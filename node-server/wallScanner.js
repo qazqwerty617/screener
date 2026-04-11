@@ -611,6 +611,7 @@ async function runCombinerLoop() {
   scanCount++;
   
   try {
+    const t0 = Date.now();
     const allWalls = [];
     
     // Merge from cached REST results
