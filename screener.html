@@ -382,19 +382,16 @@ function connectOKXTicker(){
 async function fetchCandles(ex,sym,tf){
   candles=[];
   try{
-    let url,data;
-    if(ex==='BN'){
-      const r=await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf]}&limit=300`);
-      data=await r.json();
-      candles=data.map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
-    }else if(ex==='BB'){
-      const r=await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf]}&limit=300`);
-      data=await r.json();
-      if(data.result?.list) candles=data.result.list.slice().reverse().map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
-    }else if(ex==='OX'){
-      const r=await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TFOK[tf]}&limit=300`);
-      data=await r.json();
-      if(data.data) candles=data.data.slice().reverse().map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
+    const r=await fetch(`http://${location.hostname}:${location.port}/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`);
+    const data=await r.json();
+    if(Array.isArray(data) && data.length > 0){
+      if(typeof data[0] === 'number'){
+        for(let i=0; i<data.length; i+=6){
+          candles.push({t:data[i],o:data[i+1],h:data[i+2],l:data[i+3],c:data[i+4],v:data[i+5]});
+        }
+      } else {
+        candles = data;
+      }
     }
     updateOHLC();requestAnimationFrame(drawChart);
   }catch(e){console.error('klines',e);}

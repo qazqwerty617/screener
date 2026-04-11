@@ -16,9 +16,9 @@ const httpsAgent = new https.Agent({
   timeout: 60000,
 });
 
-const compression = require('compression');
 const wallScanner = require("./wallScanner");
 const wsWallScanner = require("./wsWallScanner");
+const db = require("./db");
 let currentWallsCache = [];
 
 // ─── In-memory store ────────────────────────────────────────────────────────
@@ -162,6 +162,9 @@ setInterval(() => {
 
 // ─── Kline broadcast to clients ─────────────────────────────────────────────
 function broadcastKline(ex, sym, tf, candle) {
+  // Save to DB for persistent cache
+  db.saveKlines(ex, sym, tf, [candle]);
+
   const msg = JSON.stringify({ type: "kline", ex, sym, tf, data: [candle.t, candle.o, candle.h, candle.l, candle.c, candle.v] });
   for (const ws of klineClients) {
     if (ws.readyState === WebSocket.OPEN) {
@@ -796,40 +799,50 @@ function cacheKey(ex, sym, tf, lite) {
 app.get("/api/klines", async (req, res) => {
   const { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0" } = req.query;
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "public, max-age=30");
+  res.setHeader("Cache-Control", "public, max-age=10");
   
   const useLite = lite === "1";
-  const key = cacheKey(ex, sym, tf, useLite);
-  const now = Date.now();
+  const limit = useLite ? 300 : 1000;
   
-  const cached = klinesCache.get(key);
-  // TTL: 10s for lite charts, 60s for full
-  const ttl = useLite ? 10000 : 60000;
-  
-  if (cached && now - cached.at < ttl) {
-    return res.json(cached.data);
-  }
-
   try {
-    let pending = klinesInFlight.get(key);
-    if (!pending) {
-      pending = fetchFullHistory(ex, sym, tf, useLite).finally(() => klinesInFlight.delete(key));
-      klinesInFlight.set(key, pending);
+    // 1. Try DB first
+    let candles = db.getKlines(ex, sym, tf, limit);
+    
+    // 2. If DB is empty or data is stale (> 30s), fetch from API
+    const now = Date.now();
+    const staleThresh = tf.includes("m") ? 30000 : 300000; // candles refresh
+    const lastT = candles.length > 0 ? candles[candles.length - 1].t : 0;
+    
+    if (candles.length < limit * 0.5 || (now - lastT) > staleThresh) {
+      let pending = klinesInFlight.get(`${ex}|${sym}|${tf}`);
+      if (!pending) {
+        pending = fetchFullHistory(ex, sym, tf, useLite).then(fresh => {
+          if (fresh && fresh.length > 0) db.saveKlines(ex, sym, tf, fresh);
+          return fresh;
+        }).finally(() => klinesInFlight.delete(`${ex}|${sym}|${tf}`));
+        klinesInFlight.set(`${ex}|${sym}|${tf}`, pending);
+      }
+      const fresh = await pending;
+      // Re-fetch from DB to get the merged/ordered set
+      candles = db.getKlines(ex, sym, tf, limit);
     }
-    const candles = await pending;
-    if (!candles || candles.length === 0) throw new Error("No data");
+
+    if (!candles || candles.length === 0) throw new Error("No data found");
 
     const flat = [];
     for (const c of candles) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
-    klinesCache.set(key, { at: now, data: flat });
     res.json(flat);
   } catch (e) {
     console.error(`[KLINES ERROR] ${ex} ${sym} ${tf}:`, e.message);
-    // Fallback to cache if available, even if stale
-    if (cached) return res.json(cached.data);
     res.status(500).json({ error: e.message });
   }
 });
+
+// Daily pruning job
+setInterval(() => {
+  console.log("[CRON] Starting daily kline prune...");
+  db.pruneKlines();
+}, 24 * 60 * 60 * 1000);
 
 app.get("/api/walls", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
