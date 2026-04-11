@@ -54,7 +54,7 @@ function getKlines(ex, sym, tf, limit = 1000) {
     LIMIT ?
   `);
   
-  const rows = stmt.all(ex, sym, tf);
+  const rows = stmt.all(ex, sym, tf, limit);
   // Return as objects or flat array depends on server.js needs
   return rows.reverse().map(r => ({ t: r.t, o: r.o, h: r.h, l: r.l, c: r.c, v: r.v }));
 }
