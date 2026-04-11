@@ -1,10 +1,19 @@
-# Зависимости и пакеты
-node_modules/
+# DB and runtime files
+*.db
+*.db-journal
+*.exe
+aggregator.exe
 
-# Логи и текстовые файлы
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Logs
 *.log
 server_out.txt
-npm-debug.log*
 
 # Временные файлы кэша (большие JSON файлы, которые генерит сканер)
 t*.json

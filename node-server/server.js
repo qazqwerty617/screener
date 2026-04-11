@@ -20,12 +20,25 @@ const compression = require('compression');
 const wallScanner = require("./wallScanner");
 const wsWallScanner = require("./wsWallScanner");
 const db = require("./db");
+const { ExchangeManager } = require("./tph_service");
 let currentWallsCache = [];
 
 // ─── In-memory store ────────────────────────────────────────────────────────
-const tickers = new Map();
+const tickers = new Map(); // key: "EX:SYM" -> {p, chg, v, h, l, o, funding, nextFunding, oi, trades, ...}
 const dirtyKeys = new Set();
 const clients = new Set();
+
+// ─── TPH Service Integration ──────────────────────────────────────────────
+const tphManager = new ExchangeManager();
+tphManager.on("update", (counts) => {
+  for (const key in counts) {
+    const ticker = tickers.get(key);
+    if (ticker) {
+      ticker.trades = counts[key];
+      dirtyKeys.add(key);
+    }
+  }
+});
 
 // ─── Kline streaming state ──────────────────────────────────────────────────
 const klineSubs = new Map(); // "ex|sym|tf" => { ws, ex, sym, tf }
@@ -159,7 +172,7 @@ setInterval(() => {
       }
     }
   }
-}, 6);
+}, 50);
 
 // ─── Kline broadcast to clients ─────────────────────────────────────────────
 function broadcastKline(ex, sym, tf, candle) {
@@ -909,6 +922,9 @@ server.listen(PORT, () => {
     }
   }
   
+  // Start TPH Tracking
+  startTphTracking();
+  
   // Start Wall Scanner Engine
   wsWallScanner.startWsScanner(tickers, wallScanner);
   wallScanner.startScanning(tickers, apiFetch, (walls) => {
@@ -921,7 +937,37 @@ server.listen(PORT, () => {
     }
   });
 
-  // Periodic snapshots as data arrives
+  function startTphTracking() {
+  const groups = new Map();
+  for (const [key, t] of tickers) {
+    if (!groups.has(t.ex)) groups.set(t.ex, []);
+    // For TPH we only need top volume coins to avoid hitting WS limits
+    groups.get(t.ex).push(t);
+  }
+
+  for (const [ex, coins] of groups) {
+    // Sort by volume, take top 50
+    const top = coins.sort((a, b) => b.v - a.v).slice(0, 50);
+    const pairs = top.map(c => {
+      let ccxtSym = c.sym;
+      if (ex === "BN") ccxtSym = c.sym.replace("USDT", "/USDT:USDT");
+      if (ex === "BB") ccxtSym = c.sym.replace("USDT", "/USDT:USDT");
+      if (ex === "OX") ccxtSym = c.sym.replace("-USDT", "/USDT:USDT");
+      if (ex === "BG") ccxtSym = c.sym.replace("USDT", "/USDT:USDT");
+      return { ccxt: ccxtSym, internal: c.sym };
+    });
+
+    if (ex === "HL") {
+      tphManager.initHyperliquid(top.map(c => c.sym));
+    } else if (ex === "AD") {
+      tphManager.initAsterdex(top.map(c => c.sym));
+    } else {
+      tphManager.initCex(ex, pairs);
+    }
+  }
+}
+
+// Periodic snapshots as data arrives
   let snapCount = 0;
   const snapTimer = setInterval(() => {
     if (tickers.size > 0 && clients.size > 0) {

@@ -4273,6 +4273,34 @@ class ChartInstance {
     ctx.textAlign = "center";
     ctx.fillText(fP(lastPrice), PW + PR / 2, ly + 4);
 
+    // ── Draw Walls (Density) on Chart ──
+    const walls = densityData.filter(w => w.ex === this.ex && w.base === this.sym.replace("USDT", "").replace("-USDT", ""));
+    if (walls.length > 0) {
+      ctx.save();
+      for (const w of walls) {
+        const wy = toY(w.price);
+        if (wy < 0 || wy > PH) continue;
+
+        const isBid = w.side === "bid";
+        const alpha = Math.min(0.6, (w.rtwi / 25) * 0.8);
+        ctx.strokeStyle = isBid ? `rgba(38,201,122,${alpha})` : `rgba(255,69,96,${alpha})`;
+        ctx.lineWidth = Math.min(4, 1 + w.rtwi / 8);
+        
+        ctx.beginPath();
+        ctx.moveTo(0, wy);
+        ctx.lineTo(PW, wy);
+        ctx.stroke();
+
+        if (candleWidth > 15) {
+          ctx.fillStyle = isBid ? "rgba(38,201,122,0.8)" : "rgba(255,69,96,0.8)";
+          ctx.font = "bold 9px Inter";
+          ctx.textAlign = "right";
+          ctx.fillText(w.wallK + "K", PW - 4, wy - 4);
+        }
+      }
+      ctx.restore();
+    }
+
     // ── Draw Ruler ──
     if (this.rulerStart && this.rulerCurrent) {
         const s = this.rulerStart;
@@ -4508,7 +4536,41 @@ function initChartGrid() {
 
 
 function renderScreenerHeatmap() {
-  // Logic for heatmap (if still needed, though multichart is the new heatmap)
+  const container = $("sh-grid");
+  if (!container) return;
+  
+  const sorted = Array.from(coins.values())
+    .filter(c => isUsdtFutures(c))
+    .sort((a, b) => {
+      const dir = 1; // can be extended with sortDir if needed
+      if (heatmapSort === "v") return (b.v - a.v) * dir;
+      if (heatmapSort === "chg") return (Math.abs(b.chg) - Math.abs(a.chg)) * dir;
+      return 0;
+    })
+    .slice(0, 200);
+
+  container.innerHTML = sorted.map(c => {
+    const chg = c.chg || 0;
+    // Color logic: Intensity based on change %
+    const opacity = Math.min(0.9, 0.2 + Math.abs(chg) / 10);
+    const bg = chg >= 0 ? `rgba(38,166,154,${opacity})` : `rgba(239,83,80,${opacity})`;
+    
+    return `
+      <div class="sh-item" style="background:${bg};" onclick="selectCoinByKey('${c.key}')">
+        <div style="font-size:12px; font-weight:800; color:#fff; text-shadow: 0 1px 2px rgba(0,0,0,0.4);">${c.sym.replace("USDT", "")}</div>
+        <div style="font-size:11px; font-weight:600; color:rgba(255,255,255,0.9); margin-top:2px;">${fC(chg)}</div>
+        <div style="font-size:9px; color:rgba(255,255,255,0.6); margin-top:1px;">${fV(c.v)}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function selectCoinByKey(key) {
+  const c = coins.get(key);
+  if (c) {
+    selectCoin(c);
+    toggleScreenerView('single');
+  }
 }
 
 
