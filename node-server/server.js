@@ -16,6 +16,7 @@ const httpsAgent = new https.Agent({
   timeout: 60000,
 });
 
+const compression = require('compression');
 const wallScanner = require("./wallScanner");
 const wsWallScanner = require("./wsWallScanner");
 const db = require("./db");
