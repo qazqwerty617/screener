@@ -127,7 +127,7 @@ async function fetchOB(ex, coin, apiFetch) {
       const realSym = isSpot ? sym.replace("_SPOT", "") : sym;
       const url = isSpot
         ? `https://api.bitget.com/api/v2/spot/market/depth?symbol=${realSym}&limit=${depth}`
-        : `https://api.bitget.com/api/v2/mix/market/depth?productType=USDT-FUTURES&symbol=${realSym}&limit=${depth}`;
+        : `https://api.bitget.com/api/v2/mix/market/merge-depth?productType=usdt-futures&symbol=${realSym}&limit=${depth}`;
       const d = await apiFetch(url, API_TIMEOUT, 0);
       const r = d.data || {};
       if (r.bids) bids = r.bids.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * +q }));
@@ -150,6 +150,9 @@ async function fetchOB(ex, coin, apiFetch) {
         ? `https://api.mexc.com/api/v3/depth?symbol=${realSym}&limit=${depth}`
         : `https://contract.mexc.com/api/v1/contract/depth/${realSym}?limit=${depth}`;
       const d = await apiFetch(url, API_TIMEOUT, 0);
+      if (d && d.success === false) {
+        console.warn(`[WALL MX ERROR] ${sym}: ${d.message || JSON.stringify(d)}`);
+      }
       const r = isSpot ? d : (d.data || {});
       if (r.bids) bids = r.bids.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * (+q * actualCs) }));
       if (r.asks) asks = r.asks.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * (+q * actualCs) }));
@@ -180,7 +183,7 @@ async function fetchOB(ex, coin, apiFetch) {
       const actualCs = isSpot ? 1 : cs;
       const url = isSpot
         ? `https://api.huobi.pro/market/depth?symbol=${realSym}&type=step0`
-        : `https://api.hbdm.com/linear-swap-ex/market/depth?contract_code=${realSym}&type=step0`;
+        : `https://api.hbdm.vn/linear-swap-ex/market/depth?contract_code=${realSym}&type=step0`;
       const d = await apiFetch(url, API_TIMEOUT, 0);
       const tick = d.tick || {};
       if (tick.bids) bids = tick.bids.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * (+q * actualCs) }));
@@ -198,7 +201,8 @@ async function fetchOB(ex, coin, apiFetch) {
     }
 
     return { bids, asks };
-  } catch (_) {
+  } catch (e) {
+    if (ex === "MX") console.warn(`[WALL ERROR] ${ex}:${sym} failed: ${e.message}`);
     return { bids: [], asks: [] };
   }
 }
@@ -398,12 +402,15 @@ async function scanExchange(ex, tickers, apiFetch, currentScanId) {
     exCoins.length = MAX_COINS_PER_EX;
   }
 
+  const chunkSize = ex === "MX" ? 2 : POOL_COIN;
+  const delayMs = ex === "MX" ? 380 : COIN_DELAY_MS;
+
   const walls = [];
   let ok = 0, fail = 0;
 
-  // Parallel batches of POOL_COIN
-  for (let i = 0; i < exCoins.length; i += POOL_COIN) {
-    const batch = exCoins.slice(i, i + POOL_COIN);
+  // Parallel batches
+  for (let i = 0; i < exCoins.length; i += chunkSize) {
+    const batch = exCoins.slice(i, i + chunkSize);
     const results = await Promise.allSettled(
       batch.map(async (coin) => {
         try {
@@ -411,7 +418,8 @@ async function scanExchange(ex, tickers, apiFetch, currentScanId) {
           if (!bids.length && !asks.length) { fail++; return []; }
           ok++;
           return processOrderbook(ex, coin, bids, asks, currentScanId);
-        } catch (_) {
+        } catch (e) {
+          if (ex === "MX" || ex === "BG") console.warn(`[WALL ERROR] ${ex}:${coin.sym} failed: ${e.message}`);
           fail++;
           return [];
         }
@@ -421,8 +429,8 @@ async function scanExchange(ex, tickers, apiFetch, currentScanId) {
       if (r.status === "fulfilled" && r.value) walls.push(...r.value);
     }
     // Small delay to avoid rate limits
-    if (i + POOL_COIN < exCoins.length) {
-      await new Promise(r => setTimeout(r, COIN_DELAY_MS));
+    if (i + chunkSize < exCoins.length) {
+      await new Promise(r => setTimeout(r, delayMs));
     }
   }
 

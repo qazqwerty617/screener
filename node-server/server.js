@@ -17,6 +17,8 @@ const httpsAgent = new https.Agent({
 });
 
 const compression = require('compression');
+const wallScanner = require("./wallScanner");
+let currentWallsCache = [];
 
 // ─── In-memory store ────────────────────────────────────────────────────────
 const tickers = new Map();
@@ -847,6 +849,13 @@ app.get("/api/klines", async (req, res) => {
   }
 });
 
+app.get("/api/walls", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "private, max-age=1");
+  res.setHeader("Content-Type", "application/json");
+  res.json(currentWallsCache);
+});
+
 app.get("/api/tickers", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "private, max-age=1");
@@ -903,6 +912,17 @@ server.listen(PORT, () => {
       console.error(`[INIT] Failed to start ${name}:`, e.message);
     }
   }
+  
+  // Start Wall Scanner Engine
+  wallScanner.startScanning(tickers, apiFetch, (walls) => {
+    currentWallsCache = walls;
+    const msg = JSON.stringify({ type: "walls", data: walls });
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(msg); } catch (e) {}
+      }
+    }
+  });
   
   // Periodic snapshots as data arrives
   let snapCount = 0;
