@@ -310,30 +310,39 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     // pass Z as relSize so UI shows "Z=4.5"
     const relSize = Z;
 
-    // ── Anti-Spoofing Timer (2 scans = ~12s) ──
+    // ── Anti-Spoofing Timer ──
     const lk = `${ex}:${coin.sym}:${side}:${+bin.maxOrderPrice.toPrecision(7)}`;
     let h = levelHistory.get(lk);
     const now = Date.now();
 
+    if (h && h.scanId === currentScanId) {
+      return;
+    }
+
     if (!h) {
       h = { firstSeen: now, lastSeen: now, scanId: currentScanId, consecutivePresent: 1, misses: 0 };
       levelHistory.set(lk, h);
-      return; 
+    } else {
+      const timeSinceLastSeen = now - h.lastSeen;
+      const maxMissGapMs = 10000; // 10s tolerance to retain age
+
+      if (h.scanId === currentScanId - 1) {
+        h.consecutivePresent++;
+        h.misses = 0;
+      } else if (timeSinceLastSeen <= maxMissGapMs) {
+        h.consecutivePresent++;
+        h.misses = 0;
+      } else {
+        h.firstSeen = now;
+        h.consecutivePresent = 1;
+        h.misses = 1;
+      }
+      h.scanId = currentScanId;
+      h.lastSeen = now;
     }
 
-    if (h.scanId === currentScanId - 1) {
-      h.consecutivePresent++;
-      h.misses = 0;
-    } else if (h.scanId < currentScanId - 1) {
-      h.firstSeen = now;
-      h.consecutivePresent = 1;
-      h.misses++;
-    }
-    h.scanId = currentScanId;
-    h.lastSeen = now;
-
-    // Survive MIN_SCANS consecutive logic (Very fast update)
-    if (h.consecutivePresent < 2) return;
+    // BingX (BX) still requires at least 2 consecutive scans to show (anti-spoofing)
+    if (ex === "BX" && h.consecutivePresent < 2) return;
 
     // Output visual properties
     const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
