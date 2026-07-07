@@ -824,8 +824,10 @@ function drawChart() {
   const upBorderCol = hexToRgba(cs.border.up, cs.border.upOp);
   const dnBorderCol = hexToRgba(cs.border.down, cs.border.downOp);
 
+  const dpr = window.devicePixelRatio || 1;
+
   vis.forEach((c, i) => {
-    const x = Math.round((i + futureGap) * candleW + candleW / 2);
+    const rawX = (i + futureGap) * candleW + candleW / 2;
     const up = c.c >= c.o;
 
     const yH = toY(c.h),
@@ -836,23 +838,44 @@ function drawChart() {
       bH = Math.max(1, Math.abs(yC - yO));
 
     if (cs.wick.show) {
+      const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
+      const wickYH = Math.round(yH * dpr) / dpr;
+      const wickYL = Math.round(yL * dpr) / dpr;
       ctx.strokeStyle = up ? upWickCol : dnWickCol;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1 / dpr;
       ctx.beginPath();
-      ctx.moveTo(x, yH);
-      ctx.lineTo(x, yL);
+      ctx.moveTo(wickX, wickYH);
+      ctx.lineTo(wickX, wickYL);
       ctx.stroke();
     }
 
     if (cs.body.show) {
+      const leftX = Math.round((rawX - hw) * dpr);
+      const rightX = Math.round((rawX + hw) * dpr);
+      const topY = Math.round(bT * dpr);
+      const bottomY = Math.round((bT + bH) * dpr);
+
+      const fillX = leftX / dpr;
+      const fillY = topY / dpr;
+      const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
+      const fillH = Math.max(1 / dpr, (bottomY - topY) / dpr);
+
       ctx.fillStyle = up ? upBodyCol : dnBodyCol;
-      ctx.fillRect(x - hw, bT, hw * 2, bH);
+      ctx.fillRect(fillX, fillY, fillW, fillH);
     }
 
     if (cs.border.show) {
+      const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
+      const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
+      const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
+      const strokeBottomY = (Math.floor((bT + bH) * dpr) + 0.5) / dpr;
+
+      const strokeW = Math.max(1 / dpr, strokeRightX - strokeLeftX);
+      const strokeH = Math.max(1 / dpr, strokeBottomY - strokeTopY);
+
       ctx.strokeStyle = up ? upBorderCol : dnBorderCol;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x - hw, bT, hw * 2, bH);
+      ctx.lineWidth = 1 / dpr;
+      ctx.strokeRect(strokeLeftX, strokeTopY, strokeW, strokeH);
     }
   });
 
@@ -3841,8 +3864,6 @@ class ChartInstance {
     this.viewMn = null;
     this.viewMx = null;
     this.autoFitY = true;
-    this.rulerStart = null;
-    this.rulerCurrent = null;
 
     this.yScaleStartMn = 0;
     this.yScaleStartMx = 0;
@@ -3922,12 +3943,6 @@ class ChartInstance {
       const PR = 60;
       const PW = w - PR;
 
-      if (e.shiftKey && e.button === 0) {
-        this.rulerStart = { x: px, y: py };
-        this.rulerCurrent = { x: px, y: py };
-        return;
-      }
-
       if (px >= PW) {
         if (this.viewMn !== null && this.viewMx !== null) {
           this.isDragYScale = true;
@@ -3968,13 +3983,6 @@ class ChartInstance {
     };
 
     window.addEventListener('mousemove', (e) => {
-      if (this.rulerStart) {
-        const r = this.canvas.getBoundingClientRect();
-        this.rulerCurrent = { x: e.clientX - r.left, y: e.clientY - r.top };
-        this.draw(true);
-        return;
-      }
-
       if (this.isDrag) {
         const dx = e.clientX - this.dragStart;
         this.offsetX = this.dragOff + dx / this.candleW;
@@ -4004,14 +4012,11 @@ class ChartInstance {
     }, { passive: false });
 
     window.addEventListener('mouseup', () => {
-      if (this.isDrag || this.isDragYScale || this.isDragY || this.rulerStart) {
+      if (this.isDrag || this.isDragYScale || this.isDragY) {
         this.isDrag = false;
         this.isDragYScale = false;
         this.isDragY = false;
-        this.rulerStart = null;
-        this.rulerCurrent = null;
         this.canvas.style.cursor = 'crosshair';
-        this.draw(true);
       }
     });
 
@@ -4219,8 +4224,8 @@ class ChartInstance {
     }
 
     vis.forEach((c, i) => {
-      const x = (i + futureGap) * candleWidth + candleWidth / 2;
-      if (x > PW + candleWidth) return;
+      const rawX = (i + futureGap) * candleWidth + candleWidth / 2;
+      if (rawX > PW + candleWidth) return;
       const up = c.c >= c.o;
       const side = up ? "up" : "down";
       const cs = window.candleSettings || {
@@ -4234,18 +4239,42 @@ class ChartInstance {
       const bT = Math.min(yO, yC), bH = Math.max(1, Math.abs(yC - yO));
 
       if (cs.wick.show) {
+        const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
+        const wickYH = Math.round(yH * dpr) / dpr;
+        const wickYL = Math.round(yL * dpr) / dpr;
         ctx.strokeStyle = hexToRgba(cs.wick[side], cs.wick[side + "Op"]);
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
+        ctx.lineWidth = 1 / dpr;
+        ctx.beginPath();
+        ctx.moveTo(wickX, wickYH);
+        ctx.lineTo(wickX, wickYL);
+        ctx.stroke();
       }
       if (cs.body.show) {
+        const leftX = Math.round((rawX - hw) * dpr);
+        const rightX = Math.round((rawX + hw) * dpr);
+        const topY = Math.round(bT * dpr);
+        const bottomY = Math.round((bT + bH) * dpr);
+
+        const fillX = leftX / dpr;
+        const fillY = topY / dpr;
+        const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
+        const fillH = Math.max(1 / dpr, (bottomY - topY) / dpr);
+
         ctx.fillStyle = hexToRgba(cs.body[side], cs.body[side + "Op"]);
-        ctx.fillRect(x - hw, bT, hw * 2, bH);
+        ctx.fillRect(fillX, fillY, fillW, fillH);
       }
       if (cs.border.show) {
+        const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
+        const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
+        const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
+        const strokeBottomY = (Math.floor((bT + bH) * dpr) + 0.5) / dpr;
+
+        const strokeW = Math.max(1 / dpr, strokeRightX - strokeLeftX);
+        const strokeH = Math.max(1 / dpr, strokeBottomY - strokeTopY);
+
         ctx.strokeStyle = hexToRgba(cs.border[side], cs.border[side + "Op"]);
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x - hw, bT, hw * 2, bH);
+        ctx.lineWidth = 1 / dpr;
+        ctx.strokeRect(strokeLeftX, strokeTopY, strokeW, strokeH);
       }
     });
 
@@ -4272,77 +4301,6 @@ class ChartInstance {
     ctx.font = "bold 10px Inter";
     ctx.textAlign = "center";
     ctx.fillText(fP(lastPrice), PW + PR / 2, ly + 4);
-
-    // ── Draw Walls (Density) on Chart ──
-    const walls = densityData.filter(w => w.ex === this.ex && w.base === this.sym.replace("USDT", "").replace("-USDT", ""));
-    if (walls.length > 0) {
-      ctx.save();
-      for (const w of walls) {
-        const wy = toY(w.price);
-        if (wy < 0 || wy > PH) continue;
-
-        const isBid = w.side === "bid";
-        const alpha = Math.min(0.6, (w.rtwi / 25) * 0.8);
-        ctx.strokeStyle = isBid ? `rgba(38,201,122,${alpha})` : `rgba(255,69,96,${alpha})`;
-        ctx.lineWidth = Math.min(4, 1 + w.rtwi / 8);
-        
-        ctx.beginPath();
-        ctx.moveTo(0, wy);
-        ctx.lineTo(PW, wy);
-        ctx.stroke();
-
-        if (candleWidth > 15) {
-          ctx.fillStyle = isBid ? "rgba(38,201,122,0.8)" : "rgba(255,69,96,0.8)";
-          ctx.font = "bold 9px Inter";
-          ctx.textAlign = "right";
-          ctx.fillText(w.wallK + "K", PW - 4, wy - 4);
-        }
-      }
-      ctx.restore();
-    }
-
-    // ── Draw Ruler ──
-    if (this.rulerStart && this.rulerCurrent) {
-        const s = this.rulerStart;
-        const c = this.rulerCurrent;
-        
-        const pr_val = mx - mn || 1;
-        const fromY = (y) => mx - (y / PH) * pr_val;
-        const p1 = fromY(s.y);
-        const p2 = fromY(c.y);
-        const diffP = p2 - p1;
-        const chgP = (diffP / p1) * 100;
-        
-        const nBars = Math.round((c.x - s.x) / candleWidth);
-        
-        ctx.save();
-        ctx.strokeStyle = "rgba(255,255,255,0.8)";
-        ctx.setLineDash([5, 5]);
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(s.x, s.y);
-        ctx.lineTo(c.x, c.y);
-        ctx.stroke();
-        
-        // Info box
-        const boxW = 80, boxH = 40;
-        const bx = c.x + 10, by = c.y - boxH / 2;
-        ctx.fillStyle = "rgba(20,24,35,0.85)";
-        ctx.strokeStyle = chgP >= 0 ? "#26c97a" : "#ff4560";
-        roundRect(ctx, bx, by, boxW, boxH, 4);
-        ctx.fill();
-        ctx.stroke();
-        
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 10px Inter";
-        ctx.textAlign = "center";
-        ctx.fillText((chgP >= 0 ? "+" : "") + chgP.toFixed(2) + "%", bx + boxW / 2, by + 14);
-        ctx.font = "9px Inter";
-        ctx.fillStyle = "rgba(255,255,255,0.7)";
-        ctx.fillText(fP(Math.abs(diffP)), bx + boxW / 2, by + 25);
-        ctx.fillText(Math.abs(nBars) + " баров", bx + boxW / 2, by + 35);
-        ctx.restore();
-    }
   }
 }
 
@@ -4536,41 +4494,7 @@ function initChartGrid() {
 
 
 function renderScreenerHeatmap() {
-  const container = $("sh-grid");
-  if (!container) return;
-  
-  const sorted = Array.from(coins.values())
-    .filter(c => isUsdtFutures(c))
-    .sort((a, b) => {
-      const dir = 1; // can be extended with sortDir if needed
-      if (heatmapSort === "v") return (b.v - a.v) * dir;
-      if (heatmapSort === "chg") return (Math.abs(b.chg) - Math.abs(a.chg)) * dir;
-      return 0;
-    })
-    .slice(0, 200);
-
-  container.innerHTML = sorted.map(c => {
-    const chg = c.chg || 0;
-    // Color logic: Intensity based on change %
-    const opacity = Math.min(0.9, 0.2 + Math.abs(chg) / 10);
-    const bg = chg >= 0 ? `rgba(38,166,154,${opacity})` : `rgba(239,83,80,${opacity})`;
-    
-    return `
-      <div class="sh-item" style="background:${bg};" onclick="selectCoinByKey('${c.key}')">
-        <div style="font-size:12px; font-weight:800; color:#fff; text-shadow: 0 1px 2px rgba(0,0,0,0.4);">${c.sym.replace("USDT", "")}</div>
-        <div style="font-size:11px; font-weight:600; color:rgba(255,255,255,0.9); margin-top:2px;">${fC(chg)}</div>
-        <div style="font-size:9px; color:rgba(255,255,255,0.6); margin-top:1px;">${fV(c.v)}</div>
-      </div>
-    `;
-  }).join("");
-}
-
-function selectCoinByKey(key) {
-  const c = coins.get(key);
-  if (c) {
-    selectCoin(c);
-    toggleScreenerView('single');
-  }
+  // Logic for heatmap (if still needed, though multichart is the new heatmap)
 }
 
 
@@ -4673,7 +4597,7 @@ function getFilteredDensity() {
   });
 }
 
-// ── Layout: collision-aware spiral with score-based sizing ─────────────────────
+// ── Layout: distribute badges radially by pct ─────────────────────────────────
 function layoutDensityBadges() {
   const filtered = getFilteredDensity();
 
@@ -4685,59 +4609,18 @@ function layoutDensityBadges() {
   const cx = densityW / 2;
   const cy = densityH / 2;
   const maxRadius = Math.min(cx, cy) - 60;
-  const minRadius = 55;
+  const minRadius = 50;
 
-  // Sort by score DESC so strongest walls get priority placement
-  filtered.sort((a, b) => b.rtwi - a.rtwi || b.S - a.S);
-
-  // Calculate bubble radius per wall (based on score)
-  for (const d of filtered) {
-    const scoreFactor = Math.min(1 + (d.rtwi || 1) / 15, 2.5);
-    d._bubbleR = Math.min(36, 22 + scoreFactor * 4);
-  }
-
-  const placed = [];
-  const GOLDEN_ANGLE = 2.399963;
-  const PAD = 6; // minimum gap between bubbles
+  filtered.sort((a, b) => a.pct - b.pct);
 
   for (let i = 0; i < filtered.length; i++) {
     const d = filtered[i];
-    // Distance from price → radial position
-    const norm = Math.max(0, Math.min(1, (d.pct - 0.05) / 5.0));
-    const targetR = minRadius + norm * (maxRadius - minRadius);
-    const baseAngle = i * GOLDEN_ANGLE - Math.PI / 2;
-
-    // Try to place without collision, nudging angle if needed
-    let bestX = cx + Math.cos(baseAngle) * targetR;
-    let bestY = cy + Math.sin(baseAngle) * targetR;
-    let collides = true;
-
-    for (let attempt = 0; attempt < 12 && collides; attempt++) {
-      const angle = baseAngle + attempt * 0.35;
-      const r = targetR + attempt * 8;
-      bestX = cx + Math.cos(angle) * Math.min(r, maxRadius + 20);
-      bestY = cy + Math.sin(angle) * Math.min(r, maxRadius + 20);
-
-      collides = false;
-      for (const p of placed) {
-        const dx = bestX - p.x;
-        const dy = bestY - p.y;
-        const minDist = (d._bubbleR + p.r) + PAD;
-        if (dx * dx + dy * dy < minDist * minDist) {
-          collides = true;
-          break;
-        }
-      }
-    }
-
-    // Clamp to canvas bounds
-    const bR = d._bubbleR + 10;
-    bestX = Math.max(bR, Math.min(densityW - bR, bestX));
-    bestY = Math.max(bR, Math.min(densityH - bR, bestY));
-
-    d.rx = bestX;
-    d.ry = bestY;
-    placed.push({ x: bestX, y: bestY, r: d._bubbleR });
+    const norm = Math.max(0, Math.min(1, (d.pct - 0.3) / 5.7));
+    const r = minRadius + norm * (maxRadius - minRadius);
+    const step = 2.399963;
+    const angle = i * step - Math.PI / 2;
+    d.rx = cx + Math.cos(angle) * r;
+    d.ry = cy + Math.sin(angle) * r;
   }
 }
 
@@ -4894,19 +4777,21 @@ function drawDensityMap() {
     ctx.setLineDash([]); ctx.restore();
 
     // ── Tooltip
-    const tipW = 245;
-    const tipH = 160 + (d.count > 1 ? 20 : 0);
+    // Math to get tip width
+    const tipW = 230;
+    const tipH = 125 + (d.count > 1 ? 20 : 0);
     let tipX = d.rx + 55, tipY = d.ry - tipH / 2;
     if (tipX + tipW > densityW - 10) tipX = d.rx - tipW - 55;
     if (tipY < 10) tipY = 10;
     if (tipY + tipH > densityH - 10) tipY = densityH - tipH - 10;
 
     ctx.save();
+    // Dark background box with subtle border
     roundRect(ctx, tipX, tipY, tipW, tipH, 6);
     ctx.fillStyle = "rgba(10, 11, 16, 0.96)"; ctx.fill();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.05)"; ctx.lineWidth = 1; ctx.stroke();
 
-    // Header
+    // 1. Header (TRADOOR.S — СОПРОТИВЛЕНИЕ)
     const suffix = d.market === "spot" ? ".S" : ".F";
     const headerTitle = `${d.base}${suffix} — `;
     const headerType = isBid ? "ПОДДЕРЖКА" : "СОПРОТИВЛЕНИЕ";
@@ -4916,65 +4801,70 @@ function drawDensityMap() {
     ctx.font = "bold 13px Inter";
     ctx.textAlign = "left";
     ctx.fillStyle = "#ffffff";
-    ctx.fillText(headerTitle, tipX + 16, tipY + 14);
+    ctx.fillText(headerTitle, tipX + 16, tipY + 16);
     const titleW = ctx.measureText(headerTitle).width;
     ctx.fillStyle = headerTypeColor;
-    ctx.fillText(headerType, tipX + 16 + titleW, tipY + 14);
+    ctx.fillText(headerType, tipX + 16 + titleW, tipY + 16);
 
-    // Separator
+    // Separator line
     ctx.beginPath();
-    ctx.moveTo(tipX + 16, tipY + 36);
-    ctx.lineTo(tipX + tipW - 16, tipY + 36);
+    ctx.moveTo(tipX + 16, tipY + 38);
+    ctx.lineTo(tipX + tipW - 16, tipY + 38);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-    ctx.setLineDash([]); ctx.lineWidth = 1; ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.stroke();
 
-    let currY = tipY + 48;
+    // Rows helper
+    let currY = tipY + 50;
     const drawRow = (leftText, rightText, rightColor = "#fff") => {
       ctx.font = "11px Inter";
       ctx.fillStyle = "rgba(255,255,255,0.4)";
       ctx.textAlign = "left";
       ctx.fillText(leftText, tipX + 16, currY);
+
       ctx.font = "bold 12px Inter";
       ctx.fillStyle = rightColor;
       ctx.textAlign = "right";
       ctx.fillText(rightText, tipX + tipW - 16, currY);
-      currY += 19;
+      currY += 20;
     };
 
-    // Рынок
+    // 2. Рынок
     const marketText = d.market === "spot" ? "СПОТ" : "ФЬЮЧЕРСЫ";
     const marketColor = d.market === "spot" ? "#16c784" : "#eab308";
     drawRow("РЫНОК", marketText, marketColor);
 
-    // Объём
+    // 3. Объем
     const volText = d.wallK >= 1000 ? (d.wallK / 1000).toFixed(1) + "M$" : d.wallK + "K$";
-    drawRow("ОБЪЁМ", volText);
+    drawRow("ОБЪЕМ", volText);
 
-    // Цена / Дист
+    // 4. Цена / Дист
     const fmtPrice = d.price < 1 ? +d.price.toPrecision(4) : +d.price.toFixed(4);
-    drawRow("ЦЕНА / ДИСТ", `${fmtPrice} (${d.pct.toFixed(2)}%)` );
+    const priceText = `${fmtPrice} (${d.pct.toFixed(2)}%)`;
+    drawRow("ЦЕНА / ДИСТ", priceText);
 
-    // Z-Score (quality)
-    const zStr = (d.relSize || 0).toFixed(1);
-    let zColor = "#64748b";
-    if (d.relSize >= 8) zColor = "#fbbf24";
-    else if (d.relSize >= 6) zColor = "#a78bfa";
-    else if (d.relSize >= 4) zColor = "#38bdf8";
-    drawRow("Z-SCORE", zStr, zColor);
-
-    // Ордера
-    drawRow("ОРДЕРА", `${d.count || 1}`, "#94a3b8");
-
-    // Separator
-    currY += 2;
+    // Dotted separator
+    currY += 4;
     ctx.beginPath();
     ctx.moveTo(tipX + 16, currY);
     ctx.lineTo(tipX + tipW - 16, currY);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
-    ctx.setLineDash([3, 4]); ctx.stroke();
-    ctx.setLineDash([]); currY += 10;
+    ctx.setLineDash([3, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    currY += 12;
 
-    // Кластер
+    // 5. Время жизни
+    let formatAge = "-";
+    if (d.age) {
+      if (d.age < 60) formatAge = `${d.age}с`;
+      else if (d.age < 3600) formatAge = `${Math.floor(d.age / 60)}м`;
+      else formatAge = `${Math.floor(d.age / 3600)}ч ${Math.floor((d.age % 3600) / 60)}м`;
+    }
+    drawRow("ВРЕМЯ ЖИЗНИ", formatAge, "#fbbf24");
+
+    // 6. Cluster
     if (d.count > 1) {
       drawRow("КЛАСТЕР", `${d.count} ур.`, "#a78bfa");
     }
@@ -4989,24 +4879,29 @@ function drawDensityMap() {
   }
 }
 
-// ── Draw a single bubble badge (score-aware) ─────────────────────────────────
+// ── Draw a single bubble badge ────────────────────────────────────────────────
 function drawDensityBubble(ctx, d, x, y, isHover) {
   const isBid = d.side === "bid";
-  const R = Math.round(isHover ? (d._bubbleR || 28) + 5 : (d._bubbleR || 28));
+  const scoreFactor = Math.min(1. + (d.rtwi || 5) / 30, 2.2);
+  const baseR = Math.min(32, 24 + scoreFactor * 3); // Larger base radius to fit 3 lines
+  const R = Math.round(isHover ? baseR + 4 : baseR);
   const bc = isBid ? [22, 199, 132] : [255, 69, 96];
 
   ctx.save();
 
   // Draw main badge shape (bubble with pointer)
   ctx.beginPath();
+  // We draw a circle from angle 0.15pi to 0.85pi to leave room for the triangle
   const arcOffset = 0.35;
   ctx.arc(x, y, R, Math.PI / 2 + arcOffset, Math.PI / 2 - arcOffset);
+  // Triangle tip at the bottom
   ctx.lineTo(x + 7, y + R - 3);
   ctx.lineTo(x, y + R + 9);
   ctx.lineTo(x - 7, y + R - 3);
   ctx.closePath();
 
-  // Fill — dark with side tint
+  // Fill
+  // Dark mostly opaque fill tinted by side
   ctx.fillStyle = isBid ? "rgba(10, 26, 18, 0.95)" : "rgba(26, 10, 13, 0.95)";
   if (isHover) {
     ctx.fillStyle = isBid ? "rgba(15, 36, 25, 0.98)" : "rgba(36, 15, 20, 0.98)";
@@ -5015,14 +4910,14 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
 
   // Border
   ctx.strokeStyle = `rgba(${bc[0]},${bc[1]},${bc[2]},${isHover ? 1 : 0.85})`;
-  ctx.lineWidth = isHover ? 2.2 : 1.5;
+  ctx.lineWidth = isHover ? 2 : 1.5;
   ctx.stroke();
 
   // Outer glow on hover
   if (isHover) {
     ctx.save();
     ctx.shadowColor = `rgba(${bc[0]},${bc[1]},${bc[2]}, 0.5)`;
-    ctx.shadowBlur = 18;
+    ctx.shadowBlur = 15;
     ctx.fillStyle = "transparent";
     ctx.fill();
     ctx.restore();
@@ -5032,48 +4927,39 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // 1. Volume (e.g. 5.4M)
+  // 1. Top text: Volume (e.g. 5.4M)
   const volText = d.wallK >= 1000
     ? (d.wallK / 1000).toFixed(1).replace(/\.0$/, "") + "M"
     : d.wallK + "K";
-  const fsBig = Math.max(10, Math.min(14, R * 0.45));
-  ctx.font = `bold ${isHover ? fsBig + 2 : fsBig}px Inter`;
+  ctx.font = `bold ${isHover ? 14 : 12}px sans-serif`;
   ctx.fillStyle = "#ffffff";
-  ctx.fillText(volText, x, y - R * 0.32);
+  ctx.fillText(volText, x, y - R * 0.35);
 
-  // 2. Ticker
-  const fsMid = Math.max(8, Math.min(11, R * 0.35));
-  ctx.font = `${isHover ? fsMid + 1 : fsMid}px Inter`;
+  // 2. Middle text: Ticker (e.g. DOGE)
+  ctx.font = `${isHover ? 11 : 9}px sans-serif`;
   ctx.fillStyle = `rgb(${bc[0]},${bc[1]},${bc[2]})`;
-  ctx.fillText(d.base, x, y + R * 0.08);
+  ctx.fillText(d.base, x, y + R * 0.05);
 
-  // 3. Exchange + Pct
-  const fsSmall = Math.max(7, Math.min(9, R * 0.28));
-  ctx.font = `bold ${fsSmall}px Inter`;
+  // 3. Bottom text: Exchange + Pct (e.g. BIN 0.7%)
+  ctx.font = `bold ${isHover ? 9 : 8}px sans-serif`;
   const exShort = (EX_NAMES[d.ex] || d.ex).substring(0, 3).toUpperCase();
   const pctStr = `${exShort} ${d.pct.toFixed(1)}%`;
 
-  const EX_BUBBLE_COLORS = {
-    "BN": "#fbbf24", "BB": "#f97316", "OX": "#f8fafc", "BG": "#2dd4bf",
-    "MX": "#10b981", "GT": "#0ea5e9", "KC": "#22c55e", "HT": "#ec4899",
-    "BX": "#a855f7", "HL": "#fb923c", "AD": "#f59e0b"
+  // Unique brand colors for each exchange
+  const EX_COLORS = {
+    "BN": "#fbbf24", // Binance Yellow
+    "BB": "#f97316", // Bybit Orange
+    "OX": "#f8fafc", // OKX White
+    "BG": "#2dd4bf", // Bitget Cyan
+    "MX": "#10b981", // MEXC Emerald
+    "GT": "#0ea5e9", // Gate Blue
+    "KC": "#22c55e", // Kucoin Green
+    "HT": "#ec4899", // HTX Pink
+    "BX": "#a855f7", // BingX Purple
+    "HL": "#fb923c"  // HyperLiquid Orange
   };
-  ctx.fillStyle = EX_BUBBLE_COLORS[d.ex] || "#a1a1aa";
-  ctx.fillText(pctStr, x, y + R * 0.46);
-
-  // 4. Quality dot — top-right corner (Z-score indicator)
-  const zScore = d.relSize || 0;
-  let dotColor;
-  if (zScore >= 8) dotColor = "#fbbf24";      // Gold = ultra strong
-  else if (zScore >= 6) dotColor = "#a78bfa";  // Purple = very strong
-  else dotColor = "#64748b";                    // Gray = moderate
-  
-  if (zScore >= 6 || isHover) {
-    ctx.beginPath();
-    ctx.arc(x + R * 0.6, y - R * 0.6, isHover ? 4 : 3, 0, Math.PI * 2);
-    ctx.fillStyle = dotColor;
-    ctx.fill();
-  }
+  ctx.fillStyle = EX_COLORS[d.ex] || "#a1a1aa";
+  ctx.fillText(pctStr, x, y + R * 0.45);
 
   ctx.restore();
 }
@@ -5287,6 +5173,7 @@ window.addEventListener("resize", () => {
           }
           sel.value = gridSize;
         }
+        if (typeof syncCustomGridSelect === "function") syncCustomGridSelect();
       }
       if (screenerView === "multichart") {
         initChartGrid();
@@ -5297,12 +5184,112 @@ window.addEventListener("resize", () => {
     };
   }
 
-  // Grid size select
+  // Helper to sync custom grid select dropdown UI
+  function syncCustomGridSelect() {
+    const valSpan = $("custom-grid-select-val");
+    if (!valSpan) return;
+
+    let label = gridSize + " Графиков";
+    if (gridSize === 2 || gridSize === 3 || gridSize === 4) {
+      label = gridSize + " Графика";
+    }
+    valSpan.textContent = label;
+
+    const items = document.querySelectorAll(".custom-grid-select-item");
+    let found = false;
+    items.forEach(item => {
+      const val = parseInt(item.dataset.value);
+      if (val === gridSize) {
+        item.classList.add("on");
+        item.setAttribute("aria-selected", "true");
+        found = true;
+      } else {
+        item.classList.remove("on");
+        item.setAttribute("aria-selected", "false");
+      }
+    });
+
+    if (!found) {
+      const menu = $("custom-grid-select-menu");
+      if (menu) {
+        // Remove any previous custom dynamic items first to avoid duplicates
+        const oldDynamic = menu.querySelector('.custom-grid-select-item[data-dynamic="true"]');
+        if (oldDynamic) oldDynamic.remove();
+
+        const newItem = document.createElement("div");
+        newItem.className = "custom-grid-select-item on";
+        newItem.dataset.value = gridSize;
+        newItem.dataset.dynamic = "true";
+        newItem.setAttribute("role", "option");
+        newItem.setAttribute("aria-selected", "true");
+        newItem.textContent = label;
+        newItem.onclick = () => {
+          selectCustomGridSize(gridSize);
+        };
+        menu.appendChild(newItem);
+      }
+    } else {
+      // Clean up dynamic items if they are no longer selected
+      const menu = $("custom-grid-select-menu");
+      if (menu) {
+        const oldDynamic = menu.querySelector('.custom-grid-select-item[data-dynamic="true"]');
+        if (oldDynamic) oldDynamic.remove();
+      }
+    }
+  }
+
+  function selectCustomGridSize(val) {
+    gridSize = val;
+    const sel = $("grid-size-select");
+    if (sel) sel.value = val;
+    syncCustomGridSelect();
+    if (screenerView === "multichart") {
+      initChartGrid();
+    }
+  }
+
+  // Custom Grid size select binding
+  const customGridBtn = $("custom-grid-select-btn");
+  const customGridMenu = $("custom-grid-select-menu");
+  if (customGridBtn && customGridMenu) {
+    customGridBtn.onclick = (e) => {
+      e.stopPropagation();
+      const open = customGridMenu.classList.contains("open");
+      if (open) {
+        customGridMenu.classList.remove("open");
+        customGridBtn.classList.remove("open");
+      } else {
+        customGridMenu.classList.add("open");
+        customGridBtn.classList.add("open");
+      }
+    };
+
+    document.addEventListener("click", () => {
+      customGridMenu.classList.remove("open");
+      customGridBtn.classList.remove("open");
+    });
+
+    customGridMenu.onclick = (e) => e.stopPropagation();
+
+    document.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      item.onclick = () => {
+        const val = parseInt(item.dataset.value);
+        selectCustomGridSize(val);
+        customGridMenu.classList.remove("open");
+        customGridBtn.classList.remove("open");
+      };
+    });
+
+    syncCustomGridSelect();
+  }
+
+  // Native Grid size select fallback / link
   const gridSizeSelect = $("grid-size-select");
   if (gridSizeSelect) {
     gridSizeSelect.value = gridSize;
     gridSizeSelect.onchange = (e) => {
       gridSize = parseInt(e.target.value);
+      syncCustomGridSelect();
       if (screenerView === "multichart") {
         initChartGrid();
       }

@@ -153,7 +153,7 @@
                                 <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
                             </svg>
                         </button>
-                        <select id="grid-size-select" class="grid-select">
+                        <select id="grid-size-select" class="grid-select" style="display: none;">
                             <option value="2">2 Графика</option>
                             <option value="3">3 Графика</option>
                             <option value="4">4 Графика</option>
@@ -161,6 +161,20 @@
                             <option value="9">9 Графиков</option>
                             <option value="12">12 Графиков</option>
                         </select>
+                        <div class="custom-grid-select-wrap" id="custom-grid-select-wrap">
+                            <div class="custom-grid-select-btn" id="custom-grid-select-btn" role="button" aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                                <span id="custom-grid-select-val">4 Графика</span>
+                                <span class="custom-grid-select-arrow">▼</span>
+                            </div>
+                            <div class="custom-grid-select-menu" id="custom-grid-select-menu" role="listbox">
+                                <div class="custom-grid-select-item" data-value="2" role="option">2 Графика</div>
+                                <div class="custom-grid-select-item" data-value="3" role="option">3 Графика</div>
+                                <div class="custom-grid-select-item on" data-value="4" role="option">4 Графика</div>
+                                <div class="custom-grid-select-item" data-value="6" role="option">6 Графиков</div>
+                                <div class="custom-grid-select-item" data-value="9" role="option">9 Графиков</div>
+                                <div class="custom-grid-select-item" data-value="12" role="option">12 Графиков</div>
+                            </div>
+                        </div>
                         <div class="grid-nav">
                             <button class="grid-nav-btn" id="grid-prev" title="Назад">◀</button>
                             <span id="grid-page-label" class="grid-page-num">Стр. 1</span>

@@ -1,89 +1,77 @@
 "use strict";
 
 /**
- * Wall Scanner v4 — Robust MAD Z-Score Engine
+ * Wall Scanner v2 — Adaptive Dynamic Threshold Engine
  *
- * МАТЕМАТИЧЕСКАЯ ФОРМУЛА (идеальная):
- * ═══════════════════════════════════
- * 1. Binning: ордера группируются в ценовые бины шириной 0.25% от цены
- * 2. Robust Z-Score: вместо σ (standard deviation) используем MAD:
- *      MAD = median(|Xi - median(X)|)
- *      ModifiedZ = 0.6745 × (Xi - median) / MAD
- *    Это устойчиво к выбросам (фейковые стены MEXC/HTX не раздувают σ)
- * 3. Multi-layer фильтрация:
- *    a) ModifiedZ ≥ 4.0 (статистически значимый выброс)
- *    b) Минимум USD = max(ExchangeFloor, Volume×Ratio)
- *    c) Минимум 2 ордера в бине (одиночный гигант = спуфинг)
- *    d) Дистанция 0.08% – 5.0% от цены
- * 4. WallScore = (Z/4)^0.8 × VolumeFraction × 1/(1 + dist×0.3)
- *    VolumeFraction = binUSD / (coin24hVol × exWeight) — нормализация по ликвидности
+ * KEY PRINCIPLES:
+ * 1. ALL coins on every exchange are scanned (no artificial limit)
+ * 2. Dynamic thresholds: wall = level significantly above MEDIAN orderbook level
+ *    → $500K on Binance BTC might be noise, but $10K on Asterdex ALT is a wall
+ * 3. Persistence tracking: walls must survive ≥2 scans (anti-spoofing)
+ * 4. Wide distance range: 0.05% – 12% from current price
+ * 5. Parallel scanning across exchanges + coins for maximum speed
+ * 6. Real-time callback for WebSocket broadcast
  *
- * ANTI-SPOOF:
- *   - Одиночный ордер > 80% бина → score × 0.3 (вероятный спуф)
- *   - MEXC/HTX: жёсткие потолки + x3 минимумы
- *   - Бины с < 2 ордерами штрафуются
+ * FORMULA:
+ *   WallScore = RelativeSize^1.3 × DistanceFactor × PersistenceBonus
+ *   RelativeSize = LevelUSD / MedianUSD  (must be ≥ WALL_MULT)
+ *   DistanceFactor = 1 / (1 + 1.5 × |dist%|)
+ *   PersistenceBonus = min(2, 1 + (consecutiveScans - 2) × 0.1)
  */
 
-// ═══ Timing ══════════════════════════════════════════════════════════════════
+// ═══ Configuration ═══════════════════════════════════════════════════════════
 
-const REST_SCAN_GAP_MS = {
-  BN: 120000, BB: 5000, OX: 6000, BG: 5000,
-  MX: 8000,  KC: 6000, BX: 5000, HT: 8000,
-  GT: 8000,  HL: 5000, AD: 5000,
+const SCAN_GAP_MS    = 10000;  // minimum gap between scan cycles
+const API_TIMEOUT    = 3500;   // per-request timeout
+const POOL_EX        = 4;     // exchanges scanned in parallel
+const POOL_COIN      = 10;    // coins per exchange in parallel
+const COIN_DELAY_MS  = 120;   // delay between coin batches (avoid rate limits)
+const MAX_COINS_PER_EX = 60;  // Process top 60 coins max per exchange
+
+// ── Z-Score & Physics Constants ──
+const BIN_STEP_PCT   = 0.001; // 0.1% price bins
+const Z_THRESHOLD    = 5.0;   // mathematical Z-score (X - µ)/σ > 5.0
+
+const MIN_LIFETIME_MS = 120000; // 120s Time-In-Force (Anti-Spoofing)
+const MIN_DIST_PCT   = 0.05;  
+const MAX_DIST_PCT   = 5.0;
+const MIN_SCANS      = 2;     // must survive 2 consecutive scans
+const FLICKER_PENALTY = 0.5;  // penalty for walls that flicker
+
+const MAX_OUTPUT      = 120;   // max walls sent to frontend
+const MAX_PER_COIN    = 5;    // max walls per base symbol
+
+const CLUSTER_PCT     = 0.15; // cluster walls within 0.15% of each other
+
+// Base liquidity limits per exchange
+const EX_LIMITS = {
+  BN: 600000, BB: 400000, OX: 300000, BG: 250000,
+  KC: 200000, BX: 150000, MX: 1200000, GT: 200000,
+  HT: 1200000, HL: 300000, AD: 150000
 };
-const GLOBAL_SCAN_LOOP_MS = 1500;  // faster loop
 
-const API_TIMEOUT    = 2500;
-const POOL_EX        = 11;
-const POOL_COIN      = 30;
-const COIN_DELAY_MS  = 30;
-const MAX_COINS_PER_EX = 9999; // ALL coins
-
-// ═══ Physics Constants ═══════════════════════════════════════════════════════
-
-const BIN_STEP_PCT   = 0.0035;  // 0.35% bins
-const MAD_Z_THRESH   = 9.5;     // Stricter Z-score (was 6.0)
-const MIN_DIST_PCT   = 0.10;    // Min distance from price (%)
-const MAX_DIST_PCT   = 5.0;     // Max distance from price (%)
-const CLUSTER_PCT    = 0.40;    // Merge walls within 0.40% (better aggregation)
-const MAX_OUTPUT     = 80;      // Top walls
-const MAX_PER_COIN   = 3;       // Max walls per coin
-const MIN_ORDERS_IN_BIN = 2;    // Min orders in a bin
-
-// EX_CONFIG: floor (absolute min USD), vr (% of 24h vol), ceil (absolute max), depth, sp (spoof penalty)
-// vr heavily limits high-volume coins like BTC: e.g. vr:0.008 on $2B vol requires $16M absolute min wall
-const EX_CONFIG = {
-  //           floor        volRatio  ceiling       depth  spoofPenalty
-  BN: { floor: 1000000,  vr: 0.0120, ceil: 80000000,  depth: 1000, sp: 1.0  }, 
-  BB: { floor: 700000,   vr: 0.0100, ceil: 50000000,  depth: 500,  sp: 0.85 },
-  OX: { floor: 600000,   vr: 0.0100, ceil: 40000000,  depth: 400,  sp: 0.9  },
-  BG: { floor: 500000,   vr: 0.0120, ceil: 20000000,  depth: 100,  sp: 0.8  },
-  GT: { floor: 400000,   vr: 0.0120, ceil: 15000000,  depth: 100,  sp: 0.7  },
-  KC: { floor: 400000,   vr: 0.0120, ceil: 10000000,  depth: 100,  sp: 0.7  },
-  // "Шумные" биржи — ультра-жёсткие
-  MX: { floor: 5000000,  vr: 0.0220, ceil: 90000000,  depth: 500,  sp: 0.3  }, 
-  BX: { floor: 600000,   vr: 0.0150, ceil: 20000000,  depth: 100,  sp: 0.5  }, 
-  HT: { floor: 5000000,  vr: 0.0220, ceil: 70000000,  depth: 150,  sp: 0.3  },
-  // DEX / Новые
-  HL: { floor: 300000,   vr: 0.0075, ceil: 15000000,  depth: 50,   sp: 1.0  },
-  AD: { floor: 250000,   vr: 0.0090, ceil: 8000000,   depth: 100,  sp: 0.8  },
+// Orderbook depth per exchange (max supported / reasonable)
+const OB_DEPTH = {
+  BN: 100, BB: 100, OX: 100, BG: 100,
+  GT: 50,  MX: 100, KC: 100, BX: 100,
+  HT: 100, HL: 50,  AD: 100,
 };
 
 const EXCLUDED_BASES = new Set([
-  "USDT","USDC","DAI","BUSD","FDUSD","TUSD","USDP","USDE","PYUSD","USD1","EUR1","USDC1","BTC1",
+  "USDT","USDC","DAI","BUSD","FDUSD","TUSD","USDP","USDE","PYUSD", "USD1", "EUR1", "USDC1", "BTC1",
   "XAUT","PAXG","XAG","XAU","SILVER","GOLD",
   "EUR","GBP","JPY","AUD","USD","CHF","TRY","RUB","BRL",
 ]);
 
 // ═══ State ═══════════════════════════════════════════════════════════════════
 
+const levelHistory = new Map(); // "EX:SYM:PRICE8" → {firstSeen,lastSeen,scanId,consecutivePresent,misses}
 let detectedWalls = [];
 let scanRunning = false;
 let scanCount = 0;
 let onUpdateCb = null;
-const wsWalls = new Map();
 
-// ═══ Robust Statistics ═══════════════════════════════════════════════════════
+// ═══ Helpers ═════════════════════════════════════════════════════════════════
 
 function median(arr) {
   if (!arr.length) return 0;
@@ -92,38 +80,22 @@ function median(arr) {
   return s.length & 1 ? s[m] : (s[m - 1] + s[m]) * 0.5;
 }
 
-/**
- * MAD = Median Absolute Deviation
- * Modified Z-score = 0.6745 × (x - median) / MAD
- * 0.6745 is the 0.75th quantile of the standard normal distribution,
- * making MAD consistent with σ for normal distributions.
- * 
- * Key advantage: single outlier (spoof order) doesn't inflate the scale.
- */
-function madStats(values) {
-  if (values.length < 3) return { med: 0, mad: 1 };
-  const med = median(values);
-  const absDevs = values.map(v => Math.abs(v - med));
-  let mad = median(absDevs);
-  // CRITICAL: floor MAD to 5% of median to prevent Z-score explosion
-  // on deep uniform orderbooks (e.g. BTC on Binance where every level ≈ $1M)
-  const madFloor = Math.max(med * 0.05, 100);
-  if (mad < madFloor) mad = madFloor;
-  return { med, mad };
+function quantile(arr, q) {
+  if (!arr.length) return 0;
+  const s = arr.slice().sort((a, b) => a - b);
+  const pos = (s.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return s[lo];
+  return s[lo] * (hi - pos) + s[hi] * (pos - lo);
 }
 
-function modifiedZScore(value, med, mad) {
-  const raw = 0.6745 * (value - med) / mad;
-  return Math.min(raw, 50); // Cap at 50 to prevent score explosion
-}
-
-// ═══ Fetch Orderbook ═════════════════════════════════════════════════════════
+// ═══ Fetch orderbook ═════════════════════════════════════════════════════════
 
 async function fetchOB(ex, coin, apiFetch) {
   const sym = coin.sym;
   const cs = Number(coin.cs || 1);
-  const cfg = EX_CONFIG[ex] || EX_CONFIG.AD;
-  const depth = cfg.depth;
+  const depth = OB_DEPTH[ex] || 100;
   try {
     let bids = [], asks = [];
 
@@ -154,8 +126,8 @@ async function fetchOB(ex, coin, apiFetch) {
       const isSpot = sym.endsWith("_SPOT");
       const realSym = isSpot ? sym.replace("_SPOT", "") : sym;
       const url = isSpot
-        ? `https://api.bitget.com/api/v2/spot/market/orderbook?symbol=${realSym}&limit=${depth}`
-        : `https://api.bitget.com/api/v2/mix/market/orderbook?productType=USDT-FUTURES&symbol=${realSym}&limit=${depth}`;
+        ? `https://api.bitget.com/api/v2/spot/market/depth?symbol=${realSym}&limit=${depth}`
+        : `https://api.bitget.com/api/v2/mix/market/depth?productType=USDT-FUTURES&symbol=${realSym}&limit=${depth}`;
       const d = await apiFetch(url, API_TIMEOUT, 0);
       const r = d.data || {};
       if (r.bids) bids = r.bids.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * +q }));
@@ -214,8 +186,8 @@ async function fetchOB(ex, coin, apiFetch) {
       if (tick.bids) bids = tick.bids.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * (+q * actualCs) }));
       if (tick.asks) asks = tick.asks.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * (+q * actualCs) }));
     } else if (ex === "HL") {
-      const hlCoin = sym.replace("-USDT","").replace("USDT","");
-      const d = await apiFetch("https://api.hyperliquid.xyz/info", API_TIMEOUT, 0, "POST", { type: "l2Book", coin: hlCoin });
+      const coin = sym.replace("-USDT","").replace("USDT","");
+      const d = await apiFetch("https://api.hyperliquid.xyz/info", API_TIMEOUT, 0, "POST", { type: "l2Book", coin });
       const levels = d.levels || [[], []];
       bids = (levels[0] || []).slice(0, depth).map(l => ({ price: +l.px, qty: +l.sz, usd: +l.px * +l.sz }));
       asks = (levels[1] || []).slice(0, depth).map(l => ({ price: +l.px, qty: +l.sz, usd: +l.px * +l.sz }));
@@ -231,113 +203,129 @@ async function fetchOB(ex, coin, apiFetch) {
   }
 }
 
-// ═══ Binning Engine ══════════════════════════════════════════════════════════
+// ═══ Process one coin's orderbook ════════════════════════════════════════════
 
-const refPriceCache = new Map();
-
-function binOrders(sym, orders, currentPrice, side) {
+function binOrders(orders, currentPrice, side) {
   const bins = new Map();
-
-  // Anchor step to prevent jitter
-  if (!refPriceCache.has(sym)) refPriceCache.set(sym, currentPrice);
-  const refPrice = refPriceCache.get(sym);
-  const step = refPrice * BIN_STEP_PCT;
-
+  const step = currentPrice * BIN_STEP_PCT;
+  
   for (const o of orders) {
     if (o.usd <= 0) continue;
-    const distPct = Math.abs(o.price - currentPrice) / currentPrice * 100;
-    if (distPct > MAX_DIST_PCT || distPct < MIN_DIST_PCT * 0.5) continue;
+    const distPct = Math.abs(o.price - currentPrice) / currentPrice;
+    if (distPct > MAX_DIST_PCT / 100) continue;
 
-    const binIdx = Math.round(o.price / step);
+    const binIdx = side === "bid" ? Math.floor(o.price / step) : Math.ceil(o.price / step);
     if (!bins.has(binIdx)) {
-      bins.set(binIdx, { price: binIdx * step, usd: 0, count: 0, maxSingle: 0 });
+      const binPrice = side === "bid" ? (binIdx * step) + (step/2) : (binIdx * step) - (step/2);
+      bins.set(binIdx, { price: binPrice, usd: 0, count: 0 });
     }
     const b = bins.get(binIdx);
     b.usd += o.usd;
     b.count++;
-    if (o.usd > b.maxSingle) b.maxSingle = o.usd;
   }
-
   return Array.from(bins.values());
 }
 
-// ═══ Process One Coin ════════════════════════════════════════════════════════
-
-function processOrderbook(ex, coin, bids, asks) {
+function processOrderbook(ex, coin, bids, asks, currentScanId) {
   const price = coin.p;
   if (!price || price <= 0) return [];
   if (EXCLUDED_BASES.has(coin.base)) return [];
 
-  const cfg = EX_CONFIG[ex] || EX_CONFIG.AD;
+  const binnedBids = binOrders(bids.slice(2), price, "bid");
+  const binnedAsks = binOrders(asks.slice(2), price, "ask");
 
-  // Skip first 3 levels (spread noise)
-  const binnedBids = binOrders(coin.sym, bids.slice(3), price, "bid");
-  const binnedAsks = binOrders(coin.sym, asks.slice(3), price, "ask");
+  // Calculate orderbook side statistics for Z-Score
+  const calculateZStats = (arr) => {
+    const vals = arr.filter(b => b.usd > 0).map(b => b.usd);
+    if (!vals.length) return { mu: 0, sigma: 1 };
+    
+    // Mean (µ)
+    const sum = vals.reduce((a, b) => a + b, 0);
+    const mu = sum / vals.length;
+    
+    // Standard Deviation (σ)
+    const sqDiffSum = vals.reduce((a, b) => a + Math.pow(b - mu, 2), 0);
+    const variance = sqDiffSum / vals.length;
+    let sigma = Math.sqrt(variance);
 
-  // ── Robust Z-Score stats per side ──
-  const getStats = (bins) => {
-    const vals = bins.filter(b => b.usd > 0).map(b => b.usd);
-    return madStats(vals);
+    // Guard against sigma being effectively 0 (zero variance in empty books)
+    if (sigma < 1) sigma = 1;
+
+    return { mu, sigma };
   };
 
-  const bidStats = getStats(binnedBids);
-  const askStats = getStats(binnedAsks);
-
-  // ── Dynamic minimum USD ──
-  // = max(exchangeFloor, coin24hVol × volRatio)
-  // Caps at ceiling to reject impossible values
-  const vol24 = coin.v || 0;
-  const volMin = vol24 > 0 ? vol24 * cfg.vr : 0;
-  const minUSD = Math.max(cfg.floor, volMin);
+  const bidStats = calculateZStats(binnedBids);
+  const askStats = calculateZStats(binnedAsks);
 
   const walls = [];
 
   const processBin = (bin, side) => {
     if (!bin.usd || isNaN(bin.usd)) return;
 
-    // 1. Distance filter
+    // 1. Distance check
     const dist = Math.abs(bin.price - price) / price * 100;
     if (dist < MIN_DIST_PCT || dist > MAX_DIST_PCT) return;
 
-    // 2. Ceiling filter — reject impossibly large walls (API errors / fake data)
-    if (bin.usd > cfg.ceil) return;
-
-    // 3. Minimum USD filter
-    if (bin.usd < minUSD) return;
-
-    // 4. Robust Z-Score filter
+    // 2. Statistical Z-Score filter (X - µ) / σ
     const stats = side === "bid" ? bidStats : askStats;
-    const Z = modifiedZScore(bin.usd, stats.med, stats.mad);
-    if (Z < MAD_Z_THRESH) return;
-
-    // 5. Anti-spoof: single order dominance penalty
-    let spoofMult = 1.0;
-    if (bin.count < MIN_ORDERS_IN_BIN) {
-      spoofMult *= 0.4; // Single order = very suspicious
+    const Z = (bin.usd - stats.mu) / stats.sigma;
+    if (Z < Z_THRESHOLD) return;
+    
+    // 3. Dynamic absolute liquidity floor to stop fake walls on high-cap coins
+    let minDust = 80000;
+    if (["BX", "MX", "GT", "HT"].includes(ex)) minDust = 250000;
+    
+    // A wall must be at least 0.15% of the coin's 24H volume (capped at $3M for BTC)
+    if (coin.v && coin.v > 0) {
+      const volReq = Math.min(3000000, coin.v * 0.0015);
+      minDust = Math.max(minDust, volReq);
     }
-    if (bin.maxSingle > bin.usd * 0.80 && bin.count > 1) {
-      spoofMult *= 0.5; // One order is >80% of the bin
-    }
-
-    // 6. Exchange spoof penalty (noisy exchanges)
-    spoofMult *= cfg.sp;
-
-    // 7. Activity bonus (trade velocity)
+    
+    if (bin.usd < minDust) return;
+    
+    // 4. Honest Trade Activity Filter (New)
+    // If a coin has very low TPH (Trades Per Hour) relative to its size, 
+    // we penalize the wall score or filter it out entirely if it's likely spoofing.
     const tph = coin.trades || 0;
-    let activityMult = 1.0;
-    if (tph < 30) activityMult = 0.6;       // Dead coin
-    else if (tph > 2000) activityMult = 1.15; // Very active
+    let activityBonus = 1.0;
+    
+    if (tph < 50) {
+      // Very low activity: might be a spoof or dead coin
+      if (bin.usd > 500000) activityBonus = 0.5; // Large wall on dead coin = suspicious
+    } else if (tph > 2000) {
+      activityBonus = 1.2; // High activity: walls are more likely to be real
+    }
 
-    // ═══ WALL SCORE FORMULA ═══
-    // WallScore = log(1 + Z/threshold) × volumeSignificance × distanceFactor × modifiers
-    // log1p prevents explosion: log(1+4)=1.6, log(1+10)=2.4, log(1+50)=3.9
-    const zNorm = Math.log1p(Z / MAD_Z_THRESH);
-    const volSignificance = vol24 > 0 ? Math.min(1, Math.sqrt(bin.usd / vol24) * 10) : 0.5;
-    const distFactor = 1 / (1 + dist * 0.3);
-    const wallScore = zNorm * volSignificance * distFactor * spoofMult * activityMult * 5;
+    // pass Z as relSize so UI shows "Z=4.5"
+    const relSize = Z;
 
-    // Final quality gate — only real meaningful walls pass
-    if (wallScore < 5.0) return;
+    // ── Anti-Spoofing Timer (2 scans = ~12s) ──
+    const lk = `${ex}:${coin.sym}:${side}:${Math.round(bin.price * 1000)/1000}`;
+    let h = levelHistory.get(lk);
+    const now = Date.now();
+
+    if (!h) {
+      h = { firstSeen: now, lastSeen: now, scanId: currentScanId, consecutivePresent: 1, misses: 0 };
+      levelHistory.set(lk, h);
+      return; 
+    }
+
+    if (h.scanId === currentScanId - 1) {
+      h.consecutivePresent++;
+      h.misses = 0;
+    } else if (h.scanId < currentScanId - 1) {
+      h.firstSeen = now;
+      h.consecutivePresent = 1;
+      h.misses++;
+    }
+    h.scanId = currentScanId;
+    h.lastSeen = now;
+
+    // Survive MIN_SCANS consecutive logic (Very fast update)
+    if (h.consecutivePresent < 2) return;
+
+    // Output visual properties
+    const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
 
     walls.push({
       base: coin.base,
@@ -349,9 +337,9 @@ function processOrderbook(ex, coin, bids, asks) {
       wallK: Math.round(bin.usd / 1000),
       rtwi: +wallScore.toFixed(2),
       pct: +dist.toFixed(3),
-      relSize: +Z.toFixed(1),
+      relSize: +relSize.toFixed(1),
       market: coin.sym.endsWith("_SPOT") ? "spot" : "futures",
-      age: 0,
+      age: Math.round((now - h.firstSeen) / 1000),
       count: bin.count,
     });
   };
@@ -362,7 +350,7 @@ function processOrderbook(ex, coin, bids, asks) {
   return walls;
 }
 
-// ═══ Cluster Nearby Walls ════════════════════════════════════════════════════
+// ═══ Cluster nearby walls ════════════════════════════════════════════════════
 
 function clusterWalls(walls) {
   if (!walls.length) return [];
@@ -374,15 +362,13 @@ function clusterWalls(walls) {
     const w = walls[i];
     const gap = Math.abs(w.price - cur.price) / cur.price * 100;
     if (gap <= CLUSTER_PCT && w.side === cur.side) {
-      // Merge: weighted average price, sum USD
-      const totalS = cur.S + w.S;
-      cur.price = (cur.price * cur.S + w.price * w.S) / totalS;
-      cur.S = totalS;
+      cur.S += w.S;
       cur.wallK = Math.round(cur.S / 1000);
       cur.rtwi = Math.max(cur.rtwi, w.rtwi);
       cur.relSize = Math.max(cur.relSize, w.relSize);
-      cur.count += w.count;
-      cur.pct = +((Math.abs(cur.price - (cur._refP || cur.price)) / (cur._refP || cur.price)) * 100).toFixed(3) || cur.pct;
+      cur.count++;
+      cur.price = (cur.price * (cur.count - 1) + w.price) / cur.count;
+      cur.pct = +((cur.pct * (cur.count - 1) + w.pct) / cur.count).toFixed(3);
       cur.age = Math.max(cur.age, w.age);
     } else {
       out.push(cur);
@@ -393,188 +379,38 @@ function clusterWalls(walls) {
   return out;
 }
 
-// ═══ WS Integration ══════════════════════════════════════════════════════════
-
-function injectWsOrderbook(ex, base, tickers, bids, asks) {
-  const key = `${ex}:${base}`;
-  const t = tickers.get(key);
-  if (!t || t.p <= 0 || t.v <= 0) return;
-  const walls = processOrderbook(ex, t,
-    bids.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * +q })),
-    asks.map(([p, q]) => ({ price: +p, qty: +q, usd: +p * +q }))
-  );
-  if (walls && walls.length > 0) {
-    wsWalls.set(key, walls);
-  } else {
-    wsWalls.delete(key);
-  }
-}
-
-// ═══ Spot Symbols Loader (only for density map) ═════════════════════════════
-
-const spotTickers = new Map(); // ex:SYM_SPOT → {sym, base, ex, p, v, ...}
-let spotLoaded = false;
-
-async function loadSpotSymbols(apiFetch) {
-  if (spotLoaded) return;
-  spotLoaded = true;
-  console.log("[WALL] Loading spot symbols for density map...");
-  let total = 0;
-  try {
-    // ── Binance Spot
-    const bnData = await apiFetch("https://api.binance.com/api/v3/ticker/24hr", 5000, 0);
-    if (Array.isArray(bnData)) {
-      for (const t of bnData) {
-        if (!t.symbol.endsWith("USDT")) continue;
-        const base = t.symbol.replace("USDT", "");
-        if (EXCLUDED_BASES.has(base)) continue;
-        const key = `BN:${t.symbol}_SPOT`;
-        spotTickers.set(key, {
-          key, sym: t.symbol + "_SPOT", base, ex: "BN",
-          p: +t.lastPrice, v: +t.quoteVolume, trades: +t.count / 24 || 0,
-        });
-        total++;
-      }
-    }
-  } catch (_) {}
-  try {
-    // ── Bybit Spot
-    const bbData = await apiFetch("https://api.bybit.com/v5/market/tickers?category=spot", 5000, 0);
-    for (const t of (bbData?.result?.list || [])) {
-      if (!t.symbol.endsWith("USDT")) continue;
-      const base = t.symbol.replace("USDT", "");
-      if (EXCLUDED_BASES.has(base)) continue;
-      const key = `BB:${t.symbol}_SPOT`;
-      spotTickers.set(key, {
-        key, sym: t.symbol + "_SPOT", base, ex: "BB",
-        p: +t.lastPrice, v: +t.turnover24h, trades: 0,
-      });
-      total++;
-    }
-  } catch (_) {}
-  try {
-    // ── OKX Spot
-    const oxData = await apiFetch("https://www.okx.com/api/v5/market/tickers?instType=SPOT", 5000, 0);
-    for (const t of (oxData?.data || [])) {
-      if (!t.instId.endsWith("-USDT")) continue;
-      const base = t.instId.replace("-USDT", "");
-      if (EXCLUDED_BASES.has(base)) continue;
-      const key = `OX:${t.instId}_SPOT`;
-      spotTickers.set(key, {
-        key, sym: t.instId + "_SPOT", base, ex: "OX",
-        p: +t.last, v: +t.volCcy24h, trades: 0,
-      });
-      total++;
-    }
-  } catch (_) {}
-  try {
-    // ── Bitget Spot
-    const bgData = await apiFetch("https://api.bitget.com/api/v2/spot/market/tickers", 5000, 0);
-    for (const t of (bgData?.data || [])) {
-      if (!t.symbol.endsWith("USDT")) continue;
-      const base = t.symbol.replace("USDT", "");
-      if (EXCLUDED_BASES.has(base)) continue;
-      const key = `BG:${t.symbol}_SPOT`;
-      spotTickers.set(key, {
-        key, sym: t.symbol + "_SPOT", base, ex: "BG",
-        p: +t.lastPr, v: +t.usdtVolume, trades: 0,
-      });
-      total++;
-    }
-  } catch (_) {}
-  try {
-    // ── Gate Spot
-    const gtData = await apiFetch("https://api.gateio.ws/api/v4/spot/tickers", 5000, 0);
-    if (Array.isArray(gtData)) {
-      for (const t of gtData) {
-        if (!t.currency_pair?.endsWith("_USDT")) continue;
-        const base = t.currency_pair.replace("_USDT", "");
-        if (EXCLUDED_BASES.has(base)) continue;
-        const key = `GT:${t.currency_pair}_SPOT`;
-        spotTickers.set(key, {
-          key, sym: t.currency_pair + "_SPOT", base, ex: "GT",
-          p: +t.last, v: +t.quote_volume, trades: 0,
-        });
-        total++;
-      }
-    }
-  } catch (_) {}
-  console.log(`[WALL] Loaded ${total} spot symbols for density scanning`);
-}
-
-const MAX_SPOT_PER_EX = 9999;    // Top 100 spot by volume per exchange
-const MIN_SPOT_VOL    = 0; // Min $2M 24h volume for spot
-
-// ═══ Scan Exchange ═══════════════════════════════════════════════════════════
-
-const exLastScan = {};
-const exCachedWalls = {};
+// ═══ Scan one exchange ═══════════════════════════════════════════════════════
 
 async function scanExchange(ex, tickers, apiFetch, currentScanId) {
-  const gap = REST_SCAN_GAP_MS[ex] || 5000;
-  const now = Date.now();
-  const cached = exCachedWalls[ex] || [];
-
-  if (exLastScan[ex] && now - exLastScan[ex] < gap) {
-    return cached;
-  }
-
-  exLastScan[ex] = now;
-
-  // Get ALL coins for this exchange — futures from tickers + spot from spotTickers
+  // Get ALL coins for this exchange
   const exCoins = [];
-  const cfg = EX_CONFIG[ex] || EX_CONFIG.AD;
-  const volMin = cfg.floor * 1.5; // Dynamic pre-filter to drastically save IP requests
-
   for (const [, t] of tickers) {
-    if (t.ex === ex && t.p > 0 && t.v > volMin) {
+    if (t.ex === ex && t.p > 0 && t.v > 0) {
       if (EXCLUDED_BASES.has(t.base)) continue;
       exCoins.push(t);
     }
   }
-  // Add spot coins — top by volume, capped per exchange
-  const spotForEx = [];
-  for (const [, t] of spotTickers) {
-    if (t.ex === ex && t.p > 0 && t.v > volMin) {
-      if (EXCLUDED_BASES.has(t.base)) continue;
-      spotForEx.push(t);
-    }
-  }
-  spotForEx.sort((a, b) => (b.v || 0) - (a.v || 0));
-  for (let si = 0; si < Math.min(spotForEx.length, MAX_SPOT_PER_EX); si++) {
-    exCoins.push(spotForEx[si]);
-  }
-
-  // Sort by volume — highest volume first
+  // Sort by volume — process highest volume first
   exCoins.sort((a, b) => (b.v || 0) - (a.v || 0));
 
+  // Limit to MAX_COINS_PER_EX (e.g. top 60) to avoid IP ban!
   if (exCoins.length > MAX_COINS_PER_EX) {
     exCoins.length = MAX_COINS_PER_EX;
   }
 
-  // Per-exchange rate limit: batch size + delay
-  const EX_RATE = {
-    BN: { batch: 3, delay: 1000 },  // Binance: Smart fast limit
-    OX: { batch: 12, delay: 200 },  // OKX: moderate
-    GT: { batch: 10, delay: 300 },  // Gate: strict
-    KC: { batch: 12, delay: 200 },  // KuCoin: moderate
-    MX: { batch: 10, delay: 300 },  // MEXC: strict
-    HT: { batch: 15, delay: 200 },  // HTX: moderate
-  };
-  const rate = EX_RATE[ex] || { batch: POOL_COIN, delay: COIN_DELAY_MS };
-
   const walls = [];
   let ok = 0, fail = 0;
 
-  for (let i = 0; i < exCoins.length; i += rate.batch) {
-    const batch = exCoins.slice(i, i + rate.batch);
+  // Parallel batches of POOL_COIN
+  for (let i = 0; i < exCoins.length; i += POOL_COIN) {
+    const batch = exCoins.slice(i, i + POOL_COIN);
     const results = await Promise.allSettled(
       batch.map(async (coin) => {
         try {
           const { bids, asks } = await fetchOB(ex, coin, apiFetch);
           if (!bids.length && !asks.length) { fail++; return []; }
           ok++;
-          return processOrderbook(ex, coin, bids, asks);
+          return processOrderbook(ex, coin, bids, asks, currentScanId);
         } catch (_) {
           fail++;
           return [];
@@ -584,47 +420,39 @@ async function scanExchange(ex, tickers, apiFetch, currentScanId) {
     for (const r of results) {
       if (r.status === "fulfilled" && r.value) walls.push(...r.value);
     }
-    if (i + rate.batch < exCoins.length) {
-      // Early abort: if >50% fail, exchange is rate-limiting us — stop
-      const failRate = fail / (ok + fail + 1);
-      if (failRate > 0.5 && (ok + fail) > 20) {
-        console.log(`[WALL] ${ex}: Aborting — ${Math.round(failRate*100)}% fail rate (rate limit)`);
-        break;
-      }
-      const extraDelay = failRate > 0.3 ? 200 : 0;
-      await new Promise(r => setTimeout(r, rate.delay + extraDelay));
+    // Small delay to avoid rate limits
+    if (i + POOL_COIN < exCoins.length) {
+      await new Promise(r => setTimeout(r, COIN_DELAY_MS));
     }
   }
 
-  exCachedWalls[ex] = walls;
-  const spotCount = exCoins.filter(c => c.sym.endsWith("_SPOT")).length;
-  const futCount = exCoins.length - spotCount;
-  console.log(`[WALL] ${ex}: ${futCount}F+${spotCount}S=${exCoins.length} coins, ${ok} OK, ${fail} fail, ${walls.length} walls`);
+  console.log(`[WALL] ${ex}: ${exCoins.length} coins, ${ok} OK, ${fail} fail, ${walls.length} raw walls`);
   return walls;
 }
 
-// ═══ Quick Cluster & Publish Loop (Instant) ════════════════════════════════
+// ═══ Full scan cycle ═════════════════════════════════════════════════════════
 
-async function runCombinerLoop() {
+async function runFullScan(tickers, apiFetch) {
   if (scanRunning) return;
   scanRunning = true;
+  const t0 = Date.now();
   scanCount++;
-  
+  const currentScanId = scanCount;
+
   try {
-    const t0 = Date.now();
     const allWalls = [];
-    
-    // Merge from cached REST results
-    for (const ex in exCachedWalls) {
-      allWalls.push(...exCachedWalls[ex]);
+    const exchanges = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
+
+    // Scan exchanges in parallel pools of POOL_EX
+    for (let i = 0; i < exchanges.length; i += POOL_EX) {
+      const chunk = exchanges.slice(i, i + POOL_EX);
+      const chunkResults = await Promise.all(
+        chunk.map(ex => scanExchange(ex, tickers, apiFetch, currentScanId))
+      );
+      for (const w of chunkResults) allWalls.push(...w);
     }
 
-    // Merge WebSocket walls
-    for (const [, wsArr] of wsWalls) {
-      allWalls.push(...wsArr);
-    }
-
-    // Cluster by coin+side
+    // ── Cluster by coin+side ──
     const groups = new Map();
     for (const w of allWalls) {
       const k = `${w.ex}:${w.base}:${w.side}`;
@@ -637,10 +465,10 @@ async function runCombinerLoop() {
       clustered.push(...clusterWalls(cw));
     }
 
-    // Sort by wall score
+    // Sort by wall score (strongest first)
     clustered.sort((a, b) => b.rtwi - a.rtwi || b.S - a.S);
 
-    // Limit per base
+    // Limit per base symbol
     const coinCount = new Map();
     const limited = [];
     for (const w of clustered) {
@@ -652,65 +480,47 @@ async function runCombinerLoop() {
 
     detectedWalls = limited.slice(0, MAX_OUTPUT);
 
-    const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
-    // console.log(`[WALL] Output #${scanCount}: ${allWalls.length} raw → ${clustered.length} clustered → ${detectedWalls.length} output`);
-    if (detectedWalls.length > 0 && scanCount % 5 === 0) {
-      const top = detectedWalls[0];
-      console.log(`[WALL] Top: ${top.base} ${top.side} ${top.wallK}K$ ${top.pct}% (${top.ex}) score=${top.rtwi.toFixed(2)} Z=${top.relSize}`);
+    // ── Cleanup old history ──
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    for (const [key, h] of levelHistory) {
+      if (h.lastSeen < cutoff) levelHistory.delete(key);
     }
 
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`[WALL] Scan #${currentScanId} done in ${elapsed}s: ${allWalls.length} raw → ${clustered.length} clustered → ${detectedWalls.length} output`);
+    if (detectedWalls.length > 0) {
+      const top = detectedWalls[0];
+      console.log(`[WALL] Top: ${top.base} ${top.side} ${top.wallK}K$ at ${top.pct}% dist (${top.ex}) score=${top.rtwi} relSize=${top.relSize}x`);
+    }
+
+    // Broadcast to clients
     if (onUpdateCb) onUpdateCb(detectedWalls);
 
   } catch (e) {
-    console.error("[WALL] Combine error:", e.message);
+    console.error("[WALL] Scan error:", e.message);
   } finally {
     scanRunning = false;
   }
 }
 
-// ═══ Independent Exchange Loops ══════════════════════════════════════════════
+// ═══ Continuous scan loop ════════════════════════════════════════════════════
 
-function startScannerLoops(tickers, apiFetch) {
-  const exchanges = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
-  
-  // 1. Independent fetch loops for each API
-  for (const ex of exchanges) {
-    (async () => {
-      let runId = 0;
-      while (true) {
-        runId++;
-        try {
-          await scanExchange(ex, tickers, apiFetch, runId);
-        } catch (e) {
-          console.error(`[WALL] Loop error ${ex}: ${e.message}`);
-        }
-        const gap = REST_SCAN_GAP_MS[ex] || 5000;
-        await new Promise(r => setTimeout(r, gap));
-      }
-    })();
+async function scanLoop(tickers, apiFetch) {
+  while (true) {
+    await runFullScan(tickers, apiFetch);
+    await new Promise(r => setTimeout(r, SCAN_GAP_MS));
   }
-  
-  // 2. Fast continuous combinator loop
-  setInterval(() => {
-    runCombinerLoop();
-  }, GLOBAL_SCAN_LOOP_MS);
 }
 
 // ═══ Public API ══════════════════════════════════════════════════════════════
 
 module.exports = {
   getWalls: () => detectedWalls,
-  injectWsOrderbook,
   startScanning: (tickers, apiFetch, onUpdate) => {
-    console.log("[WALL] Starting Wall Scanner v4 — Full Coverage MAD Z-Score Engine");
-    console.log(`[WALL] Config: ALL coins (futures+spot), MAD_Z≥${MAD_Z_THRESH}, bins=${BIN_STEP_PCT*100}%, dist=${MIN_DIST_PCT}-${MAX_DIST_PCT}%`);
+    console.log("[WALL] Starting Wall Scanner v3 — Statistical Z-Score Engine (Binning + ADV + TIF)");
+    console.log("[WALL] Config: Top " + MAX_COINS_PER_EX + " coins per exchange, Z_THRESHOLD=" + Z_THRESHOLD + ", dist=" + MIN_DIST_PCT + "%-" + MAX_DIST_PCT + "%");
     onUpdateCb = onUpdate || null;
-    // Load spot symbols first, then start independent loops
-    setTimeout(async () => {
-      await loadSpotSymbols(apiFetch);
-      startScannerLoops(tickers, apiFetch);
-    }, 8000);
-    // Refresh spot prices every 5 minutes
-    setInterval(() => { spotLoaded = false; loadSpotSymbols(apiFetch); }, 300000);
+    // Initial delay to let exchanges populate tickers
+    setTimeout(() => scanLoop(tickers, apiFetch), 6000);
   },
 };

@@ -1,36 +1,17 @@
-# DB and runtime files
-*.db
-*.db-journal
-*.exe
-aggregator.exe
-
-# Node.js
+# Dependencies
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
 
-# Logs
+# Logs and temp files
 *.log
-server_out.txt
-
-# Временные файлы кэша (большие JSON файлы, которые генерит сканер)
-t*.json
-tmp*.json
-
-# Тестовые и черновые скрипты (чтобы не засорять прод)
-scratch_*.js
-test_*.js
-check_*.js
-diag*.js
-
-# Конфиги сред и переменные окружения (обезопасить доступы)
-.env
-.env.*
-
-# Файлы операционных систем и редакторов кода
-.DS_Store
-Thumbs.db
+*.txt
 .vscode/
-.idea/
+.gemini/
+
+# Scratch and test files
+node-server/0
+node-server/t*.json
+node-server/tmp*.json
+node-server/check_*.js
+node-server/diag*.js
+node-server/test_*.js
+node-server/test-*.js

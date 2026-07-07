@@ -51,7 +51,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
     for (let i = 0; i < bnSymbols.length; i += bnBatchSize) {
       const chunk = bnSymbols.slice(i, i + bnBatchSize);
       const connId = `BN-Trades-${i}`;
-      mkExWs(connId, "wss://fstream.binance.com/stream", (raw) => {
+      mkExWs(connId, "wss://fstream.binance.com/market/stream", (raw) => {
         try {
           const payload = JSON.parse(raw.toString());
           const d = payload.data;
@@ -74,7 +74,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
     }
 
     // 2. Stats stream: 24h tickers every 1s (Volumes, OHLC, Count)
-    mkExWs("BN-Stats", "wss://fstream.binance.com/ws/!ticker@arr", (raw) => {
+    mkExWs("BN-Stats", "wss://fstream.binance.com/market/ws/!ticker@arr", (raw) => {
       try {
         const batch = JSON.parse(raw.toString());
         if (!Array.isArray(batch)) return;
@@ -94,7 +94,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
     });
 
     // 3. Funding: markPrice@arr every 1 second
-    mkExWs("BN-MP", "wss://fstream.binance.com/ws/!markPrice@arr@1s", (raw) => {
+    mkExWs("BN-MP", "wss://fstream.binance.com/market/ws/!markPrice@arr@1s", (raw) => {
       try {
         const batch = JSON.parse(raw.toString());
         for (const d of batch) {
