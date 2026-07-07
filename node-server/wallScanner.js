@@ -30,7 +30,7 @@ const MAX_COINS_PER_EX = 60;  // Process top 60 coins max per exchange
 
 // ── Z-Score & Physics Constants ──
 const BIN_STEP_PCT   = 0.001; // 0.1% price bins
-const Z_THRESHOLD    = 5.0;   // mathematical Z-score (X - µ)/σ > 5.0
+const Z_THRESHOLD    = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
 
 const MIN_LIFETIME_MS = 120000; // 120s Time-In-Force (Anti-Spoofing)
 const MIN_DIST_PCT   = 0.05;  
@@ -221,11 +221,15 @@ function binOrders(orders, currentPrice, side) {
     const binIdx = side === "bid" ? Math.floor(o.price / step) : Math.ceil(o.price / step);
     if (!bins.has(binIdx)) {
       const binPrice = side === "bid" ? (binIdx * step) + (step/2) : (binIdx * step) - (step/2);
-      bins.set(binIdx, { price: binPrice, usd: 0, count: 0 });
+      bins.set(binIdx, { price: binPrice, usd: 0, count: 0, maxOrderPrice: o.price, maxOrderUsd: o.usd });
     }
     const b = bins.get(binIdx);
     b.usd += o.usd;
     b.count++;
+    if (o.usd > b.maxOrderUsd) {
+      b.maxOrderUsd = o.usd;
+      b.maxOrderPrice = o.price;
+    }
   }
   return Array.from(bins.values());
 }
@@ -276,12 +280,15 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     if (Z < Z_THRESHOLD) return;
     
     // 3. Dynamic absolute liquidity floor to stop fake walls on high-cap coins
-    let minDust = 80000;
-    if (["BX", "MX", "GT", "HT"].includes(ex)) minDust = 250000;
+    let minDust = 30000;
+    if (ex === "BN" || ex === "BB") minDust = 50000;
+    if (ex === "BX") minDust = 250000; // Keep BingX as requested
     
-    // A wall must be at least 0.15% of the coin's 24H volume (capped at $3M for BTC)
+    // A wall must be at least 0.05% of the coin's 24H volume (0.15% for BX)
     if (coin.v && coin.v > 0) {
-      const volReq = Math.min(3000000, coin.v * 0.0015);
+      const volReq = ex === "BX"
+        ? Math.min(3000000, coin.v * 0.0015)
+        : Math.min(3000000, coin.v * 0.0005);
       minDust = Math.max(minDust, volReq);
     }
     
@@ -304,7 +311,7 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     const relSize = Z;
 
     // ── Anti-Spoofing Timer (2 scans = ~12s) ──
-    const lk = `${ex}:${coin.sym}:${side}:${Math.round(bin.price * 1000)/1000}`;
+    const lk = `${ex}:${coin.sym}:${side}:${+bin.maxOrderPrice.toPrecision(7)}`;
     let h = levelHistory.get(lk);
     const now = Date.now();
 
