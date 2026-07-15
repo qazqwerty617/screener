@@ -15,3 +15,8 @@ node-server/check_*.js
 node-server/diag*.js
 node-server/test_*.js
 node-server/test-*.js
+
+# Go scanner binaries and data
+go-scanner/*.exe
+go-scanner/data/
+go-scanner/*.tmp
