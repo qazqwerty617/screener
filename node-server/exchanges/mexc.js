@@ -88,32 +88,22 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   function connectWs() {
     if (updateExStatus) updateExStatus("MX", "online");
 
-    // Split into 3 connections
-    const connCount = 3;
-    const chunkSize = Math.ceil(mxSyms.length / connCount);
-    
-    for (let c = 0; c < connCount; c++) {
-      const connSyms = mxSyms.slice(c * chunkSize, (c + 1) * chunkSize);
-      if (!connSyms.length) continue;
-
-      mkExWs(`MX${c === 0 ? "" : "_" + c}`, "wss://contract.mexc.com/edge", (raw) => {
-        try {
-          const d = JSON.parse(raw.toString());
-          
-          // push.ticker — has bid1/ask1 for mid-price + stats
-          if (d.channel === "push.ticker" && d.data) {
-            const tick = d.data;
-            const sym = d.symbol || tick.symbol;
-            if (!sym) return;
+    mkExWs("MX", "wss://contract.mexc.com/edge", (raw) => {
+      try {
+        const d = JSON.parse(raw.toString());
+        
+        if (d.channel === "push.tickers" && Array.isArray(d.data)) {
+          for (const tick of d.data) {
+            const sym = tick.symbol;
+            if (!sym) continue;
             const t = tickers.get("MX:" + sym);
-            if (!t) return;
+            if (!t) continue;
 
-            // Mid-price from best bid/ask (pro terminal accuracy)
-            const bid = +(tick.bid1 || 0);
-            const ask = +(tick.ask1 || 0);
+            const bid = +(tick.maxBidPrice || 0);
+            const ask = +(tick.minAskPrice || 0);
             if (bid > 0 && ask > 0) {
               t.p = (bid + ask) / 2;
-              t._wsMid = true; // flag: WS mid-price active
+              t._wsMid = true;
             } else {
               const lp = +(tick.lastPrice || 0);
               if (lp > 0) t.p = lp;
@@ -122,42 +112,21 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             if (tick.amount24) t.v = +tick.amount24;
             if (tick.high24Price) t.h = +tick.high24Price;
             if (tick.lower24Price) t.l = +tick.lower24Price;
+            if (tick.riseFallRate) {
+              t.o = t.p / (1 + +tick.riseFallRate);
+            }
             if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
             dirtyKeys.add(t.key);
           }
-
-          // push.deal — also update price from actual trades as backup
-          if (d.channel === "push.deal" && d.data) {
-            const tick = d.data;
-            const sym = d.symbol || tick.symbol;
-            if (!sym) return;
-            const t = tickers.get("MX:" + sym);
-            if (t && !t._wsMid) {
-              const lp = +(tick.p || 0);
-              if (lp > 0) {
-                t.p = lp;
-                if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
-                dirtyKeys.add(t.key);
-              }
-            }
-          }
-        } catch (_) {}
-      }, (ws) => {
-        const subBatch = 20;
-        for (let i = 0; i < connSyms.length; i += subBatch) {
-          const batch = connSyms.slice(i, i + subBatch);
-          setTimeout(() => {
-            if (ws.readyState === 1) {
-              batch.forEach(sym => {
-                ws.send(JSON.stringify({ method: "sub.ticker", param: { symbol: sym } }));
-                ws.send(JSON.stringify({ method: "sub.deal", param: { symbol: sym } }));
-              });
-            }
-          }, (i / subBatch) * 50);
         }
-        const ping = setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ method: "ping" })); else clearInterval(ping); }, 15000);
-      });
-    }
+      } catch (_) {}
+    }, (ws) => {
+      ws.send(JSON.stringify({ method: "sub.tickers", param: {} }));
+      const ping = setInterval(() => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ method: "ping" }));
+        else clearInterval(ping);
+      }, 15000);
+    });
   }
 
   return { init };

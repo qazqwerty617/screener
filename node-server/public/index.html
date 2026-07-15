@@ -635,7 +635,7 @@
                         <path d="M3 3v18h18"></path>
                         <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"></path>
                     </svg>
-                    <span>Мультиграфики</span>
+                    <span>Формации</span>
                 </div>
 
                 <div class="fg-tf-switcher">
@@ -649,10 +649,35 @@
                     <button class="fg-tf-btn" data-tf="1w">1Н</button>
                 </div>
 
-                <!-- Only formations filter toggle (Каскады) -->
+                <!-- Formations Selection Dropdown -->
+                <div class="custom-grid-select-wrap" id="formations-select-wrap" style="margin-right: 6px;">
+                    <div class="settings-btn" id="formations-select-btn" role="button" aria-haspopup="listbox" aria-expanded="false" tabindex="0" title="Выбор формации" style="height: 24px; display: flex; align-items: center; gap: 6px; background: var(--bg3); border: 1px solid var(--bd2); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--t2); box-sizing: border-box; transition: all 0.15s ease; font-size: 11px; font-weight: 600; min-width: 155px;">
+                        <span id="formations-select-text">Каскады</span>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: auto;">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </div>
+                    <div class="custom-grid-select-menu" id="formations-select-menu" role="listbox" style="min-width: 170px; right: auto; left: 0;">
+                        <div style="padding: 8px 12px; border-bottom: 1px solid var(--bd2); font-size: 10px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">Выберите формацию</div>
+                        <div class="custom-grid-select-item on" data-value="cascades" role="option">Каскады уровней</div>
+                        <div class="custom-grid-select-item" data-value="breakout" role="option">Горизонтальный уровень</div>
+                        <div class="custom-grid-select-item" data-value="trendline" role="option">Наклонный уровень</div>
+                        <div class="custom-grid-select-item" data-value="retest" role="option">Ретест уровня</div>
+                    </div>
+                </div>
+
+
+
+                <!-- Nearest sorting toggle -->
                 <div style="display: flex; align-items: center; gap: 8px; margin-right: 6px;">
-                    <input type="checkbox" id="formations-only-toggle" class="beautiful-checkbox" checked>
-                    <label for="formations-only-toggle" style="font-size: 11px; font-weight: 600; color: var(--t2); cursor: pointer; user-select: none;">Каскады</label>
+                    <input type="checkbox" id="formations-nearest-toggle" class="beautiful-checkbox">
+                    <label for="formations-nearest-toggle" style="font-size: 11px; font-weight: 600; color: var(--t2); cursor: pointer; user-select: none;">Ближайшие</label>
+                </div>
+
+                <!-- Approaching retest toggle (visible only for retests) -->
+                <div id="formations-approaching-wrap" style="display: none; align-items: center; gap: 8px; margin-right: 6px;">
+                    <input type="checkbox" id="formations-approaching-toggle" class="beautiful-checkbox">
+                    <label for="formations-approaching-toggle" style="font-size: 11px; font-weight: 600; color: var(--t2); cursor: pointer; user-select: none;">Подход к ретесту</label>
                 </div>
 
                 <!-- Formations settings button -->
@@ -664,7 +689,7 @@
                         </svg>
                     </div>
                     <div class="custom-grid-select-menu" id="formations-settings-menu" role="listbox" style="min-width: 170px; right: 0; left: auto;">
-                        <div style="padding: 8px 12px; border-bottom: 1px solid var(--bd2); font-size: 10px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">Мин. уровней каскада</div>
+                        <div id="formations-settings-header" style="padding: 8px 12px; border-bottom: 1px solid var(--bd2); font-size: 10px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">Мин. уровней каскада</div>
                         <div class="custom-grid-select-item" data-value="1" role="option">1+ уровень</div>
                         <div class="custom-grid-select-item on" data-value="2" role="option">2+ уровня</div>
                         <div class="custom-grid-select-item" data-value="3" role="option">3+ уровня</div>
@@ -789,6 +814,10 @@
     <div id="draw-color-menu">
         <div class="filter-title" id="draw-color-title">Цвет линии</div>
         <div class="tag-grid draw-color-grid" id="draw-color-grid"></div>
+        <div class="brush-thickness-control" id="brush-thickness-control" style="display: none;">
+            <div class="brush-thickness-label">Толщина кисти: <span id="brush-thickness-value">2px</span></div>
+            <input type="range" id="brush-thickness-slider" min="1" max="10" value="2" step="1">
+        </div>
         <div class="tag-btn none" id="draw-color-close" title="Закрыть"></div>
     </div>
 

@@ -380,21 +380,21 @@ function connectKlineWs(sub) {
     sub.ws = new WebSocket("wss://contract.mexc.com/edge", { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] MX:${sym}`, e.message));
     sub.ws.on("open", () => {
-      sub.ws.send(JSON.stringify({ method: `sub.kline.${tfMap[tf] || "Hour4"}`, param: { symbol: sym } }));
+      sub.ws.send(JSON.stringify({ method: "sub.kline", param: { symbol: sym, interval: tfMap[tf] || "Hour4" } }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ method: "ping" })); }, 20000);
     });
     sub.ws.on("message", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (!d.channel?.startsWith("push.kline")) return;
+        if (d.channel !== "push.kline" || !d.data) return;
         const k = d.data;
-        broadcastKline(ex, sym, tf, { t: +k.time, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.amount });
+        broadcastKline(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.a || +k.q });
       } catch (_) {}
     });
     sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
     sub.ws.on("error", () => {});
   } else if (ex === "HL") {
-    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d" };
+    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     sub.ws = new WebSocket("wss://api.hyperliquid.xyz/ws", { perMessageDeflate: false });
     sub.ws.on("open", () => {
       sub.ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "candle", coin: sym, interval: tfMap[tf] || "4h" } }));
@@ -751,10 +751,20 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     }
   }
 
+  const tfMs = (() => {
+    const low = tf.toLowerCase();
+    const num = parseInt(low, 10) || 1;
+    if (low.endsWith("m")) return num * 60 * 1000;
+    if (low.endsWith("h")) return num * 60 * 60 * 1000;
+    if (low.endsWith("d")) return num * 24 * 60 * 60 * 1000;
+    if (low.endsWith("w")) return num * 7 * 24 * 60 * 60 * 1000;
+    return 60000;
+  })();
+
   const pages = { BN: 3, BB: 3, OX: 5, BG: 3, GT: 3, MX: 2, KC: 3, BX: 3, HT: 1, AD: 3 };
   const limits = { BN: 1000, BB: 1000, OX: 100, BG: 1000, GT: 1000, MX: 1000, KC: 1000, BX: 1000, HT: 1000, AD: 1000 };
   const maxP = lite ? 1 : (pages[fetchEx] || 3);
-  const limit = lite ? 300 : (limits[fetchEx] || 1000);
+  const limit = limits[fetchEx] || 1000;
   
   if (lite) {
     try {
@@ -772,7 +782,7 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
         const data = await apiFetch(url, 4000, 0);
         return (data.data || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
       } else if (ex === "HL") {
-        const data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (limit * 60000), endTime: Date.now() } });
+        const data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (limit * tfMs), endTime: Date.now() } });
         return (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }));
       }
       const url = getKlinesUrl(ex, sym, tf, limit);
@@ -788,7 +798,7 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     try {
       let data, batch;
       if (fetchEx === "HL") {
-        data = await apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * 60000), endTime: before } });
+        data = await apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } });
         batch = (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }));
       } else {
         const url = getKlinesUrl(fetchEx, fetchSym, tf, limit, before);

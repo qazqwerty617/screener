@@ -1,6 +1,7 @@
 "use strict";
 
 // ═══ State ═══════════════════════════════════════════════════════════════════
+window.DEBUG_LEVELS = false;
 const coins = new Map();
 const dirty = new Set();
 const rowEls = new Map();
@@ -86,7 +87,7 @@ let listEx = "BN",
 let sortCol = "chg",
   sortDir = 1; // 1=desc, -1=asc
 
-let chartDensityEnabled = true;
+let chartDensityEnabled = false;
 let chartDensitySide = "all";
 let chartDensitySizes = new Set(["small", "medium", "large"]);
 let chartDensityMarket = "all";
@@ -216,6 +217,8 @@ let dragDrawing = null;       // { idx, handle:'p1'|'p2'|'move', ... }
 let hoverDrawingIdx = -1;     // index of drawing under cursor (-1 = none)
 let quickMeasure = null;
 let editingFibDrawing = null;
+let brushLineWidth = 2;       // brush line width in pixels (1-10)
+let brushDrawThrottle = null;  // throttle for brush drawing requests
 
 // ── Direct Trade WS (Zero-Lag Pricing) ───────────────────────────────────────
 let activeTradeWs = null;
@@ -342,6 +345,7 @@ const DEFAULT_TOOL_COLORS = {
   rect: "#fb7185",
   ruler: "#facc15",
   fibgrid: "#8b5cf6",
+  brush: "#facc15",
 };
 const DRAW_COLOR_PALETTE = [
   "#ff4d7a",
@@ -1646,6 +1650,7 @@ function drawChart() {
       rect: "#fb7185",
       ruler: "#22d3ee",
       fibgrid: "#8b5cf6",
+      brush: "#facc15",
     };
     const baseCol = d.color || getToolColor(d.type) || palette[d.type] || "#facc15";
     const col = isHovered ? "#ffffff" : baseCol;
@@ -1705,6 +1710,35 @@ function drawChart() {
       const sign = pct > 0 ? "+" : "";
       const label = sign + pct.toFixed(2) + "%";
       drawPill(label, (x1 + x2) / 2, (y1 + y2) / 2 - 20, col);
+    } else if (d.type === "brush") {
+      // Brush drawing - freehand path with optimization
+      if (d.points && d.points.length > 1) {
+        ctx.beginPath();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = d.lineWidth || 2;
+        
+        // Simplify path by skipping some points for performance
+        const step = Math.max(1, Math.floor(d.points.length / 200));
+        
+        const firstPoint = d.points[0];
+        const startX = getX(firstPoint.t);
+        const startY = getY(firstPoint.p);
+        ctx.moveTo(startX, startY);
+        
+        for (let i = 1; i < d.points.length; i += step) {
+          const pt = d.points[i];
+          const px = getX(pt.t);
+          const py = getY(pt.p);
+          ctx.lineTo(px, py);
+        }
+        // Always include the last point
+        if (d.points.length > 1) {
+          const lastPt = d.points[d.points.length - 1];
+          ctx.lineTo(getX(lastPt.t), getY(lastPt.p));
+        }
+        ctx.stroke();
+      }
     } else if (d.type === "fibgrid") {
       const fibRows = getActiveFibLevelRows(d);
       const fibs = fibRows.map((row) => row.value);
@@ -2268,13 +2302,37 @@ function openDrawColorMenu({
   pageY = window.innerHeight / 2,
   preserveFibMenu = false,
   onSelect,
+  showBrushThickness = false,
 }) {
   const menu = $("draw-color-menu");
   const grid = $("draw-color-grid");
   const titleEl = $("draw-color-title");
+  const brushControl = $("brush-thickness-control");
+  const brushSlider = $("brush-thickness-slider");
+  const brushValue = $("brush-thickness-value");
+  
   titleEl.textContent = title;
   grid.innerHTML = "";
   drawColorSelectHandler = onSelect || null;
+  
+  // Show/hide brush thickness control
+  if (showBrushThickness) {
+    brushControl.style.display = "block";
+    brushSlider.value = brushLineWidth;
+    brushValue.textContent = brushLineWidth + "px";
+    
+    // Remove old listener if exists
+    const newSlider = brushSlider.cloneNode(true);
+    brushSlider.parentNode.replaceChild(newSlider, brushSlider);
+    
+    newSlider.addEventListener("input", (e) => {
+      brushLineWidth = parseInt(e.target.value, 10);
+      brushValue.textContent = brushLineWidth + "px";
+    });
+  } else {
+    brushControl.style.display = "none";
+  }
+  
   DRAW_COLOR_PALETTE.forEach((clr) => {
     const b = document.createElement("div");
     b.className = "tag-btn" + (currentColor === clr ? " on" : "");
@@ -2307,6 +2365,7 @@ function pickToolColor(tool) {
     currentColor: getToolColor(tool),
     pageX: rect ? rect.right + 10 : window.innerWidth / 2 - 70,
     pageY: rect ? rect.top : window.innerHeight / 2 - 60,
+    showBrushThickness: tool === "brush",
     onSelect: (clr) => {
       toolColors[tool] = clr;
       saveToolColors();
@@ -2463,6 +2522,19 @@ canvas.addEventListener("mousedown", (e) => {
       return;
     }
 
+    if (activeTool === 'brush') {
+      // Brush: start freehand drawing
+      tempDrawing = {
+        type: "brush",
+        points: [{ t, p }],
+        color: getToolColor("brush"),
+        lineWidth: brushLineWidth,
+      };
+      drawingPhase = 1;
+      requestDraw();
+      return;
+    }
+
     if (drawingPhase === 0) {
       // First click — place start point, enter phase 1
       tempDrawing = normalizeDrawing({
@@ -2603,10 +2675,38 @@ canvas.addEventListener("mousemove", (e) => {
 
   // Update temp drawing second point (phase 1)
   if (tempDrawing && drawingPhase === 1) {
-    const { t, p } = getCursorTP(mX, mY);
-    tempDrawing.t2 = t;
-    tempDrawing.p2 = p;
-    normalizeDrawing(tempDrawing);
+    if (tempDrawing.type === 'brush') {
+      // Brush: add points to the path with throttling
+      const { t, p } = getCursorTP(mX, mY);
+      const lastPoint = tempDrawing.points[tempDrawing.points.length - 1];
+      
+      // Only add point if it's significantly different (min distance check)
+      if (lastPoint) {
+        const dt = Math.abs(t - lastPoint.t);
+        const dp = Math.abs(p - lastPoint.p);
+        // Minimum threshold to avoid too many points
+        if (dt < 0.001 && dp < 0.000001) {
+          // Skip if too close to last point
+        } else if (tempDrawing.points.length < 500) { // Limit max points
+          tempDrawing.points.push({ t, p });
+          // Throttle draw requests for brush
+          if (!brushDrawThrottle) {
+            brushDrawThrottle = setTimeout(() => {
+              brushDrawThrottle = null;
+              requestDraw();
+            }, 16); // ~60fps
+          }
+        }
+      } else {
+        tempDrawing.points.push({ t, p });
+        requestDraw();
+      }
+    } else {
+      const { t, p } = getCursorTP(mX, mY);
+      tempDrawing.t2 = t;
+      tempDrawing.p2 = p;
+      normalizeDrawing(tempDrawing);
+    }
   }
 
   if (quickMeasure) {
@@ -2645,6 +2745,18 @@ canvas.addEventListener("mousemove", (e) => {
 canvas.addEventListener("mouseup", () => {
   if (dragDrawing) { saveDrawings(); dragDrawing = null; }
   if (activeTool === 'ruler') setTool('none');
+  
+  // Finish brush drawing
+  if (activeTool === 'brush' && tempDrawing && drawingPhase === 1) {
+    if (tempDrawing.points && tempDrawing.points.length > 1) {
+      chartDrawings.push({ ...tempDrawing });
+      saveDrawings();
+    }
+    tempDrawing = null;
+    drawingPhase = 0;
+    setTool("none");
+  }
+  
   quickMeasure = null;
   isDragX = false; isDragY = false; isDragYScale = false;
   requestDraw();
@@ -2744,7 +2856,7 @@ canvas.addEventListener(
   { passive: false },
 );
 
-// Double-click: reset Y to auto-fit
+// Double-click: reset Y to auto-fit (disabled to prevent teleportation)
 canvas.addEventListener("dblclick", (e) => {
   const r = canvas.getBoundingClientRect();
   const px = e.clientX - r.left;
@@ -2754,10 +2866,11 @@ canvas.addEventListener("dblclick", (e) => {
     configureFibDrawing(chartDrawings[idx], e.pageX, e.pageY);
     return;
   }
-  autoFitY = true;
-  viewMn = null;
-  viewMx = null;
-  requestDraw();
+  // Disabled auto-fit on double-click to prevent graph teleportation
+  // autoFitY = true;
+  // viewMn = null;
+  // viewMx = null;
+  // requestDraw();
 });
 
 // ═══ WebSocket connection to Node aggregator ══════════════════════════════════
@@ -3369,6 +3482,24 @@ function isUsdtFutures(c) {
   return isFuture;
 }
 
+const STABLECOIN_BASES = new Set(['USDC', 'USDD', 'TUSD', 'DAI', 'FDUSD', 'USDP', 'BUSD', 'PYUSD', 'EUSD', 'USD', 'USDE', 'USDJ', 'FRAX', 'LUSD', 'GUSD', 'SUSD', 'CEUR', 'CUSD', 'USDY', 'USDX']);
+function isStablecoinBase(c) {
+  if (!c) return false;
+  if (c.base) {
+    const base = c.base.toUpperCase();
+    if (STABLECOIN_BASES.has(base)) return true;
+  }
+  if (c.sym) {
+    const sym = c.sym.toUpperCase();
+    for (const stable of STABLECOIN_BASES) {
+      if (sym.startsWith(stable) && sym.length > stable.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function rebuildList() {
   let list = Array.from(coins.values());
 
@@ -3686,7 +3817,7 @@ applyToolButtonColors();
   // Switch inside density settings panel
   const densitySwitch = $("chart-density-switch");
   if (densitySwitch) {
-    densitySwitch.classList.add("on"); // match chartDensityEnabled = true default
+    if (chartDensityEnabled) densitySwitch.classList.add("on"); // match chartDensityEnabled default
     densitySwitch.onclick = () => {
       densitySwitch.classList.toggle("on");
       chartDensityEnabled = densitySwitch.classList.contains("on");
@@ -4693,6 +4824,10 @@ class ChartInstance {
     this.viewMx = null;
     this.autoFitY = true;
 
+    this.isRuler = false;
+    this.rulerStart = { x: null, y: null, price: null, idx: null };
+    this.rulerEnd = { x: null, y: null, price: null, idx: null };
+
     this.yScaleStartMn = 0;
     this.yScaleStartMx = 0;
     this.dragMnOff = 0;
@@ -4758,6 +4893,7 @@ class ChartInstance {
                     <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 `;
+                window.loadFormations();
               } else {
                 grid.querySelectorAll(".grid-cell").forEach(cell => {
                   cell.classList.remove("expanded");
@@ -4810,6 +4946,23 @@ class ChartInstance {
       const PR = 60;
       const PW = w - PR;
 
+      if (e.shiftKey) {
+        this.isRuler = true;
+        const n = PW / this.candleW;
+        const viewStart = this.candles.length - n - this.offsetX;
+        const s = Math.max(0, Math.floor(viewStart));
+        const futureGap = viewStart < 0 ? -viewStart : 0;
+
+        const idx = clamp(Math.round((px - this.candleW / 2) / this.candleW + s - futureGap), 0, this.candles.length - 1);
+        const price = this.viewMx - (py / this.canvas.clientHeight) * (this.viewMx - this.viewMn);
+
+        this.rulerStart = { x: px, y: py, price, idx };
+        this.rulerEnd = { x: px, y: py, price, idx };
+        this.draw(true);
+        e.stopPropagation();
+        return;
+      }
+
       if (px >= PW) {
         if (this.viewMn !== null && this.viewMx !== null) {
           this.isDragYScale = true;
@@ -4850,9 +5003,35 @@ class ChartInstance {
     };
 
     window.addEventListener('mousemove', (e) => {
+      if (this.isRuler) {
+        const r = this.canvas.getBoundingClientRect();
+        const px = e.clientX - r.left;
+        const py = e.clientY - r.top;
+        const w = this.canvas.clientWidth;
+        const PR = 60;
+        const PW = w - PR;
+
+        const n = PW / this.candleW;
+        const viewStart = this.candles.length - n - this.offsetX;
+        const s = Math.max(0, Math.floor(viewStart));
+        const futureGap = viewStart < 0 ? -viewStart : 0;
+
+        const idx = clamp(Math.round((px - this.candleW / 2) / this.candleW + s - futureGap), 0, this.candles.length - 1);
+        const price = this.viewMx - (py / this.canvas.clientHeight) * (this.viewMx - this.viewMn);
+
+        this.rulerEnd = { x: px, y: py, price, idx };
+        this.draw(true);
+        return;
+      }
+
       if (this.isDrag) {
         const dx = e.clientX - this.dragStart;
-        this.offsetX = this.dragOff + dx / this.candleW;
+        const w = this.canvas.clientWidth;
+        const PR = 60;
+        const PW = w - PR;
+        const n = PW / this.candleW;
+        const minOffsetX = -(n - 5);
+        this.offsetX = Math.max(minOffsetX, this.dragOff + dx / this.candleW);
         this.draw(true);
       }
 
@@ -4879,6 +5058,12 @@ class ChartInstance {
     }, { passive: false });
 
     window.addEventListener('mouseup', () => {
+      if (this.isRuler) {
+        this.isRuler = false;
+        this.rulerStart = { x: null, y: null, price: null, idx: null };
+        this.rulerEnd = { x: null, y: null, price: null, idx: null };
+        this.draw(true);
+      }
       if (this.isDrag || this.isDragYScale || this.isDragY) {
         this.isDrag = false;
         this.isDragYScale = false;
@@ -4949,7 +5134,7 @@ class ChartInstance {
       } else {
         this.candles = sanitizeCandles(cached.data);
       }
-      this.levels = window.detectChartLevelsAndTouches(this.candles);
+      this.levels = window.detectChartLevelsFn(this.candles);
       if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
       this.draw(true);
       return;
@@ -4969,7 +5154,7 @@ class ChartInstance {
         } else {
           this.candles = sanitizeCandles(dataLite);
         }
-        this.levels = window.detectChartLevelsAndTouches(this.candles);
+        this.levels = window.detectChartLevelsFn(this.candles);
         if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
         this.draw(true);
       }
@@ -4987,7 +5172,7 @@ class ChartInstance {
         } else {
           this.candles = sanitizeCandles(dataFull);
         }
-        this.levels = window.detectChartLevelsAndTouches(this.candles);
+        this.levels = window.detectChartLevelsFn(this.candles);
         if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
         KLINES_CACHE.set(key, { ts: Date.now(), data: dataFull });
         this.draw(true);
@@ -4997,6 +5182,38 @@ class ChartInstance {
 
   draw(force = false) {
     if (!this.candles.length || (activeView === "screener" && screenerView !== "multichart")) return;
+
+    const isFocused = (
+      (activeView === "screener" && screenerView === "single") ||
+      (activeView === "formations" && this.el.classList.contains("expanded"))
+    );
+    if (isFocused) {
+      window.__debugCandles = this.candles;
+      window.__debugLevels = this.levels;
+      if (window.DEBUG_LEVELS) {
+        console.clear();
+        console.log(`[DEBUG_LEVELS] ${this.ex}:${this.sym} (${this.tf})`);
+        if (this.levels && this.levels.length > 0) {
+          console.table(this.levels.map(c => {
+            const tIndices = c.touchIndices || (c.touchIdx !== undefined ? [c.swingIdx, c.touchIdx] : [c.swingIdx]);
+            const firstTouch = tIndices.length > 0 ? Math.min(...tIndices) : c.swingIdx;
+            const lastTouch = tIndices.length > 0 ? Math.max(...tIndices) : (c.lastTouch || c.swingIdx);
+            return {
+              pair: `${this.ex}:${this.sym}`,
+              price: c.price,
+              type: c.direction === 'up' ? 'resistance' : 'support',
+              touches: tIndices.length,
+              tol_percent: c.isTrendline ? "0.015" : "0.020",
+              firstTouchIdx: firstTouch,
+              lastTouchIdx: lastTouch,
+              active: c.active !== undefined ? c.active : true
+            };
+          }));
+        } else {
+          console.log("No levels detected for the current pair.");
+        }
+      }
+    }
 
     const now = Date.now();
     if (!force && now - this.lastDrawTs < 16) return; // Increased to ~60fps
@@ -5033,6 +5250,8 @@ class ChartInstance {
     const PH = ch;
     const candleWidth = this.candleW;
     const n = PW / candleWidth;
+    const minOffsetX = -(n - 5);
+    this.offsetX = Math.max(minOffsetX, this.offsetX);
     const viewStart = this.candles.length - n - this.offsetX;
     const s = Math.max(0, Math.floor(viewStart));
     const vis = this.candles.slice(s, s + Math.ceil(n) + 2);
@@ -5156,45 +5375,156 @@ class ChartInstance {
     const ly = clamp(toY(lastPrice), 10, ch - 10);
 
     // ── Unmitigated Levels overlay ────────────────────────────────────────────
-    if (activeView === "formations" && $('formations-only-toggle')?.checked && this.levels && this.levels.length > 0) {
+    if (activeView === "formations" && this.levels && this.levels.length > 0) {
       const getX = (idx) => (idx - s + futureGap) * candleWidth + candleWidth / 2;
+      const N = this.candles.length;
+
+      // ── Pre-calculate and adjust Y label coordinates to prevent overlapping ────
+      this.levels.forEach(setup => {
+        if (setup.isTrendline) {
+          const currentPriceAtLine = setup.p1.price + (setup.p2.price - setup.p1.price) * ((N - 1) - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
+          setup.labelY = toY(currentPriceAtLine);
+        } else {
+          setup.labelY = toY(setup.price);
+        }
+      });
+
+      const visibleLevels = this.levels.filter(setup => setup.labelY >= 2 && setup.labelY <= ch - 2);
+      visibleLevels.sort((a, b) => a.labelY - b.labelY);
+      
+      const minSpacing = 16;
+      for (let i = 1; i < visibleLevels.length; i++) {
+        const prev = visibleLevels[i - 1];
+        const curr = visibleLevels[i];
+        if (curr.labelY - prev.labelY < minSpacing) {
+          curr.labelY = prev.labelY + minSpacing;
+        }
+      }
+      for (let i = visibleLevels.length - 2; i >= 0; i--) {
+        const curr = visibleLevels[i];
+        const next = visibleLevels[i + 1];
+        if (next.labelY - curr.labelY < minSpacing) {
+          curr.labelY = next.labelY - minSpacing;
+        }
+      }
 
       this.levels.forEach(setup => {
-        const y = toY(setup.price);
-        if (y < 2 || y > ch - 2) return;
-
         const isUp = setup.direction === 'up';
         // green = unmitigated HIGH above price (goes UP to cover)
         // red   = unmitigated LOW  below price (goes DOWN to cover)
-        const lineColor = isUp ? '#26c97a' : '#ff4560';
+        let lineColor = isUp ? '#26c97a' : '#ff4560';
+        if (setup.isRetest) {
+          lineColor = setup.outcome === 'confirmed' ? '#af52de' : '#ff9100';
+        }
+        if (setup.isApproachingRetest) {
+          lineColor = '#00baff'; // beautiful cyan color for approaching retest
+        }
 
-        // ── Solid horizontal line: from swing → right edge ────────────────
-        const x0 = Math.max(0, getX(setup.swingIdx));
-        ctx.strokeStyle = lineColor;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([]);
-        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(PW, y); ctx.stroke();
+        if (setup.isTrendline) {
+          // Draw Trendline
+          const x1 = getX(setup.p1.idx);
+          const y1 = toY(setup.p1.price);
+          
+          // Project trendline to the current candle + 4 candles in length
+          const endIdx = N - 1 + 4;
+          const endPrice = setup.p1.price + (setup.p2.price - setup.p1.price) * (endIdx - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
+          const x2 = getX(endIdx);
+          const y2 = toY(endPrice);
 
-        // ── Price label on the right ──────────────────────────────────────
-        const labelH = 15, labelW = PR - 6;
-        roundRect(ctx, PW + 3, y - labelH / 2, labelW, labelH, 3);
-        ctx.fillStyle = lineColor;
-        ctx.fill();
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 8px Inter';
-        ctx.textAlign = 'center';
-        ctx.fillText(fP(setup.price), PW + PR / 2, y + 3);
+          ctx.strokeStyle = lineColor;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
 
-        // ── Departure circle at the swing candle ──────────────────────────
-        const depX = getX(setup.swingIdx);
-        const depCandle = this.candles[setup.swingIdx];
-        if (depCandle && depX >= 0 && depX <= PW) {
-          const depY = toY(isUp ? depCandle.h : depCandle.l);
+          // Draw price label at current price level of the trendline (at N - 1)
+          const currentPriceAtLine = setup.p1.price + (setup.p2.price - setup.p1.price) * ((N - 1) - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
+          const yLabel = setup.labelY;
+          if (yLabel >= 2 && yLabel <= ch - 2) {
+            const labelH = 15, labelW = PR - 6;
+            roundRect(ctx, PW + 3, yLabel - labelH / 2, labelW, labelH, 3);
+            ctx.fillStyle = lineColor;
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 8px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText(fP(currentPriceAtLine), PW + PR / 2, yLabel + 3);
+          }
+
+          // Draw touch circles
+          setup.swingIndices.forEach(idx => {
+            const circleX = getX(idx);
+            const circleCandle = this.candles[idx];
+            if (circleCandle && circleX >= 0 && circleX <= PW) {
+              const circleY = toY(isUp ? circleCandle.h : circleCandle.l);
+              ctx.fillStyle = lineColor;
+              ctx.strokeStyle = '#fff';
+              ctx.lineWidth = 1.2;
+              ctx.beginPath(); ctx.arc(circleX, circleY, 4, 0, 2 * Math.PI);
+              ctx.fill(); ctx.stroke();
+            }
+          });
+
+        } else {
+          const y = toY(setup.price);
+          if (y < 2 || y > ch - 2) return;
+
+          // ── Solid horizontal line: from swing → right edge ────────────────
+          const x0 = Math.max(0, getX(setup.swingIdx));
+          ctx.strokeStyle = lineColor;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(PW, y); ctx.stroke();
+
+          // ── Price label on the right ──────────────────────────────────────
+          const labelH = 15, labelW = PR - 6;
+          roundRect(ctx, PW + 3, setup.labelY - labelH / 2, labelW, labelH, 3);
           ctx.fillStyle = lineColor;
-          ctx.strokeStyle = '#fff';
-          ctx.lineWidth = 1.2;
-          ctx.beginPath(); ctx.arc(depX, depY, 4, 0, 2 * Math.PI);
-          ctx.fill(); ctx.stroke();
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 8px Inter';
+          ctx.textAlign = 'center';
+          ctx.fillText(fP(setup.price), PW + PR / 2, setup.labelY + 3);
+
+          // ── Draw circles for all touches (including the initial swing point) ─
+          if (setup.touchIndices) {
+            setup.touchIndices.forEach(tIdx => {
+              const tX = getX(tIdx);
+              const tCandle = this.candles[tIdx];
+              if (tCandle && tX >= 0 && tX <= PW) {
+                const tY = toY(isUp ? tCandle.h : tCandle.l);
+                ctx.fillStyle = lineColor;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1.2;
+                ctx.beginPath(); ctx.arc(tX, tY, 4, 0, 2 * Math.PI);
+                ctx.fill(); ctx.stroke();
+              }
+            });
+          } else {
+            const depX = getX(setup.swingIdx);
+            const depCandle = this.candles[setup.swingIdx];
+            if (depCandle && depX >= 0 && depX <= PW) {
+              const depY = toY(isUp ? depCandle.h : depCandle.l);
+              ctx.fillStyle = lineColor;
+              ctx.strokeStyle = '#fff';
+              ctx.lineWidth = 1.2;
+              ctx.beginPath(); ctx.arc(depX, depY, 4, 0, 2 * Math.PI);
+              ctx.fill(); ctx.stroke();
+            }
+          }
+
+          // ── Retest Touch circle (if applicable) ──────────────────────────
+          if (setup.isRetest && setup.touchIdx !== undefined) {
+            const retestX = getX(setup.touchIdx);
+            const retestCandle = this.candles[setup.touchIdx];
+            if (retestCandle && retestX >= 0 && retestX <= PW) {
+              const retestY = toY(isUp ? retestCandle.l : retestCandle.h);
+              ctx.fillStyle = lineColor;
+              ctx.strokeStyle = '#fff';
+              ctx.lineWidth = 1.2;
+              ctx.beginPath(); ctx.arc(retestX, retestY, 4, 0, 2 * Math.PI);
+              ctx.fill(); ctx.stroke();
+            }
+          }
         }
       });
 
@@ -5473,6 +5803,109 @@ class ChartInstance {
         ctx.fillText(fP(badge.price), badgeX + badgeW / 2, badge.y);
         ctx.restore();
       }
+    }
+
+    // ── Ruler tool drawing ──────────────────────────────────────────────────────
+    if (this.isRuler && this.rulerStart && this.rulerEnd && this.rulerStart.idx !== null && this.rulerEnd.idx !== null) {
+      const getX = (idx) => (idx - s + futureGap) * candleWidth + candleWidth / 2;
+      const xStart = getX(this.rulerStart.idx);
+      const yStart = toY(this.rulerStart.price);
+      const xEnd = getX(this.rulerEnd.idx);
+      const yEnd = toY(this.rulerEnd.price);
+
+      // Shaded rectangle
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 186, 255, 0.12)";
+      ctx.fillRect(xStart, Math.min(yStart, yEnd), xEnd - xStart, Math.abs(yEnd - yStart));
+      
+      // Border of the region
+      ctx.strokeStyle = "rgba(0, 186, 255, 0.6)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(xStart, Math.min(yStart, yEnd), xEnd - xStart, Math.abs(yEnd - yStart));
+
+      // Connecting line
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(0, 186, 255, 0.8)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.moveTo(xStart, yStart);
+      ctx.lineTo(xEnd, yEnd);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Tooltip calculation
+      const startPrice = this.rulerStart.price;
+      const endPrice = this.rulerEnd.price;
+      const deltaPrice = endPrice - startPrice;
+      const pct = (deltaPrice / startPrice) * 100;
+      const bars = Math.abs(this.rulerEnd.idx - this.rulerStart.idx);
+
+      // Time calculation
+      let timeStr = "";
+      const tStart = this.candles[this.rulerStart.idx]?.t;
+      const tEnd = this.candles[this.rulerEnd.idx]?.t;
+      if (typeof tStart === 'number' && typeof tEnd === 'number') {
+        const diffMs = Math.abs(tEnd - tStart);
+        if (diffMs < 3600000) {
+          timeStr = Math.round(diffMs / 60000) + "m";
+        } else if (diffMs < 86400000) {
+          const hours = Math.floor(diffMs / 3600000);
+          const mins = Math.round((diffMs % 3600000) / 60000);
+          timeStr = hours + "h " + mins + "m";
+        } else {
+          const days = Math.floor(diffMs / 86400000);
+          const hours = Math.round((diffMs % 86400000) / 3600000);
+          timeStr = days + "d " + hours + "h";
+        }
+      } else {
+        // Fallback using timeframe if timestamp not found
+        let tfMin = 240;
+        if (this.tf.endsWith("m")) tfMin = parseInt(this.tf);
+        else if (this.tf.endsWith("h")) tfMin = parseInt(this.tf) * 60;
+        else if (this.tf.endsWith("d")) tfMin = parseInt(this.tf) * 1440;
+        else if (this.tf.endsWith("w")) tfMin = parseInt(this.tf) * 10080;
+        
+        const totalMin = bars * tfMin;
+        if (totalMin < 60) timeStr = totalMin + "m";
+        else if (totalMin < 1440) {
+          timeStr = Math.floor(totalMin / 60) + "h " + (totalMin % 60) + "m";
+        } else {
+          timeStr = Math.floor(totalMin / 1440) + "d " + Math.round((totalMin % 1440) / 60) + "h";
+        }
+      }
+
+      // Draw tooltip box at midpoint
+      const midX = (xStart + xEnd) / 2;
+      const midY = (yStart + yEnd) / 2;
+
+      const pctSign = pct >= 0 ? "+" : "";
+      const priceSign = deltaPrice >= 0 ? "+" : "";
+      const text1 = `${pctSign}${pct.toFixed(2)}% (${priceSign}${fP(deltaPrice)})`;
+      const text2 = `${bars} свечей, ${timeStr}`;
+
+      ctx.font = "bold 9px Inter";
+      const w1 = ctx.measureText(text1).width;
+      const w2 = ctx.measureText(text2).width;
+      const boxW = Math.max(w1, w2) + 16;
+      const boxH = 32;
+      const boxX = clamp(midX - boxW / 2, 4, PW - boxW - 4);
+      const boxY = clamp(midY - boxH / 2, 4, PH - boxH - 4);
+
+      roundRect(ctx, boxX, boxY, boxW, boxH, 4);
+      ctx.fillStyle = "rgba(20, 24, 33, 0.9)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0, 186, 255, 0.8)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      ctx.fillStyle = pct >= 0 ? "#26c97a" : "#ff4560";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText(text1, boxX + boxW / 2, boxY + 6);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(text2, boxX + boxW / 2, boxY + 18);
+      ctx.restore();
     }
   }
 }
@@ -6812,17 +7245,798 @@ window.addEventListener("resize", () => {
     return kept;
   };
 
+  window.detectChartBreakoutLevels = function(candles) {
+    if (!candles || candles.length < 40) return [];
+    const N = candles.length;
+    const lastPrice = candles[N - 1].c;
+
+    // 1. Swing Highs & Lows (window=3)
+    const W = 3;
+    const swings = [];
+    for (let i = W; i < N - W; i++) {
+      let isH = true, isL = true;
+      for (let j = i - W; j <= i + W; j++) {
+        if (j === i) continue;
+        if (candles[j].h >= candles[i].h) isH = false;
+        if (candles[j].l <= candles[i].l) isL = false;
+      }
+      if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+    }
+
+    const highSwings = swings.filter(s => s.type === 'high');
+    const lowSwings = swings.filter(s => s.type === 'low');
+    const tol = 0.0002; // 0.02%
+    const maxBarsToRetest = 25;
+    const candidates = [];
+
+    // Resistance (breaks UP)
+    const resClusters = [];
+    for (const sw of highSwings) {
+      let merged = false;
+      for (const cl of resClusters) {
+        if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
+          cl.prices.push(sw.price);
+          cl.touches++;
+          cl.swingIndices.push(sw.idx);
+          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        resClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+      }
+    }
+
+    // Filter Resistance
+    for (const cl of resClusters) {
+      if (cl.touches < formationsMinCascade) continue;
+      const firstIdx = Math.min(...cl.swingIndices);
+      
+      let active = true;
+      let touchIndices = new Set(cl.swingIndices);
+      let lastTouchIndex = cl.lastTouch;
+
+      for (let i = firstIdx; i < N; i++) {
+        if (!active) break;
+
+        // Check if candle i touches the level
+        const isTouch = Math.abs(candles[i].h - cl.price) <= cl.price * tol;
+        if (isTouch) {
+          touchIndices.add(i);
+          lastTouchIndex = Math.max(lastTouchIndex, i);
+        }
+
+        // Check breakout
+        const isBreak = candles[i].c > cl.price;
+        if (isBreak) {
+          let confirmedRetestFound = false;
+          const endSearch = Math.min(N, i + maxBarsToRetest + 1);
+          for (let tIdx = i + 1; tIdx < endSearch; tIdx++) {
+            if (candles[tIdx].l <= cl.price + cl.price * tol) {
+              let stayedAbove = true;
+              for (let k = i + 1; k < tIdx; k++) {
+                if (candles[k].c < cl.price) { stayedAbove = false; break; }
+              }
+              if (stayedAbove) {
+                let confirmed = true;
+                const confirmationBars = 3;
+                const confirmEnd = Math.min(N, tIdx + confirmationBars);
+                for (let k = tIdx; k < confirmEnd; k++) {
+                  if (candles[k].c < cl.price - cl.price * tol) { confirmed = false; break; }
+                }
+                if (confirmed) { confirmedRetestFound = true; break; }
+              }
+            }
+          }
+          if (confirmedRetestFound) {
+            active = false;
+          }
+        }
+      }
+
+      if (active) {
+        const dist = Math.abs(cl.price - lastPrice) / lastPrice;
+        const barsSinceLastTouch = N - 1 - lastTouchIndex;
+        // Relevance: closer price (priority) + recency of last touch
+        const relevance = - (dist * 1000) - (barsSinceLastTouch / 20);
+
+        candidates.push({
+          price: cl.price,
+          direction: 'up',
+          swingIdx: firstIdx,
+          lastTouch: lastTouchIndex,
+          touches: touchIndices.size,
+          touchIndices: Array.from(touchIndices),
+          relevance: relevance,
+          strength: touchIndices.size * 3 - dist * 100
+        });
+      }
+    }
+
+    // Support (breaks DOWN)
+    const supClusters = [];
+    for (const sw of lowSwings) {
+      let merged = false;
+      for (const cl of supClusters) {
+        if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
+          cl.prices.push(sw.price);
+          cl.touches++;
+          cl.swingIndices.push(sw.idx);
+          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        supClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+      }
+    }
+
+    // Filter Support
+    for (const cl of supClusters) {
+      if (cl.touches < formationsMinCascade) continue;
+      const firstIdx = Math.min(...cl.swingIndices);
+
+      let active = true;
+      let touchIndices = new Set(cl.swingIndices);
+      let lastTouchIndex = cl.lastTouch;
+
+      for (let i = firstIdx; i < N; i++) {
+        if (!active) break;
+
+        const isTouch = Math.abs(candles[i].l - cl.price) <= cl.price * tol;
+        if (isTouch) {
+          touchIndices.add(i);
+          lastTouchIndex = Math.max(lastTouchIndex, i);
+        }
+
+        const isBreak = candles[i].c < cl.price;
+        if (isBreak) {
+          let confirmedRetestFound = false;
+          const endSearch = Math.min(N, i + maxBarsToRetest + 1);
+          for (let tIdx = i + 1; tIdx < endSearch; tIdx++) {
+            if (candles[tIdx].h >= cl.price - cl.price * tol) {
+              let stayedBelow = true;
+              for (let k = i + 1; k < tIdx; k++) {
+                if (candles[k].c > cl.price) { stayedBelow = false; break; }
+              }
+              if (stayedBelow) {
+                let confirmed = true;
+                const confirmationBars = 3;
+                const confirmEnd = Math.min(N, tIdx + confirmationBars);
+                for (let k = tIdx; k < confirmEnd; k++) {
+                  if (candles[k].c > cl.price + cl.price * tol) { confirmed = false; break; }
+                }
+                if (confirmed) { confirmedRetestFound = true; break; }
+              }
+            }
+          }
+          if (confirmedRetestFound) {
+            active = false;
+          }
+        }
+      }
+
+      if (active) {
+        const dist = Math.abs(cl.price - lastPrice) / lastPrice;
+        const barsSinceLastTouch = N - 1 - lastTouchIndex;
+        const relevance = - (dist * 1000) - (barsSinceLastTouch / 20);
+
+        candidates.push({
+          price: cl.price,
+          direction: 'down',
+          swingIdx: firstIdx,
+          lastTouch: lastTouchIndex,
+          touches: touchIndices.size,
+          touchIndices: Array.from(touchIndices),
+          relevance: relevance,
+          strength: touchIndices.size * 3 - dist * 100
+        });
+      }
+    }
+
+    // Sort by relevance (highest relevance first)
+    candidates.sort((a, b) => b.relevance - a.relevance);
+    
+    // Deduplicate: min distance 0.5%
+    const kept = [];
+    for (const c of candidates) {
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
+      if (!near) kept.push(c);
+    }
+    
+    // Limit to 3 most relevant active levels
+    return kept.slice(0, 3);
+  };
+
+  window.detectChartTrendlines = function(candles) {
+    if (!candles || candles.length < 40) return [];
+    const N = candles.length;
+    const lastPrice = candles[N - 1].c;
+
+    // 1. Swing Highs & Lows (window=3)
+    const W = 3;
+    const swings = [];
+    for (let i = W; i < N - W; i++) {
+      let isH = true, isL = true;
+      for (let j = i - W; j <= i + W; j++) {
+        if (j === i) continue;
+        if (candles[j].h >= candles[i].h) isH = false;
+        if (candles[j].l <= candles[i].l) isL = false;
+      }
+      if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+    }
+
+    const highSwings = swings.filter(s => s.type === 'high');
+    const lowSwings = swings.filter(s => s.type === 'low');
+    const tol = 0.00015; // 0.015%
+    const candidates = [];
+
+    // Resistance Trendlines (downward sloping, price below line, breaks UP)
+    for (let i = 0; i < highSwings.length - 1; i++) {
+      for (let j = i + 1; j < highSwings.length; j++) {
+        const s1 = highSwings[i];
+        const s2 = highSwings[j];
+        if (s2.price >= s1.price) continue; // must be downward sloping
+
+        const slope = (s2.price - s1.price) / (s2.idx - s1.idx);
+        
+        // Check if unbroken and count touches
+        let broken = false;
+        const swingIndices = [];
+        for (let k = s1.idx; k < N; k++) {
+          const lineVal = s1.price + slope * (k - s1.idx);
+          if (candles[k].h > lineVal) {
+            broken = true;
+            break;
+          }
+          if (candles[k].h <= lineVal && (lineVal - candles[k].h) / lineVal <= tol) {
+            swingIndices.push(k);
+          }
+        }
+        if (broken) continue;
+
+        // Ensure both original swings are counted
+        if (!swingIndices.includes(s1.idx)) swingIndices.push(s1.idx);
+        if (!swingIndices.includes(s2.idx)) swingIndices.push(s2.idx);
+        swingIndices.sort((a, b) => a - b);
+        const uniqueTouches = Array.from(new Set(swingIndices));
+
+        if (uniqueTouches.length < formationsMinCascade) continue;
+
+        const lineLastVal = s1.price + slope * ((N - 1) - s1.idx);
+        if (lastPrice > lineLastVal) continue;
+        const dist = (lineLastVal - lastPrice) / lastPrice;
+        if (dist > 0.015) continue;
+
+        candidates.push({
+          p1: s1,
+          p2: s2,
+          slope,
+          direction: 'up',
+          swingIndices: uniqueTouches,
+          touches: uniqueTouches.length,
+          isTrendline: true,
+          strength: uniqueTouches.length * 2 - dist * 100,
+          endPrice: lineLastVal
+        });
+      }
+    }
+
+    // Support Trendlines (upward sloping, price above line, breaks DOWN)
+    for (let i = 0; i < lowSwings.length - 1; i++) {
+      for (let j = i + 1; j < lowSwings.length; j++) {
+        const s1 = lowSwings[i];
+        const s2 = lowSwings[j];
+        if (s2.price <= s1.price) continue; // must be upward sloping
+
+        const slope = (s2.price - s1.price) / (s2.idx - s1.idx);
+
+        // Check if unbroken and count touches
+        let broken = false;
+        const swingIndices = [];
+        for (let k = s1.idx; k < N; k++) {
+          const lineVal = s1.price + slope * (k - s1.idx);
+          if (candles[k].l < lineVal) {
+            broken = true;
+            break;
+          }
+          if (candles[k].l >= lineVal && (candles[k].l - lineVal) / lineVal <= tol) {
+            swingIndices.push(k);
+          }
+        }
+        if (broken) continue;
+
+        if (!swingIndices.includes(s1.idx)) swingIndices.push(s1.idx);
+        if (!swingIndices.includes(s2.idx)) swingIndices.push(s2.idx);
+        swingIndices.sort((a, b) => a - b);
+        const uniqueTouches = Array.from(new Set(swingIndices));
+
+        if (uniqueTouches.length < formationsMinCascade) continue;
+
+        const lineLastVal = s1.price + slope * ((N - 1) - s1.idx);
+        if (lastPrice < lineLastVal) continue;
+        const dist = (lastPrice - lineLastVal) / lineLastVal;
+        if (dist > 0.015) continue;
+
+        candidates.push({
+          p1: s1,
+          p2: s2,
+          slope,
+          direction: 'down',
+          swingIndices: uniqueTouches,
+          touches: uniqueTouches.length,
+          isTrendline: true,
+          strength: uniqueTouches.length * 2 - dist * 100,
+          endPrice: lineLastVal
+        });
+      }
+    }
+
+    // Deduplicate trendlines that are too similar
+    candidates.sort((a, b) => b.strength - a.strength);
+    const kept = [];
+    for (const c of candidates) {
+      const near = kept.find(k => k.direction === c.direction && Math.abs(k.endPrice - c.endPrice) / c.endPrice < 0.005);
+      if (!near) kept.push(c);
+      if (kept.length >= 8) break;
+    }
+
+    return kept;
+  };
+
+  window.detectChartRetests = function(candles) {
+    if (!candles || candles.length < 40) return [];
+    const N = candles.length;
+    const lastPrice = candles[N - 1].c;
+
+    const W = 3;
+    const swings = [];
+    for (let i = W; i < N - W; i++) {
+      let isH = true, isL = true;
+      for (let j = i - W; j <= i + W; j++) {
+        if (j === i) continue;
+        if (candles[j].h >= candles[i].h) isH = false;
+        if (candles[j].l <= candles[i].l) isL = false;
+      }
+      if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+    }
+
+    const highSwings = swings.filter(s => s.type === 'high');
+    const lowSwings = swings.filter(s => s.type === 'low');
+    const tol = 0.0002;
+    const maxBarsToRetest = 25;
+    const candidates = [];
+
+    const resClusters = [];
+    for (const sw of highSwings) {
+      let merged = false;
+      for (const cl of resClusters) {
+        if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
+          cl.prices.push(sw.price);
+          cl.touches++;
+          cl.swingIndices.push(sw.idx);
+          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        resClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+      }
+    }
+
+    for (const cl of resClusters) {
+      if (cl.touches < formationsMinCascade) continue;
+      const firstIdx = Math.min(...cl.swingIndices);
+      
+      let breakIdx = -1;
+      for (let i = firstIdx + 1; i < N; i++) {
+        if (candles[i].h > cl.price) {
+          if (candles[i].c > cl.price) {
+            breakIdx = i;
+          }
+          break;
+        }
+      }
+      if (breakIdx === -1) continue;
+
+      let touchIdx = -1;
+      let overshoot = 0;
+      const endSearch = Math.min(N, breakIdx + maxBarsToRetest + 1);
+      
+      for (let i = breakIdx + 1; i < endSearch; i++) {
+        if (candles[i].l <= cl.price + cl.price * tol) {
+          let stayedAbove = true;
+          for (let k = breakIdx + 1; k < i; k++) {
+            if (candles[k].c < cl.price) {
+              stayedAbove = false;
+              break;
+            }
+          }
+          if (stayedAbove) {
+            touchIdx = i;
+            if (candles[i].l < cl.price) {
+              overshoot = (cl.price - candles[i].l) / cl.price;
+            }
+            break;
+          }
+        }
+      }
+      if (touchIdx === -1) continue;
+
+      let outcome = 'confirmed';
+      let confirmationIdx = N - 1;
+      for (let i = touchIdx; i < N; i++) {
+        if (candles[i].c < cl.price - cl.price * tol) {
+          outcome = 'failed';
+          confirmationIdx = i;
+          break;
+        }
+      }
+
+      if (outcome !== 'confirmed') continue;
+
+      const dist = Math.abs(cl.price - lastPrice) / lastPrice;
+      if (dist > 0.015) continue;
+
+      const barsSinceRetest = N - 1 - touchIdx;
+      candidates.push({
+        price: cl.price,
+        direction: 'up',
+        swingIdx: firstIdx,
+        breakIdx: breakIdx,
+        touchIdx: touchIdx,
+        isRetest: true,
+        outcome: outcome,
+        overshoot: overshoot,
+        strength: cl.touches * 5 - dist * 100 - overshoot * 50 - barsSinceRetest / 5,
+        touches: cl.touches
+      });
+    }
+
+    const supClusters = [];
+    for (const sw of lowSwings) {
+      let merged = false;
+      for (const cl of supClusters) {
+        if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
+          cl.prices.push(sw.price);
+          cl.touches++;
+          cl.swingIndices.push(sw.idx);
+          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        supClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+      }
+    }
+
+    for (const cl of supClusters) {
+      if (cl.touches < formationsMinCascade) continue;
+      const firstIdx = Math.min(...cl.swingIndices);
+
+      let breakIdx = -1;
+      for (let i = firstIdx + 1; i < N; i++) {
+        if (candles[i].l < cl.price) {
+          if (candles[i].c < cl.price) {
+            breakIdx = i;
+          }
+          break;
+        }
+      }
+      if (breakIdx === -1) continue;
+
+      let touchIdx = -1;
+      let overshoot = 0;
+      const endSearch = Math.min(N, breakIdx + maxBarsToRetest + 1);
+
+      for (let i = breakIdx + 1; i < endSearch; i++) {
+        if (candles[i].h >= cl.price - cl.price * tol) {
+          let stayedBelow = true;
+          for (let k = breakIdx + 1; k < i; k++) {
+            if (candles[k].c > cl.price) {
+              stayedBelow = false;
+              break;
+            }
+          }
+          if (stayedBelow) {
+            touchIdx = i;
+            if (candles[i].h > cl.price) {
+              overshoot = (candles[i].h - cl.price) / cl.price;
+            }
+            break;
+          }
+        }
+      }
+      if (touchIdx === -1) continue;
+
+      let outcome = 'confirmed';
+      let confirmationIdx = N - 1;
+      for (let i = touchIdx; i < N; i++) {
+        if (candles[i].c > cl.price + cl.price * tol) {
+          outcome = 'failed';
+          confirmationIdx = i;
+          break;
+        }
+      }
+
+      if (outcome !== 'confirmed') continue;
+
+      const dist = Math.abs(cl.price - lastPrice) / lastPrice;
+      if (dist > 0.015) continue;
+
+      const barsSinceRetest = N - 1 - touchIdx;
+      candidates.push({
+        price: cl.price,
+        direction: 'down',
+        swingIdx: firstIdx,
+        breakIdx: breakIdx,
+        touchIdx: touchIdx,
+        isRetest: true,
+        outcome: outcome,
+        overshoot: overshoot,
+        strength: cl.touches * 5 - dist * 100 - overshoot * 50 - barsSinceRetest / 5,
+        touches: cl.touches
+      });
+    }
+
+    candidates.sort((a, b) => b.strength - a.strength);
+    const kept = [];
+    for (const c of candidates) {
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
+      if (!near) kept.push(c);
+    }
+    return kept.slice(0, 3);
+  };
+
+  window.detectChartApproachingRetests = function(candles) {
+    if (!candles || candles.length < 40) return [];
+    const N = candles.length;
+    const lastPrice = candles[N - 1].c;
+
+    const W = 3;
+    const swings = [];
+    for (let i = W; i < N - W; i++) {
+      let isH = true, isL = true;
+      for (let j = i - W; j <= i + W; j++) {
+        if (j === i) continue;
+        if (candles[j].h >= candles[i].h) isH = false;
+        if (candles[j].l <= candles[i].l) isL = false;
+      }
+      if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+    }
+
+    const highSwings = swings.filter(s => s.type === 'high');
+    const lowSwings  = swings.filter(s => s.type === 'low');
+    const tol = 0.003; // wider clustering tolerance to build stronger levels
+    const candidates = [];
+    const MIN_TOUCHES = 2; // level must have at least 2 swing touches
+    const MIN_BREAKOUT_DIST = 0.015; // price must travel ≥1.5% beyond level to confirm breakout
+    const APPROACH_ZONE = 0.015; // price is "approaching" when within 1.5% of level
+
+    // ── Resistance clusters (broken upward → support retest from above) ──
+    const resClusters = [];
+    for (const sw of highSwings) {
+      let merged = false;
+      for (const cl of resClusters) {
+        if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
+          cl.prices.push(sw.price);
+          cl.price = cl.prices.reduce((a, b) => a + b, 0) / cl.prices.length; // average
+          cl.touches++;
+          cl.swingIndices.push(sw.idx);
+          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        resClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+      }
+    }
+
+    for (const cl of resClusters) {
+      if (cl.touches < MIN_TOUCHES) continue;
+      const lastSwingIdx = Math.max(...cl.swingIndices);
+
+      // Find a TRUE breakout: close above level AFTER the last swing touch
+      let breakIdx = -1;
+      for (let i = lastSwingIdx + 1; i < N; i++) {
+        if (candles[i].c > cl.price + cl.price * tol) {
+          breakIdx = i;
+          break;
+        }
+      }
+      if (breakIdx === -1) continue;
+
+      // Breakout must be PROVEN: price had to travel ≥1.5% above the level at some point
+      let maxAbove = 0;
+      let peakIdx = breakIdx;
+      for (let i = breakIdx; i < N; i++) {
+        const abovePct = (candles[i].h - cl.price) / cl.price;
+        if (abovePct > maxAbove) {
+          maxAbove = abovePct;
+          peakIdx = i;
+        }
+      }
+      if (maxAbove < MIN_BREAKOUT_DIST) continue;
+
+      // Price must NOT have closed below the level since breakout (no failed breakout)
+      let failed = false;
+      for (let k = breakIdx + 1; k < N; k++) {
+        if (candles[k].c < cl.price - cl.price * tol) {
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+
+      // Check that NO return touch (wick touching level zone) has happened yet
+      let alreadyTouched = false;
+      for (let i = breakIdx + 1; i < N; i++) {
+        if (candles[i].l <= cl.price + cl.price * tol) {
+          alreadyTouched = true;
+          break;
+        }
+      }
+      if (alreadyTouched) continue;
+
+      // Price must be APPROACHING: currently within 1.5% of level AND below the peak
+      const dist = (lastPrice - cl.price) / cl.price;
+      if (dist <= 0 || dist > APPROACH_ZONE) continue;
+
+      // The peak must be ABOVE current price (price came down from peak toward level)
+      if (lastPrice >= candles[peakIdx].h * 0.998) continue;
+
+      candidates.push({
+        price: cl.price,
+        direction: 'up',
+        swingIdx: Math.min(...cl.swingIndices),
+        breakIdx: breakIdx,
+        isApproachingRetest: true,
+        strength: cl.touches * 5 - dist * 100 + maxAbove * 20,
+        touches: cl.touches
+      });
+    }
+
+    // ── Support clusters (broken downward → resistance retest from below) ──
+    const supClusters = [];
+    for (const sw of lowSwings) {
+      let merged = false;
+      for (const cl of supClusters) {
+        if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
+          cl.prices.push(sw.price);
+          cl.price = cl.prices.reduce((a, b) => a + b, 0) / cl.prices.length;
+          cl.touches++;
+          cl.swingIndices.push(sw.idx);
+          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) {
+        supClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+      }
+    }
+
+    for (const cl of supClusters) {
+      if (cl.touches < MIN_TOUCHES) continue;
+      const lastSwingIdx = Math.max(...cl.swingIndices);
+
+      // Find a TRUE breakout: close below level AFTER the last swing touch
+      let breakIdx = -1;
+      for (let i = lastSwingIdx + 1; i < N; i++) {
+        if (candles[i].c < cl.price - cl.price * tol) {
+          breakIdx = i;
+          break;
+        }
+      }
+      if (breakIdx === -1) continue;
+
+      // Breakout must be PROVEN: price had to travel ≥1.5% below the level
+      let maxBelow = 0;
+      let troughIdx = breakIdx;
+      for (let i = breakIdx; i < N; i++) {
+        const belowPct = (cl.price - candles[i].l) / cl.price;
+        if (belowPct > maxBelow) {
+          maxBelow = belowPct;
+          troughIdx = i;
+        }
+      }
+      if (maxBelow < MIN_BREAKOUT_DIST) continue;
+
+      // Price must NOT have closed above the level since breakout
+      let failed = false;
+      for (let k = breakIdx + 1; k < N; k++) {
+        if (candles[k].c > cl.price + cl.price * tol) {
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+
+      // Check that NO return touch has happened yet
+      let alreadyTouched = false;
+      for (let i = breakIdx + 1; i < N; i++) {
+        if (candles[i].h >= cl.price - cl.price * tol) {
+          alreadyTouched = true;
+          break;
+        }
+      }
+      if (alreadyTouched) continue;
+
+      // Price must be APPROACHING: currently within 1.5% of level AND above the trough
+      const dist = (cl.price - lastPrice) / cl.price;
+      if (dist <= 0 || dist > APPROACH_ZONE) continue;
+
+      // The trough must be BELOW current price (price came up from trough toward level)
+      if (lastPrice <= candles[troughIdx].l * 1.002) continue;
+
+      candidates.push({
+        price: cl.price,
+        direction: 'down',
+        swingIdx: Math.min(...cl.swingIndices),
+        breakIdx: breakIdx,
+        isApproachingRetest: true,
+        strength: cl.touches * 5 - dist * 100 + maxBelow * 20,
+        touches: cl.touches
+      });
+    }
+
+    // Sort by strength, deduplicate
+    candidates.sort((a, b) => b.strength - a.strength);
+    const kept = [];
+    for (const c of candidates) {
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
+      if (!near) kept.push(c);
+    }
+    return kept.slice(0, 3);
+  };
+
+  window.detectChartLevelsFn = function(candles) {
+    if (typeof activeFormation === 'undefined') return window.detectChartLevelsAndTouches(candles);
+    if (activeFormation === 'breakout') {
+      return window.detectChartBreakoutLevels(candles);
+    } else if (activeFormation === 'trendline') {
+      return window.detectChartTrendlines(candles);
+    } else if (activeFormation === 'retest') {
+      const showApproaching = $("formations-approaching-toggle")?.checked;
+      if (showApproaching) {
+        return window.detectChartApproachingRetests(candles);
+      } else {
+        return window.detectChartRetests(candles);
+      }
+    } else {
+      return window.detectChartLevelsAndTouches(candles);
+    }
+  };
+
   // ─── Formations View Logic v2 (Simplified Multi-Charts) ───────────────────
   let formationsCols = 2;
   let formationsTf = "4h";
+  let activeFormation = 'cascades';
 
 
 
-  // Auto-enable: show only tokens with detected levels by default
-  const formationsOnlyToggle = $("formations-only-toggle");
-  if (formationsOnlyToggle) {
-    formationsOnlyToggle.checked = true;  // default ON
-    formationsOnlyToggle.onchange = () => {
+  const formationsNearestToggle = $("formations-nearest-toggle");
+  if (formationsNearestToggle) {
+    formationsNearestToggle.checked = false; // default OFF
+    formationsNearestToggle.onchange = () => {
+      window.loadFormations(true);
+    };
+  }
+
+  const formationsApproachingToggle = $("formations-approaching-toggle");
+  if (formationsApproachingToggle) {
+    formationsApproachingToggle.checked = false; // default OFF
+    formationsApproachingToggle.onchange = () => {
+      formationsCoinsLevelsMap.clear();
       window.loadFormations(true);
     };
   }
@@ -6976,6 +8190,117 @@ window.addEventListener("resize", () => {
   // Formations custom settings menu select binding
   let formationsMinCascade = 2; // Default to 2+ levels
 
+  // Formations Selection Dropdown Binding
+  const fgSelectBtn = $("formations-select-btn");
+  const fgSelectMenu = $("formations-select-menu");
+  const fgSelectText = $("formations-select-text");
+
+  function syncFormationsSelect() {
+    if (!fgSelectBtn || !fgSelectMenu || !fgSelectText) return;
+    if (activeFormation === 'cascades') {
+      fgSelectText.textContent = "Каскады";
+    } else if (activeFormation === 'breakout') {
+      fgSelectText.textContent = "Гориз. уровень";
+    } else if (activeFormation === 'trendline') {
+      fgSelectText.textContent = "Наклонный уровень";
+    } else if (activeFormation === 'retest') {
+      fgSelectText.textContent = "Ретест уровня";
+    }
+
+    const approachingWrap = $("formations-approaching-wrap");
+    if (approachingWrap) {
+      approachingWrap.style.display = (activeFormation === 'retest') ? 'flex' : 'none';
+    }
+
+    const settingsWrap = $("formations-settings-wrap");
+    if (settingsWrap) {
+      settingsWrap.style.display = (activeFormation === 'retest') ? 'none' : '';
+    }
+
+    fgSelectMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      if (item.dataset.value === activeFormation) {
+        item.classList.add("on");
+      } else {
+        item.classList.remove("on");
+      }
+    });
+
+    updateSettingsMenuItems();
+  }
+
+  function updateSettingsMenuItems() {
+    const header = $("formations-settings-header");
+    const menu = $("formations-settings-menu");
+    if (!menu) return;
+    const items = menu.querySelectorAll(".custom-grid-select-item");
+    if (items.length < 5) return;
+    if (activeFormation === 'cascades') {
+      if (header) header.textContent = "Мин. уровней каскада";
+      items[0].textContent = "1+ уровень";
+      items[1].textContent = "2+ уровня";
+      items[2].textContent = "3+ уровня";
+      items[3].textContent = "4+ уровня";
+      items[4].textContent = "5+ уровней";
+    } else if (activeFormation === 'breakout') {
+      if (header) header.textContent = "Мин. касаний уровня";
+      items[0].textContent = "1+ касание";
+      items[1].textContent = "2+ касания";
+      items[2].textContent = "3+ касания";
+      items[3].textContent = "4+ касания";
+      items[4].textContent = "5+ касаний";
+    } else {
+      if (header) header.textContent = "Мин. касаний наклонной";
+      items[0].textContent = "1+ касание";
+      items[1].textContent = "2+ касания";
+      items[2].textContent = "3+ касания";
+      items[3].textContent = "4+ касания";
+      items[4].textContent = "5+ касаний";
+    }
+  }
+
+  if (fgSelectBtn && fgSelectMenu) {
+    fgSelectBtn.onclick = (e) => {
+      e.stopPropagation();
+      const open = fgSelectMenu.classList.contains("open");
+      if (open) {
+        fgSelectMenu.classList.remove("open");
+        fgSelectBtn.classList.remove("open");
+      } else {
+        fgSelectMenu.classList.add("open");
+        fgSelectBtn.classList.add("open");
+        
+        // Close other menus
+        fgSettingsMenu?.classList.remove("open");
+        fgSettingsBtn?.classList.remove("open");
+        fgGridMenu?.classList.remove("open");
+        fgGridBtn?.classList.remove("open");
+        fgExcMenu?.classList.remove("open");
+        fgExcBtn?.classList.remove("open");
+      }
+    };
+
+    document.addEventListener("click", () => {
+      fgSelectMenu.classList.remove("open");
+      fgSelectBtn.classList.remove("open");
+    });
+
+    fgSelectMenu.onclick = (e) => e.stopPropagation();
+
+    fgSelectMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      item.onclick = () => {
+        activeFormation = item.dataset.value;
+        syncFormationsSelect();
+        fgSelectMenu.classList.remove("open");
+        fgSelectBtn.classList.remove("open");
+        // Clear cached formations level map because we changed the active formation type
+        formationsCoinsLevelsMap.clear();
+        window.loadFormations(true);
+      };
+    });
+
+    syncFormationsSelect();
+  }
+
   const fgSettingsBtn = $("formations-settings-btn");
   const fgSettingsMenu = $("formations-settings-menu");
 
@@ -7003,6 +8328,8 @@ window.addEventListener("resize", () => {
         fgSettingsBtn.classList.add("open");
         
         // Close other menus
+        fgSelectMenu?.classList.remove("open");
+        fgSelectBtn?.classList.remove("open");
         fgGridMenu?.classList.remove("open");
         fgGridBtn?.classList.remove("open");
         fgExcMenu?.classList.remove("open");
@@ -7013,6 +8340,8 @@ window.addEventListener("resize", () => {
     document.addEventListener("click", () => {
       fgSettingsMenu.classList.remove("open");
       fgSettingsBtn.classList.remove("open");
+      fgSelectMenu?.classList.remove("open");
+      fgSelectBtn?.classList.remove("open");
     });
 
     fgSettingsMenu.onclick = (e) => e.stopPropagation();
@@ -7041,25 +8370,52 @@ window.addEventListener("resize", () => {
   let scanProgressText = "";
   let lastScanKey = "";
 
+  let lastLoadFormationsTs = 0;
+  let loadFormationsTimeout = null;
+
+  function triggerThrottledLoadFormations() {
+    const now = Date.now();
+    if (now - lastLoadFormationsTs >= 1500) {
+      lastLoadFormationsTs = now;
+      if (loadFormationsTimeout) {
+        clearTimeout(loadFormationsTimeout);
+        loadFormationsTimeout = null;
+      }
+      window.loadFormations();
+    } else {
+      if (!loadFormationsTimeout) {
+        loadFormationsTimeout = setTimeout(() => {
+          lastLoadFormationsTs = Date.now();
+          loadFormationsTimeout = null;
+          window.loadFormations();
+        }, 1500 - (now - lastLoadFormationsTs));
+      }
+    }
+  }
+
   function startFormationsScan(checkedEx, tf) {
     const scanId = ++activeScanId;
     scanProgressText = "Сканирование...";
     updateFormationsPagination();
 
-    const eligibleCoins = Array.from(coins.values())
-      .filter(c => {
-        if (!isUsdtFutures(c) || c.v <= 0) return false;
-        if (!checkedEx.includes(c.ex)) return false;
-        return true;
-      })
-      .sort((a, b) => b.v - a.v)
-      .slice(0, 150); // limit to top 150
+    const eligibleCoins = [];
+    for (const ex of checkedEx) {
+      const exCoins = Array.from(coins.values())
+        .filter(c => c.ex === ex && isUsdtFutures(c) && c.v >= 80000 && !isStablecoinBase(c));
+      eligibleCoins.push(...exCoins);
+    }
+    eligibleCoins.sort((a, b) => b.v - a.v);
 
     let index = 0;
     const total = eligibleCoins.length;
     if (total === 0) {
       scanProgressText = "";
       updateFormationsPagination();
+      setTimeout(() => {
+        if (scanId === activeScanId) {
+          startFormationsScan(checkedEx, tf);
+        }
+      }, 1000);
       return;
     }
 
@@ -7068,6 +8424,10 @@ window.addEventListener("resize", () => {
       if (index >= total) {
         scanProgressText = "";
         updateFormationsPagination();
+        if (loadFormationsTimeout) {
+          clearTimeout(loadFormationsTimeout);
+          loadFormationsTimeout = null;
+        }
         window.loadFormations();
         return;
       }
@@ -7075,7 +8435,14 @@ window.addEventListener("resize", () => {
       const batch = eligibleCoins.slice(index, index + 3);
       index += batch.length;
 
-      scanProgressText = `Сканирование: ${index}/${total}`;
+      const rem = total - index;
+      const batchesRem = Math.ceil(rem / batch.length);
+      const secTotal = Math.ceil((batchesRem * 200) / 1000);
+      const min = Math.floor(secTotal / 60);
+      const sec = secTotal % 60;
+      const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
+
+      scanProgressText = `Сканирование: ${index}/${total} (${etaText})`;
       updateFormationsPagination();
 
       const promises = batch.map(async (c) => {
@@ -7108,18 +8475,22 @@ window.addEventListener("resize", () => {
             flat.push(...klinesData);
           }
           const candlesList = sanitizeCandles(flat);
-          const detectedLevels = window.detectChartLevelsAndTouches(candlesList);
+          const detectedLevels = window.detectChartLevelsFn(candlesList);
           const coinKey = c.ex + ':' + c.sym;
 
           let wasEligible = false;
           const hadLevel = formationsCoinsLevelsMap.has(coinKey);
           if (hadLevel) {
-            const prevLvls = formationsCoinsLevelsMap.get(coinKey);
-            let upC = 0, downC = 0;
-            for (const l of prevLvls) {
-              if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+            if (activeFormation === 'breakout' || activeFormation === 'trendline') {
+              wasEligible = true;
+            } else {
+              const prevLvls = formationsCoinsLevelsMap.get(coinKey);
+              let upC = 0, downC = 0;
+              for (const l of prevLvls) {
+                if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+              }
+              wasEligible = Math.max(upC, downC) >= formationsMinCascade;
             }
-            wasEligible = Math.max(upC, downC) >= formationsMinCascade;
           }
 
           const hasLevel = detectedLevels && detectedLevels.length > 0;
@@ -7131,22 +8502,26 @@ window.addEventListener("resize", () => {
 
           let isEligible = false;
           if (hasLevel) {
-            let upC = 0, downC = 0;
-            for (const l of detectedLevels) {
-              if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+            if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+              isEligible = true;
+            } else {
+              let upC = 0, downC = 0;
+              for (const l of detectedLevels) {
+                if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+              }
+              isEligible = Math.max(upC, downC) >= formationsMinCascade;
             }
-            isEligible = Math.max(upC, downC) >= formationsMinCascade;
           }
 
-          if (wasEligible !== isEligible && fgFormationsOnlyToggle?.checked) {
-            window.loadFormations();
+          if (wasEligible !== isEligible) {
+            triggerThrottledLoadFormations();
           }
         }
       });
 
       await Promise.all(promises);
 
-      setTimeout(nextBatch, 80);
+      setTimeout(nextBatch, 200);
     }
 
     nextBatch();
@@ -7159,12 +8534,16 @@ window.addEventListener("resize", () => {
     
     let wasEligible = false;
     if (had) {
-      const prev = formationsCoinsLevelsMap.get(key);
-      let upC = 0, downC = 0;
-      for (const l of prev) {
-        if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+      if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+        wasEligible = true;
+      } else {
+        const prev = formationsCoinsLevelsMap.get(key);
+        let upC = 0, downC = 0;
+        for (const l of prev) {
+          if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+        }
+        wasEligible = Math.max(upC, downC) >= formationsMinCascade;
       }
-      wasEligible = Math.max(upC, downC) >= formationsMinCascade;
     }
 
     const hasL = levels && levels.length > 0;
@@ -7176,15 +8555,19 @@ window.addEventListener("resize", () => {
 
     let isEligible = false;
     if (hasL) {
-      let upC = 0, downC = 0;
-      for (const l of levels) {
-        if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+      if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+        isEligible = true;
+      } else {
+        let upC = 0, downC = 0;
+        for (const l of levels) {
+          if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+        }
+        isEligible = Math.max(upC, downC) >= formationsMinCascade;
       }
-      isEligible = Math.max(upC, downC) >= formationsMinCascade;
     }
 
-    if (wasEligible !== isEligible && fgFormationsOnlyToggle?.checked) {
-      window.loadFormations();
+    if (wasEligible !== isEligible) {
+      triggerThrottledLoadFormations();
     } else {
       updateFormationsPagination();
     }
@@ -7222,8 +8605,7 @@ window.addEventListener("resize", () => {
     if (formationsPage < totalPages - 1) { formationsPage++; renderCurrentPage(); }
   };
 
-  // Toggle: only show coins with formations
-  const fgFormationsOnlyToggle = $("formations-only-toggle");
+  const fgFormationsNearestToggle = $("formations-nearest-toggle");
 
   window.loadFormations = function(resetPage = false) {
     if (resetPage) formationsPage = 0;
@@ -7236,25 +8618,53 @@ window.addEventListener("resize", () => {
       checkedEx.push("BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD");
     }
 
-    const onlyFormations = fgFormationsOnlyToggle?.checked;
+    const onlyFormations = true;
+
+    const getMinDist = (c) => {
+      if (!c.p) return Infinity;
+      const lvls = formationsCoinsLevelsMap.get(c.ex + ':' + c.sym);
+      if (!lvls || lvls.length === 0) return Infinity;
+      let minD = Infinity;
+      for (const l of lvls) {
+        const lp = l.endPrice !== undefined ? l.endPrice : l.price;
+        if (lp === undefined) continue;
+        const d = Math.abs(lp - c.p) / c.p;
+        if (d < minD) minD = d;
+      }
+      return minD;
+    };
 
     formationsAllCoins = Array.from(coins.values())
       .filter(c => {
-        if (!isUsdtFutures(c) || c.v <= 0) return false;
+        if (!isUsdtFutures(c) || c.v < 80000) return false;
+        if (isStablecoinBase(c)) return false;
         if (!checkedEx.includes(c.ex)) return false;
         if (onlyFormations) {
           const lvls = formationsCoinsLevelsMap.get(c.ex + ':' + c.sym);
-          if (!lvls) return false;
-          let upC = 0, downC = 0;
-          for (const l of lvls) {
-            if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+          if (!lvls || lvls.length === 0) return false;
+          if (activeFormation !== 'breakout' && activeFormation !== 'trendline' && activeFormation !== 'retest') {
+            let upC = 0, downC = 0;
+            for (const l of lvls) {
+              if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+            }
+            const cascadeSize = Math.max(upC, downC);
+            if (cascadeSize < formationsMinCascade) return false;
           }
-          const cascadeSize = Math.max(upC, downC);
-          if (cascadeSize < formationsMinCascade) return false;
         }
         return true;
-      })
-      .sort((a, b) => b.v - a.v);
+      });
+
+    const sortByNearest = fgFormationsNearestToggle?.checked;
+    if (sortByNearest) {
+      formationsAllCoins.sort((a, b) => {
+        const distA = getMinDist(a);
+        const distB = getMinDist(b);
+        if (distA !== distB) return distA - distB;
+        return b.v - a.v; // fallback to volume
+      });
+    } else {
+      formationsAllCoins.sort((a, b) => b.v - a.v);
+    }
 
     const currentScanKey = checkedEx.sort().join(",") + "|" + formationsTf;
     if (resetPage || currentScanKey !== lastScanKey) {
@@ -7268,6 +8678,10 @@ window.addEventListener("resize", () => {
   function renderCurrentPage() {
     const grid = $("formations-grid");
     if (!grid) return;
+    if (grid.classList.contains("has-expanded")) {
+      // Do not overwrite the grid or collapse the chart while user is viewing it
+      return;
+    }
     grid.classList.remove("has-expanded"); // Reset fullscreen expanded state on page change
 
     const perPage = formationsCols;
