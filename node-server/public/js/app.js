@@ -189,7 +189,7 @@ const saveTags = () => {
 let candles = [],
   chartW = 0,
   chartH = 0;
-const volH = 70;
+let volH = 80;
 let offsetX = 0;
 function getClampedOffsetX(val) {
   if (candles.length === 0) return 0;
@@ -852,6 +852,29 @@ function calcCVD(data) {
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
 
+  // Calculate active indicators first to determine volH
+  const activeIndicators = [];
+  if (chartActiveIndicators.has("RSI")) activeIndicators.push("RSI");
+  if (chartActiveIndicators.has("MACD")) activeIndicators.push("MACD");
+  if (chartActiveIndicators.has("CVD")) activeIndicators.push("CVD");
+  if (chartActiveIndicators.has("ATR")) activeIndicators.push("ATR");
+
+  // Volume always takes 60px, indicators take 40px each
+  const fixedVolumeHeight = 60;
+  const indicatorHeightPer = 40;
+  const newVolH = fixedVolumeHeight + (activeIndicators.length * indicatorHeightPer);
+  
+  // Update volH if needed and adjust canvas
+  if (newVolH !== volH) {
+    volH = newVolH;
+    const dpr = window.devicePixelRatio || 1;
+    const volCanvas = document.getElementById('vol-canvas');
+    if (volCanvas) {
+      volCanvas.height = volH * dpr;
+      volCanvas.style.height = volH + 'px';
+    }
+  }
+
   // Layout
   const PR = 82;
   const PW = chartW - PR;
@@ -1156,272 +1179,292 @@ function drawChart() {
   ctx.restore();
 
   // ── Draw Sub-indicators / Oscillators in separated rows of Volume Pane ──
-  const activeSubs = [];
-  if (chartActiveIndicators.has("RSI")) activeSubs.push("RSI");
-  if (chartActiveIndicators.has("MACD")) activeSubs.push("MACD");
-  if (chartActiveIndicators.has("CVD")) activeSubs.push("CVD");
-  if (chartActiveIndicators.has("ATR")) activeSubs.push("ATR");
-  activeSubs.push("Volume");
+  // activeIndicators is already calculated above!
 
-  const subH = volH / activeSubs.length;
+  // Fixed heights (already defined above, reuse variables)
+  const volumeHeight = fixedVolumeHeight;
+  const indicatorsHeight = activeIndicators.length === 0 ? 0 : (activeIndicators.length * indicatorHeightPer);
 
-  activeSubs.forEach((subType, subIdx) => {
-    const yStart = subIdx * subH;
-    
-    vCtx.save();
-    vCtx.beginPath();
-    vCtx.rect(0, yStart, PW, subH);
-    vCtx.clip();
+  // Draw indicators first (top part)
+  if (activeIndicators.length > 0) {
+    const indicatorSubH = indicatorsHeight / activeIndicators.length;
+    activeIndicators.forEach((subType, subIdx) => {
+      const yStart = subIdx * indicatorSubH;
+      
+      vCtx.save();
+      vCtx.beginPath();
+      vCtx.rect(0, yStart, PW, indicatorSubH);
+      vCtx.clip();
 
-    // Fill background for this sub-panel
-    vCtx.fillStyle = getCanvasBgColor();
-    vCtx.fillRect(0, yStart, PW, subH);
+      // Fill background for this sub-panel
+      vCtx.fillStyle = getCanvasBgColor();
+      vCtx.fillRect(0, yStart, PW, indicatorSubH);
 
-    // Draw sub-panel border/divider
-    vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-    vCtx.lineWidth = 1;
-    vCtx.beginPath();
-    vCtx.moveTo(0, yStart);
-    vCtx.lineTo(PW, yStart);
-    vCtx.stroke();
+      // Draw sub-panel border/divider
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      vCtx.lineWidth = 1;
+      vCtx.beginPath();
+      vCtx.moveTo(0, yStart);
+      vCtx.lineTo(PW, yStart);
+      vCtx.stroke();
 
-    if (subType === "Volume" && mv > 0) {
-      // 1. Infallible Cumulative Detector (The Golden Bullet)
-      let massiveDrops = 0;
-      for (let i = 1; i < vis.length; i++) {
-        if (vis[i - 1].v > 0 && vis[i].v < vis[i - 1].v * 0.5) massiveDrops++;
-      }
-      const isCumulativeBug = vis.length > 20 && (massiveDrops < vis.length * 0.05);
+      if (subType === "RSI") {
+        const rsi = calcRSI(candles, 14);
+        const lastVal = rsi[rsi.length - 1];
 
-      let renderVols = new Array(vis.length);
-      let trueMv = 0;
+        // Draw levels 30, 50, 70
+        const y30 = yStart + indicatorSubH - (30 / 100) * (indicatorSubH - 25) - 15;
+        const y50 = yStart + indicatorSubH - (50 / 100) * (indicatorSubH - 25) - 15;
+        const y70 = yStart + indicatorSubH - (70 / 100) * (indicatorSubH - 25) - 15;
 
-      for (let i = 0; i < vis.length; i++) {
-        if (isCumulativeBug) {
-          let prevV = i > 0 ? vis[i - 1].v : vis[i].v;
-          if (vis[i].v === 0 || (prevV === 0 && vis[i].v > 0)) renderVols[i] = 0;
-          else renderVols[i] = Math.max(0, vis[i].v - prevV);
-        } else {
-          renderVols[i] = vis[i].v;
-        }
-        if (renderVols[i] > trueMv) trueMv = renderVols[i];
-      }
+        // Fill 30-70 channel
+        vCtx.fillStyle = "rgba(139, 92, 246, 0.08)";
+        vCtx.fillRect(0, y70, PW, y30 - y70);
 
-      const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
-      for (let i = 0; i < vis.length; i++) {
-        const c = vis[i];
-        const x = Math.round((i + futureGap) * candleW + candleW / 2);
-        const up = c.c >= c.o;
-        const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
-        const vh = Math.max(3, Math.min(1, vRatio) * (subH - 10));
-        vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+        // Dash lines
+        vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+        vCtx.setLineDash([3, 3]);
+        vCtx.lineWidth = 1;
         
-        vCtx.fillRect(x - Math.floor(volW / 2), yStart + subH - vh, volW, vh);
-      }
-      
-      // Volume label removed
+        vCtx.beginPath();
+        vCtx.moveTo(0, y30); vCtx.lineTo(PW, y30);
+        vCtx.moveTo(0, y50); vCtx.lineTo(PW, y50);
+        vCtx.moveTo(0, y70); vCtx.lineTo(PW, y70);
+        vCtx.stroke();
+        vCtx.setLineDash([]);
 
-    } else if (subType === "RSI") {
-      const rsi = calcRSI(candles, 14);
-      const lastVal = rsi[rsi.length - 1];
+        // Draw levels labels on the right
+        vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
+        vCtx.font = "bold 9px Inter";
+        vCtx.textAlign = "right";
+        vCtx.fillText("70", PW - 4, y70 + 3);
+        vCtx.fillText("50", PW - 4, y50 + 3);
+        vCtx.fillText("30", PW - 4, y30 + 3);
 
-      // Draw levels 30, 50, 70
-      const y30 = yStart + subH - (30 / 100) * (subH - 25) - 15;
-      const y50 = yStart + subH - (50 / 100) * (subH - 25) - 15;
-      const y70 = yStart + subH - (70 / 100) * (subH - 25) - 15;
+        // Draw RSI Curve
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#a78bfa";
+        vCtx.lineWidth = 2;
+        for (let i = 0; i < vis.length; i++) {
+          const val = rsi[s + i];
+          if (val != null) {
+            const x = (i + futureGap) * candleW + candleW / 2;
+            const y = yStart + indicatorSubH - (val / 100) * (indicatorSubH - 25) - 15;
+            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+          }
+        }
+        vCtx.stroke();
 
-      // Fill 30-70 channel
-      vCtx.fillStyle = "rgba(139, 92, 246, 0.08)";
-      vCtx.fillRect(0, y70, PW, y30 - y70);
+        // Big clear label
+        vCtx.fillStyle = "#a78bfa";
+        vCtx.font = "bold 11px Inter";
+        vCtx.textAlign = "left";
+        vCtx.textBaseline = "top";
+        vCtx.fillText(`RSI(14): ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, 10, yStart + 5);
+        // Right side value too
+        vCtx.textAlign = "right";
+        vCtx.fillText(`RSI: ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, PW - 4, yStart + 5);
 
-      // Dash lines
-      vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-      vCtx.setLineDash([3, 3]);
-      vCtx.lineWidth = 1;
-      
-      vCtx.beginPath();
-      vCtx.moveTo(0, y30); vCtx.lineTo(PW, y30);
-      vCtx.moveTo(0, y50); vCtx.lineTo(PW, y50);
-      vCtx.moveTo(0, y70); vCtx.lineTo(PW, y70);
-      vCtx.stroke();
-      vCtx.setLineDash([]);
+      } else if (subType === "ATR") {
+        const atr = calcATR(candles, 14);
+        const lastVal = atr[atr.length - 1];
+        let maxAtr = 0.00001;
+        for (let i = 0; i < vis.length; i++) {
+          if (atr[s + i] > maxAtr) maxAtr = atr[s + i];
+        }
 
-      // Draw levels labels on the right
-      vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
-      vCtx.font = "bold 9px Inter";
-      vCtx.textAlign = "right";
-      vCtx.fillText("70", PW - 4, y70 + 3);
-      vCtx.fillText("50", PW - 4, y50 + 3);
-      vCtx.fillText("30", PW - 4, y30 + 3);
+        // Draw Curve
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#fb923c"; // ATR Orange
+        vCtx.lineWidth = 2;
+        for (let i = 0; i < vis.length; i++) {
+          const val = atr[s + i];
+          if (val) {
+            const x = (i + futureGap) * candleW + candleW / 2;
+            const y = yStart + indicatorSubH - (val / maxAtr) * (indicatorSubH - 25) - 15;
+            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+          }
+        }
+        vCtx.stroke();
 
-      // Draw RSI Curve
-      vCtx.beginPath();
-      vCtx.strokeStyle = "#a78bfa";
-      vCtx.lineWidth = 2;
-      for (let i = 0; i < vis.length; i++) {
-        const val = rsi[s + i];
-        if (val != null) {
+        // Big clear label
+        vCtx.fillStyle = "#fb923c";
+        vCtx.font = "bold 11px Inter";
+        vCtx.textAlign = "left";
+        vCtx.textBaseline = "top";
+        vCtx.fillText(`ATR(14): ${lastVal != null ? fP(lastVal) : "N/A"}`, 10, yStart + 5);
+        // Right side value too
+        vCtx.textAlign = "right";
+        vCtx.fillText(`ATR: ${lastVal != null ? fP(lastVal) : "N/A"}`, PW - 4, yStart + 5);
+
+      } else if (subType === "MACD") {
+        const macdData = calcMACD(candles);
+        const lastM = macdData.macd[macdData.macd.length - 1];
+        const lastS = macdData.signal[macdData.signal.length - 1];
+
+        let maxMacd = 0.00001;
+        for (let i = 0; i < vis.length; i++) {
+          const idx = s + i;
+          const mVal = Math.max(Math.abs(macdData.macd[idx]), Math.abs(macdData.signal[idx]), Math.abs(macdData.hist[idx]));
+          if (mVal > maxMacd) maxMacd = mVal;
+        }
+
+        const yZero = yStart + indicatorSubH / 2;
+
+        // Zero line
+        vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+        vCtx.lineWidth = 1;
+        vCtx.beginPath();
+        vCtx.moveTo(0, yZero);
+        vCtx.lineTo(PW, yZero);
+        vCtx.stroke();
+
+        // Hist bars
+        for (let i = 0; i < vis.length; i++) {
+          const val = macdData.hist[s + i];
           const x = (i + futureGap) * candleW + candleW / 2;
-          const y = yStart + subH - (val / 100) * (subH - 25) - 15;
+          const yVal = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
+          vCtx.fillStyle = val >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
+          vCtx.fillRect(x - 1.5, Math.min(yZero, yVal), 3, Math.max(1, Math.abs(yZero - yVal)));
+        }
+
+        // MACD Line (Blue)
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#3b82f6";
+        vCtx.lineWidth = 2;
+        for (let i = 0; i < vis.length; i++) {
+          const val = macdData.macd[s + i];
+          const x = (i + futureGap) * candleW + candleW / 2;
+          const y = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
           if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
-      }
-      vCtx.stroke();
+        vCtx.stroke();
 
-      // Big clear label
-      vCtx.fillStyle = "#a78bfa";
-      vCtx.font = "bold 11px Inter";
-      vCtx.textAlign = "left";
-      vCtx.textBaseline = "top";
-      vCtx.fillText(`RSI(14): ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, 10, yStart + 5);
-      // Right side value too
-      vCtx.textAlign = "right";
-      vCtx.fillText(`RSI: ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, PW - 4, yStart + 5);
-
-    } else if (subType === "ATR") {
-      const atr = calcATR(candles, 14);
-      const lastVal = atr[atr.length - 1];
-      let maxAtr = 0.00001;
-      for (let i = 0; i < vis.length; i++) {
-        if (atr[s + i] > maxAtr) maxAtr = atr[s + i];
-      }
-
-      // Draw Curve
-      vCtx.beginPath();
-      vCtx.strokeStyle = "#fb923c"; // ATR Orange
-      vCtx.lineWidth = 2;
-      for (let i = 0; i < vis.length; i++) {
-        const val = atr[s + i];
-        if (val) {
+        // Signal Line (Pink)
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#f43f5e";
+        vCtx.lineWidth = 2;
+        for (let i = 0; i < vis.length; i++) {
+          const val = macdData.signal[s + i];
           const x = (i + futureGap) * candleW + candleW / 2;
-          const y = yStart + subH - (val / maxAtr) * (subH - 25) - 15;
+          const y = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
           if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
-      }
-      vCtx.stroke();
+        vCtx.stroke();
 
-      // Big clear label
-      vCtx.fillStyle = "#fb923c";
-      vCtx.font = "bold 11px Inter";
-      vCtx.textAlign = "left";
-      vCtx.textBaseline = "top";
-      vCtx.fillText(`ATR(14): ${lastVal != null ? fP(lastVal) : "N/A"}`, 10, yStart + 5);
-      // Right side value too
-      vCtx.textAlign = "right";
-      vCtx.fillText(`ATR: ${lastVal != null ? fP(lastVal) : "N/A"}`, PW - 4, yStart + 5);
+        // Big clear label
+        vCtx.fillStyle = "#3b82f6";
+        vCtx.font = "bold 11px Inter";
+        vCtx.textAlign = "left";
+        vCtx.textBaseline = "top";
+        vCtx.fillText(`MACD: ${lastM.toFixed(4)} | SIGNAL: ${lastS.toFixed(4)}`, 10, yStart + 5);
+        // Right side value too
+        vCtx.textAlign = "right";
+        vCtx.fillText(`MACD: ${lastM.toFixed(4)}`, PW - 4, yStart + 5);
 
-    } else if (subType === "MACD") {
-      const macdData = calcMACD(candles);
-      const lastM = macdData.macd[macdData.macd.length - 1];
-      const lastS = macdData.signal[macdData.signal.length - 1];
-
-      let maxMacd = 0.00001;
-      for (let i = 0; i < vis.length; i++) {
-        const idx = s + i;
-        const mVal = Math.max(Math.abs(macdData.macd[idx]), Math.abs(macdData.signal[idx]), Math.abs(macdData.hist[idx]));
-        if (mVal > maxMacd) maxMacd = mVal;
-      }
-
-      const yZero = yStart + subH / 2;
-
-      // Zero line
-      vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-      vCtx.lineWidth = 1;
-      vCtx.beginPath();
-      vCtx.moveTo(0, yZero);
-      vCtx.lineTo(PW, yZero);
-      vCtx.stroke();
-
-      // Hist bars
-      for (let i = 0; i < vis.length; i++) {
-        const val = macdData.hist[s + i];
-        const x = (i + futureGap) * candleW + candleW / 2;
-        const yVal = yZero - (val / maxMacd) * (subH / 2 - 15);
-        vCtx.fillStyle = val >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
-        vCtx.fillRect(x - 1.5, Math.min(yZero, yVal), 3, Math.max(1, Math.abs(yZero - yVal)));
-      }
-
-      // MACD Line (Blue)
-      vCtx.beginPath();
-      vCtx.strokeStyle = "#38bdf8";
-      vCtx.lineWidth = 2;
-      for (let i = 0; i < vis.length; i++) {
-        const val = macdData.macd[s + i];
-        const x = (i + futureGap) * candleW + candleW / 2;
-        const y = yZero - (val / maxMacd) * (subH / 2 - 15);
-        if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
-      }
-      vCtx.stroke();
-
-      // Signal Line (Pink)
-      vCtx.beginPath();
-      vCtx.strokeStyle = "#f43f5e";
-      vCtx.lineWidth = 2;
-      for (let i = 0; i < vis.length; i++) {
-        const val = macdData.signal[s + i];
-        const x = (i + futureGap) * candleW + candleW / 2;
-        const y = yZero - (val / maxMacd) * (subH / 2 - 15);
-        if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
-      }
-      vCtx.stroke();
-
-      // Big clear label
-      vCtx.fillStyle = "#38bdf8";
-      vCtx.font = "bold 11px Inter";
-      vCtx.textAlign = "left";
-      vCtx.textBaseline = "top";
-      vCtx.fillText(`MACD: ${lastM.toFixed(4)} | SIGNAL: ${lastS.toFixed(4)}`, 10, yStart + 5);
-      // Right side value too
-      vCtx.textAlign = "right";
-      vCtx.fillText(`MACD: ${lastM.toFixed(4)}`, PW - 4, yStart + 5);
-
-    } else if (subType === "CVD") {
-      const cvd = calcCVD(candles);
-      const lastVal = cvd[cvd.length - 1];
-      let minCvd = Infinity, maxCvd = -Infinity;
-      for (let i = 0; i < vis.length; i++) {
-        const val = cvd[s + i];
-        if (val < minCvd) minCvd = val;
-        if (val > maxCvd) maxCvd = val;
-      }
-      const cvdRange = maxCvd - minCvd || 1;
-      const yZero = yStart + subH - ((0 - minCvd) / cvdRange) * (subH - 25) - 15;
-
-      // Zero reference line
-      vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-      vCtx.lineWidth = 1;
-      vCtx.beginPath();
-      vCtx.moveTo(0, yZero);
-      vCtx.lineTo(PW, yZero);
-      vCtx.stroke();
-
-      // Curve
-      vCtx.beginPath();
-      vCtx.strokeStyle = "#ec4899"; // CVD Pink
-      vCtx.lineWidth = 2;
-      for (let i = 0; i < vis.length; i++) {
-        const val = cvd[s + i];
-        if (val != null) {
-          const x = (i + futureGap) * candleW + candleW / 2;
-          const y = yStart + subH - ((val - minCvd) / cvdRange) * (subH - 25) - 15;
-          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+      } else if (subType === "CVD") {
+        const cvd = calcCVD(candles);
+        const lastVal = cvd[cvd.length - 1];
+        let minCvd = Infinity, maxCvd = -Infinity;
+        for (let i = 0; i < vis.length; i++) {
+          const val = cvd[s + i];
+          if (val < minCvd) minCvd = val;
+          if (val > maxCvd) maxCvd = val;
         }
-      }
-      vCtx.stroke();
+        const cvdRange = maxCvd - minCvd || 1;
+        const yZero = yStart + indicatorSubH - ((0 - minCvd) / cvdRange) * (indicatorSubH - 25) - 15;
 
-      // Big clear label
-      vCtx.fillStyle = "#ec4899";
-      vCtx.font = "bold 11px Inter";
-      vCtx.textAlign = "left";
-      vCtx.textBaseline = "top";
-      vCtx.fillText(`CVD: ${fV(lastVal)}`, 10, yStart + 5);
-      // Right side value too
-      vCtx.textAlign = "right";
-      vCtx.fillText(`CVD: ${fV(lastVal)}`, PW - 4, yStart + 5);
+        // Zero reference line
+        vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+        vCtx.lineWidth = 1;
+        vCtx.beginPath();
+        vCtx.moveTo(0, yZero);
+        vCtx.lineTo(PW, yZero);
+        vCtx.stroke();
+
+        // Curve
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#ec4899"; // CVD Pink
+        vCtx.lineWidth = 2;
+        for (let i = 0; i < vis.length; i++) {
+          const val = cvd[s + i];
+          if (val != null) {
+            const x = (i + futureGap) * candleW + candleW / 2;
+            const y = yStart + indicatorSubH - ((val - minCvd) / cvdRange) * (indicatorSubH - 25) - 15;
+            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+          }
+        }
+        vCtx.stroke();
+
+        // Big clear label
+        vCtx.fillStyle = "#ec4899";
+        vCtx.font = "bold 11px Inter";
+        vCtx.textAlign = "left";
+        vCtx.textBaseline = "top";
+        vCtx.fillText(`CVD: ${fV(lastVal)}`, 10, yStart + 5);
+        // Right side value too
+        vCtx.textAlign = "right";
+        vCtx.fillText(`CVD: ${fV(lastVal)}`, PW - 4, yStart + 5);
+      }
+
+      vCtx.restore(); // Important: Restore state after clipping!
+    });
+  }
+
+  // Draw Volume (bottom part)
+  const volumeYStart = indicatorsHeight;
+  vCtx.save();
+  vCtx.beginPath();
+  vCtx.rect(0, volumeYStart, PW, volumeHeight);
+  vCtx.clip();
+
+  // Fill background for volume panel
+  vCtx.fillStyle = getCanvasBgColor();
+  vCtx.fillRect(0, volumeYStart, PW, volumeHeight);
+
+  // Draw volume panel border
+  vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+  vCtx.lineWidth = 1;
+  vCtx.beginPath();
+  vCtx.moveTo(0, volumeYStart);
+  vCtx.lineTo(PW, volumeYStart);
+  vCtx.stroke();
+
+  if (mv > 0) {
+    // 1. Infallible Cumulative Detector (The Golden Bullet)
+    let massiveDrops = 0;
+    for (let i = 1; i < vis.length; i++) {
+      if (vis[i - 1].v > 0 && vis[i].v < vis[i - 1].v * 0.5) massiveDrops++;
+    }
+    const isCumulativeBug = vis.length > 20 && (massiveDrops < vis.length * 0.05);
+
+    let renderVols = new Array(vis.length);
+    let trueMv = 0;
+
+    for (let i = 0; i < vis.length; i++) {
+      if (isCumulativeBug) {
+        let prevV = i > 0 ? vis[i - 1].v : vis[i].v;
+        if (vis[i].v === 0 || (prevV === 0 && vis[i].v > 0)) renderVols[i] = 0;
+        else renderVols[i] = Math.max(0, vis[i].v - prevV);
+      } else {
+        renderVols[i] = vis[i].v;
+      }
+      if (renderVols[i] > trueMv) trueMv = renderVols[i];
     }
 
-    vCtx.restore(); // Important: Restore state after clipping!
-  });
+    const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
+    for (let i = 0; i < vis.length; i++) {
+      const c = vis[i];
+      const x = Math.round((i + futureGap) * candleW + candleW / 2);
+      const up = c.c >= c.o;
+      const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
+      const vh = Math.max(3, Math.min(1, vRatio) * (volumeHeight - 10));
+      vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+      
+      vCtx.fillRect(x - Math.floor(volW / 2), volumeYStart + volumeHeight - vh, volW, vh);
+    }
+  }
+  vCtx.restore();
 
   // ── Right axis panel (thin divider line) ─────────────────
   // Note: Background is already filled once at the start of drawChart
