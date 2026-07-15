@@ -32,6 +32,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
           v: Number.isFinite(v) ? v : 0, h: h > 0 ? h : p, l: l > 0 ? l : p, o,
           funding: +d.fundingFeeRate * 100 || 0, nextFunding: d.nextFundingRateTime ? Date.now() + d.nextFundingRateTime : 0,
           oi: d.openInterest ? +d.openInterest * p * multiplier : 0,
+          cs: multiplier
         });
         added++;
       }

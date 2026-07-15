@@ -39,6 +39,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           tickers.set("OX:" + s.instId, {
             key: "OX:" + s.instId, ex: "OX", sym: s.instId, base: s.ctValCcy,
             p: 0, chg: 0, v: 0, h: 0, l: 0, o: 0, funding: 0, nextFunding: 0,
+            cs: +s.ctVal || 1
           });
         }
       }

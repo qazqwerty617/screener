@@ -18,7 +18,9 @@ const httpsAgent = new https.Agent({
 
 const compression = require('compression');
 const wallScanner = require("./wallScanner");
+const patternDetector = require("./patternDetector");
 let currentWallsCache = [];
+let patternsCache = []; // Global in-memory patterns/signals cache
 
 // ─── In-memory store ────────────────────────────────────────────────────────
 const tickers = new Map();
@@ -807,6 +809,44 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
 const klinesCache = new Map();
 const klinesInFlight = new Map();
 
+// ─── Go Scanner Proxy ──────────────────────────────────────────────────────
+const GO_SCANNER_URL = "http://127.0.0.1:8082";
+
+app.get("/api/go-status", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    const r = await fetch(`${GO_SCANNER_URL}/api/klines?ex=BN&sym=BTCUSDT&tf=1m&limit=1`);
+    if (r.ok) {
+      res.json({ status: "online" });
+    } else {
+      res.json({ status: "error", code: r.status });
+    }
+  } catch (e) {
+    res.json({ status: "offline", error: e.message });
+  }
+});
+
+app.get("/api/go-klines", async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  const { ex = "BN", sym = "BTCUSDT", tf = "1h", limit = "200" } = req.query;
+  try {
+    const goUrl = `${GO_SCANNER_URL}/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&limit=${limit}`;
+    const r = await fetch(goUrl);
+    if (!r.ok) {
+      const text = await r.text();
+      return res.status(r.status).json({ error: text });
+    }
+    const data = await r.json();
+    // Go returns [{t,o,h,l,c,v}] — convert to flat array for frontend compatibility
+    const flat = [];
+    for (const c of data) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
+    res.json(flat);
+  } catch (e) {
+    res.status(503).json({ error: "Go scanner offline: " + e.message });
+  }
+});
+// ──────────────────────────────────────────────────────────────────────────
+
 function cacheKey(ex, sym, tf, lite) {
   return `${ex}|${sym}|${tf}|${lite ? "1" : "0"}`;
 }
@@ -868,6 +908,31 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", tickers: tickers.size, clients: clients.size, dirty: dirtyKeys.size, exchanges: Object.fromEntries(exStatus) });
 });
 
+app.get("/api/patterns", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "private, max-age=1");
+  res.setHeader("Content-Type", "application/json");
+
+  let result = [...patternsCache];
+  const { tf, type, dir, limit = "100" } = req.query;
+
+  if (tf) {
+    const tfs = tf.split(",");
+    result = result.filter(p => tfs.includes(p.tf));
+  }
+  if (type) {
+    const types = type.split(",");
+    result = result.filter(p => types.includes(p.type));
+  }
+  if (dir) {
+    const dirs = dir.split(",");
+    result = result.filter(p => dirs.includes(p.direction));
+  }
+
+  const lim = parseInt(limit, 10) || 100;
+  res.json(result.slice(0, lim));
+});
+
 app.get("/api/kucoin-token", async (req, res) => {
   const tk = await getKuCoinToken();
   if (tk) res.json(tk);
@@ -923,6 +988,81 @@ server.listen(PORT, () => {
       }
     }
   });
+
+  // ─── Pattern Scanner Engine ───────────────────────────────────────────────
+  let isScanningPatterns = false;
+  async function scanAllPatterns() {
+    if (isScanningPatterns) return;
+    isScanningPatterns = true;
+    console.log(`[PATTERNS] Starting pattern detection scan...`);
+    const startTime = Date.now();
+
+    try {
+      const list = Array.from(tickers.values())
+        .filter(t => t.v > 0)
+        .sort((a, b) => b.v - a.v)
+        .slice(0, 50); // Scan top 50
+
+      const timeframes = ["15m", "1h", "4h", "1d"];
+      let newSignalsCount = 0;
+
+      for (const t of list) {
+        const colonIdx = t.key.indexOf(':');
+        if (colonIdx <= 0) continue;
+        const ex = t.key.substring(0, colonIdx);
+        const sym = t.key.substring(colonIdx + 1);
+        const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
+
+        for (const tf of timeframes) {
+          try {
+            const candles = await fetchFullHistory(ex, sym, tf, true);
+            if (!candles || candles.length < 30) continue;
+
+            const meta = { ex, sym, base, tf };
+            const signals = patternDetector.scanCandles(meta, candles);
+
+            for (const sig of signals) {
+              const existingIdx = patternsCache.findIndex(p =>
+                p.ex === sig.ex &&
+                p.sym === sig.sym &&
+                p.tf === sig.tf &&
+                p.type === sig.type &&
+                p.direction === sig.direction &&
+                Math.abs(p.price - sig.price) / sig.price < 0.005
+              );
+
+              if (existingIdx >= 0) {
+                patternsCache[existingIdx].ts = sig.ts;
+                patternsCache[existingIdx].meta = sig.meta;
+                patternsCache[existingIdx].confidence = sig.confidence;
+              } else {
+                patternsCache.push(sig);
+                newSignalsCount++;
+              }
+            }
+          } catch (e) {}
+          await new Promise(r => setTimeout(r, 80));
+        }
+      }
+
+      patternsCache.sort((a, b) => b.ts - a.ts);
+      if (patternsCache.length > 1000) {
+        patternsCache = patternsCache.slice(0, 1000);
+      }
+
+      console.log(`[PATTERNS] Scan completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s. Found ${newSignalsCount} new signals. Total cached: ${patternsCache.length}`);
+    } catch (err) {
+      console.error("[PATTERNS] Error during scan:", err);
+    } finally {
+      isScanningPatterns = false;
+    }
+  }
+
+  // Initial trigger after 8 seconds, then every 5 minutes
+  setTimeout(() => {
+    scanAllPatterns();
+    setInterval(scanAllPatterns, 5 * 60 * 1000);
+  }, 8000);
   
   // Periodic snapshots as data arrives
   let snapCount = 0;

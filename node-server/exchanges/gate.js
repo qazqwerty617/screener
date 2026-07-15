@@ -37,7 +37,8 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           v: +(ticker24h?.volume_24h_quote || ticker24h?.volume_24h_settle || 0), h, l, o,
           funding: +(ticker24h?.funding_rate || contract.funding_rate || 0) * 100,
           nextFunding: +(ticker24h?.funding_rate_next_apply || contract.funding_next_apply || 0) * 1000,
-          oi
+          oi,
+          cs: +contract.quanto_multiplier || 1
         });
         added++;
       }

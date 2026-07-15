@@ -16,6 +16,15 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       ]);
       if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) throw new Error("MEXC API error");
 
+      const detailMap = new Map();
+      if (detailResp?.success && Array.isArray(detailResp.data)) {
+        for (const item of detailResp.data) {
+          if (item.symbol && item.contractSize) {
+            detailMap.set(item.symbol, +item.contractSize);
+          }
+        }
+      }
+
       let added = 0;
       for (const d of data.data) {
         if (!d.symbol || !d.symbol.endsWith("_USDT")) continue;
@@ -27,11 +36,13 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           oi = (+d.holdVol / +d.volume24) * +d.amount24;
         }
         mxSyms.push(d.symbol);
+        const cs = detailMap.get(d.symbol) || 1;
         tickers.set("MX:" + d.symbol, {
           key: "MX:" + d.symbol, ex: "MX", sym: d.symbol, base: d.symbol.replace(/_USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changeRate * 100,
           v: +d.amount24, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
-          oi
+          oi,
+          cs
         });
         added++;
       }

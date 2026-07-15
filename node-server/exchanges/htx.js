@@ -14,9 +14,10 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
     try {
       if (updateExStatus) updateExStatus("HT", "connecting");
       // Use standard futures API domain
-      const [data, fundingResp] = await Promise.all([
+      const [data, fundingResp, contractInfo] = await Promise.all([
         apiFetch("https://api.hbdm.vn/linear-swap-ex/market/detail/batch_merged", 15000, 2),
-        apiFetch("https://api.hbdm.vn/linear-swap-api/v1/swap_batch_funding_rate", 15000, 2)
+        apiFetch("https://api.hbdm.vn/linear-swap-api/v1/swap_batch_funding_rate", 15000, 2),
+        apiFetch("https://api.hbdm.vn/linear-swap-api/v1/swap_contract_info", 15000, 2)
       ]);
       if (data.status !== "ok") {
          console.log("[HT] Raw response keys:", Object.keys(data));
@@ -31,16 +32,27 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       
       const fundingBySymbol = new Map((fundingResp?.data || []).map(i => [i.contract_code, i]));
 
+      const sizeMap = new Map();
+      if (contractInfo && Array.isArray(contractInfo.data)) {
+        for (const item of contractInfo.data) {
+          if (item.contract_code && item.contract_size) {
+            sizeMap.set(item.contract_code, +item.contract_size);
+          }
+        }
+      }
+
       for (const tick of ticks) {
         const sym = tick.symbol || tick.contract_code;
         if (!sym) continue;
         const fm = fundingBySymbol.get(sym);
         const p = +tick.close, o = +tick.open, h = +tick.high, l = +tick.low;
         const v = +tick.trade_turnover || (+tick.amount * p);
+        const cs = sizeMap.get(sym) || 1;
         tickers.set("HT:" + sym, {
           key: "HT:" + sym, ex: "HT", sym, base: sym.split("-")[0],
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : 0,
           v, h, l, o, funding: fm ? +fm.funding_rate * 100 : 0, nextFunding: fm ? +fm.next_funding_time : 0,
+          cs
         });
         htSyms.push(sym);
       }

@@ -85,6 +85,13 @@ let listEx = "BN",
 
 let sortCol = "chg",
   sortDir = 1; // 1=desc, -1=asc
+
+let chartDensityEnabled = true;
+let chartDensitySide = "all";
+let chartDensitySizes = new Set(["small", "medium", "large"]);
+let chartDensityMarket = "all";
+let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
+let chartActiveIndicators = new Set([]);
 const TAG_PALETTE = [
   "#ff4560",
   "#26c97a",
@@ -182,7 +189,7 @@ const saveTags = () => {
 let candles = [],
   chartW = 0,
   chartH = 0;
-const volH = 100;
+const volH = 70;
 let offsetX = 0;
 function getClampedOffsetX(val) {
   if (candles.length === 0) return 0;
@@ -722,6 +729,126 @@ function requestDraw() {
   chartNeedsDraw = true;
 }
 
+// ── Indicator Calculations ──
+function calcEMA(data, period) {
+  const k = 2 / (period + 1);
+  let ema = new Array(data.length);
+  if (data.length === 0) return ema;
+  ema[0] = data[0].c;
+  for (let i = 1; i < data.length; i++) {
+    ema[i] = data[i].c * k + ema[i - 1] * (1 - k);
+  }
+  return ema;
+}
+
+function calcBB(data, period = 20, stdDevMult = 2) {
+  let bb = new Array(data.length).fill(null).map(() => ({ middle: 0, upper: 0, lower: 0 }));
+  if (data.length < period) return bb;
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      sum += data[j].c;
+    }
+    const mean = sum / period;
+    let varianceSum = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      varianceSum += Math.pow(data[j].c - mean, 2);
+    }
+    const stdDev = Math.sqrt(varianceSum / period);
+    bb[i] = {
+      middle: mean,
+      upper: mean + stdDevMult * stdDev,
+      lower: mean - stdDevMult * stdDev
+    };
+  }
+  return bb;
+}
+
+function calcVWAP(data) {
+  let vwap = new Array(data.length);
+  let sumPV = 0, sumV = 0;
+  for (let i = 0; i < data.length; i++) {
+    const tp = (data[i].h + data[i].l + data[i].c) / 3;
+    sumPV += tp * data[i].v;
+    sumV += data[i].v;
+    vwap[i] = sumV > 0 ? sumPV / sumV : tp;
+  }
+  return vwap;
+}
+
+function calcRSI(data, period = 14) {
+  let rsi = new Array(data.length).fill(50);
+  if (data.length <= period) return rsi;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = data[i].c - data[i - 1].c;
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  rsi[period] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+  for (let i = period + 1; i < data.length; i++) {
+    const diff = data[i].c - data[i - 1].c;
+    avgGain = (avgGain * (period - 1) + (diff > 0 ? diff : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
+    rsi[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+  }
+  return rsi;
+}
+
+function calcATR(data, period = 14) {
+  let atr = new Array(data.length).fill(0);
+  if (data.length === 0) return atr;
+  let trSum = 0;
+  for (let i = 1; i < data.length; i++) {
+    const h = data[i].h, l = data[i].l, pc = data[i - 1].c;
+    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+    if (i <= period) {
+      trSum += tr;
+      if (i === period) atr[i] = trSum / period;
+    } else {
+      atr[i] = (atr[i - 1] * (period - 1) + tr) / period;
+    }
+  }
+  return atr;
+}
+
+function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
+  const emaS = calcEMA(data, shortP);
+  const emaL = calcEMA(data, longP);
+  let macd = new Array(data.length).fill(0);
+  for (let i = 0; i < data.length; i++) {
+    macd[i] = emaS[i] - emaL[i];
+  }
+  const k = 2 / (signalP + 1);
+  let signal = new Array(data.length).fill(0);
+  signal[0] = macd[0];
+  for (let i = 1; i < data.length; i++) {
+    signal[i] = macd[i] * k + signal[i - 1] * (1 - k);
+  }
+  let hist = new Array(data.length).fill(0);
+  for (let i = 0; i < data.length; i++) {
+    hist[i] = macd[i] - signal[i];
+  }
+  return { macd, signal, hist };
+}
+
+function calcCVD(data) {
+  let cvd = new Array(data.length).fill(0);
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const c = data[i];
+    const range = c.h - c.l || 1;
+    const buyR = (c.c - c.l) / range;
+    const sellR = (c.h - c.c) / range;
+    sum += c.v * (buyR - sellR);
+    cvd[i] = sum;
+  }
+  return cvd;
+}
+
+
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
 
@@ -737,6 +864,8 @@ function drawChart() {
   ctx.fillStyle = getCanvasBgColor();
   ctx.fillRect(0, 0, chartW, chartH);
   vCtx.clearRect(0, 0, chartW, volH);
+  vCtx.fillStyle = getCanvasBgColor();
+  vCtx.fillRect(0, 0, chartW, volH);
 
   // ── Visible candle window ──────────────────────────────────────────────────
   const n = Math.max(1, PW / candleW);
@@ -879,65 +1008,420 @@ function drawChart() {
     }
   });
 
-  // ── Volume pane ────────────────────────────────────────────────────────────
-  if (mv > 0) {
-    vCtx.save();
-    vCtx.beginPath();
-    vCtx.rect(0, 0, PW, volH);
-    vCtx.clip();
+  // ── Draw Overlay Indicators on Chart ──
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, TOP, PW, PH);
+  ctx.clip();
 
-    // 1. Infallible Cumulative Detecor (The Golden Bullet)
-    // Interval volume constantly spikes and then collapses. It routinely drops >50% from the previous candle.
-    // 24H rolling volume is a massive sum. It almost NEVER drops by >50% in a single minute.
-    let massiveDrops = 0;
-    for (let i = 1; i < vis.length; i++) {
-      if (vis[i - 1].v > 0 && vis[i].v < vis[i - 1].v * 0.5) {
-        massiveDrops++;
-      }
-    }
-    const isCumulativeBug = vis.length > 20 && (massiveDrops < vis.length * 0.05);
-
-    // 2. Map volumes mathematically
-    let renderVols = new Array(vis.length);
-    let trueMv = 0;
-
-    for (let i = 0; i < vis.length; i++) {
-      if (isCumulativeBug) {
-        let prevV = i > 0 ? vis[i - 1].v : (vis[i].v);
-        // If API dropped to zero internally, ignore the chaotic negative/positive bounce
-        if (vis[i].v === 0) {
-          renderVols[i] = 0;
-        } else if (prevV === 0 && vis[i].v > 0) {
-          renderVols[i] = 0; // The recovery jump is fake
-        } else {
-          // True interval volume is roughly the positive delta of the rolling sum
-          renderVols[i] = Math.max(0, vis[i].v - prevV);
-        }
-      } else {
-        renderVols[i] = vis[i].v;
-      }
-      if (renderVols[i] > trueMv) {
-        trueMv = renderVols[i];
-      }
-    }
-
-    const volW = Math.max(1, candleW > 3 ? candleW - 1 : candleW);
-
-    // 3. Draw
+  // 1. Volume Profile (VP) with POC
+  if (chartActiveIndicators.has("VP")) {
+    const bins = {};
+    let maxBinVol = 0;
+    let pocPrice = 0;
+    const binSize = pr * 0.025 || 0.1;
     for (let i = 0; i < vis.length; i++) {
       const c = vis[i];
-      const x = Math.round((i + futureGap) * candleW + candleW / 2);
-      const up = c.c >= c.o;
-
-      const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
-      const vh = Math.max(2, Math.min(1, vRatio) * (volH - 6));
-
-      vCtx.fillStyle = up ? "rgba(38,201,122,.75)" : "rgba(255,69,96,.75)";
-      vCtx.fillRect(x - Math.floor(volW / 2), volH - vh, volW, vh);
+      const bin = Math.floor(c.c / binSize) * binSize;
+      bins[bin] = (bins[bin] || 0) + c.v;
+      if (bins[bin] > maxBinVol) {
+        maxBinVol = bins[bin];
+        pocPrice = bin + binSize / 2;
+      }
+    }
+    
+    // Draw Profile Bins on the RIGHT
+    for (const bin in bins) {
+      const p = parseFloat(bin);
+      const y = toY(p);
+      const yBottom = toY(p + binSize);
+      const height = Math.abs(yBottom - y);
+      const width = (bins[bin] / maxBinVol) * (PW * 0.20); // Max 20% width
+      const isPOC = Math.abs(p + binSize/2 - pocPrice) < binSize*0.1;
+      ctx.fillStyle = isPOC ? "rgba(255, 69, 96, 0.5)" : "rgba(108, 93, 211, 0.15)";
+      ctx.fillRect(PW - width, yBottom, width, height - 1);
     }
 
-    vCtx.restore();
+    // Draw Point of Control (POC) Label ONLY (no long line)
+    if (pocPrice > 0) {
+      const pocY = toY(pocPrice);
+      const pocWidth = (maxBinVol / maxBinVol) * (PW * 0.20);
+      // Label POC centered on the red bin
+      ctx.fillStyle = "#ff4560";
+      ctx.font = "bold 10px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("POC " + fP(pocPrice), PW - pocWidth/2, pocY);
+    }
   }
+
+  // 2. Bollinger Bands (BB)
+  if (chartActiveIndicators.has("BB")) {
+    const bb = calcBB(candles);
+    
+    // Draw Upper Band
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(167, 139, 250, 0.5)";
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < vis.length; i++) {
+      const val = bb[s + i];
+      if (val && val.upper) {
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = toY(val.upper);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+
+    // Draw Lower Band
+    ctx.beginPath();
+    for (let i = 0; i < vis.length; i++) {
+      const val = bb[s + i];
+      if (val && val.lower) {
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = toY(val.lower);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+
+  // 3. EMA 20
+  if (chartActiveIndicators.has("EMA 20")) {
+    const ema20 = calcEMA(candles, 20);
+    ctx.beginPath();
+    ctx.strokeStyle = "#4ade80"; // Bright Green
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < vis.length; i++) {
+      const val = ema20[s + i];
+      if (val) {
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = toY(val);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+
+  // 4. EMA 50
+  if (chartActiveIndicators.has("EMA 50")) {
+    const ema50 = calcEMA(candles, 50);
+    ctx.beginPath();
+    ctx.strokeStyle = "#facc15"; // Bright Yellow
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < vis.length; i++) {
+      const val = ema50[s + i];
+      if (val) {
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = toY(val);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+
+  // 5. EMA 200
+  if (chartActiveIndicators.has("EMA 200")) {
+    const ema200 = calcEMA(candles, 200);
+    ctx.beginPath();
+    ctx.strokeStyle = "#f87171"; // Bright Red
+    ctx.lineWidth = 1.8;
+    for (let i = 0; i < vis.length; i++) {
+      const val = ema200[s + i];
+      if (val) {
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = toY(val);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+
+  // 6. VWAP
+  if (chartActiveIndicators.has("VWAP")) {
+    const vwap = calcVWAP(candles);
+    ctx.beginPath();
+    ctx.strokeStyle = "#38bdf8"; // Sky Blue
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < vis.length; i++) {
+      const val = vwap[s + i];
+      if (val) {
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = toY(val);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // ── Draw Sub-indicators / Oscillators in separated rows of Volume Pane ──
+  const activeSubs = [];
+  if (chartActiveIndicators.has("RSI")) activeSubs.push("RSI");
+  if (chartActiveIndicators.has("MACD")) activeSubs.push("MACD");
+  if (chartActiveIndicators.has("CVD")) activeSubs.push("CVD");
+  if (chartActiveIndicators.has("ATR")) activeSubs.push("ATR");
+  activeSubs.push("Volume");
+
+  const subH = volH / activeSubs.length;
+
+  activeSubs.forEach((subType, subIdx) => {
+    const yStart = subIdx * subH;
+    
+    vCtx.save();
+    vCtx.beginPath();
+    vCtx.rect(0, yStart, PW, subH);
+    vCtx.clip();
+
+    // Fill background for this sub-panel
+    vCtx.fillStyle = getCanvasBgColor();
+    vCtx.fillRect(0, yStart, PW, subH);
+
+    // Draw sub-panel border/divider
+    vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+    vCtx.lineWidth = 1;
+    vCtx.beginPath();
+    vCtx.moveTo(0, yStart);
+    vCtx.lineTo(PW, yStart);
+    vCtx.stroke();
+
+    if (subType === "Volume" && mv > 0) {
+      // 1. Infallible Cumulative Detector (The Golden Bullet)
+      let massiveDrops = 0;
+      for (let i = 1; i < vis.length; i++) {
+        if (vis[i - 1].v > 0 && vis[i].v < vis[i - 1].v * 0.5) massiveDrops++;
+      }
+      const isCumulativeBug = vis.length > 20 && (massiveDrops < vis.length * 0.05);
+
+      let renderVols = new Array(vis.length);
+      let trueMv = 0;
+
+      for (let i = 0; i < vis.length; i++) {
+        if (isCumulativeBug) {
+          let prevV = i > 0 ? vis[i - 1].v : vis[i].v;
+          if (vis[i].v === 0 || (prevV === 0 && vis[i].v > 0)) renderVols[i] = 0;
+          else renderVols[i] = Math.max(0, vis[i].v - prevV);
+        } else {
+          renderVols[i] = vis[i].v;
+        }
+        if (renderVols[i] > trueMv) trueMv = renderVols[i];
+      }
+
+      const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
+      for (let i = 0; i < vis.length; i++) {
+        const c = vis[i];
+        const x = Math.round((i + futureGap) * candleW + candleW / 2);
+        const up = c.c >= c.o;
+        const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
+        const vh = Math.max(3, Math.min(1, vRatio) * (subH - 25) / 3); // Reduce height by 3x
+        vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+        
+        vCtx.fillRect(x - Math.floor(volW / 2), yStart + subH - vh, volW, vh);
+      }
+      
+      // Volume label removed
+
+    } else if (subType === "RSI") {
+      const rsi = calcRSI(candles, 14);
+      const lastVal = rsi[rsi.length - 1];
+
+      // Draw levels 30, 50, 70
+      const y30 = yStart + subH - (30 / 100) * (subH - 25) - 15;
+      const y50 = yStart + subH - (50 / 100) * (subH - 25) - 15;
+      const y70 = yStart + subH - (70 / 100) * (subH - 25) - 15;
+
+      // Fill 30-70 channel
+      vCtx.fillStyle = "rgba(139, 92, 246, 0.08)";
+      vCtx.fillRect(0, y70, PW, y30 - y70);
+
+      // Dash lines
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+      vCtx.setLineDash([3, 3]);
+      vCtx.lineWidth = 1;
+      
+      vCtx.beginPath();
+      vCtx.moveTo(0, y30); vCtx.lineTo(PW, y30);
+      vCtx.moveTo(0, y50); vCtx.lineTo(PW, y50);
+      vCtx.moveTo(0, y70); vCtx.lineTo(PW, y70);
+      vCtx.stroke();
+      vCtx.setLineDash([]);
+
+      // Draw levels labels on the right
+      vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      vCtx.font = "bold 9px Inter";
+      vCtx.textAlign = "right";
+      vCtx.fillText("70", PW - 4, y70 + 3);
+      vCtx.fillText("50", PW - 4, y50 + 3);
+      vCtx.fillText("30", PW - 4, y30 + 3);
+
+      // Draw RSI Curve
+      vCtx.beginPath();
+      vCtx.strokeStyle = "#a78bfa";
+      vCtx.lineWidth = 2;
+      for (let i = 0; i < vis.length; i++) {
+        const val = rsi[s + i];
+        if (val != null) {
+          const x = (i + futureGap) * candleW + candleW / 2;
+          const y = yStart + subH - (val / 100) * (subH - 25) - 15;
+          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+        }
+      }
+      vCtx.stroke();
+
+      // Big clear label
+      vCtx.fillStyle = "#a78bfa";
+      vCtx.font = "bold 11px Inter";
+      vCtx.textAlign = "left";
+      vCtx.textBaseline = "top";
+      vCtx.fillText(`RSI(14): ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, 10, yStart + 5);
+      // Right side value too
+      vCtx.textAlign = "right";
+      vCtx.fillText(`RSI: ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, PW - 4, yStart + 5);
+
+    } else if (subType === "ATR") {
+      const atr = calcATR(candles, 14);
+      const lastVal = atr[atr.length - 1];
+      let maxAtr = 0.00001;
+      for (let i = 0; i < vis.length; i++) {
+        if (atr[s + i] > maxAtr) maxAtr = atr[s + i];
+      }
+
+      // Draw Curve
+      vCtx.beginPath();
+      vCtx.strokeStyle = "#fb923c"; // ATR Orange
+      vCtx.lineWidth = 2;
+      for (let i = 0; i < vis.length; i++) {
+        const val = atr[s + i];
+        if (val) {
+          const x = (i + futureGap) * candleW + candleW / 2;
+          const y = yStart + subH - (val / maxAtr) * (subH - 25) - 15;
+          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+        }
+      }
+      vCtx.stroke();
+
+      // Big clear label
+      vCtx.fillStyle = "#fb923c";
+      vCtx.font = "bold 11px Inter";
+      vCtx.textAlign = "left";
+      vCtx.textBaseline = "top";
+      vCtx.fillText(`ATR(14): ${lastVal != null ? fP(lastVal) : "N/A"}`, 10, yStart + 5);
+      // Right side value too
+      vCtx.textAlign = "right";
+      vCtx.fillText(`ATR: ${lastVal != null ? fP(lastVal) : "N/A"}`, PW - 4, yStart + 5);
+
+    } else if (subType === "MACD") {
+      const macdData = calcMACD(candles);
+      const lastM = macdData.macd[macdData.macd.length - 1];
+      const lastS = macdData.signal[macdData.signal.length - 1];
+
+      let maxMacd = 0.00001;
+      for (let i = 0; i < vis.length; i++) {
+        const idx = s + i;
+        const mVal = Math.max(Math.abs(macdData.macd[idx]), Math.abs(macdData.signal[idx]), Math.abs(macdData.hist[idx]));
+        if (mVal > maxMacd) maxMacd = mVal;
+      }
+
+      const yZero = yStart + subH / 2;
+
+      // Zero line
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+      vCtx.lineWidth = 1;
+      vCtx.beginPath();
+      vCtx.moveTo(0, yZero);
+      vCtx.lineTo(PW, yZero);
+      vCtx.stroke();
+
+      // Hist bars
+      for (let i = 0; i < vis.length; i++) {
+        const val = macdData.hist[s + i];
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const yVal = yZero - (val / maxMacd) * (subH / 2 - 15);
+        vCtx.fillStyle = val >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
+        vCtx.fillRect(x - 1.5, Math.min(yZero, yVal), 3, Math.max(1, Math.abs(yZero - yVal)));
+      }
+
+      // MACD Line (Blue)
+      vCtx.beginPath();
+      vCtx.strokeStyle = "#38bdf8";
+      vCtx.lineWidth = 2;
+      for (let i = 0; i < vis.length; i++) {
+        const val = macdData.macd[s + i];
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = yZero - (val / maxMacd) * (subH / 2 - 15);
+        if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+      }
+      vCtx.stroke();
+
+      // Signal Line (Pink)
+      vCtx.beginPath();
+      vCtx.strokeStyle = "#f43f5e";
+      vCtx.lineWidth = 2;
+      for (let i = 0; i < vis.length; i++) {
+        const val = macdData.signal[s + i];
+        const x = (i + futureGap) * candleW + candleW / 2;
+        const y = yZero - (val / maxMacd) * (subH / 2 - 15);
+        if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+      }
+      vCtx.stroke();
+
+      // Big clear label
+      vCtx.fillStyle = "#38bdf8";
+      vCtx.font = "bold 11px Inter";
+      vCtx.textAlign = "left";
+      vCtx.textBaseline = "top";
+      vCtx.fillText(`MACD: ${lastM.toFixed(4)} | SIGNAL: ${lastS.toFixed(4)}`, 10, yStart + 5);
+      // Right side value too
+      vCtx.textAlign = "right";
+      vCtx.fillText(`MACD: ${lastM.toFixed(4)}`, PW - 4, yStart + 5);
+
+    } else if (subType === "CVD") {
+      const cvd = calcCVD(candles);
+      const lastVal = cvd[cvd.length - 1];
+      let minCvd = Infinity, maxCvd = -Infinity;
+      for (let i = 0; i < vis.length; i++) {
+        const val = cvd[s + i];
+        if (val < minCvd) minCvd = val;
+        if (val > maxCvd) maxCvd = val;
+      }
+      const cvdRange = maxCvd - minCvd || 1;
+      const yZero = yStart + subH - ((0 - minCvd) / cvdRange) * (subH - 25) - 15;
+
+      // Zero reference line
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+      vCtx.lineWidth = 1;
+      vCtx.beginPath();
+      vCtx.moveTo(0, yZero);
+      vCtx.lineTo(PW, yZero);
+      vCtx.stroke();
+
+      // Curve
+      vCtx.beginPath();
+      vCtx.strokeStyle = "#ec4899"; // CVD Pink
+      vCtx.lineWidth = 2;
+      for (let i = 0; i < vis.length; i++) {
+        const val = cvd[s + i];
+        if (val != null) {
+          const x = (i + futureGap) * candleW + candleW / 2;
+          const y = yStart + subH - ((val - minCvd) / cvdRange) * (subH - 25) - 15;
+          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+        }
+      }
+      vCtx.stroke();
+
+      // Big clear label
+      vCtx.fillStyle = "#ec4899";
+      vCtx.font = "bold 11px Inter";
+      vCtx.textAlign = "left";
+      vCtx.textBaseline = "top";
+      vCtx.fillText(`CVD: ${fV(lastVal)}`, 10, yStart + 5);
+      // Right side value too
+      vCtx.textAlign = "right";
+      vCtx.fillText(`CVD: ${fV(lastVal)}`, PW - 4, yStart + 5);
+    }
+
+    vCtx.restore(); // Important: Restore state after clipping!
+  });
 
   // ── Right axis panel (thin divider line) ─────────────────
   // Note: Background is already filled once at the start of drawChart
@@ -953,6 +1437,87 @@ function drawChart() {
   ctx.moveTo(PW, 0);
   ctx.lineTo(PW, chartH);
   ctx.stroke();
+
+  // ── Draw Walls (Density) on Chart ──
+  let wallBadges = [];
+  if (chartDensityEnabled) {
+    const ticker = coins.get(activeEx + ":" + activeSym);
+    const activeBase = ticker ? ticker.base : activeSym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
+    
+    const walls = densityData.filter(w => {
+      if (w.base !== activeBase) return false;
+      if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
+      if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
+      if (!chartDensityExes.has(w.ex)) return false;
+      
+      const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
+      if (!chartDensitySizes.has(sizeType)) return false;
+      
+      return true;
+    });
+
+    if (walls.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, TOP, PW, PH);
+      ctx.clip();
+
+      // Exchange abbreviation map for clearer labels
+      const EX_NAMES = {
+        BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX", 
+        KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate", 
+        HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
+      };
+      
+      for (const w of walls) {
+        const wy = toY(w.price);
+        if (wy < TOP || wy > TOP + PH) continue;
+
+        // Find x start position (based on firstSeenAt timestamp (exact time, not just candle index)
+        let startIdx = 0;
+        if (w.firstSeenAt && candles.length > 0) {
+          startIdx = getIdxFromTime(w.firstSeenAt);
+        }
+        const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
+
+        const isBid = w.side === "bid";
+        const baseColor = isBid ? "rgb(38,201,122)" : "rgb(255,69,96)";
+        
+        ctx.strokeStyle = baseColor;
+        // Nicer line thickness
+        ctx.lineWidth = Math.min(6, 1.5 + w.rtwi / 5);
+        ctx.lineCap = "round";
+        
+        ctx.beginPath();
+        ctx.moveTo(startX, wy);
+        ctx.lineTo(PW, wy);
+        ctx.stroke();
+
+        // Print exchange + volume (e.g. Binance 2.5M) near the start
+        const exName = EX_NAMES[w.ex] || w.ex;
+        const volStr = (w.wallK >= 1000 ? (w.wallK / 1000).toFixed(1).replace(/\.0$/, "") + "M" : w.wallK + "K");
+        const label = `${exName} ${volStr}`;
+        ctx.fillStyle = baseColor;
+        ctx.font = "bold 9px Inter";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        
+        // Draw a little pill/background for label
+        const labelWidth = ctx.measureText(label).width + 10;
+        const labelHeight = 14;
+        ctx.fillStyle = isBid ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
+        roundRect(ctx, Math.min(startX + 2, PW - labelWidth - 4), wy - labelHeight - 2, labelWidth, labelHeight, 3);
+        ctx.fill();
+        
+        ctx.fillStyle = baseColor;
+        ctx.fillText(label, Math.min(startX + 7, PW - labelWidth), wy - 5);
+
+        // Save badge coordinate and info to draw on price scale later (outside of clip)
+        wallBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38,201,122] : [255,69,96] });
+      }
+      ctx.restore();
+    }
+  }
 
   // ── Drawings ───────────────────────────────────────────────────────────────
   const getX = (t) => {
@@ -1265,6 +1830,36 @@ function drawChart() {
     }
   }
 
+  // Draw price badges on the right price scale for walls (densities)
+  if (wallBadges.length > 0) {
+    const badgeH = 20;
+    const badgeW = PR - 8;
+    const badgeX = PW + 4;
+
+    for (const badge of wallBadges) {
+      ctx.save();
+      const badgeY = badge.y - badgeH / 2;
+      
+      // Draw background
+      roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+      ctx.fillStyle = "#1e1f2e";
+      ctx.fill();
+      
+      // Draw border in wall color
+      ctx.strokeStyle = `rgba(${badge.baseColorArr.join(',')},1)`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Draw exact price
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(fP(badge.price), badgeX + badgeW / 2, badge.y);
+      ctx.restore();
+    }
+  }
+
   // ── Crosshair ──────────────────────────────────────────────────────────────
   if (mX >= 0 && mX < PW && mY >= TOP && mY <= TOP + PH) {
     ctx.strokeStyle = "rgba(255,255,255,.25)";
@@ -1394,24 +1989,24 @@ function getTimeFromIdx(idx) {
   return candles[i].t + (candles[i + 1].t - candles[i].t) * frac;
 }
 
-function getIdxFromTime(t) {
-  if (!candles.length) return 0;
-  if (t <= candles[0].t) {
+function getIdxFromTime(t, customCandles = candles) {
+  if (!customCandles.length) return 0;
+  if (t <= customCandles[0].t) {
     const tf = TF_MS[activeTf] || 60000;
-    return (t - candles[0].t) / tf;
+    return (t - customCandles[0].t) / tf;
   }
-  if (t >= candles[candles.length - 1].t) {
+  if (t >= customCandles[customCandles.length - 1].t) {
     const tf = TF_MS[activeTf] || 60000;
-    return (candles.length - 1) + (t - candles[candles.length - 1].t) / tf;
+    return (customCandles.length - 1) + (t - customCandles[customCandles.length - 1].t) / tf;
   }
   // Binary search for the correct candle gap
-  let low = 0, high = candles.length - 2;
+  let low = 0, high = customCandles.length - 2;
   while (low <= high) {
     const mid = (low + high) >> 1;
-    if (t >= candles[mid].t && t <= candles[mid + 1].t) {
-      return mid + (t - candles[mid].t) / (candles[mid + 1].t - candles[mid].t);
+    if (t >= customCandles[mid].t && t <= customCandles[mid + 1].t) {
+      return mid + (t - customCandles[mid].t) / (customCandles[mid + 1].t - customCandles[mid].t);
     }
-    if (t < candles[mid].t) high = mid - 1;
+    if (t < customCandles[mid].t) high = mid - 1;
     else low = mid + 1;
   }
   return 0;
@@ -2271,7 +2866,14 @@ function connectWS() {
       if (Array.isArray(msg.data)) {
         densityData = msg.data;
         densityLastUpdate = Date.now();
-        if (activeView === "map") layoutDensityBadges();
+        if (activeView === "map") {
+          layoutDensityBadges();
+        } else {
+          requestAnimationFrame(drawChart);
+          if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+            chartInstances.forEach(inst => inst.draw());
+          }
+        }
       }
       return;
     }
@@ -2311,7 +2913,7 @@ function connectWS() {
         }
         dirty.add(key);
 
-        if (screenerView === "multichart") {
+        if (screenerView === "multichart" || activeView === "formations") {
           chartInstances.forEach(inst => {
             if (inst.sym && `${inst.ex}:${inst.sym}` === key) {
               inst.update(c);
@@ -2696,7 +3298,7 @@ function rafLoop() {
     dirty.add(ak);
   }
 
-  if (screenerView === "multichart") {
+  if (screenerView === "multichart" || activeView === "formations") {
     chartInstances.forEach(inst => inst.draw());
   } else if (chartNeedsDraw || isActiveAnimating) {
     chartNeedsDraw = false;
@@ -2998,9 +3600,192 @@ const _magnetBtn = $("magnet-btn");
 if (_magnetBtn) _magnetBtn.onclick = toggleMagnet;
 applyToolButtonColors();
 
-const settingsBtn = $("settings-btn");
-const settingsOverlay = $("settings-overlay");
-const settingsClose = $("settings-close");
+  // ── Density settings panel toggle ────────────────────────────────────────────
+  const densitySettingsToggle = $("chart-density-settings-toggle");
+  const densityPanel = $("chart-density-panel");
+  const densityClose = $("chart-density-close");
+
+  if (densitySettingsToggle && densityPanel) {
+    densitySettingsToggle.onclick = (e) => {
+      e.stopPropagation();
+      const open = densityPanel.classList.contains("open");
+      if (open) {
+        densityPanel.classList.remove("open");
+        densitySettingsToggle.classList.remove("on");
+      } else {
+        densityPanel.classList.add("open");
+        densitySettingsToggle.classList.add("on");
+      }
+    };
+  }
+
+  if (densityClose && densityPanel && densitySettingsToggle) {
+    densityClose.onclick = (e) => {
+      e.stopPropagation();
+      densityPanel.classList.remove("open");
+      densitySettingsToggle.classList.remove("on");
+    };
+  }
+
+  // Hide density panel when clicking outside
+  document.addEventListener("click", (e) => {
+    if (densityPanel && densityPanel.classList.contains("open")) {
+      const clickedToggle = densitySettingsToggle && densitySettingsToggle.contains(e.target);
+      const clickedExWrap = document.getElementById("chart-density-exc-wrap");
+      const clickedExMenu = clickedExWrap && clickedExWrap.contains(e.target);
+      if (!densityPanel.contains(e.target) && !clickedToggle && !clickedExMenu) {
+        densityPanel.classList.remove("open");
+        if (densitySettingsToggle) densitySettingsToggle.classList.remove("on");
+      }
+    }
+  });
+
+  // Switch inside density settings panel
+  const densitySwitch = $("chart-density-switch");
+  if (densitySwitch) {
+    densitySwitch.classList.add("on"); // match chartDensityEnabled = true default
+    densitySwitch.onclick = () => {
+      densitySwitch.classList.toggle("on");
+      chartDensityEnabled = densitySwitch.classList.contains("on");
+      requestAnimationFrame(drawChart);
+    };
+  }
+
+  // Filter buttons inside density settings panel (toggle active states)
+  document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forEach(btn => {
+    btn.onclick = () => {
+      const side = btn.dataset.chartDensitySide;
+      const market = btn.dataset.chartDensityMarket;
+      if (side) {
+        const parent = btn.parentElement;
+        if (parent) {
+          parent.querySelectorAll("[data-chart-density-side]").forEach(b => b.classList.remove("on"));
+        }
+        btn.classList.add("on");
+        chartDensitySide = side;
+      } else if (market) {
+        const parent = btn.parentElement;
+        if (parent) {
+          parent.querySelectorAll("[data-chart-density-market]").forEach(b => b.classList.remove("on"));
+        }
+        btn.classList.add("on");
+        chartDensityMarket = market;
+      } else {
+        btn.classList.toggle("on");
+        const sizeId = btn.id; // e.g. chart-density-small
+        if (sizeId) {
+          const sizeType = sizeId.replace("chart-density-", "");
+          if (btn.classList.contains("on")) {
+            chartDensitySizes.add(sizeType);
+          } else {
+            chartDensitySizes.delete(sizeType);
+          }
+        }
+      }
+      requestAnimationFrame(drawChart);
+    };
+  });
+
+  // Indicators buttons inside density settings panel
+  const indInfoBox = $("chart-indicator-info-box");
+  // Map button IDs to correct indicator names that code expects
+  const indicatorIdToName = {
+    "ind-cvd": "CVD",
+    "ind-ema20": "EMA 20",
+    "ind-ema50": "EMA 50",
+    "ind-ema200": "EMA 200",
+    "ind-vwap": "VWAP",
+    "ind-rsi": "RSI",
+    "ind-atr": "ATR",
+    "ind-volprofile": "VP",
+    "ind-bb": "BB",
+    "ind-macd": "MACD"
+  };
+  document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
+    // Initialize button state based on chartActiveIndicators
+    const indicatorName = indicatorIdToName[btn.id];
+    if (indicatorName && chartActiveIndicators.has(indicatorName)) {
+      btn.classList.add("on");
+    }
+    btn.onclick = () => {
+      btn.classList.toggle("on");
+      const indicatorName = indicatorIdToName[btn.id];
+      if (!indicatorName) return;
+      if (btn.classList.contains("on")) {
+        chartActiveIndicators.add(indicatorName);
+      } else {
+        chartActiveIndicators.delete(indicatorName);
+      }
+      requestAnimationFrame(drawChart);
+    };
+
+    // Hover descriptions
+    btn.onmouseenter = () => {
+      if (indInfoBox) {
+        indInfoBox.textContent = btn.dataset.desc || "";
+      }
+    };
+    btn.onmouseleave = () => {
+      if (indInfoBox) {
+        indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
+      }
+    };
+  });
+
+  // Exchange selector inside density settings panel
+  const cDexBtn = $("chart-density-exc-btn");
+  const cDexMenu = $("chart-density-exc-menu");
+  const cDexName = $("chart-density-exc-name");
+  const cDexCbAll = document.querySelector(".chart-dex-cb-all");
+  const cDexCbs = document.querySelectorAll(".chart-dex-cb");
+
+  if (cDexBtn && cDexMenu) {
+    cDexBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cDexBtn.classList.toggle("open");
+      cDexMenu.classList.toggle("open");
+    });
+  }
+
+  function updateChartDexDropdownUI() {
+    const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
+    if (chartDensityExes.size === allExes.length) {
+      if (cDexName) cDexName.textContent = "Все биржи";
+      if (cDexCbAll) cDexCbAll.checked = true;
+      cDexCbs.forEach(cb => cb.checked = true);
+    } else {
+      if (chartDensityExes.size === 0) {
+        if (cDexName) cDexName.textContent = "Выберите биржу";
+      } else {
+        if (cDexName) cDexName.textContent = `Выбрано: ${chartDensityExes.size}`;
+      }
+      if (cDexCbAll) cDexCbAll.checked = false;
+      cDexCbs.forEach(cb => cb.checked = chartDensityExes.has(cb.value));
+    }
+  }
+
+  if (cDexCbAll) {
+    cDexCbAll.addEventListener("change", (e) => {
+      const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
+      if (e.target.checked) chartDensityExes = new Set(allExes);
+      else chartDensityExes.clear();
+      updateChartDexDropdownUI();
+      requestAnimationFrame(drawChart);
+    });
+  }
+
+  cDexCbs.forEach(cb => {
+    cb.addEventListener("change", (e) => {
+      if (e.target.checked) chartDensityExes.add(cb.value);
+      else chartDensityExes.delete(cb.value);
+      updateChartDexDropdownUI();
+      requestAnimationFrame(drawChart);
+    });
+  });
+
+  const settingsBtn = $("settings-btn");
+  const settingsOverlay = $("settings-overlay");
+  const settingsClose = $("settings-close");
 
 if (settingsBtn && settingsOverlay && settingsClose) {
   settingsBtn.onclick = () => {
@@ -3439,7 +4224,7 @@ function updateBgColor(color, opacity = 100, save = true) {
   // Force redraw all charts if initialized
   if (typeof drawChart === "function") drawChart();
 
-  if (typeof screenerView !== "undefined" && screenerView === "multichart") {
+  if (typeof screenerView !== "undefined" && (screenerView === "multichart" || activeView === "formations")) {
     // Redraw all ChartInstances
     if (typeof chartInstances !== "undefined") {
       chartInstances.forEach(inst => inst.draw());
@@ -3518,12 +4303,12 @@ document.addEventListener("click", () => {
 });
 excMenu.addEventListener("click", (e) => e.stopPropagation());
 
-document.querySelectorAll(".exc-item:not(.disabled)").forEach((item) => {
+document.querySelectorAll("#exc-menu .exc-item:not(.disabled)").forEach((item) => {
   item.addEventListener("click", () => {
     const cex = item.dataset.cex,
       label = item.dataset.label,
       img = item.dataset.img;
-    document.querySelectorAll(".exc-item").forEach((x) => {
+    document.querySelectorAll("#exc-menu .exc-item").forEach((x) => {
       x.classList.remove("on");
       x.setAttribute("aria-selected", "false");
     });
@@ -3563,11 +4348,11 @@ document.querySelectorAll(".exc-item:not(.disabled)").forEach((item) => {
 });
 
 function syncExcDropdown(ex) {
-  document.querySelectorAll(".exc-item").forEach((x) => {
+  document.querySelectorAll("#exc-menu .exc-item").forEach((x) => {
     x.classList.remove("on");
     x.setAttribute("aria-selected", "false");
   });
-  const item = document.querySelector(`.exc-item[data-cex="${ex}"]`);
+  const item = document.querySelector(`#exc-menu .exc-item[data-cex="${ex}"]`);
   if (item) {
     item.classList.add("on");
     item.setAttribute("aria-selected", "true");
@@ -3917,10 +4702,49 @@ class ChartInstance {
     this.el.onclick = (e) => {
       if (e.target.closest('.cell-fs-btn')) {
         if (this.sym) {
-          const c = coins.get(`${this.ex}:${this.sym}`);
-          if (c) {
-            selectCoin(c);
-            toggleScreenerView('single');
+          if (activeView === "formations") {
+            const grid = document.getElementById("formations-grid");
+            if (grid) {
+              const isExpanded = this.el.classList.contains("expanded");
+              if (isExpanded) {
+                this.el.classList.remove("expanded");
+                grid.classList.remove("has-expanded");
+                this.fsBtn.title = "Развернуть";
+                this.fsBtn.innerHTML = `
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                `;
+              } else {
+                grid.querySelectorAll(".grid-cell").forEach(cell => {
+                  cell.classList.remove("expanded");
+                  const btn = cell.querySelector(".cell-fs-btn");
+                  if (btn) {
+                    btn.title = "Развернуть";
+                    btn.innerHTML = `
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    `;
+                  }
+                });
+                this.el.classList.add("expanded");
+                grid.classList.add("has-expanded");
+                this.fsBtn.title = "Свернуть";
+                this.fsBtn.innerHTML = `
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path d="M4 12H1V9M1 12L6 7M12 4H15V7M15 4L10 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                `;
+              }
+              this.draw(true);
+            }
+          } else {
+            const c = coins.get(`${this.ex}:${this.sym}`);
+            if (c) {
+              selectCoin(c);
+              toggleScreenerView('single');
+            }
           }
         }
         return;
@@ -4030,7 +4854,7 @@ class ChartInstance {
     this.canvas.oncontextmenu = (e) => e.preventDefault();
 
     this.canvas.onwheel = (e) => {
-      if (screenerView !== "multichart") return;
+      if (activeView === "screener" && screenerView !== "multichart") return;
       e.preventDefault();
       const dir = e.deltaY > 0 ? -1 : 1;
       this.candleW = clamp(this.candleW * (1 + dir * 0.15), 1.5, 50);
@@ -4064,7 +4888,6 @@ class ChartInstance {
       this.offsetX = 0;
       this.loadKlines();
     }
-    // No direct draw call here, the global loop will handle it
   }
 
   async loadKlines() {
@@ -4083,6 +4906,8 @@ class ChartInstance {
       } else {
         this.candles = sanitizeCandles(cached.data);
       }
+      this.levels = window.detectChartLevelsAndTouches(this.candles);
+      if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
       this.draw(true);
       return;
     }
@@ -4101,6 +4926,8 @@ class ChartInstance {
         } else {
           this.candles = sanitizeCandles(dataLite);
         }
+        this.levels = window.detectChartLevelsAndTouches(this.candles);
+        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
         this.draw(true);
       }
 
@@ -4117,6 +4944,8 @@ class ChartInstance {
         } else {
           this.candles = sanitizeCandles(dataFull);
         }
+        this.levels = window.detectChartLevelsAndTouches(this.candles);
+        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
         KLINES_CACHE.set(key, { ts: Date.now(), data: dataFull });
         this.draw(true);
       }
@@ -4124,7 +4953,7 @@ class ChartInstance {
   }
 
   draw(force = false) {
-    if (!this.candles.length || screenerView !== "multichart") return;
+    if (!this.candles.length || (activeView === "screener" && screenerView !== "multichart")) return;
 
     const now = Date.now();
     if (!force && now - this.lastDrawTs < 16) return; // Increased to ~60fps
@@ -4283,6 +5112,54 @@ class ChartInstance {
     const up = lastPrice >= lastCandle.o;
     const ly = clamp(toY(lastPrice), 10, ch - 10);
 
+    // ── Unmitigated Levels overlay ────────────────────────────────────────────
+    if (activeView === "formations" && $('formations-only-toggle')?.checked && this.levels && this.levels.length > 0) {
+      const getX = (idx) => (idx - s + futureGap) * candleWidth + candleWidth / 2;
+
+      this.levels.forEach(setup => {
+        const y = toY(setup.price);
+        if (y < 2 || y > ch - 2) return;
+
+        const isUp = setup.direction === 'up';
+        // green = unmitigated HIGH above price (goes UP to cover)
+        // red   = unmitigated LOW  below price (goes DOWN to cover)
+        const lineColor = isUp ? '#26c97a' : '#ff4560';
+
+        // ── Solid horizontal line: from swing → right edge ────────────────
+        const x0 = Math.max(0, getX(setup.swingIdx));
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(PW, y); ctx.stroke();
+
+        // ── Price label on the right ──────────────────────────────────────
+        const labelH = 15, labelW = PR - 6;
+        roundRect(ctx, PW + 3, y - labelH / 2, labelW, labelH, 3);
+        ctx.fillStyle = lineColor;
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 8px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText(fP(setup.price), PW + PR / 2, y + 3);
+
+        // ── Departure circle at the swing candle ──────────────────────────
+        const depX = getX(setup.swingIdx);
+        const depCandle = this.candles[setup.swingIdx];
+        if (depCandle && depX >= 0 && depX <= PW) {
+          const depY = toY(isUp ? depCandle.h : depCandle.l);
+          ctx.fillStyle = lineColor;
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.arc(depX, depY, 4, 0, 2 * Math.PI);
+          ctx.fill(); ctx.stroke();
+        }
+      });
+
+      ctx.setLineDash([]);
+      ctx.textAlign = 'left';
+    }
+
+    // ── Last price dashed line + label ─────────────────────────────────────────
     ctx.setLineDash([3, 3]);
     ctx.strokeStyle = "rgba(255,255,255,0.15)";
     ctx.lineWidth = 1;
@@ -4301,6 +5178,259 @@ class ChartInstance {
     ctx.font = "bold 10px Inter";
     ctx.textAlign = "center";
     ctx.fillText(fP(lastPrice), PW + PR / 2, ly + 4);
+
+    // ── Draw Overlay Indicators on grid cell ──
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, PW, PH);
+    ctx.clip();
+
+    // 1. Volume Profile (VP) with POC
+    if (chartActiveIndicators.has("VP")) {
+      const bins = {};
+      let maxBinVol = 0;
+      let pocPrice = 0;
+      const binSize = pr * 0.025 || 0.1;
+      for (let i = 0; i < vis.length; i++) {
+        const c = vis[i];
+        const bin = Math.floor(c.c / binSize) * binSize;
+        bins[bin] = (bins[bin] || 0) + c.v;
+        if (bins[bin] > maxBinVol) {
+          maxBinVol = bins[bin];
+          pocPrice = bin + binSize / 2;
+        }
+      }
+      
+      // Draw Profile Bins on the RIGHT (same as main chart)
+      for (const bin in bins) {
+        const p = parseFloat(bin);
+        const y = toY(p);
+        const yBottom = toY(p + binSize);
+        const height = Math.abs(yBottom - y);
+        const width = (bins[bin] / maxBinVol) * (PW * 0.20);
+        const isPOC = Math.abs(p + binSize/2 - pocPrice) < binSize*0.1;
+        ctx.fillStyle = isPOC ? "rgba(255, 69, 96, 0.5)" : "rgba(108, 93, 211, 0.15)";
+        ctx.fillRect(PW - width, yBottom, width, height - 1);
+      }
+
+      // Draw POC Label only (no line), centered on the red bin
+      if (pocPrice > 0) {
+        const pocY = toY(pocPrice);
+        const pocWidth = (maxBinVol / maxBinVol) * (PW * 0.20);
+        ctx.fillStyle = "#ff4560";
+        ctx.font = "bold 9px Inter";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("POC " + fP(pocPrice), PW - pocWidth/2, pocY);
+      }
+    }
+
+    // 2. Bollinger Bands (BB)
+    if (chartActiveIndicators.has("BB")) {
+      const bb = calcBB(this.candles);
+      
+      // Upper Band
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(167, 139, 250, 0.5)";
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < vis.length; i++) {
+        const val = bb[s + i];
+        if (val && val.upper) {
+          const x = (i + futureGap) * candleWidth + candleWidth / 2;
+          const y = toY(val.upper);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+
+      // Lower Band
+      ctx.beginPath();
+      for (let i = 0; i < vis.length; i++) {
+        const val = bb[s + i];
+        if (val && val.lower) {
+          const x = (i + futureGap) * candleWidth + candleWidth / 2;
+          const y = toY(val.lower);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // 3. EMA 20
+    if (chartActiveIndicators.has("EMA 20")) {
+      const ema20 = calcEMA(this.candles, 20);
+      ctx.beginPath();
+      ctx.strokeStyle = "#4ade80";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < vis.length; i++) {
+        const val = ema20[s + i];
+        if (val) {
+          const x = (i + futureGap) * candleWidth + candleWidth / 2;
+          const y = toY(val);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // 4. EMA 50
+    if (chartActiveIndicators.has("EMA 50")) {
+      const ema50 = calcEMA(this.candles, 50);
+      ctx.beginPath();
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < vis.length; i++) {
+        const val = ema50[s + i];
+        if (val) {
+          const x = (i + futureGap) * candleWidth + candleWidth / 2;
+          const y = toY(val);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // 5. EMA 200
+    if (chartActiveIndicators.has("EMA 200")) {
+      const ema200 = calcEMA(this.candles, 200);
+      ctx.beginPath();
+      ctx.strokeStyle = "#f87171";
+      ctx.lineWidth = 1.8;
+      for (let i = 0; i < vis.length; i++) {
+        const val = ema200[s + i];
+        if (val) {
+          const x = (i + futureGap) * candleWidth + candleWidth / 2;
+          const y = toY(val);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // 6. VWAP
+    if (chartActiveIndicators.has("VWAP")) {
+      const vwap = calcVWAP(this.candles);
+      ctx.beginPath();
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < vis.length; i++) {
+        const val = vwap[s + i];
+        if (val) {
+          const x = (i + futureGap) * candleWidth + candleWidth / 2;
+          const y = toY(val);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // ── Draw Walls (Density) on Chart ──
+    let gridBadges = [];
+    if (chartDensityEnabled) {
+      const ticker = coins.get(this.ex + ":" + this.sym);
+      const activeBase = ticker ? ticker.base : this.sym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
+      
+      const walls = densityData.filter(w => {
+        if (w.base !== activeBase) return false;
+        if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
+        if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
+        if (!chartDensityExes.has(w.ex)) return false;
+        
+        const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
+        if (!chartDensitySizes.has(sizeType)) return false;
+        
+        return true;
+      });
+
+      if (walls.length > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, PW, ch);
+        ctx.clip();
+
+        // Exchange abbreviation map for clearer labels
+        const EX_NAMES = {
+          BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX", 
+          KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate", 
+          HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
+        };
+        
+        for (const w of walls) {
+          const wy = toY(w.price);
+          if (wy < 0 || wy > ch) continue;
+
+          // Find x start position (based on firstSeenAt timestamp (exact time, not just candle index)
+          let startIdx = 0;
+          if (w.firstSeenAt && this.candles.length > 0) {
+            startIdx = getIdxFromTime(w.firstSeenAt, this.candles);
+          }
+          const startX = Math.max(0, (startIdx - s + futureGap) * candleWidth + candleWidth / 2);
+
+          const isBid = w.side === "bid";
+          const baseColor = isBid ? "rgb(38,201,122)" : "rgb(255,69,96)";
+          
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = Math.min(8, 2.0 + w.rtwi / 4);
+          ctx.lineCap = "round";
+          
+          ctx.beginPath();
+          ctx.moveTo(startX, wy);
+          ctx.lineTo(PW, wy);
+          ctx.stroke();
+
+          // Print exchange + volume (e.g. Binance 2.5M) near the start
+          const exName = EX_NAMES[w.ex] || w.ex;
+          const volStr = (w.wallK >= 1000 ? (w.wallK / 1000).toFixed(1).replace(/\.0$/, "") + "M" : w.wallK + "K");
+          const label = exName + " " + volStr;
+          ctx.fillStyle = baseColor;
+          ctx.font = "bold 9px Inter";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          
+          // Draw a little pill/background for label
+          const labelWidth = ctx.measureText(label).width + 10;
+          const labelHeight = 14;
+          ctx.fillStyle = isBid ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
+          roundRect(ctx, Math.min(startX + 2, PW - labelWidth - 4), wy - labelHeight - 2, labelWidth, labelHeight, 3);
+          ctx.fill();
+          
+          ctx.fillStyle = baseColor;
+          ctx.fillText(label, Math.min(startX + 7, PW - labelWidth), wy - 5);
+
+          // Save badge coordinate and info to draw on price scale later (outside of clip)
+          gridBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38,201,122] : [255,69,96] });
+        }
+        ctx.restore();
+      }
+    }
+
+    // Draw price badges on the right price scale of this grid cell
+    if (gridBadges.length > 0) {
+      const PR = 60; // Grid scale width
+      const badgeH = 18;
+      const badgeW = PR - 8;
+      const badgeX = PW + 4;
+
+      for (const badge of gridBadges) {
+        ctx.save();
+        const badgeY = badge.y - badgeH / 2;
+        roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+        ctx.fillStyle = "#1e1f2e";
+        ctx.fill();
+        
+        ctx.strokeStyle = `rgba(${badge.baseColorArr.join(',')},1)`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 10px Inter";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(fP(badge.price), badgeX + badgeW / 2, badge.y);
+        ctx.restore();
+      }
+    }
   }
 }
 
@@ -4507,17 +5637,23 @@ document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
       switchView("screener");
     } else if (idx === 1) {
       switchView("map");
+    } else if (idx === 3) {
+      switchView("formations");
     }
   });
 });
 
 function switchView(view) {
   activeView = view;
+  densityHover = -1; // Reset hover index when switching views
   const mainEl = $("main");
   const densityEl = $("density-view");
+  const formationsEl = $("formations-view");
+
   if (view === "screener") {
     mainEl.style.display = "flex";
     densityEl.style.display = "none";
+    if (formationsEl) formationsEl.style.display = "none";
     if (densityAnimFrame) { cancelAnimationFrame(densityAnimFrame); densityAnimFrame = null; }
     document.querySelectorAll(".vt-btn").forEach(btn => {
       btn.onclick = () => toggleScreenerView(btn.dataset.view);
@@ -4537,9 +5673,17 @@ function switchView(view) {
   } else if (view === "map") {
     mainEl.style.display = "none";
     densityEl.style.display = "flex";
+    if (formationsEl) formationsEl.style.display = "none";
     initDensityCanvas();
     fetchWalls();
     startDensityLoop();
+  } else if (view === "formations") {
+    mainEl.style.display = "none";
+    densityEl.style.display = "none";
+    if (formationsEl) {
+      formationsEl.style.display = "flex";
+      window.loadFormations();
+    }
   }
 }
 
@@ -4563,16 +5707,21 @@ function resizeDensityCanvas() {
   layoutDensityBadges();
 }
 
-// ── Fetch walls (fallback if WS hasn't sent yet) ─────────────────────────────
 async function fetchWalls() {
-  if (activeView !== "map") return;
   try {
     const res = await fetch("/api/walls");
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
         densityData = data;
-        layoutDensityBadges();
+        if (activeView === "map") {
+          layoutDensityBadges();
+        } else {
+          requestAnimationFrame(drawChart);
+          if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+            chartInstances.forEach(inst => inst.draw());
+          }
+        }
       }
     }
   } catch (e) { console.error("Failed to fetch walls:", e); }
@@ -4580,7 +5729,7 @@ async function fetchWalls() {
 
 // Fallback polling (in case WS didn't deliver)
 setInterval(() => {
-  if (activeView === "map" && Date.now() - densityLastUpdate > 15000) fetchWalls();
+  if (Date.now() - densityLastUpdate > 15000) fetchWalls();
 }, 12000);
 
 // ── Filter ────────────────────────────────────────────────────────────────────
@@ -4994,11 +6143,23 @@ if (densityCanvas) {
 
 document.addEventListener("click", (e) => {
   if (activeView !== "map" || densityHover < 0) return;
+  if (e.target !== densityCanvas) return; // Only switch view when clicking directly on the density canvas
+
   const filtered = getFilteredDensity();
   const d = filtered[densityHover];
   if (d) {
     const coinKey = d.ex + ":" + d.sym;
-    const c = coins.get(coinKey);
+    let c = coins.get(coinKey);
+
+    // If coin is spot or not found in our futures-only list, look up equivalent futures coin
+    if (!c || !isUsdtFutures(c)) {
+      const matches = Array.from(coins.values()).filter(x => x.base === d.base && isUsdtFutures(x));
+      if (matches.length > 0) {
+        const dExClean = d.ex.replace("_SPOT", "");
+        c = matches.find(x => x.ex === dExClean) || matches[0];
+      }
+    }
+
     if (c) {
       switchView("screener");
       document.querySelectorAll("#nav .ntab").forEach((t, i) => {
@@ -5115,6 +6276,7 @@ window.addEventListener("resize", () => {
 (function init() {
   loadTags();
   loadDrawings();
+  fetchWalls();
 
   // Safety timeout: hide loading after 8s if still visible
   setTimeout(hideLoading, 8000);
@@ -5475,6 +6637,628 @@ window.addEventListener("resize", () => {
   if (coinListEl) {
     coinListEl.addEventListener("mouseenter", () => { isHoveringScreener = true; });
     coinListEl.addEventListener("mouseleave", () => { isHoveringScreener = false; });
+  }
+
+  // ─── Unmitigated Level Detector ──────────────────────────────────────────────
+  //
+  // An "unmitigated" level is a swing high or low where:
+  //   1. Price formed a clear local extreme (swing)
+  //   2. Price DEPARTED quickly (strong move away)
+  //   3. Price has NOT returned to that zone since
+  //
+  // These are the "debts" the market owes — it WILL come back to cover them.
+  //
+  // Returns up to 3 setup objects:
+  //   {
+  //     price         : level price
+  //     direction     : 'up' | 'down'  — direction price must travel to mitigate
+  //     swingIdx      : candle index where level was formed
+  //     departureIdx  : candle where price made the decisive move away
+  //     strength      : number for sorting
+  //     atr           : ATR at detection time (for projection sizing)
+  //   }
+  //
+  window.detectChartLevelsAndTouches = function(candles) {
+    if (!candles || candles.length < 40) return [];
+
+    const N = candles.length;
+
+    // ── 1. ATR-14 ────────────────────────────────────────────────────────────
+    let atrSum = 0;
+    for (let i = Math.max(1, N - 14); i < N; i++) {
+      const c = candles[i], p = candles[i - 1];
+      atrSum += Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
+    }
+    const atr  = atrSum / 14;
+    const tol  = atr * 0.4;   // within 40% ATR = "price visited this zone"
+    const minDep = atr * 0.8; // departure must be at least 80% ATR in 3 bars
+
+    // ── 2. Swing Highs & Lows (window=3) ─────────────────────────────────────
+    const W = 3;
+    const swings = [];
+    for (let i = W; i < N - W; i++) {
+      let isH = true, isL = true;
+      for (let j = i - W; j <= i + W; j++) {
+        if (j === i) continue;
+        if (candles[j].h >= candles[i].h) isH = false;
+        if (candles[j].l <= candles[i].l) isL = false;
+      }
+      if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+    }
+
+    const lastPrice = candles[N - 1].c;
+    const candidates = [];
+
+    for (const sw of swings) {
+      const lvl = sw.price;
+
+      // ── 3. Departure: price must have moved away strongly after swing ─────
+      // Check that within 5 bars after swing, price moved at least minDep away
+      let departed = false;
+      let departureIdx = sw.idx;
+      for (let i = sw.idx + 1; i < Math.min(sw.idx + 6, N); i++) {
+        if (sw.type === 'high') {
+          // After a high, price should drop away
+          if (lvl - candles[i].c >= minDep) { departed = true; departureIdx = i; break; }
+        } else {
+          // After a low, price should rise away
+          if (candles[i].c - lvl >= minDep) { departed = true; departureIdx = i; break; }
+        }
+      }
+      if (!departed) continue;
+
+      // ── 4. UNMITIGATED: price must NOT have returned to within tol since ──
+      let mitigated = false;
+      for (let i = sw.idx + 1; i < N; i++) {
+        if (sw.type === 'high') {
+          // High is mitigated if any later candle WICK entered the zone from below
+          if (candles[i].h >= lvl - tol) { mitigated = true; break; }
+        } else {
+          // Low is mitigated if any later candle WICK entered the zone from above
+          if (candles[i].l <= lvl + tol) { mitigated = true; break; }
+        }
+      }
+      if (mitigated) continue;
+
+      // ── 5. Direction price needs to travel to mitigate ────────────────────
+      // Unmitigated HIGH above current price → price needs to go UP
+      // Unmitigated LOW below current price → price needs to go DOWN
+      let direction;
+      if (sw.type === 'high' && lvl > lastPrice) {
+        direction = 'up';   // price must rise to reach this unmitigated high
+      } else if (sw.type === 'low' && lvl < lastPrice) {
+        direction = 'down'; // price must fall to reach this unmitigated low
+      } else {
+        // Level is on the wrong side — skip (e.g. unmitigated high already
+        // above where price is going, but price is above it — shouldn't happen
+        // given our mitigated check, but guard anyway)
+        continue;
+      }
+
+      // ── 6. Recency score ─────────────────────────────────────────────────
+      // Prefer more recent + farther swings (price owes more distance)
+      const barsAgo = N - 1 - sw.idx;
+      // Skip if too old (> 200 bars) — irrelevant for current price action
+      if (barsAgo > 200) continue;
+
+      const recency = 1 - barsAgo / 200;
+      const distance = Math.abs(lvl - lastPrice) / atr;  // how many ATRs away
+      const strength = recency * 2.5 + Math.min(distance, 5) * 0.4;
+
+      candidates.push({
+        price:        lvl,
+        direction,
+        swingIdx:     sw.idx,
+        departureIdx,
+        strength,
+        atr
+      });
+    }
+
+    // ── 7. Deduplicate: keep strongest, show up to 8 unmitigated levels ──────
+    candidates.sort((a, b) => b.strength - a.strength);
+    const kept = [];
+    for (const c of candidates) {
+      // Skip if already have a level within 0.5% price of this one
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
+      if (!near) kept.push(c);
+      if (kept.length >= 8) break;  // show all relevant levels, not just top-3
+    }
+
+    return kept;
+  };
+
+  // ─── Formations View Logic v2 (Simplified Multi-Charts) ───────────────────
+  let formationsCols = 2;
+  let formationsTf = "4h";
+
+
+
+  // Auto-enable: show only tokens with detected levels by default
+  const formationsOnlyToggle = $("formations-only-toggle");
+  if (formationsOnlyToggle) {
+    formationsOnlyToggle.checked = true;  // default ON
+    formationsOnlyToggle.onchange = () => {
+      window.loadFormations(true);
+    };
+  }
+
+  // Init timeframe switcher listeners for Formations
+  document.querySelectorAll(".fg-tf-btn").forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll(".fg-tf-btn").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      formationsTf = btn.dataset.tf;
+      window.loadFormations();
+    };
+  });
+
+  // Formations custom grid size select binding
+  const fgGridBtn = $("formations-grid-select-btn");
+  const fgGridMenu = $("formations-grid-select-menu");
+  const fgGridVal = $("formations-grid-select-val");
+
+  function syncFormationsGridSelect() {
+    if (!fgGridBtn || !fgGridMenu || !fgGridVal) return;
+    let label = formationsCols + " Графиков";
+    if (formationsCols === 1) label = formationsCols + " График";
+    else if (formationsCols >= 2 && formationsCols <= 4) label = formationsCols + " Графика";
+    
+    fgGridVal.textContent = label;
+    
+    fgGridMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      const val = parseInt(item.dataset.value, 10);
+      if (val === formationsCols) {
+        item.classList.add("on");
+      } else {
+        item.classList.remove("on");
+      }
+    });
+  }
+
+  if (fgGridBtn && fgGridMenu) {
+    fgGridBtn.onclick = (e) => {
+      e.stopPropagation();
+      const open = fgGridMenu.classList.contains("open");
+      if (open) {
+        fgGridMenu.classList.remove("open");
+        fgGridBtn.classList.remove("open");
+      } else {
+        fgGridMenu.classList.add("open");
+        fgGridBtn.classList.add("open");
+      }
+    };
+
+    document.addEventListener("click", () => {
+      fgGridMenu.classList.remove("open");
+      fgGridBtn.classList.remove("open");
+    });
+
+    fgGridMenu.onclick = (e) => e.stopPropagation();
+
+    fgGridMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      item.onclick = () => {
+        formationsCols = parseInt(item.dataset.value, 10);
+        syncFormationsGridSelect();
+        fgGridMenu.classList.remove("open");
+        fgGridBtn.classList.remove("open");
+        window.loadFormations();
+      };
+    });
+
+    syncFormationsGridSelect();
+  }
+
+  // Formations custom exchange dropdown select binding
+  const fgExcBtn = $("formations-exc-btn");
+  const fgExcMenu = $("formations-exc-menu");
+  const fgExcName = $("formations-exc-name");
+  const fgExcDot = $("formations-exc-dot");
+
+  function syncFormationsExchangeSelect() {
+    if (!fgExcBtn || !fgExcMenu || !fgExcName) return;
+    const allItem = fgExcMenu.querySelector(".exc-item[data-cex='ALL']");
+    const otherItems = Array.from(fgExcMenu.querySelectorAll(".exc-item:not([data-cex='ALL'])"));
+    const activeItems = otherItems.filter(item => item.classList.contains("on"));
+
+    if (activeItems.length === otherItems.length) {
+      allItem.classList.add("on");
+      fgExcName.textContent = "Все биржи";
+      const ALL_EXC_IMG = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E";
+      fgExcDot.style.background = `center/contain no-repeat url('${ALL_EXC_IMG}')`;
+    } else {
+      allItem.classList.remove("on");
+      if (activeItems.length === 0) {
+        fgExcName.textContent = "Нет бирж";
+        fgExcDot.style.background = "none";
+      } else if (activeItems.length === 1) {
+        fgExcName.textContent = activeItems[0].dataset.label;
+        fgExcDot.style.background = `center/contain no-repeat url('${activeItems[0].dataset.img}')`;
+      } else {
+        fgExcName.textContent = `Выбрано: ${activeItems.length}`;
+        const ALL_EXC_IMG = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E";
+        fgExcDot.style.background = `center/contain no-repeat url('${ALL_EXC_IMG}')`;
+      }
+    }
+  }
+
+  if (fgExcBtn && fgExcMenu) {
+    fgExcBtn.onclick = (e) => {
+      e.stopPropagation();
+      const open = fgExcMenu.classList.contains("open");
+      if (open) {
+        fgExcMenu.classList.remove("open");
+        fgExcBtn.classList.remove("open");
+      } else {
+        fgExcMenu.classList.add("open");
+        fgExcBtn.classList.add("open");
+      }
+    };
+
+    document.addEventListener("click", () => {
+      fgExcMenu.classList.remove("open");
+      fgExcBtn.classList.remove("open");
+    });
+
+    fgExcMenu.onclick = (e) => e.stopPropagation();
+
+    fgExcMenu.querySelectorAll(".exc-item").forEach(item => {
+      item.onclick = () => {
+        const cex = item.dataset.cex;
+        const wasOn = item.classList.contains("on");
+        
+        if (cex === "ALL") {
+          const turnOn = !wasOn;
+          fgExcMenu.querySelectorAll(".exc-item").forEach(x => {
+            if (turnOn) x.classList.add("on");
+            else x.classList.remove("on");
+          });
+        } else {
+          if (wasOn) {
+            item.classList.remove("on");
+          } else {
+            item.classList.add("on");
+          }
+        }
+        
+        syncFormationsExchangeSelect();
+        window.loadFormations();
+      };
+    });
+
+    syncFormationsExchangeSelect();
+  }
+
+  // Formations custom settings menu select binding
+  let formationsMinCascade = 2; // Default to 2+ levels
+
+  const fgSettingsBtn = $("formations-settings-btn");
+  const fgSettingsMenu = $("formations-settings-menu");
+
+  function syncFormationsSettings() {
+    if (!fgSettingsMenu) return;
+    fgSettingsMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      const val = parseInt(item.dataset.value, 10);
+      if (val === formationsMinCascade) {
+        item.classList.add("on");
+      } else {
+        item.classList.remove("on");
+      }
+    });
+  }
+
+  if (fgSettingsBtn && fgSettingsMenu) {
+    fgSettingsBtn.onclick = (e) => {
+      e.stopPropagation();
+      const open = fgSettingsMenu.classList.contains("open");
+      if (open) {
+        fgSettingsMenu.classList.remove("open");
+        fgSettingsBtn.classList.remove("open");
+      } else {
+        fgSettingsMenu.classList.add("open");
+        fgSettingsBtn.classList.add("open");
+        
+        // Close other menus
+        fgGridMenu?.classList.remove("open");
+        fgGridBtn?.classList.remove("open");
+        fgExcMenu?.classList.remove("open");
+        fgExcBtn?.classList.remove("open");
+      }
+    };
+
+    document.addEventListener("click", () => {
+      fgSettingsMenu.classList.remove("open");
+      fgSettingsBtn.classList.remove("open");
+    });
+
+    fgSettingsMenu.onclick = (e) => e.stopPropagation();
+
+    fgSettingsMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+      item.onclick = () => {
+        formationsMinCascade = parseInt(item.dataset.value, 10);
+        syncFormationsSettings();
+        fgSettingsMenu.classList.remove("open");
+        fgSettingsBtn.classList.remove("open");
+        window.loadFormations(true);
+      };
+    });
+
+    syncFormationsSettings();
+  }
+
+  // ── Pagination state ─────────────────────────────────────────────────────
+  let formationsPage = 0;
+  // Map of key => levels array for coins that have detected levels
+  const formationsCoinsLevelsMap = new Map();
+  // Full sorted list rebuilt on loadFormations, used for paging
+  let formationsAllCoins = [];
+
+  let activeScanId = 0;
+  let scanProgressText = "";
+  let lastScanKey = "";
+
+  function startFormationsScan(checkedEx, tf) {
+    const scanId = ++activeScanId;
+    scanProgressText = "Сканирование...";
+    updateFormationsPagination();
+
+    const eligibleCoins = Array.from(coins.values())
+      .filter(c => {
+        if (!isUsdtFutures(c) || c.v <= 0) return false;
+        if (!checkedEx.includes(c.ex)) return false;
+        return true;
+      })
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 150); // limit to top 150
+
+    let index = 0;
+    const total = eligibleCoins.length;
+    if (total === 0) {
+      scanProgressText = "";
+      updateFormationsPagination();
+      return;
+    }
+
+    async function nextBatch() {
+      if (scanId !== activeScanId) return; // cancelled
+      if (index >= total) {
+        scanProgressText = "";
+        updateFormationsPagination();
+        window.loadFormations();
+        return;
+      }
+
+      const batch = eligibleCoins.slice(index, index + 3);
+      index += batch.length;
+
+      scanProgressText = `Сканирование: ${index}/${total}`;
+      updateFormationsPagination();
+
+      const promises = batch.map(async (c) => {
+        const key = `${c.ex}|${c.sym}|${tf}`;
+        let klinesData = null;
+
+        const cached = KLINES_CACHE.get(key);
+        if (cached && Date.now() - cached.ts < 300000) {
+          klinesData = cached.data;
+        } else {
+          try {
+            const r = await fetch(`/api/klines?ex=${c.ex}&sym=${c.sym}&tf=${tf}&lite=1`);
+            if (r.ok) {
+              const rawKlines = await r.json();
+              if (Array.isArray(rawKlines) && rawKlines.length > 0) {
+                klinesData = rawKlines;
+                KLINES_CACHE.set(key, { ts: Date.now(), data: rawKlines });
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (klinesData) {
+          const flat = [];
+          if (typeof klinesData[0] === 'number') {
+            for (let i = 0; i < klinesData.length; i += 6) {
+              flat.push({ t: klinesData[i], o: klinesData[i+1], h: klinesData[i+2], l: klinesData[i+3], c: klinesData[i+4], v: klinesData[i+5] });
+            }
+          } else {
+            flat.push(...klinesData);
+          }
+          const candlesList = sanitizeCandles(flat);
+          const detectedLevels = window.detectChartLevelsAndTouches(candlesList);
+          const coinKey = c.ex + ':' + c.sym;
+
+          let wasEligible = false;
+          const hadLevel = formationsCoinsLevelsMap.has(coinKey);
+          if (hadLevel) {
+            const prevLvls = formationsCoinsLevelsMap.get(coinKey);
+            let upC = 0, downC = 0;
+            for (const l of prevLvls) {
+              if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+            }
+            wasEligible = Math.max(upC, downC) >= formationsMinCascade;
+          }
+
+          const hasLevel = detectedLevels && detectedLevels.length > 0;
+          if (hasLevel) {
+            formationsCoinsLevelsMap.set(coinKey, detectedLevels);
+          } else {
+            formationsCoinsLevelsMap.delete(coinKey);
+          }
+
+          let isEligible = false;
+          if (hasLevel) {
+            let upC = 0, downC = 0;
+            for (const l of detectedLevels) {
+              if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+            }
+            isEligible = Math.max(upC, downC) >= formationsMinCascade;
+          }
+
+          if (wasEligible !== isEligible && fgFormationsOnlyToggle?.checked) {
+            window.loadFormations();
+          }
+        }
+      });
+
+      await Promise.all(promises);
+
+      setTimeout(nextBatch, 80);
+    }
+
+    nextBatch();
+  }
+
+  // Called by ChartInstance after klines load and levels are computed
+  window.registerFormationsCoinLevels = function(ex, sym, levels) {
+    const key = ex + ':' + sym;
+    const had = formationsCoinsLevelsMap.has(key);
+    
+    let wasEligible = false;
+    if (had) {
+      const prev = formationsCoinsLevelsMap.get(key);
+      let upC = 0, downC = 0;
+      for (const l of prev) {
+        if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+      }
+      wasEligible = Math.max(upC, downC) >= formationsMinCascade;
+    }
+
+    const hasL = levels && levels.length > 0;
+    if (hasL) {
+      formationsCoinsLevelsMap.set(key, levels);
+    } else {
+      formationsCoinsLevelsMap.delete(key);
+    }
+
+    let isEligible = false;
+    if (hasL) {
+      let upC = 0, downC = 0;
+      for (const l of levels) {
+        if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+      }
+      isEligible = Math.max(upC, downC) >= formationsMinCascade;
+    }
+
+    if (wasEligible !== isEligible && fgFormationsOnlyToggle?.checked) {
+      window.loadFormations();
+    } else {
+      updateFormationsPagination();
+    }
+  };
+
+  function updateFormationsPagination() {
+    const pgEl = $("formations-page-info");
+    const prevBtn = $("formations-page-prev");
+    const nextBtn = $("formations-page-next");
+    if (!pgEl) return;
+    const perPage = formationsCols;
+    const total = formationsAllCoins.length;
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    if (formationsPage >= totalPages) formationsPage = totalPages - 1;
+
+    let infoText = `${formationsPage + 1} / ${totalPages}`;
+    if (scanProgressText) {
+      infoText += ` [${scanProgressText}]`;
+    }
+    pgEl.textContent = infoText;
+
+    if (prevBtn) prevBtn.disabled = formationsPage === 0;
+    if (nextBtn) nextBtn.disabled = formationsPage >= totalPages - 1;
+  }
+
+  // Bind prev/next buttons
+  const fgPrevBtn = $("formations-page-prev");
+  const fgNextBtn = $("formations-page-next");
+  if (fgPrevBtn) fgPrevBtn.onclick = () => {
+    if (formationsPage > 0) { formationsPage--; renderCurrentPage(); }
+  };
+  if (fgNextBtn) fgNextBtn.onclick = () => {
+    const perPage = formationsCols;
+    const totalPages = Math.max(1, Math.ceil(formationsAllCoins.length / perPage));
+    if (formationsPage < totalPages - 1) { formationsPage++; renderCurrentPage(); }
+  };
+
+  // Toggle: only show coins with formations
+  const fgFormationsOnlyToggle = $("formations-only-toggle");
+
+  window.loadFormations = function(resetPage = false) {
+    if (resetPage) formationsPage = 0;
+    const checkedEx = [];
+    if (fgExcMenu) {
+      fgExcMenu.querySelectorAll(".exc-item:not([data-cex='ALL'])").forEach(item => {
+        if (item.classList.contains("on")) checkedEx.push(item.dataset.cex);
+      });
+    } else {
+      checkedEx.push("BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD");
+    }
+
+    const onlyFormations = fgFormationsOnlyToggle?.checked;
+
+    formationsAllCoins = Array.from(coins.values())
+      .filter(c => {
+        if (!isUsdtFutures(c) || c.v <= 0) return false;
+        if (!checkedEx.includes(c.ex)) return false;
+        if (onlyFormations) {
+          const lvls = formationsCoinsLevelsMap.get(c.ex + ':' + c.sym);
+          if (!lvls) return false;
+          let upC = 0, downC = 0;
+          for (const l of lvls) {
+            if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+          }
+          const cascadeSize = Math.max(upC, downC);
+          if (cascadeSize < formationsMinCascade) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => b.v - a.v);
+
+    const currentScanKey = checkedEx.sort().join(",") + "|" + formationsTf;
+    if (resetPage || currentScanKey !== lastScanKey) {
+      lastScanKey = currentScanKey;
+      startFormationsScan(checkedEx, formationsTf);
+    }
+
+    renderCurrentPage();
+  };
+
+  function renderCurrentPage() {
+    const grid = $("formations-grid");
+    if (!grid) return;
+    grid.classList.remove("has-expanded"); // Reset fullscreen expanded state on page change
+
+    const perPage = formationsCols;
+    const start = formationsPage * perPage;
+    const slice = formationsAllCoins.slice(start, start + perPage);
+
+    grid.innerHTML = "";
+    chartInstances = [];
+
+    if (formationsAllCoins.length === 0) {
+      grid.innerHTML = `<div class="formations-empty">Инструменты не загружены.</div>`;
+      updateFormationsPagination();
+      return;
+    }
+    if (slice.length === 0) {
+      formationsPage = Math.max(0, formationsPage - 1);
+      return renderCurrentPage();
+    }
+
+    const maxCharts = perPage;
+    const rows = maxCharts <= 1 ? 1 : (maxCharts <= 2 ? 1 : (maxCharts <= 6 ? 2 : (maxCharts <= 9 ? 3 : 3)));
+    const cols = Math.ceil(maxCharts / rows);
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+
+    slice.forEach((c, i) => {
+      const inst = new ChartInstance(grid, i);
+      inst.tf = formationsTf;
+      inst.update(c);
+      chartInstances.push(inst);
+    });
+
+    if (chartInstances[0]) chartInstances[0].el.classList.add("active");
+    updateFormationsPagination();
   }
 
 })();

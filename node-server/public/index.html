@@ -91,7 +91,7 @@
             <!-- Chart area -->
             <main id="chart-area" aria-label="График">
                 <div id="ctbar">
-                    <button id="chart-back-btn" class="chart-back-btn" title="Вернуться в мульти-режим">
+                    <button id="chart-back-btn" class="chart-back-btn" title="Назад">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="19" y1="12" x2="5" y2="12"></line>
                             <polyline points="12 19 5 12 12 5"></polyline>
@@ -144,6 +144,13 @@
                             </svg>
                         </button>
                     </div>
+
+                    <button id="chart-density-settings-toggle" class="chart-density-settings-toggle" title="Настройки плотностей">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </button>
 
                     <div class="grid-config" id="grid-config" style="display:none">
                         <button id="btn-sync-all-ex" class="chart-back-btn" style="margin-right: 8px; border-radius: 4px; display: flex;" title="Открыть эту монету на всех биржах">
@@ -285,6 +292,13 @@
                                     stroke-width="1.2" />
                             </svg>
                         </button>
+                        <button class="dt-btn" data-tool="brush" title="Кисть (B)">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <path d="M12 2L14 4L5 13H3V11L12 2Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M10 4L12 6" stroke="currentColor" stroke-width="1.2"/>
+                                <path d="M3 11C3 11 3.5 12 4.5 13C5.5 14 5.5 14 5.5 14" stroke="currentColor" stroke-width="1.2"/>
+                            </svg>
+                        </button>
                         <button class="dt-btn" data-tool="ruler" title="Линейка">
                             <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                                 <rect x="2" y="5" width="12" height="6" rx="1" transform="rotate(-45 8 8)" stroke="currentColor" stroke-width="1.2" fill="none" />
@@ -330,6 +344,137 @@
                                     stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
                             </svg>
                         </button>
+                    </div>
+                    <div id="chart-density-panel" class="chart-density-panel" aria-label="Настройки плотностей">
+                        <div class="chart-density-panel-head">
+                            <div>
+                                <div class="chart-density-panel-title">Настройки плотностей</div>
+                                <div class="chart-density-panel-subtitle" id="chart-density-panel-subtitle">Для текущей монеты</div>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <button id="chart-density-switch" class="chart-density-switch" title="Включить/выключить плотности"></button>
+                                <button id="chart-density-close" class="chart-density-close" title="Скрыть панель">×</button>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Сторона</span>
+                            <div class="chart-density-filter-row">
+                                <button class="chart-density-filter-btn on" data-chart-density-side="all">Все</button>
+                                <button class="chart-density-filter-btn" data-chart-density-side="bid">BID</button>
+                                <button class="chart-density-filter-btn" data-chart-density-side="ask">ASK</button>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Размер</span>
+                            <div class="chart-density-filter-row">
+                                <button class="chart-density-filter-btn on" id="chart-density-small">Мелкие</button>
+                                <button class="chart-density-filter-btn on" id="chart-density-medium">Средние</button>
+                                <button class="chart-density-filter-btn on" id="chart-density-large">Большие</button>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Рынок</span>
+                            <div class="chart-density-filter-row">
+                                <button class="chart-density-filter-btn on" data-chart-density-market="all">Все</button>
+                                <button class="chart-density-filter-btn" data-chart-density-market="spot">Спот</button>
+                                <button class="chart-density-filter-btn" data-chart-density-market="futures">Фьючерсы</button>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Индикаторы</span>
+                            <div class="chart-density-indicators-grid">
+                                <button class="chart-indicator-grid-btn" id="ind-cvd" data-desc="CVD — разница покупок и продаж по рынку. Показывает скрытое давление покупателей или продавцов.">CVD</button>
+                                <button class="chart-indicator-grid-btn" id="ind-ema20" data-desc="EMA 20 — краткосрочный тренд. Удобно для поиска точек входа по текущему движению.">EMA 20</button>
+                                <button class="chart-indicator-grid-btn" id="ind-ema50" data-desc="EMA 50 — среднесрочный тренд. Часто выступает зоной отскока цены на откатах.">EMA 50</button>
+                                <button class="chart-indicator-grid-btn" id="ind-ema200" data-desc="EMA 200 — глобальный тренд. Сильнейший уровень поддержки/сопротивления.">EMA 200</button>
+                                <button class="chart-indicator-grid-btn" id="ind-vwap" data-desc="VWAP — средняя цена с учетом объема. Показывает баланс дня: выше — лонг, ниже — шорт.">VWAP</button>
+                                <button class="chart-indicator-grid-btn" id="ind-rsi" data-desc="RSI 14 — сила рынка (0-100) с автоматическим поиском дивергенций (разворотных точек).">RSI</button>
+                                <button class="chart-indicator-grid-btn" id="ind-atr" data-desc="ATR 14 — текущая волатильность монеты в долларах. Помогает правильно ставить стопы.">ATR</button>
+                                <button class="chart-indicator-grid-btn" id="ind-volprofile" data-desc="Volume Profile — горизонтальные объемы. POC (красная линия) — максимальный объем.">VP</button>
+                                <button class="chart-indicator-grid-btn" id="ind-bb" data-desc="Bollinger Bands — ценовой канал волатильности. Отскоки от краев указывают на зоны перепроданности/перекупленности.">BB</button>
+                                <button class="chart-indicator-grid-btn" id="ind-macd" data-desc="MACD — схождение/расхождение средних. Пересечение линий дает сигналы на разворот тренда.">MACD</button>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Биржи</span>
+                            <div class="chart-density-exc-wrap" id="chart-density-exc-wrap">
+                                <div class="chart-density-exc-btn" id="chart-density-exc-btn">
+                                    <span id="chart-density-exc-name">Все биржи</span>
+                                    <span class="exc-arrow">▼</span>
+                                </div>
+                                <div class="chart-density-exc-menu" id="chart-density-exc-menu">
+                                    <label class="chart-density-exc-item all">
+                                        <input type="checkbox" class="chart-dex-cb-all" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E')"></div>
+                                        <span class="dex-name">Все биржи</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="BN">
+                                        <input type="checkbox" class="chart-dex-cb" value="BN" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/BN.png')"></div>
+                                        <span class="dex-name">Binance</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="BB">
+                                        <input type="checkbox" class="chart-dex-cb" value="BB" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/BB.png')"></div>
+                                        <span class="dex-name">Bybit</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="OX">
+                                        <input type="checkbox" class="chart-dex-cb" value="OX" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/OK.png')"></div>
+                                        <span class="dex-name">OKX</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="BG">
+                                        <input type="checkbox" class="chart-dex-cb" value="BG" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/BG.png')"></div>
+                                        <span class="dex-name">Bitget</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="GT">
+                                        <input type="checkbox" class="chart-dex-cb" value="GT" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/GT.png')"></div>
+                                        <span class="dex-name">Gate</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="MX">
+                                        <input type="checkbox" class="chart-dex-cb" value="MX" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/MX.png')"></div>
+                                        <span class="dex-name">MEXC</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="KC">
+                                        <input type="checkbox" class="chart-dex-cb" value="KC" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/KC.png')"></div>
+                                        <span class="dex-name">KuCoin</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="BX">
+                                        <input type="checkbox" class="chart-dex-cb" value="BX" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/BX.png')"></div>
+                                        <span class="dex-name">BingX</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="HT">
+                                        <input type="checkbox" class="chart-dex-cb" value="HT" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/HX.png')"></div>
+                                        <span class="dex-name">HTX</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="HL">
+                                        <input type="checkbox" class="chart-dex-cb" value="HL" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/HL.png')"></div>
+                                        <span class="dex-name">Hyperliquid</span>
+                                    </label>
+                                    <label class="chart-density-exc-item" data-chart-dex="AD">
+                                        <input type="checkbox" class="chart-dex-cb" value="AD" checked>
+                                        <div class="exc-dot" style="background: center/contain no-repeat url('/img/AS.png')"></div>
+                                        <span class="dex-name">Asterdex</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="chart-indicator-info-box" id="chart-indicator-info-box">
+                            Наведите на индикатор, чтобы прочитать его описание.
+                        </div>
                     </div>
                     <canvas id="chart-canvas"></canvas>
                     <canvas id="vol-canvas"></canvas>
@@ -479,6 +624,150 @@
             </div>
             <div id="density-canvas-wrap">
                 <canvas id="density-canvas"></canvas>
+            </div>
+        </div>
+
+        <!-- Formations View -->
+        <div id="formations-view" style="display:none">
+            <div id="formations-toolbar">
+                <div class="formations-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 3v18h18"></path>
+                        <path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"></path>
+                    </svg>
+                    <span>Мультиграфики</span>
+                </div>
+
+                <div class="fg-tf-switcher">
+                    <button class="fg-tf-btn" data-tf="1m">1М</button>
+                    <button class="fg-tf-btn" data-tf="5m">5М</button>
+                    <button class="fg-tf-btn" data-tf="15m">15М</button>
+                    <button class="fg-tf-btn" data-tf="1h">1Ч</button>
+                    <button class="fg-tf-btn on" data-tf="4h">4Ч</button>
+                    <button class="fg-tf-btn" data-tf="1d">1Д</button>
+                    <button class="fg-tf-btn" data-tf="3d">3Д</button>
+                    <button class="fg-tf-btn" data-tf="1w">1Н</button>
+                </div>
+
+                <!-- Only formations filter toggle (Каскады) -->
+                <div style="display: flex; align-items: center; gap: 8px; margin-right: 6px;">
+                    <input type="checkbox" id="formations-only-toggle" class="beautiful-checkbox" checked>
+                    <label for="formations-only-toggle" style="font-size: 11px; font-weight: 600; color: var(--t2); cursor: pointer; user-select: none;">Каскады</label>
+                </div>
+
+                <!-- Formations settings button -->
+                <div class="custom-grid-select-wrap" id="formations-settings-wrap" style="margin-right: 6px;">
+                    <div class="settings-btn" id="formations-settings-btn" role="button" aria-haspopup="listbox" aria-expanded="false" tabindex="0" title="Настройки фильтра" style="height: 24px; width: 24px; display: flex; align-items: center; justify-content: center; background: var(--bg3); border: 1px solid var(--bd2); border-radius: 6px; padding: 4px; cursor: pointer; color: var(--t2); box-sizing: border-box; transition: all 0.15s ease;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </div>
+                    <div class="custom-grid-select-menu" id="formations-settings-menu" role="listbox" style="min-width: 170px; right: 0; left: auto;">
+                        <div style="padding: 8px 12px; border-bottom: 1px solid var(--bd2); font-size: 10px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;">Мин. уровней каскада</div>
+                        <div class="custom-grid-select-item" data-value="1" role="option">1+ уровень</div>
+                        <div class="custom-grid-select-item on" data-value="2" role="option">2+ уровня</div>
+                        <div class="custom-grid-select-item" data-value="3" role="option">3+ уровня</div>
+                        <div class="custom-grid-select-item" data-value="4" role="option">4+ уровня</div>
+                        <div class="custom-grid-select-item" data-value="5" role="option">5+ уровней</div>
+                    </div>
+                </div>
+
+
+                <!-- Formations Exchange dropdown -->
+                <div class="exc-wrap" id="formations-exc-wrap">
+                    <div class="exc-btn" id="formations-exc-btn" role="button" aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                        <div class="exc-dot" id="formations-exc-dot" style="background: center/contain no-repeat url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E')"></div>
+                        <span id="formations-exc-name">Все биржи</span>
+                        <span class="exc-arrow">▼</span>
+                    </div>
+                    <div class="exc-menu" id="formations-exc-menu" role="listbox" aria-label="Выбор бирж" style="min-width: 180px;">
+                        <div class="exc-item on" data-cex="ALL" data-label="Все биржи" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E')"></div>
+                            Все биржи
+                        </div>
+                        <div class="exc-item on" data-cex="BN" data-label="Binance" data-img="/img/BN.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BN.png')"></div>
+                            Binance
+                        </div>
+                        <div class="exc-item on" data-cex="BB" data-label="Bybit" data-img="/img/BB.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BB.png')"></div>
+                            Bybit
+                        </div>
+                        <div class="exc-item on" data-cex="OX" data-label="OKX" data-img="/img/OK.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/OK.png')"></div>
+                            OKX
+                        </div>
+                        <div class="exc-item on" data-cex="BG" data-label="Bitget" data-img="/img/BG.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BG.png')"></div>
+                            Bitget
+                        </div>
+                        <div class="exc-item on" data-cex="GT" data-label="Gate" data-img="/img/GT.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/GT.png')"></div>
+                            Gate
+                        </div>
+                        <div class="exc-item on" data-cex="MX" data-label="MEXC" data-img="/img/MX.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/MX.png')"></div>
+                            MEXC
+                        </div>
+                        <div class="exc-item on" data-cex="KC" data-label="KuCoin" data-img="/img/KC.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/KC.png')"></div>
+                            KuCoin
+                        </div>
+                        <div class="exc-item on" data-cex="BX" data-label="BingX" data-img="/img/BX.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BX.png')"></div>
+                            BingX
+                        </div>
+                        <div class="exc-item on" data-cex="HT" data-label="HTX" data-img="/img/HX.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/HX.png')"></div>
+                            HTX
+                        </div>
+                        <div class="exc-item on" data-cex="HL" data-label="Hyperliquid" data-img="/img/HL.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/HL.png')"></div>
+                            Hyperliquid
+                        </div>
+                        <div class="exc-item on" data-cex="AD" data-label="Asterdex" data-img="/img/AS.png" role="option">
+                            <div class="exc-checkbox"></div>
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/AS.png')"></div>
+                            Asterdex
+                        </div>
+                    </div>
+                </div>
+
+                <div class="custom-grid-select-wrap" id="formations-grid-select-wrap">
+                    <div class="custom-grid-select-btn" id="formations-grid-select-btn" role="button" aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                        <span id="formations-grid-select-val">2 Графика</span>
+                        <span class="custom-grid-select-arrow">▼</span>
+                    </div>
+                    <div class="custom-grid-select-menu" id="formations-grid-select-menu" role="listbox">
+                        <div class="custom-grid-select-item" data-value="1" role="option">1 График</div>
+                        <div class="custom-grid-select-item on" data-value="2" role="option">2 Графика</div>
+                        <div class="custom-grid-select-item" data-value="4" role="option">4 Графика</div>
+                        <div class="custom-grid-select-item" data-value="6" role="option">6 Графиков</div>
+                        <div class="custom-grid-select-item" data-value="9" role="option">9 Графиков</div>
+                        <div class="custom-grid-select-item" data-value="12" role="option">12 Графиков</div>
+                    </div>
+                </div>
+            </div>
+            <div id="formations-grid" class="fg-cols-2">
+                <!-- Mini chart cells populated dynamically -->
+            </div>
+            <!-- Pagination bar -->
+            <div id="formations-pagination">
+                <button id="formations-page-prev" class="fg-page-btn" disabled>‹ Назад</button>
+                <span id="formations-page-info">1 / 1</span>
+                <button id="formations-page-next" class="fg-page-btn">Вперёд ›</button>
             </div>
         </div>
     </div>
@@ -798,7 +1087,7 @@
         </div>
     </div>
 
-    <script src="/js/app.js?v=2"></script>
+    <script src="/js/app.js?v=4"></script>
 </body>
 
 </html>
