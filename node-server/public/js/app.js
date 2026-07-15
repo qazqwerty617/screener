@@ -1213,7 +1213,7 @@ function drawChart() {
         const x = Math.round((i + futureGap) * candleW + candleW / 2);
         const up = c.c >= c.o;
         const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
-        const vh = Math.max(3, Math.min(1, vRatio) * (subH - 25) / 3); // Reduce height by 3x
+        const vh = Math.max(3, Math.min(1, vRatio) * (subH - 10));
         vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
         
         vCtx.fillRect(x - Math.floor(volW / 2), yStart + subH - vh, volW, vh);
