@@ -3454,7 +3454,7 @@ function rafLoop() {
     dirty.add(ak);
   }
 
-  if (screenerView === "multichart" || activeView === "formations") {
+  if (screenerView === "multichart" || activeView === "formations" || activeView === "arbitrage") {
     chartInstances.forEach(inst => inst.draw());
   } else if (chartNeedsDraw || isActiveAnimating) {
     chartNeedsDraw = false;
@@ -6113,6 +6113,8 @@ document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
       switchView("screener");
     } else if (idx === 1) {
       switchView("map");
+    } else if (idx === 2) {
+      switchView("arbitrage");
     } else if (idx === 3) {
       switchView("formations");
     }
@@ -6125,11 +6127,18 @@ function switchView(view) {
   const mainEl = $("main");
   const densityEl = $("density-view");
   const formationsEl = $("formations-view");
+  const arbitrageEl = $("arbitrage-view");
+
+  if (view !== "arbitrage" && arbitrageTimer) {
+    clearInterval(arbitrageTimer);
+    arbitrageTimer = null;
+  }
 
   if (view === "screener") {
     mainEl.style.display = "flex";
     densityEl.style.display = "none";
     if (formationsEl) formationsEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
     if (densityAnimFrame) { cancelAnimationFrame(densityAnimFrame); densityAnimFrame = null; }
     document.querySelectorAll(".vt-btn").forEach(btn => {
       btn.onclick = () => toggleScreenerView(btn.dataset.view);
@@ -6150,6 +6159,7 @@ function switchView(view) {
     mainEl.style.display = "none";
     densityEl.style.display = "flex";
     if (formationsEl) formationsEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
     initDensityCanvas();
     fetchWalls();
     startDensityLoop();
@@ -6159,6 +6169,15 @@ function switchView(view) {
     if (formationsEl) {
       formationsEl.style.display = "flex";
       window.loadFormations();
+    }
+    if (arbitrageEl) arbitrageEl.style.display = "none";
+  } else if (view === "arbitrage") {
+    mainEl.style.display = "none";
+    densityEl.style.display = "none";
+    if (formationsEl) formationsEl.style.display = "none";
+    if (arbitrageEl) {
+      arbitrageEl.style.display = "flex";
+      initArbitrageView();
     }
   }
 }
@@ -8717,5 +8736,189 @@ window.addEventListener("resize", () => {
     if (chartInstances[0]) chartInstances[0].el.classList.add("active");
     updateFormationsPagination();
   }
+
+  // ─── Arbitrage View Logic ──────────────────────────────────────────────────
+  let arbitrageTf = "4h";
+  let arbitrageSelectedPair = null;
+  let arbitrageTimer = null;
+  let isArbitrageInit = false;
+
+  window.initArbitrageView = function() {
+    if (!isArbitrageInit) {
+      isArbitrageInit = true;
+
+      // Filter inputs
+      const minSpreadInput = $("arbitrage-min-spread");
+      if (minSpreadInput) {
+        minSpreadInput.oninput = () => updateArbitrageListUI();
+      }
+
+      const minVolInput = $("arbitrage-min-vol");
+      if (minVolInput) {
+        minVolInput.oninput = () => updateArbitrageListUI();
+      }
+
+      // Timeframe switcher
+      const switcher = $("arbitrage-tf-switcher");
+      if (switcher) {
+        switcher.querySelectorAll(".fg-tf-btn").forEach(btn => {
+          btn.onclick = () => {
+            switcher.querySelectorAll(".fg-tf-btn").forEach(b => b.classList.remove("on"));
+            btn.classList.add("on");
+            arbitrageTf = btn.dataset.tf;
+            
+            const buyInst = chartInstances.find(inst => inst.index === 98);
+            const sellInst = chartInstances.find(inst => inst.index === 99);
+            if (buyInst) {
+              buyInst.tf = arbitrageTf;
+              buyInst.loadKlines();
+            }
+            if (sellInst) {
+              sellInst.tf = arbitrageTf;
+              sellInst.loadKlines();
+            }
+          };
+        });
+      }
+    }
+
+    updateArbitrageListUI();
+
+    if (arbitrageTimer) clearInterval(arbitrageTimer);
+    arbitrageTimer = setInterval(() => {
+      if (activeView === "arbitrage") {
+        updateArbitrageListUI();
+      }
+    }, 2000);
+  };
+
+  window.getArbitrageOpportunities = function() {
+    const groups = new Map();
+    for (const c of coins.values()) {
+      if (!isUsdtFutures(c) || isStablecoinBase(c) || !c.p || c.p <= 0) continue;
+      let list = groups.get(c.base);
+      if (!list) {
+        list = [];
+        groups.set(c.base, list);
+      }
+      list.push(c);
+    }
+
+    const opportunities = [];
+    const minVol = parseFloat($("arbitrage-min-vol")?.value || "100000");
+    const minSpread = parseFloat($("arbitrage-min-spread")?.value || "0.1");
+
+    for (const [base, coinList] of groups.entries()) {
+      if (coinList.length < 2) continue;
+
+      const liquidCoins = coinList.filter(c => (c.v || 0) >= minVol);
+      if (liquidCoins.length < 2) continue;
+
+      let minCoin = null;
+      let maxCoin = null;
+      for (const c of liquidCoins) {
+        if (!minCoin || c.p < minCoin.p) minCoin = c;
+        if (!maxCoin || c.p > maxCoin.p) maxCoin = c;
+      }
+
+      if (!minCoin || !maxCoin || minCoin.ex === maxCoin.ex) continue;
+
+      const spread = ((maxCoin.p - minCoin.p) / minCoin.p) * 100;
+      if (spread >= minSpread) {
+        const totalVol = liquidCoins.reduce((sum, c) => sum + (c.v || 0), 0);
+        opportunities.push({
+          base,
+          minCoin,
+          maxCoin,
+          spread,
+          vol: totalVol
+        });
+      }
+    }
+
+    opportunities.sort((a, b) => b.spread - a.spread);
+    return opportunities;
+  };
+
+  window.updateArbitrageListUI = function() {
+    const tbody = $("arbitrage-list-body");
+    if (!tbody) return;
+
+    const opportunities = window.getArbitrageOpportunities();
+    const countBadge = $("arbitrage-count-badge");
+    if (countBadge) countBadge.textContent = opportunities.length;
+
+    if (opportunities.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--t3); padding: 24px;">Нет подходящих спредов</td></tr>`;
+      return;
+    }
+
+    let html = "";
+    opportunities.forEach(opt => {
+      const isSelected = arbitrageSelectedPair && 
+                         arbitrageSelectedPair.base === opt.base &&
+                         arbitrageSelectedPair.buyEx === opt.minCoin.ex &&
+                         arbitrageSelectedPair.sellEx === opt.maxCoin.ex;
+
+      html += `
+        <tr class="${isSelected ? 'sel' : ''}" onclick="window.selectArbitragePair('${opt.base}', '${opt.minCoin.ex}', '${opt.maxCoin.ex}')">
+          <td style="font-weight: 600; color: var(--t1);">${opt.base}</td>
+          <td><span style="color: var(--t3); font-size: 9px; margin-right: 4px;">${opt.minCoin.ex}</span>${fP(opt.minCoin.p)}</td>
+          <td><span style="color: var(--t3); font-size: 9px; margin-right: 4px;">${opt.maxCoin.ex}</span>${fP(opt.maxCoin.p)}</td>
+          <td class="spread-col">+${opt.spread.toFixed(2)}%</td>
+          <td class="vol-col">${fV(opt.vol)}</td>
+        </tr>
+      `;
+    });
+    tbody.innerHTML = html;
+
+    if (!arbitrageSelectedPair && opportunities.length > 0) {
+      const first = opportunities[0];
+      window.selectArbitragePair(first.base, first.minCoin.ex, first.maxCoin.ex);
+    }
+  };
+
+  window.selectArbitragePair = function(base, buyEx, sellEx) {
+    arbitrageSelectedPair = { base, buyEx, sellEx };
+
+    const tbody = $("arbitrage-list-body");
+    if (tbody) {
+      const rows = tbody.querySelectorAll("tr");
+      rows.forEach(row => {
+        const isMatch = row.innerHTML.includes(`'${base}'`) && 
+                        row.innerHTML.includes(`'${buyEx}'`) && 
+                        row.innerHTML.includes(`'${sellEx}'`);
+        row.classList.toggle("sel", isMatch);
+      });
+    }
+
+    chartInstances = chartInstances.filter(inst => inst.index !== 98 && inst.index !== 99);
+
+    const container1 = $("arbitrage-chart-container-1");
+    const container2 = $("arbitrage-chart-container-2");
+    if (container1) container1.innerHTML = "";
+    if (container2) container2.innerHTML = "";
+
+    const coinBuy = Array.from(coins.values()).find(c => c.ex === buyEx && c.base === base && isUsdtFutures(c));
+    const coinSell = Array.from(coins.values()).find(c => c.ex === sellEx && c.base === base && isUsdtFutures(c));
+
+    if (!coinBuy || !coinSell) {
+      console.warn("Arbitrage: Could not find coin objects for", base, buyEx, sellEx);
+      return;
+    }
+
+    const buyInst = new ChartInstance(container1, 98);
+    buyInst.tf = arbitrageTf;
+    buyInst.update(coinBuy);
+
+    const sellInst = new ChartInstance(container2, 99);
+    sellInst.tf = arbitrageTf;
+    sellInst.update(coinSell);
+
+    chartInstances.push(buyInst, sellInst);
+    
+    buyInst.headerSym.innerHTML = `<span style="color: #26c97a; font-weight: 700; margin-right: 6px;">[ПОКУПКА]</span> ${buyEx}:${coinBuy.sym}`;
+    sellInst.headerSym.innerHTML = `<span style="color: #ff4560; font-weight: 700; margin-right: 6px;">[ПРОДАЖА]</span> ${sellEx}:${coinSell.sym}`;
+  };
 
 })();
