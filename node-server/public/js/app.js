@@ -8862,9 +8862,9 @@ window.addEventListener("resize", () => {
 
       html += `
         <tr class="${isSelected ? 'sel' : ''}" onclick="window.selectArbitragePair('${opt.base}', '${opt.minCoin.ex}', '${opt.maxCoin.ex}')">
-          <td style="font-weight: 600; color: var(--t1);">${opt.base}</td>
-          <td><span style="color: var(--t3); font-size: 9px; margin-right: 4px;">${opt.minCoin.ex}</span>${fP(opt.minCoin.p)}</td>
-          <td><span style="color: var(--t3); font-size: 9px; margin-right: 4px;">${opt.maxCoin.ex}</span>${fP(opt.maxCoin.p)}</td>
+          <td style="font-weight: 600; color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${opt.base}</td>
+          <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><span class="ex-badge ${opt.minCoin.ex.toLowerCase()}">${opt.minCoin.ex}</span>${fP(opt.minCoin.p)}</td>
+          <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><span class="ex-badge ${opt.maxCoin.ex.toLowerCase()}">${opt.maxCoin.ex}</span>${fP(opt.maxCoin.p)}</td>
           <td class="spread-col">+${opt.spread.toFixed(2)}%</td>
           <td class="vol-col">${fV(opt.vol)}</td>
         </tr>
