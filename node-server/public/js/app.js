@@ -853,6 +853,288 @@ function calcCVD(data) {
   return cvd;
 }
 
+function calcSMC(candles, tf) {
+  if (!candles || candles.length < 8) return { obs: [], fvgs: [], boss: [], sweeps: [] };
+
+  const obs = [];
+  const fvgs = [];
+  const boss = [];
+  const sweeps = [];
+
+  const total = candles.length;
+
+  // 1. Adaptive Swing Detection
+  let swingWindow = 3;
+  if (tf === '1m' || tf === '3m') swingWindow = 2;
+  else if (tf === '1h' || tf === '4h' || tf === '1d') swingWindow = 4;
+
+  const swings = [];
+  for (let i = swingWindow; i < total - swingWindow; i++) {
+    const c = candles[i];
+    let isHigh = true, isLow = true;
+    for (let j = i - swingWindow; j <= i + swingWindow; j++) {
+      if (j === i) continue;
+      if (candles[j].h >= c.h) isHigh = false;
+      if (candles[j].l <= c.l) isLow = false;
+    }
+    if (isHigh) swings.push({ idx: i, price: c.h, type: 'high', time: c.t });
+    if (isLow) swings.push({ idx: i, price: c.l, type: 'low', time: c.t });
+  }
+
+  // 2. Order Block (OB) Detection
+  for (let i = 1; i < total - 2; i++) {
+    const c = candles[i];
+    const nextC = candles[i + 1];
+    const nnextC = candles[i + 2];
+    if (!c || !nextC) continue;
+
+    const range = c.h - c.l || 1e-9;
+    const isUpImpulse = (nextC.c - nextC.o > range * 0.7) || (nnextC && nnextC.c - c.o > range * 1.5);
+    const isDnImpulse = (nextC.o - nextC.c > range * 0.7) || (nnextC && c.o - nnextC.c > range * 1.5);
+
+    // Bullish OB: Bearish/Consolidation candle before upward expansion
+    if (isUpImpulse && c.c <= c.o + range * 0.3) {
+      let mitigated = false;
+      for (let k = i + 2; k < total; k++) {
+        if (candles[k].l < c.l) { mitigated = true; break; }
+      }
+      if (!mitigated) {
+        obs.push({
+          type: 'bullish',
+          idx: i,
+          time: c.t,
+          top: Math.max(c.o, c.c),
+          bottom: c.l,
+          price: (Math.max(c.o, c.c) + c.l) / 2
+        });
+      }
+    }
+
+    // Bearish OB: Bullish/Consolidation candle before downward expansion
+    if (isDnImpulse && c.c >= c.o - range * 0.3) {
+      let mitigated = false;
+      for (let k = i + 2; k < total; k++) {
+        if (candles[k].h > c.h) { mitigated = true; break; }
+      }
+      if (!mitigated) {
+        obs.push({
+          type: 'bearish',
+          idx: i,
+          time: c.t,
+          top: c.h,
+          bottom: Math.min(c.o, c.c),
+          price: (c.h + Math.min(c.o, c.c)) / 2
+        });
+      }
+    }
+  }
+
+  // 3. Fair Value Gap (FVG / Order Flow) Detection
+  for (let i = 2; i < total; i++) {
+    const c1 = candles[i - 2];
+    const c2 = candles[i - 1];
+    const c3 = candles[i];
+
+    // Bullish FVG (c3.l > c1.h)
+    if (c3.l > c1.h + (c1.h * 0.0001)) {
+      let mitigated = false;
+      for (let k = i + 1; k < total; k++) {
+        if (candles[k].l <= c1.h) { mitigated = true; break; }
+      }
+      if (!mitigated) {
+        fvgs.push({
+          type: 'bullish',
+          idx: i - 1,
+          time: c2.t,
+          top: c3.l,
+          bottom: c1.h,
+          eq: (c3.l + c1.h) / 2
+        });
+      }
+    }
+
+    // Bearish FVG (c3.h < c1.l)
+    if (c3.h < c1.l - (c1.l * 0.0001)) {
+      let mitigated = false;
+      for (let k = i + 1; k < total; k++) {
+        if (candles[k].h >= c1.l) { mitigated = true; break; }
+      }
+      if (!mitigated) {
+        fvgs.push({
+          type: 'bearish',
+          idx: i - 1,
+          time: c2.t,
+          top: c1.l,
+          bottom: c3.h,
+          eq: (c1.l + c3.h) / 2
+        });
+      }
+    }
+  }
+
+  // 4. Liquidity Sweeps (SWEEP)
+  const recentSwings = swings.slice(-15);
+  for (let s1 = 0; s1 < recentSwings.length; s1++) {
+    for (let s2 = s1 + 1; s2 < recentSwings.length; s2++) {
+      const sw1 = recentSwings[s1];
+      const sw2 = recentSwings[s2];
+      if (sw1.type !== sw2.type) continue;
+      const diffPct = Math.abs(sw1.price - sw2.price) / sw1.price;
+      if (diffPct < 0.0015) {
+        for (let k = sw2.idx + 1; k < total; k++) {
+          const c = candles[k];
+          if (sw1.type === 'high' && c.h > sw1.price && c.c < sw1.price) {
+            sweeps.push({ type: 'high', idx: k, time: c.t, price: c.h, level: sw1.price });
+          } else if (sw1.type === 'low' && c.l < sw1.price && c.c > sw1.price) {
+            sweeps.push({ type: 'low', idx: k, time: c.t, price: c.l, level: sw1.price });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    obs: obs.slice(-6),
+    fvgs: fvgs.slice(-8),
+    boss: boss.slice(-5),
+    sweeps: sweeps.slice(-4)
+  };
+}
+
+function drawSMCOverlays(ctx, candles, s, vis, futureGap, candleW, toY, PW, PH, TOP, tf) {
+  if (!candles || candles.length < 10) return;
+  const smcData = calcSMC(candles, tf);
+
+  // 1. Draw Order Blocks (OB)
+  if (chartActiveIndicators.has("OB")) {
+    smcData.obs.forEach(ob => {
+      const yTop = toY(ob.top);
+      const yBottom = toY(ob.bottom);
+      const h = Math.max(2, Math.abs(yBottom - yTop));
+
+      const startIdx = ob.idx;
+      const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
+      const boxW = PW - startX;
+      if (boxW <= 0) return;
+
+      const isBull = ob.type === "bullish";
+      const fillColor = isBull ? "rgba(38, 201, 122, 0.14)" : "rgba(255, 69, 96, 0.14)";
+      const borderColor = isBull ? "rgba(38, 201, 122, 0.85)" : "rgba(255, 69, 96, 0.85)";
+      const textColor = isBull ? "#26c97a" : "#ff4560";
+
+      ctx.save();
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(startX, Math.min(yTop, yBottom), boxW, h);
+
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(startX, Math.min(yTop, yBottom), boxW, h);
+
+      ctx.fillStyle = textColor;
+      ctx.font = "bold 9px Inter";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      const obLabel = (isBull ? "BULLISH OB " : "BEARISH OB ") + `[${fP(ob.bottom)} - ${fP(ob.top)}]`;
+      ctx.fillText(obLabel, startX + 6, Math.min(yTop, yBottom) + 3);
+      ctx.restore();
+    });
+  }
+
+  // 2. Draw Fair Value Gaps (FVG / Order Flow)
+  if (chartActiveIndicators.has("FVG")) {
+    smcData.fvgs.forEach(fvg => {
+      const yTop = toY(fvg.top);
+      const yBottom = toY(fvg.bottom);
+      const yEq = toY(fvg.eq);
+      const h = Math.max(2, Math.abs(yBottom - yTop));
+
+      const startIdx = fvg.idx;
+      const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
+      const boxW = PW - startX;
+      if (boxW <= 0) return;
+
+      const isBull = fvg.type === "bullish";
+      const fillColor = isBull ? "rgba(139, 92, 246, 0.12)" : "rgba(245, 158, 11, 0.12)";
+      const borderColor = isBull ? "rgba(139, 92, 246, 0.6)" : "rgba(245, 158, 11, 0.6)";
+      const textColor = isBull ? "#a78bfa" : "#fbbf24";
+
+      ctx.save();
+      ctx.fillStyle = fillColor;
+      ctx.fillRect(startX, Math.min(yTop, yBottom), boxW, h);
+
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(startX, Math.min(yTop, yBottom), boxW, h);
+
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = borderColor;
+      ctx.beginPath();
+      ctx.moveTo(startX, yEq);
+      ctx.lineTo(startX + boxW, yEq);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = textColor;
+      ctx.font = "bold 9px Inter";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`FVG 50%: ${fP(fvg.eq)}`, startX + 6, yEq - 6);
+      ctx.restore();
+    });
+  }
+
+  // 3. Draw Market Structure Breaks (BOS)
+  if (chartActiveIndicators.has("BOS")) {
+    smcData.boss.forEach(bos => {
+      const y = toY(bos.price);
+      if (y < TOP || y > TOP + PH) return;
+      const startIdx = bos.idx;
+      const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
+
+      const isBull = bos.type === "bullish";
+      const color = isBull ? "#26c97a" : "#ff4560";
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(startX, y);
+      ctx.lineTo(PW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = color;
+      ctx.font = "bold 9px Inter";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(`${bos.label} (${fP(bos.price)})`, startX + 8, y - 2);
+      ctx.restore();
+    });
+  }
+
+  // 4. Draw Liquidity Sweeps (SWEEP)
+  if (chartActiveIndicators.has("SWEEP")) {
+    smcData.sweeps.forEach(sw => {
+      const y = toY(sw.price);
+      if (y < TOP || y > TOP + PH) return;
+      const startIdx = sw.idx;
+      const startX = (startIdx - s + futureGap) * candleW + candleW / 2;
+      if (startX < 0 || startX > PW) return;
+
+      const isHigh = sw.type === "high";
+      const color = isHigh ? "#ff4560" : "#26c97a";
+
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.font = "bold 10px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = isHigh ? "bottom" : "top";
+      ctx.fillText("⚡ SWEEP", startX, isHigh ? y - 4 : y + 4);
+      ctx.restore();
+    });
+  }
+}
 
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
@@ -1436,26 +1718,15 @@ function drawChart() {
   vCtx.stroke();
 
   if (mv > 0) {
-    // 1. Infallible Cumulative Detector (The Golden Bullet)
-    let massiveDrops = 0;
-    for (let i = 1; i < vis.length; i++) {
-      if (vis[i - 1].v > 0 && vis[i].v < vis[i - 1].v * 0.5) massiveDrops++;
-    }
-    const isCumulativeBug = vis.length > 20 && (massiveDrops < vis.length * 0.05);
-
-    let renderVols = new Array(vis.length);
-    let trueMv = 0;
-
-    for (let i = 0; i < vis.length; i++) {
-      if (isCumulativeBug) {
-        let prevV = i > 0 ? vis[i - 1].v : vis[i].v;
-        if (vis[i].v === 0 || (prevV === 0 && vis[i].v > 0)) renderVols[i] = 0;
-        else renderVols[i] = Math.max(0, vis[i].v - prevV);
-      } else {
-        renderVols[i] = vis[i].v;
-      }
-      if (renderVols[i] > trueMv) trueMv = renderVols[i];
-    }
+    // Exchange kline APIs already return per-candle volume. The old cumulative
+    // detector subtracted adjacent candles and incorrectly turned normal volume
+    // into near-zero dots. Use the raw candle values and a robust scale so one
+    // exceptional spike does not flatten the other 99% of the histogram.
+    const renderVols = vis.map(c => Number.isFinite(c.v) && c.v > 0 ? c.v : 0);
+    const sortedVols = renderVols.filter(v => v > 0).sort((a, b) => a - b);
+    const absoluteMax = sortedVols[sortedVols.length - 1] || 0;
+    const p97 = sortedVols[Math.floor((sortedVols.length - 1) * 0.97)] || absoluteMax;
+    const trueMv = Math.max(1, Math.min(absoluteMax, p97 * 1.2));
 
     const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
     for (let i = 0; i < vis.length; i++) {
@@ -1463,10 +1734,9 @@ function drawChart() {
       const x = Math.round((i + futureGap) * candleW + candleW / 2);
       const up = c.c >= c.o;
       const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
-      const vh = Math.max(3, Math.min(1, vRatio) * (volumeHeight - 10));
+      const vh = renderVols[i] > 0 ? Math.max(1, Math.min(1, vRatio) * (volumeHeight - 10)) : 0;
       vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
-      
-      vCtx.fillRect(x - Math.floor(volW / 2), volumeYStart + volumeHeight - vh, volW, vh);
+      if (vh > 0) vCtx.fillRect(x - Math.floor(volW / 2), volumeYStart + volumeHeight - vh, volW, vh);
     }
   }
   vCtx.restore();
@@ -3874,7 +4144,11 @@ applyToolButtonColors();
     "ind-atr": "ATR",
     "ind-volprofile": "VP",
     "ind-bb": "BB",
-    "ind-macd": "MACD"
+    "ind-macd": "MACD",
+    "ind-ob": "OB",
+    "ind-fvg": "FVG",
+    "ind-bos": "BOS",
+    "ind-sweep": "SWEEP"
   };
   const formationIdToName = {
     "fmt-levels": "levels",
@@ -6150,14 +6424,20 @@ function renderScreenerHeatmap() {
 // ── Tab switching ─────────────────────────────────────────────────────────────
 document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
   tab.addEventListener("click", () => {
-    document.querySelectorAll("#nav .ntab").forEach(t => t.classList.remove("on"));
+    document.querySelectorAll("#nav .ntab").forEach(t => {
+      t.classList.remove("on");
+      t.setAttribute("aria-selected", "false");
+    });
     tab.classList.add("on");
+    tab.setAttribute("aria-selected", "true");
     if (idx === 0) {
       switchView("screener");
     } else if (idx === 1) {
       switchView("map");
     } else if (idx === 3) {
       switchView("formations");
+    } else if (idx === 4) {
+      switchView("backtest");
     }
   });
 });
@@ -6168,11 +6448,13 @@ function switchView(view) {
   const mainEl = $("main");
   const densityEl = $("density-view");
   const formationsEl = $("formations-view");
+  const backtestEl = $("backtest-view");
 
   if (view === "screener") {
     mainEl.style.display = "flex";
     densityEl.style.display = "none";
     if (formationsEl) formationsEl.style.display = "none";
+    if (backtestEl) backtestEl.style.display = "none";
     if (densityAnimFrame) { cancelAnimationFrame(densityAnimFrame); densityAnimFrame = null; }
     document.querySelectorAll(".vt-btn").forEach(btn => {
       btn.onclick = () => toggleScreenerView(btn.dataset.view);
@@ -6193,6 +6475,7 @@ function switchView(view) {
     mainEl.style.display = "none";
     densityEl.style.display = "flex";
     if (formationsEl) formationsEl.style.display = "none";
+    if (backtestEl) backtestEl.style.display = "none";
     initDensityCanvas();
     fetchWalls();
     startDensityLoop();
@@ -6203,6 +6486,13 @@ function switchView(view) {
       formationsEl.style.display = "flex";
       window.loadFormations();
     }
+    if (backtestEl) backtestEl.style.display = "none";
+  } else if (view === "backtest") {
+    mainEl.style.display = "none";
+    densityEl.style.display = "none";
+    if (formationsEl) formationsEl.style.display = "none";
+    if (backtestEl) backtestEl.style.display = "flex";
+    if (window.CryptoBacktest) window.CryptoBacktest.activate();
   }
 }
 

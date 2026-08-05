@@ -5,6 +5,7 @@ const https = require("https");
 const path = require("path");
 const { WebSocketServer, WebSocket } = require("ws");
 const zlib = require("zlib");
+const { randomUUID } = require("crypto");
 
 const PORT = process.env.PORT || 3000;
 
@@ -650,14 +651,14 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
 
 // ─── Klines REST helpers ────────────────────────────────────────────────────
 const TF_MAP = {
-  BB: { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" },
-  OX: { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" },
-  BG: { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" },
-  GT: { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" },
-  MX: { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" },
-  KC: { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "1440", "3d": "4320", "1w": "10080" },
-  BX: { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" },
-  HT: { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day", "3d": "3day", "1w": "1week" },
+  BB: { "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" },
+  OX: { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" },
+  BG: { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" },
+  GT: { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" },
+  MX: { "1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" },
+  KC: { "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "1440", "3d": "4320", "1w": "10080" },
+  BX: { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" },
+  HT: { "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "60min", "4h": "4hour", "1d": "1day", "3d": "3day", "1w": "1week" },
 };
 
 function getKlinesUrl(ex, sym, tf, limit, before) {
@@ -728,9 +729,6 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
   let fetchEx = ex;
   let fetchSym = sym;
   
-  // Binance disabled by user request
-  if (fetchEx === "BN") return [];
-
   const tfMs = (() => {
     const low = tf.toLowerCase();
     const num = parseInt(low, 10) || 1;
@@ -741,8 +739,8 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     return 60000;
   })();
 
-  const pages = { BN: 3, BB: 3, OX: 5, BG: 3, GT: 3, MX: 2, KC: 3, BX: 3, HT: 1, AD: 3 };
-  const limits = { BN: 1000, BB: 1000, OX: 100, BG: 1000, GT: 1000, MX: 1000, KC: 1000, BX: 1000, HT: 1000, AD: 1000 };
+  const pages = { BN: 3, BB: 3, OX: 5, BG: 3, GT: 3, MX: 2, KC: 8, BX: 3, HT: 1, AD: 3 };
+  const limits = { BN: 1000, BB: 1000, OX: 100, BG: 1000, GT: 1000, MX: 1000, KC: 200, BX: 1000, HT: 1000, AD: 1000 };
   const maxP = lite ? 1 : (pages[fetchEx] || 3);
   const limit = limits[fetchEx] || 1000;
   
@@ -787,6 +785,7 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
         batch = parseKlines(fetchEx, data);
       }
       if (!batch || !batch.length) break;
+      batch.sort((a, b) => a.t - b.t);
       all = [...batch, ...all];
       before = batch[0].t;
       if (batch.length < limit * 0.8) break;
@@ -798,6 +797,107 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
 
 const klinesCache = new Map();
 const klinesInFlight = new Map();
+
+// Backtest sessions keep unrevealed candles on the server. The browser receives
+// only the historical context and cannot peek at the result before replaying it.
+const backtestSessions = new Map();
+const BACKTEST_TTL = 2 * 60 * 60 * 1000;
+
+const BACKTEST_EXCHANGES = {
+  BN: "Binance Futures", BB: "Bybit Futures", OX: "OKX Futures", BG: "Bitget Futures", GT: "Gate Futures",
+  MX: "MEXC Futures", KC: "KuCoin Futures", BX: "BingX Futures", HT: "HTX Futures",
+  HL: "Hyperliquid", AD: "Asterdex",
+};
+const NON_CRYPTO_BASES = new Set([
+  "AAPL", "TSLA", "NVDA", "AMZN", "META", "MSFT", "GOOG", "GOOGL", "NFLX", "AMD", "INTC", "AVGO",
+  "ARM", "MU", "QCOM", "TSM", "ASML", "SMCI", "ORCL", "IBM", "CSCO", "CRM", "ADBE", "NOW",
+  "COIN", "MSTR", "MARA", "RIOT", "HOOD", "PLTR", "BABA", "SHOP", "PYPL", "SQ", "SOFI",
+  "JPM", "BAC", "GS", "MS", "V", "MA", "AXP", "WMT", "COST", "HD", "NKE", "SBUX", "MCD",
+  "LLY", "JNJ", "PFE", "MRNA", "ABBV", "UNH", "KO", "PEP", "PG", "XOM", "CVX", "CAT", "GE",
+  "DIS", "UBER", "ABNB", "RBLX", "SNAP", "GME", "AMC", "RDDT", "F", "GM", "BA",
+  "SPY", "QQQ", "DIA", "IWM", "SQQQ", "TQQQ", "DXYZ", "XYZ", "GLD", "SLV", "XAU", "XAG",
+  "WTI", "BRENT", "USOIL", "UKOIL",
+  "SOXL", "SOXS", "SNDK", "SPCX", "SKHYNIX", "SKHY", "SNXX", "CYS", "CL", "KORU", "HEI",
+  "MU", "UB", "CRCL", "DRAM", "NBIS", "RDW", "EWY", "EWJ", "AAOI", "SSPC", "CXMT", "AXTI",
+  "RKLB", "XLK", "WDC", "BIIB", "ALAB", "AEHR", "COHR", "APP", "REGN", "DELL", "AMGN", "GILD",
+  "SOXX", "MRVL", "KIOXIA", "LRCX", "CRWD", "CRDO", "SITM", "OXY", "BMNR", "ARQQ", "KTOS",
+  "DKNG", "TTWO", "LUNR", "APLD", "RGTI", "POET", "ONDS", "CIEN", "PANW", "SNOW", "NOK",
+  "RIVN", "HIMS", "HPE", "VRT", "FLEX", "TXN", "ISRG", "GEV", "TER", "AAL", "BKNG", "AXON",
+  "VST", "QBTS", "CLSK", "ETN", "GFS", "LIN", "BRKB", "AVAV", "CMCSA", "TSEM", "VRTX",
+  "NVIDIA", "TESLA", "SAMSUNG", "HYUNDAI", "SONY", "TENCENT", "XIAOMI", "GIGADEVICE", "GIGADEV",
+  "POPMART", "HK0700", "HK1810", "NDX100", "SP500", "SPX500", "NAS100", "NASDAQ100", "US30",
+  "DOWJONES", "NIKKEI225", "RUSSELL2000", "NATGAS", "NGAS", "COPPER", "PALLADIUM", "ALUMINUM",
+  "ZINC", "NICKEL", "SILVER", "NVDL", "TSLL", "GGLL", "AAPU", "MSFU", "AMZU", "CONL", "BITO",
+  "TMF", "TBT", "UVXY", "TZA", "XLE", "XBI", "SMH", "URNM", "GDX", "EWZ", "FWDI",
+]);
+
+function backtestBase(ticker) {
+  if (ticker?.base) return String(ticker.base).toUpperCase();
+  return String(ticker?.sym || "").toUpperCase()
+    .replace(/-USDT-SWAP$/, "").replace(/[-_]USDT$/, "").replace(/USDTM?$/, "").replace(/-PERP$/, "");
+}
+
+function isNonCryptoBacktestBase(base) {
+  const candidates = new Set([String(base || "").toUpperCase()]);
+  for (const value of Array.from(candidates)) {
+    candidates.add(value.replace(/STOCK/g, "").replace(/2USD$/, ""));
+    candidates.add(value.replace(/^NCSK/, "").replace(/2USD$/, ""));
+  }
+  for (const value of Array.from(candidates)) {
+    if (/^[RX]/.test(value)) candidates.add(value.slice(1));
+    if (/[XM]$/.test(value)) candidates.add(value.slice(0, -1));
+  }
+  return Array.from(candidates).some(value => NON_CRYPTO_BASES.has(value));
+}
+
+function isEligibleBacktestTicker(ticker, exchange) {
+  if (!ticker || ticker.ex !== exchange || !ticker.sym || !(ticker.p > 0) || !(ticker.v > 0)) return false;
+  const symbol = ticker.sym.toUpperCase();
+  const base = backtestBase(ticker);
+  const stableBases = new Set(["USDT", "USDC", "USD1", "USDE", "USDD", "DAI", "FDUSD", "TUSD", "BUSD", "PYUSD", "EUR", "USDP", "USDX", "USDF"]);
+  if (exchange !== "HL" && !/USDT|USDTM|USDT-SWAP/i.test(symbol)) return false;
+  if (/_SPOT$/.test(symbol)) return false;
+  if (stableBases.has(base) || isNonCryptoBacktestBase(base)) return false;
+  if (/^(STOCK|EQUITY|INDEX|FOREX|COMMODITY)[-_:]/.test(symbol)) return false;
+  if (/(BULL|BEAR|UP|DOWN|3L|3S)$/.test(base)) return false;
+  return true;
+}
+
+function getBacktestUniverse(exchange) {
+  return Array.from(tickers.values())
+    .filter(ticker => isEligibleBacktestTicker(ticker, exchange))
+    .sort((a, b) => b.v - a.v)
+    .slice(0, 300);
+}
+
+function isInterestingBacktestWindow(candles, tf) {
+  const sample = candles.slice(-Math.min(160, candles.length));
+  if (sample.length < 80) return false;
+  const close = sample[sample.length - 1].c;
+  const high = Math.max(...sample.map(c => c.h));
+  const low = Math.min(...sample.map(c => c.l));
+  const rangePct = close > 0 ? (high - low) / close : 0;
+  let trSum = 0;
+  for (let i = 1; i < sample.length; i++) {
+    const prev = sample[i - 1].c;
+    trSum += Math.max(sample[i].h - sample[i].l, Math.abs(sample[i].h - prev), Math.abs(sample[i].l - prev));
+  }
+  const atrPct = close > 0 ? (trSum / Math.max(1, sample.length - 1)) / close : 0;
+  const minRange = { "1m": 0.012, "5m": 0.018, "15m": 0.024, "30m": 0.03, "1h": 0.038, "4h": 0.055, "1d": 0.09 }[tf] || 0.03;
+  const minAtr = { "1m": 0.00035, "5m": 0.0007, "15m": 0.001, "30m": 0.00135, "1h": 0.0018, "4h": 0.003, "1d": 0.006 }[tf] || 0.0015;
+  return rangePct >= minRange && atrPct >= minAtr;
+}
+
+function publicBacktestCandle(c) {
+  return [c.t, c.o, c.h, c.l, c.c, c.v];
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - BACKTEST_TTL;
+  for (const [id, session] of backtestSessions) {
+    if (session.createdAt < cutoff) backtestSessions.delete(id);
+  }
+}, 10 * 60 * 1000).unref();
 
 // ─── Go Scanner Proxy ──────────────────────────────────────────────────────
 const GO_SCANNER_URL = "http://127.0.0.1:8082";
@@ -879,6 +979,101 @@ app.get("/api/klines", async (req, res) => {
   }
 });
 
+// ─── Blind backtest / bar replay ───────────────────────────────────────────
+app.get("/api/backtest/new", async (req, res) => {
+  const allowedTf = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d"]);
+  const tf = allowedTf.has(req.query.tf) ? req.query.tf : "5m";
+  const exchange = BACKTEST_EXCHANGES[req.query.ex] ? req.query.ex : "BB";
+  const universe = getBacktestUniverse(exchange);
+  res.setHeader("Cache-Control", "no-store");
+
+  if (universe.length < 20) {
+    return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
+  }
+
+  const shuffled = universe.slice().sort(() => Math.random() - 0.5);
+  let lastError = null;
+
+  for (const ticker of shuffled.slice(0, 20)) {
+    try {
+      const candles = (await fetchFullHistory(ticker.ex, ticker.sym, tf, false))
+        .filter(c => c && Number.isFinite(c.t) && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0)
+        .sort((a, b) => a.t - b.t)
+        .slice(0, -1); // never use a still-forming candle
+
+      const desiredHistory = { "1m": 2600, "5m": 2200, "15m": 1400, "30m": 1000, "1h": 700, "4h": 320, "1d": 160 }[tf] || 700;
+      const historyCap = { OX: 450, HT: 700, HL: 700, KC: 1500 }[exchange] || desiredHistory;
+      const minHistory = Math.min(desiredHistory, historyCap);
+      if (candles.length < minHistory) continue; // skip very recent listings
+
+      const visibleBars = Math.min(240, Math.max(150, candles.length - 100));
+      const futureBars = Math.min(96, Math.max(40, Math.floor(candles.length * 0.12)));
+      const minCut = visibleBars;
+      const maxCut = candles.length - futureBars;
+      if (maxCut <= minCut) continue;
+
+      let cut = 0, visible = null;
+      for (let attempt = 0; attempt < 28; attempt++) {
+        const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
+        const candidate = candles.slice(candidateCut - visibleBars, candidateCut);
+        if (isInterestingBacktestWindow(candidate, tf)) { cut = candidateCut; visible = candidate; break; }
+      }
+      if (!visible) continue;
+      const future = candles.slice(cut, cut + futureBars);
+      if (visible.length < 150 || future.length < 40) continue;
+
+      const id = randomUUID();
+      backtestSessions.set(id, {
+        id,
+        createdAt: Date.now(),
+        ex: ticker.ex,
+        sym: ticker.sym,
+        base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+        tf,
+        future,
+        revealed: 0,
+      });
+
+      return res.json({
+        id,
+        ex: ticker.ex,
+        exchange: BACKTEST_EXCHANGES[exchange],
+        sym: ticker.sym,
+        base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+        tf,
+        cutoffTime: visible[visible.length - 1].t,
+        candles: visible.map(publicBacktestCandle),
+        futureCount: future.length,
+        universeSize: universe.length,
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  res.status(503).json({ error: lastError?.message || "Не удалось подобрать исторический участок" });
+});
+
+app.post("/api/backtest/:id/step", (req, res) => {
+  const session = backtestSessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
+  const requested = Math.max(1, Math.min(20, parseInt(req.query.count, 10) || 1));
+  const from = session.revealed;
+  const to = Math.min(session.future.length, from + requested);
+  session.revealed = to;
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ candles: session.future.slice(from, to).map(publicBacktestCandle), done: to >= session.future.length, remaining: session.future.length - to });
+});
+
+app.post("/api/backtest/:id/reveal", (req, res) => {
+  const session = backtestSessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
+  const rest = session.future.slice(session.revealed);
+  session.revealed = session.future.length;
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ candles: rest.map(publicBacktestCandle), done: true, remaining: 0 });
+});
+
 app.get("/api/walls", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "private, max-age=1");
@@ -934,7 +1129,7 @@ app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.ht
 
 // ─── Exchange Modules ───────────────────────────────────────────────────────
 const exchanges = {
-  // BN: require("./exchanges/binance"), // Disabled by user request
+  BN: require("./exchanges/binance"),
   BB: require("./exchanges/bybit"),
   OX: require("./exchanges/okx"),
   BG: require("./exchanges/bitget"),
