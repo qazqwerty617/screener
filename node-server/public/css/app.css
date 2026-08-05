@@ -1267,6 +1267,14 @@ button {
     display: flex;
 }
 
+#chart-formations-panel {
+    position: absolute;
+    top: 12px;
+    left: 44px;
+    right: auto;
+    z-index: 85;
+}
+
 /* ── Indicators Panel ───────────────────────────────────────────────────────── */
 .chart-indicators-panel {
     position: absolute;

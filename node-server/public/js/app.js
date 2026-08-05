@@ -93,6 +93,7 @@ let chartDensitySizes = new Set(["small", "medium", "large"]);
 let chartDensityMarket = "all";
 let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
 let chartActiveIndicators = new Set([]);
+let chartActiveFormations = new Set(["levels", "breakouts", "retests", "trendlines", "impulses"]);
 const TAG_PALETTE = [
   "#ff4560",
   "#26c97a",
@@ -3875,20 +3876,47 @@ applyToolButtonColors();
     "ind-bb": "BB",
     "ind-macd": "MACD"
   };
+  const formationIdToName = {
+    "fmt-levels": "levels",
+    "fmt-breakouts": "breakouts",
+    "fmt-retests": "retests",
+    "fmt-trendlines": "trendlines",
+    "fmt-impulses": "impulses"
+  };
   document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
-    // Initialize button state based on chartActiveIndicators
+    // Initialize button state based on chartActiveIndicators & chartActiveFormations
     const indicatorName = indicatorIdToName[btn.id];
+    const formationName = formationIdToName[btn.id];
     if (indicatorName && chartActiveIndicators.has(indicatorName)) {
+      btn.classList.add("on");
+    }
+    if (formationName && chartActiveFormations.has(formationName)) {
       btn.classList.add("on");
     }
     btn.onclick = () => {
       btn.classList.toggle("on");
-      const indicatorName = indicatorIdToName[btn.id];
-      if (!indicatorName) return;
-      if (btn.classList.contains("on")) {
-        chartActiveIndicators.add(indicatorName);
-      } else {
-        chartActiveIndicators.delete(indicatorName);
+      const indName = indicatorIdToName[btn.id];
+      const fmtName = formationIdToName[btn.id];
+      if (indName) {
+        if (btn.classList.contains("on")) {
+          chartActiveIndicators.add(indName);
+        } else {
+          chartActiveIndicators.delete(indName);
+        }
+      }
+      if (fmtName) {
+        if (btn.classList.contains("on")) {
+          chartActiveFormations.add(fmtName);
+        } else {
+          chartActiveFormations.delete(fmtName);
+        }
+        // Sync left panel button if present
+        const leftBtn = $(`fmt-left-${fmtName}`);
+        if (leftBtn) {
+          if (btn.classList.contains("on")) leftBtn.classList.add("on");
+          else leftBtn.classList.remove("on");
+        }
+        if (typeof window.loadFormations === "function") window.loadFormations();
       }
       requestAnimationFrame(drawChart);
     };
@@ -3903,6 +3931,42 @@ applyToolButtonColors();
       if (indInfoBox) {
         indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
       }
+    };
+  });
+
+  // Touches filter buttons inside main settings panel
+  document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      const val = parseInt(btn.dataset.fmtTouches, 10);
+      if (val) formationsMinTouches = val;
+      if (typeof window.loadFormations === "function") window.loadFormations();
+      requestAnimationFrame(drawChart);
+    };
+  });
+
+  // Cascade filter buttons inside main settings panel
+  document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      const val = parseInt(btn.dataset.fmtCascade, 10);
+      if (val) formationsMinCascade = val;
+      if (typeof window.loadFormations === "function") window.loadFormations();
+      requestAnimationFrame(drawChart);
+    };
+  });
+
+  // Tolerance filter buttons inside main settings panel
+  document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      const val = parseFloat(btn.dataset.fmtTol);
+      if (val) formationsTolerance = val;
+      if (typeof window.loadFormations === "function") window.loadFormations();
+      requestAnimationFrame(drawChart);
     };
   });
 
@@ -5450,25 +5514,27 @@ class ChartInstance {
             ctx.fillText(fP(currentPriceAtLine), PW + PR / 2, yLabel + 3);
           }
 
-          // Draw touch circles
-          setup.swingIndices.forEach(idx => {
-            const circleX = getX(idx);
-            const circleCandle = this.candles[idx];
-            if (circleCandle && circleX >= 0 && circleX <= PW) {
-              const circleY = toY(isUp ? circleCandle.h : circleCandle.l);
-              ctx.fillStyle = lineColor;
-              ctx.strokeStyle = '#fff';
-              ctx.lineWidth = 1.2;
-              ctx.beginPath(); ctx.arc(circleX, circleY, 4, 0, 2 * Math.PI);
-              ctx.fill(); ctx.stroke();
-            }
-          });
+          // Draw touch circles for trendline
+          if (setup.swingIndices) {
+            setup.swingIndices.forEach(idx => {
+              const circleX = getX(idx);
+              const circleCandle = this.candles[idx];
+              if (circleCandle && circleX >= 0 && circleX <= PW) {
+                const circleY = toY(isUp ? circleCandle.h : circleCandle.l);
+                ctx.fillStyle = lineColor;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1.2;
+                ctx.beginPath(); ctx.arc(circleX, circleY, 4, 0, 2 * Math.PI);
+                ctx.fill(); ctx.stroke();
+              }
+            });
+          }
 
         } else {
           const y = toY(setup.price);
           if (y < 2 || y > ch - 2) return;
 
-          // ── Solid horizontal line: from swing → right edge ────────────────
+          // ── Solid horizontal line: from first swing → right edge (PW) ──────────
           const x0 = Math.max(0, getX(setup.swingIdx));
           ctx.strokeStyle = lineColor;
           ctx.lineWidth = 1.5;
@@ -5485,46 +5551,23 @@ class ChartInstance {
           ctx.textAlign = 'center';
           ctx.fillText(fP(setup.price), PW + PR / 2, setup.labelY + 3);
 
-          // ── Draw circles for all touches (including the initial swing point) ─
-          if (setup.touchIndices) {
-            setup.touchIndices.forEach(tIdx => {
-              const tX = getX(tIdx);
-              const tCandle = this.candles[tIdx];
-              if (tCandle && tX >= 0 && tX <= PW) {
-                const tY = toY(isUp ? tCandle.h : tCandle.l);
-                ctx.fillStyle = lineColor;
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 1.2;
-                ctx.beginPath(); ctx.arc(tX, tY, 4, 0, 2 * Math.PI);
-                ctx.fill(); ctx.stroke();
-              }
-            });
-          } else {
-            const depX = getX(setup.swingIdx);
-            const depCandle = this.candles[setup.swingIdx];
-            if (depCandle && depX >= 0 && depX <= PW) {
-              const depY = toY(isUp ? depCandle.h : depCandle.l);
-              ctx.fillStyle = lineColor;
-              ctx.strokeStyle = '#fff';
-              ctx.lineWidth = 1.2;
-              ctx.beginPath(); ctx.arc(depX, depY, 4, 0, 2 * Math.PI);
-              ctx.fill(); ctx.stroke();
-            }
-          }
+          // ── Draw circles: strictly MAX 2 points (1. Level Origin, 2. Single Retest Touch) ─
+          const renderIndices = [];
+          if (setup.swingIdx !== undefined) renderIndices.push(setup.swingIdx);
+          if (setup.touchIdx !== undefined) renderIndices.push(setup.touchIdx);
 
-          // ── Retest Touch circle (if applicable) ──────────────────────────
-          if (setup.isRetest && setup.touchIdx !== undefined) {
-            const retestX = getX(setup.touchIdx);
-            const retestCandle = this.candles[setup.touchIdx];
-            if (retestCandle && retestX >= 0 && retestX <= PW) {
-              const retestY = toY(isUp ? retestCandle.l : retestCandle.h);
+          const uniqueIndices = [...new Set(renderIndices)];
+          uniqueIndices.forEach(tIdx => {
+            const tX = getX(tIdx);
+            const tCandle = this.candles[tIdx];
+            if (tCandle && tX >= 0 && tX <= PW) {
               ctx.fillStyle = lineColor;
               ctx.strokeStyle = '#fff';
               ctx.lineWidth = 1.2;
-              ctx.beginPath(); ctx.arc(retestX, retestY, 4, 0, 2 * Math.PI);
+              ctx.beginPath(); ctx.arc(tX, y, 4, 0, 2 * Math.PI);
               ctx.fill(); ctx.stroke();
             }
-          }
+          });
         }
       });
 
@@ -7184,15 +7227,15 @@ window.addEventListener("resize", () => {
       }
       if (!departed) continue;
 
-      // ── 4. UNMITIGATED: price must NOT have returned to within tol since ──
+      // ── 4. UNMITIGATED: price must NOT have pierced the level ───────────
       let mitigated = false;
       for (let i = sw.idx + 1; i < N; i++) {
         if (sw.type === 'high') {
-          // High is mitigated if any later candle WICK entered the zone from below
-          if (candles[i].h >= lvl - tol) { mitigated = true; break; }
+          // High level is pierced/mitigated if any later candle high goes ABOVE the level
+          if (candles[i].h > lvl) { mitigated = true; break; }
         } else {
-          // Low is mitigated if any later candle WICK entered the zone from above
-          if (candles[i].l <= lvl + tol) { mitigated = true; break; }
+          // Low level is pierced/mitigated if any later candle low goes BELOW the level
+          if (candles[i].l < lvl) { mitigated = true; break; }
         }
       }
       if (mitigated) continue;
@@ -7277,6 +7320,7 @@ window.addEventListener("resize", () => {
       for (const cl of resClusters) {
         if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
           cl.prices.push(sw.price);
+          cl.price = Math.max(...cl.prices); // Resistance line is at the HIGHEST peak of cluster
           cl.touches++;
           cl.swingIndices.push(sw.idx);
           cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
@@ -7299,40 +7343,17 @@ window.addEventListener("resize", () => {
       let lastTouchIndex = cl.lastTouch;
 
       for (let i = firstIdx; i < N; i++) {
-        if (!active) break;
+        // High strictly above resistance level => ЗАКОЛ! Level is destroyed.
+        if (candles[i].h > cl.price) {
+          active = false;
+          break;
+        }
 
-        // Check if candle i touches the level
-        const isTouch = Math.abs(candles[i].h - cl.price) <= cl.price * tol;
+        // Touch if candle high reaches within tolerance below/at the resistance line
+        const isTouch = candles[i].h >= cl.price * (1 - tol) && candles[i].h <= cl.price;
         if (isTouch) {
           touchIndices.add(i);
           lastTouchIndex = Math.max(lastTouchIndex, i);
-        }
-
-        // Check breakout
-        const isBreak = candles[i].c > cl.price;
-        if (isBreak) {
-          let confirmedRetestFound = false;
-          const endSearch = Math.min(N, i + maxBarsToRetest + 1);
-          for (let tIdx = i + 1; tIdx < endSearch; tIdx++) {
-            if (candles[tIdx].l <= cl.price + cl.price * tol) {
-              let stayedAbove = true;
-              for (let k = i + 1; k < tIdx; k++) {
-                if (candles[k].c < cl.price) { stayedAbove = false; break; }
-              }
-              if (stayedAbove) {
-                let confirmed = true;
-                const confirmationBars = 3;
-                const confirmEnd = Math.min(N, tIdx + confirmationBars);
-                for (let k = tIdx; k < confirmEnd; k++) {
-                  if (candles[k].c < cl.price - cl.price * tol) { confirmed = false; break; }
-                }
-                if (confirmed) { confirmedRetestFound = true; break; }
-              }
-            }
-          }
-          if (confirmedRetestFound) {
-            active = false;
-          }
         }
       }
 
@@ -7362,6 +7383,7 @@ window.addEventListener("resize", () => {
       for (const cl of supClusters) {
         if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
           cl.prices.push(sw.price);
+          cl.price = Math.min(...cl.prices); // Support line is at the LOWEST trough of cluster
           cl.touches++;
           cl.swingIndices.push(sw.idx);
           cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
@@ -7384,38 +7406,17 @@ window.addEventListener("resize", () => {
       let lastTouchIndex = cl.lastTouch;
 
       for (let i = firstIdx; i < N; i++) {
-        if (!active) break;
+        // Low strictly below support level => ЗАКОЛ! Level is destroyed.
+        if (candles[i].l < cl.price) {
+          active = false;
+          break;
+        }
 
-        const isTouch = Math.abs(candles[i].l - cl.price) <= cl.price * tol;
+        // Touch if candle low reaches within tolerance above/at the support line
+        const isTouch = candles[i].l <= cl.price * (1 + tol) && candles[i].l >= cl.price;
         if (isTouch) {
           touchIndices.add(i);
           lastTouchIndex = Math.max(lastTouchIndex, i);
-        }
-
-        const isBreak = candles[i].c < cl.price;
-        if (isBreak) {
-          let confirmedRetestFound = false;
-          const endSearch = Math.min(N, i + maxBarsToRetest + 1);
-          for (let tIdx = i + 1; tIdx < endSearch; tIdx++) {
-            if (candles[tIdx].h >= cl.price - cl.price * tol) {
-              let stayedBelow = true;
-              for (let k = i + 1; k < tIdx; k++) {
-                if (candles[k].c > cl.price) { stayedBelow = false; break; }
-              }
-              if (stayedBelow) {
-                let confirmed = true;
-                const confirmationBars = 3;
-                const confirmEnd = Math.min(N, tIdx + confirmationBars);
-                for (let k = tIdx; k < confirmEnd; k++) {
-                  if (candles[k].c > cl.price + cl.price * tol) { confirmed = false; break; }
-                }
-                if (confirmed) { confirmedRetestFound = true; break; }
-              }
-            }
-          }
-          if (confirmedRetestFound) {
-            active = false;
-          }
         }
       }
 
@@ -7608,182 +7609,217 @@ window.addEventListener("resize", () => {
 
     const highSwings = swings.filter(s => s.type === 'high');
     const lowSwings = swings.filter(s => s.type === 'low');
-    const tol = 0.0002;
-    const maxBarsToRetest = 25;
+    const tol = 0.0015; // 0.15% zone tolerance
+    const MIN_DEPARTURE = 0.0030; // Price must depart by at least 0.30% after breakout
+    const MAX_OVERSHOOT = 0.0020; // Max 0.20% deep pierce allowed on retest
+    const maxBarsToRetest = 30;   // Retest MUST occur within 30 candles of breakout
+    const MAX_RETEST_AGE = 15;    // Retest touch MUST have occurred within the last 15 candles
     const candidates = [];
 
+    // ── 1. Resistance clusters (Bullish Retest: Price below -> Break UP -> Depart UP -> Retest from ABOVE) ──
     const resClusters = [];
     for (const sw of highSwings) {
       let merged = false;
       for (const cl of resClusters) {
         if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
           cl.prices.push(sw.price);
+          cl.price = Math.max(...cl.prices);
           cl.touches++;
           cl.swingIndices.push(sw.idx);
-          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
           merged = true;
           break;
         }
       }
       if (!merged) {
-        resClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+        resClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx] });
       }
     }
 
     for (const cl of resClusters) {
-      if (cl.touches < formationsMinCascade) continue;
-      const firstIdx = Math.min(...cl.swingIndices);
+      if (cl.touches < 2 || cl.touches > 5) continue; // Must be 2-5 touches
       
-      let breakIdx = -1;
-      for (let i = firstIdx + 1; i < N; i++) {
-        if (candles[i].h > cl.price) {
-          if (candles[i].c > cl.price) {
-            breakIdx = i;
-          }
-          break;
+      // GLOBAL LEVEL CLEANLINESS: level cannot have more than 2 total crossovers across chart history
+      const firstSwingIdx = Math.min(...cl.swingIndices);
+      let totalCrosses = 0;
+      for (let k = firstSwingIdx; k < N - 1; k++) {
+        if ((candles[k].c < cl.price && candles[k + 1].c > cl.price) ||
+            (candles[k].c > cl.price && candles[k + 1].c < cl.price)) {
+          totalCrosses++;
         }
       }
-      if (breakIdx === -1) continue;
+      if (totalCrosses > 2) continue; // Dirty level / chop zone -> REJECT IMMEDIATELY
 
+      const lastSwingIdx = Math.max(...cl.swingIndices);
+
+      let breakIdx = -1;
       let touchIdx = -1;
       let overshoot = 0;
-      const endSearch = Math.min(N, breakIdx + maxBarsToRetest + 1);
-      
-      for (let i = breakIdx + 1; i < endSearch; i++) {
-        if (candles[i].l <= cl.price + cl.price * tol) {
-          let stayedAbove = true;
-          for (let k = breakIdx + 1; k < i; k++) {
-            if (candles[k].c < cl.price) {
-              stayedAbove = false;
-              break;
-            }
+      let departed = false;
+
+      for (let i = lastSwingIdx + 1; i < N - 1; i++) {
+        const c = candles[i];
+
+        if (breakIdx === -1) {
+          if (c.c > cl.price * (1 + tol / 2) && c.c > c.o) {
+            breakIdx = i;
           }
-          if (stayedAbove) {
+        } else {
+          // Breakout invalidated if price closes back BELOW level before or during retest
+          if (c.c < cl.price) break;
+
+          if (i > breakIdx + maxBarsToRetest) break;
+
+          // Check if price has departed sufficiently (>0.40% away)
+          if ((c.h - cl.price) / cl.price >= 0.0040) {
+            departed = true;
+          }
+
+          // Retest CANNOT happen less than 3 candles after breakout
+          if (i < breakIdx + 3) continue;
+
+          // Touch from above — only valid IF price departed first
+          if (departed && c.l <= cl.price * (1 + tol)) {
+            if (c.l < cl.price * (1 - MAX_OVERSHOOT)) break; // Deep breach
+            if (c.c < cl.price) break; // Retest candle must close ABOVE level
+
             touchIdx = i;
-            if (candles[i].l < cl.price) {
-              overshoot = (cl.price - candles[i].l) / cl.price;
-            }
+            overshoot = Math.max(0, (cl.price - c.l) / cl.price);
             break;
           }
         }
       }
-      if (touchIdx === -1) continue;
 
-      let outcome = 'confirmed';
-      let confirmationIdx = N - 1;
-      for (let i = touchIdx; i < N; i++) {
-        if (candles[i].c < cl.price - cl.price * tol) {
-          outcome = 'failed';
-          confirmationIdx = i;
-          break;
+      if (breakIdx !== -1 && touchIdx !== -1) {
+        if (N - 1 - touchIdx > MAX_RETEST_AGE) continue; // Must be recent
+
+        let held = true;
+        for (let k = touchIdx; k < N; k++) {
+          if (candles[k].c < cl.price) {
+            held = false;
+            break;
+          }
+        }
+
+        if (held) {
+          const dist = Math.abs(cl.price - lastPrice) / lastPrice;
+          const barsSinceRetest = N - 1 - touchIdx;
+          candidates.push({
+            price: cl.price,
+            direction: 'up',
+            swingIdx: Math.min(...cl.swingIndices),
+            breakIdx: breakIdx,
+            touchIdx: touchIdx,
+            isRetest: true,
+            outcome: 'confirmed',
+            overshoot: overshoot,
+            strength: cl.touches * 10 - dist * 100 - overshoot * 50 - barsSinceRetest / 5,
+            touches: cl.touches
+          });
         }
       }
-
-      if (outcome !== 'confirmed') continue;
-
-      const dist = Math.abs(cl.price - lastPrice) / lastPrice;
-      if (dist > 0.015) continue;
-
-      const barsSinceRetest = N - 1 - touchIdx;
-      candidates.push({
-        price: cl.price,
-        direction: 'up',
-        swingIdx: firstIdx,
-        breakIdx: breakIdx,
-        touchIdx: touchIdx,
-        isRetest: true,
-        outcome: outcome,
-        overshoot: overshoot,
-        strength: cl.touches * 5 - dist * 100 - overshoot * 50 - barsSinceRetest / 5,
-        touches: cl.touches
-      });
     }
 
+    // ── 2. Support clusters (Bearish Retest: Price above -> Break DOWN -> Depart DOWN -> Retest from BELOW) ──
     const supClusters = [];
     for (const sw of lowSwings) {
       let merged = false;
       for (const cl of supClusters) {
         if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
           cl.prices.push(sw.price);
+          cl.price = Math.min(...cl.prices);
           cl.touches++;
           cl.swingIndices.push(sw.idx);
-          cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
           merged = true;
           break;
         }
       }
       if (!merged) {
-        supClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx], lastTouch: sw.idx });
+        supClusters.push({ price: sw.price, prices: [sw.price], touches: 1, swingIndices: [sw.idx] });
       }
     }
 
     for (const cl of supClusters) {
-      if (cl.touches < formationsMinCascade) continue;
-      const firstIdx = Math.min(...cl.swingIndices);
+      if (cl.touches < 2 || cl.touches > 5) continue; // Must be 2-5 touches
 
-      let breakIdx = -1;
-      for (let i = firstIdx + 1; i < N; i++) {
-        if (candles[i].l < cl.price) {
-          if (candles[i].c < cl.price) {
-            breakIdx = i;
-          }
-          break;
+      // GLOBAL LEVEL CLEANLINESS: level cannot have more than 2 total crossovers across chart history
+      const firstSwingIdx = Math.min(...cl.swingIndices);
+      let totalCrosses = 0;
+      for (let k = firstSwingIdx; k < N - 1; k++) {
+        if ((candles[k].c < cl.price && candles[k + 1].c > cl.price) ||
+            (candles[k].c > cl.price && candles[k + 1].c < cl.price)) {
+          totalCrosses++;
         }
       }
-      if (breakIdx === -1) continue;
+      if (totalCrosses > 2) continue; // Dirty level / chop zone -> REJECT IMMEDIATELY
 
+      const lastSwingIdx = Math.max(...cl.swingIndices);
+
+      let breakIdx = -1;
       let touchIdx = -1;
       let overshoot = 0;
-      const endSearch = Math.min(N, breakIdx + maxBarsToRetest + 1);
+      let departed = false;
 
-      for (let i = breakIdx + 1; i < endSearch; i++) {
-        if (candles[i].h >= cl.price - cl.price * tol) {
-          let stayedBelow = true;
-          for (let k = breakIdx + 1; k < i; k++) {
-            if (candles[k].c > cl.price) {
-              stayedBelow = false;
-              break;
-            }
+      for (let i = lastSwingIdx + 1; i < N - 1; i++) {
+        const c = candles[i];
+
+        if (breakIdx === -1) {
+          if (c.c < cl.price * (1 - tol / 2) && c.c < c.o) {
+            breakIdx = i;
           }
-          if (stayedBelow) {
+        } else {
+          // Breakout invalidated if price closes back ABOVE level before or during retest
+          if (c.c > cl.price) break;
+
+          if (i > breakIdx + maxBarsToRetest) break;
+
+          // Check if price has departed sufficiently (>0.40% away)
+          if ((cl.price - c.l) / cl.price >= 0.0040) {
+            departed = true;
+          }
+
+          // Retest CANNOT happen less than 3 candles after breakout
+          if (i < breakIdx + 3) continue;
+
+          // Touch from below — only valid IF price departed first
+          if (departed && c.h >= cl.price * (1 - tol)) {
+            if (c.h > cl.price * (1 + MAX_OVERSHOOT)) break; // Deep breach
+            if (c.c > cl.price) break; // Retest candle must close BELOW level
+
             touchIdx = i;
-            if (candles[i].h > cl.price) {
-              overshoot = (candles[i].h - cl.price) / cl.price;
-            }
+            overshoot = Math.max(0, (c.h - cl.price) / cl.price);
             break;
           }
         }
       }
-      if (touchIdx === -1) continue;
 
-      let outcome = 'confirmed';
-      let confirmationIdx = N - 1;
-      for (let i = touchIdx; i < N; i++) {
-        if (candles[i].c > cl.price + cl.price * tol) {
-          outcome = 'failed';
-          confirmationIdx = i;
-          break;
+      if (breakIdx !== -1 && touchIdx !== -1) {
+        if (N - 1 - touchIdx > MAX_RETEST_AGE) continue; // Must be recent
+
+        let held = true;
+        for (let k = touchIdx; k < N; k++) {
+          if (candles[k].c > cl.price) {
+            held = false;
+            break;
+          }
+        }
+
+        if (held) {
+          const dist = Math.abs(cl.price - lastPrice) / lastPrice;
+          const barsSinceRetest = N - 1 - touchIdx;
+          candidates.push({
+            price: cl.price,
+            direction: 'down',
+            swingIdx: Math.min(...cl.swingIndices),
+            breakIdx: breakIdx,
+            touchIdx: touchIdx,
+            isRetest: true,
+            outcome: 'confirmed',
+            overshoot: overshoot,
+            strength: cl.touches * 10 - dist * 100 - overshoot * 50 - barsSinceRetest / 5,
+            touches: cl.touches
+          });
         }
       }
-
-      if (outcome !== 'confirmed') continue;
-
-      const dist = Math.abs(cl.price - lastPrice) / lastPrice;
-      if (dist > 0.015) continue;
-
-      const barsSinceRetest = N - 1 - touchIdx;
-      candidates.push({
-        price: cl.price,
-        direction: 'down',
-        swingIdx: firstIdx,
-        breakIdx: breakIdx,
-        touchIdx: touchIdx,
-        isRetest: true,
-        outcome: outcome,
-        overshoot: overshoot,
-        strength: cl.touches * 5 - dist * 100 - overshoot * 50 - barsSinceRetest / 5,
-        touches: cl.touches
-      });
     }
 
     candidates.sort((a, b) => b.strength - a.strength);
@@ -7792,7 +7828,7 @@ window.addEventListener("resize", () => {
       const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
       if (!near) kept.push(c);
     }
-    return kept.slice(0, 3);
+    return kept.slice(0, 1);
   };
 
   window.detectChartApproachingRetests = function(candles) {
@@ -8000,21 +8036,25 @@ window.addEventListener("resize", () => {
   };
 
   window.detectChartLevelsFn = function(candles) {
-    if (typeof activeFormation === 'undefined') return window.detectChartLevelsAndTouches(candles);
-    if (activeFormation === 'breakout') {
-      return window.detectChartBreakoutLevels(candles);
-    } else if (activeFormation === 'trendline') {
-      return window.detectChartTrendlines(candles);
-    } else if (activeFormation === 'retest') {
-      const showApproaching = $("formations-approaching-toggle")?.checked;
-      if (showApproaching) {
-        return window.detectChartApproachingRetests(candles);
+    if (!candles || candles.length < 30) return [];
+
+    if (typeof activeFormation !== 'undefined') {
+      if (activeFormation === 'breakout') {
+        return window.detectChartBreakoutLevels(candles) || [];
+      } else if (activeFormation === 'trendline') {
+        return window.detectChartTrendlines(candles) || [];
+      } else if (activeFormation === 'retest') {
+        const showApproaching = $("formations-approaching-toggle")?.checked;
+        return (showApproaching
+          ? window.detectChartApproachingRetests(candles)
+          : window.detectChartRetests(candles)) || [];
       } else {
-        return window.detectChartRetests(candles);
+        // 'cascades' or 'levels': horizontal levels and cascades only
+        return window.detectChartLevelsAndTouches(candles) || [];
       }
-    } else {
-      return window.detectChartLevelsAndTouches(candles);
     }
+
+    return window.detectChartLevelsAndTouches(candles) || [];
   };
 
   // ─── Formations View Logic v2 (Simplified Multi-Charts) ───────────────────
@@ -8047,7 +8087,8 @@ window.addEventListener("resize", () => {
       document.querySelectorAll(".fg-tf-btn").forEach(b => b.classList.remove("on"));
       btn.classList.add("on");
       formationsTf = btn.dataset.tf;
-      window.loadFormations();
+      formationsCoinsLevelsMap.clear();
+      window.loadFormations(true);
     };
   });
 
@@ -8396,6 +8437,7 @@ window.addEventListener("resize", () => {
   function startFormationsScan(checkedEx, tf) {
     const scanId = ++activeScanId;
     scanProgressText = "Сканирование...";
+    formationsCoinsLevelsMap.clear();
     updateFormationsPagination();
 
     const eligibleCoins = [];
@@ -8688,11 +8730,40 @@ window.addEventListener("resize", () => {
     const start = formationsPage * perPage;
     const slice = formationsAllCoins.slice(start, start + perPage);
 
+    // If user is currently dragging or scaling a chart canvas, defer grid reload
+    const isUserInteracting = chartInstances.some(inst => inst && (inst.isDrag || inst.isDragY || inst.isDragYScale));
+    if (isUserInteracting) {
+      updateFormationsPagination();
+      return;
+    }
+
+    // Check if current chartInstances match the slice coins
+    let isSameCoins = false;
+    if (chartInstances.length === slice.length && slice.length > 0) {
+      isSameCoins = slice.every((c, i) => {
+        const inst = chartInstances[i];
+        return inst && inst.ex === c.ex && inst.sym === c.sym;
+      });
+    }
+
+    if (isSameCoins) {
+      // Coins on screen haven't changed: redraw existing instances preserving user's pan/zoom offset!
+      chartInstances.forEach((inst, i) => {
+        const c = slice[i];
+        const coinKey = c.ex + ':' + c.sym;
+        const newLvls = formationsCoinsLevelsMap.get(coinKey);
+        if (newLvls) inst.levels = newLvls;
+        inst.draw();
+      });
+      updateFormationsPagination();
+      return;
+    }
+
     grid.innerHTML = "";
     chartInstances = [];
 
     if (formationsAllCoins.length === 0) {
-      grid.innerHTML = `<div class="formations-empty">Инструменты не загружены.</div>`;
+      grid.innerHTML = `<div class="formations-empty">${scanProgressText || "Инструменты не загружены."}</div>`;
       updateFormationsPagination();
       return;
     }

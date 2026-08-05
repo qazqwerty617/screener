@@ -167,7 +167,8 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
 function detectBreakouts(candles, levels, trendlines, cfg = DEFAULT_CONFIG) {
   const events  = [];
   const last    = candles.length - 1;
-  const lookback = Math.min(5, last);
+  // lookback must cover at least retestMaxBars so retests near last bar are found
+  const lookback = Math.min(cfg.retestMaxBars + 5, last);
   const avVol   = avgVol(candles, last, cfg.breakoutVolBars);
 
   for (let i = last - lookback; i <= last; i++) {
@@ -178,7 +179,8 @@ function detectBreakouts(candles, levels, trendlines, cfg = DEFAULT_CONFIG) {
     const volConfirmed = c.v > avVol * cfg.breakoutVolMult;
 
     levels.forEach((lv, lvIdx) => {
-      if (i - lv.lastTouch > 100) return;
+      if (i - lv.lastTouch > 50) return;  // level too old
+      if (lv.touches > 4) return;          // too many touches = congestion zone, not clean S/R
       const [zLo, zHi] = lv.zone;
       if (body_hi > zHi && candles[i - 1].c <= zHi) {
         events.push({ sourceType: 'level', sourceIdx: lvIdx, barIdx: i, direction: 'up', breakPrice: lv.price, volConfirmed });
@@ -206,28 +208,88 @@ function detectBreakouts(candles, levels, trendlines, cfg = DEFAULT_CONFIG) {
 function detectRetests(candles, breakEvents, cfg = DEFAULT_CONFIG) {
   const results = [];
   const last    = candles.length - 1;
+  const MIN_DEPARTURE = 0.0020; // price must travel at least 0.20% away after breakout
+  const MAX_OVERSHOOT = 0.0030; // max 0.30% deep breach during retest
 
   for (const ev of breakEvents) {
     const searchEnd  = Math.min(last, ev.barIdx + cfg.retestMaxBars);
     const zonePrice  = ev.breakPrice;
     const zoneTol    = zonePrice * cfg.levelTolerance;
 
-    for (let i = ev.barIdx + 1; i <= searchEnd; i++) {
-      const c = candles[i];
-      if (c.l > zonePrice + zoneTol || c.h < zonePrice - zoneTol) continue;
-
-      let confirmed = false, failed = false;
-      const confirmEnd = Math.min(last, i + cfg.retestConfirmBars);
-      for (let k = i + 1; k <= confirmEnd; k++) {
-        if (ev.direction === 'up'   && candles[k].c > zonePrice + zoneTol) { confirmed = true; break; }
-        if (ev.direction === 'down' && candles[k].c < zonePrice - zoneTol) { confirmed = true; break; }
-        if (ev.direction === 'up'   && candles[k].c < zonePrice - zoneTol) { failed    = true; break; }
-        if (ev.direction === 'down' && candles[k].c > zonePrice + zoneTol) { failed    = true; break; }
+    // GLOBAL LEVEL CLEANLINESS: level cannot have more than 2 total crossovers across history before breakout
+    let totalCrosses = 0;
+    for (let k = 0; k < ev.barIdx; k++) {
+      if ((candles[k].c < zonePrice && candles[k + 1].c > zonePrice) ||
+          (candles[k].c > zonePrice && candles[k + 1].c < zonePrice)) {
+        totalCrosses++;
       }
+    }
+    if (totalCrosses > 2) continue; // Dirty level / chop zone -> REJECT!
 
-      if (confirmed || failed) {
-        results.push({ event: ev, retestBar: i, status: confirmed ? 'confirmed' : 'failed' });
-        break;
+    // Retest MUST happen at least 3 bars after breakout (ev.barIdx + 3)
+    for (let i = ev.barIdx + 3; i <= searchEnd; i++) {
+      const c = candles[i];
+
+      if (ev.direction === 'up') {
+        // Breakout invalidated: any close back BELOW the level = false upward breakout
+        if (c.c < zonePrice) break;
+
+        // Check departure away from level before retest
+        let maxAbove = 0;
+        for (let k = ev.barIdx; k < i; k++) {
+          const distAbove = (candles[k].h - zonePrice) / zonePrice;
+          if (distAbove > maxAbove) maxAbove = distAbove;
+        }
+        if (maxAbove < MIN_DEPARTURE) continue;
+
+        // Touch from above: price came back down to the level
+        if (c.l <= zonePrice + zoneTol) {
+          if (c.l < zonePrice * (1 - MAX_OVERSHOOT)) break; // Candle deep-breaches on contact
+
+          // CRITICAL: retest candle must CLOSE above the level (= rejection/bounce confirmed)
+          // If it closes below, price broke through = not a retest of support
+          if (c.c < zonePrice) break;
+
+          // Retest is INVALID if price re-breaks the level at any point after this
+          let reBreak = false;
+          for (let k = i + 1; k <= last; k++) {
+            if (candles[k].c < zonePrice) { reBreak = true; break; }
+          }
+          if (!reBreak) {
+            results.push({ event: ev, retestBar: i, status: 'confirmed' });
+          }
+          break;
+        }
+      } else if (ev.direction === 'down') {
+        // Breakout invalidated: any close back ABOVE the level = false downward breakout (BNB/BTC case)
+        if (c.c > zonePrice) break;
+
+        // Check departure away from level before retest
+        let maxBelow = 0;
+        for (let k = ev.barIdx; k < i; k++) {
+          const distBelow = (zonePrice - candles[k].l) / zonePrice;
+          if (distBelow > maxBelow) maxBelow = distBelow;
+        }
+        if (maxBelow < MIN_DEPARTURE) continue;
+
+        // Touch from below: price came back up to the level
+        if (c.h >= zonePrice - zoneTol) {
+          if (c.h > zonePrice * (1 + MAX_OVERSHOOT)) break; // Candle deep-breaches on contact
+
+          // CRITICAL: retest candle must CLOSE below the level (= rejection confirmed)
+          // If it closes above, price broke through = not a retest of resistance
+          if (c.c > zonePrice) break;
+
+          // Retest is INVALID if price re-breaks the level at any point after this
+          let reBreak = false;
+          for (let k = i + 1; k <= last; k++) {
+            if (candles[k].c > zonePrice) { reBreak = true; break; }
+          }
+          if (!reBreak) {
+            results.push({ event: ev, retestBar: i, status: 'confirmed' });
+          }
+          break;
+        }
       }
     }
   }
@@ -380,8 +442,10 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     });
   }
 
-  // Retests
+  // Retests — only show if recent (within last 10 bars) to avoid stale signals
+  const RETEST_RECENCY = 10;
   for (const rt of retests) {
+    if (last - rt.retestBar > RETEST_RECENCY) continue; // too old
     signals.push({
       type: 'retest', ex, sym, base, tf, price: +rt.event.breakPrice.toFixed(4),
       direction: rt.event.direction === 'up' ? 'long' : 'short',

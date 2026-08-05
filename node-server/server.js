@@ -292,7 +292,7 @@ function connectKlineWs(sub) {
   const { ex, sym, tf } = sub;
   
   if (ex === "BN") {
-    sub.ws = new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${tf}`, { perMessageDeflate: false });
+    return; // Binance disabled
     sub.ws.on("message", (raw) => {
       try {
         const k = JSON.parse(raw.toString()).k;
@@ -444,21 +444,6 @@ function connectKlineWs(sub) {
       sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 2000); });
     }).catch(() => startKlinePolling(sub));
   } else if (ex === "BX") {
-    // Pro Terminal Feature: Proxy BingX charts to Binance for perfect clusters
-    const bnSym = sym.replace("-", "");
-    if (tickers.has("BN:" + bnSym)) {
-      sub.ws = new WebSocket(`wss://fstream.binance.com/ws/${bnSym.toLowerCase()}@kline_${tf}`, { perMessageDeflate: false });
-      sub.ws.on("message", (raw) => {
-        try {
-          const k = JSON.parse(raw.toString()).k;
-          broadcastKline(ex, sym, tf, { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
-        } catch (_) {}
-      });
-      sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
-      sub.ws.on("error", () => {});
-      return;
-    }
-
     sub.ws = new WebSocket("wss://open-api-swap.bingx.com/swap-market", { perMessageDeflate: false });
     sub.ws.on("error", (e) => {
       console.warn(`[KL ERROR] BX:${sym}:`, e.message);
@@ -743,13 +728,8 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
   let fetchEx = ex;
   let fetchSym = sym;
   
-  if (ex === "BX") {
-    const bnSym = sym.replace("-", "");
-    if (tickers.has("BN:" + bnSym)) {
-      fetchEx = "BN";
-      fetchSym = bnSym;
-    }
-  }
+  // Binance disabled by user request
+  if (fetchEx === "BN") return [];
 
   const tfMs = (() => {
     const low = tf.toLowerCase();
@@ -954,7 +934,7 @@ app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.ht
 
 // ─── Exchange Modules ───────────────────────────────────────────────────────
 const exchanges = {
-  BN: require("./exchanges/binance"),
+  // BN: require("./exchanges/binance"), // Disabled by user request
   BB: require("./exchanges/bybit"),
   OX: require("./exchanges/okx"),
   BG: require("./exchanges/bitget"),
@@ -999,21 +979,20 @@ server.listen(PORT, () => {
     }
   });
 
-  // ─── Pattern Scanner Engine ───────────────────────────────────────────────
+  // ─── Pattern Scanner Engine (24/7 Continuous Loop) ───────────────────────
   let isScanningPatterns = false;
   async function scanAllPatterns() {
     if (isScanningPatterns) return;
     isScanningPatterns = true;
-    console.log(`[PATTERNS] Starting pattern detection scan...`);
     const startTime = Date.now();
 
     try {
       const list = Array.from(tickers.values())
         .filter(t => t.v > 0)
         .sort((a, b) => b.v - a.v)
-        .slice(0, 50); // Scan top 50
+        .slice(0, 100); // Scan top 100 coins
 
-      const timeframes = ["15m", "1h", "4h", "1d"];
+      const timeframes = ["5m", "15m", "1h", "4h", "1d"];
       let newSignalsCount = 0;
 
       for (const t of list) {
@@ -1026,53 +1005,40 @@ server.listen(PORT, () => {
         for (const tf of timeframes) {
           try {
             const candles = await fetchFullHistory(ex, sym, tf, true);
-            if (!candles || candles.length < 30) continue;
+
+            // Always clear old signals for this coin+tf
+            patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
+
+            if (!candles || candles.length < 30) { await new Promise(r => setTimeout(r, 40)); continue; }
 
             const meta = { ex, sym, base, tf };
             const signals = patternDetector.scanCandles(meta, candles);
-
             for (const sig of signals) {
-              const existingIdx = patternsCache.findIndex(p =>
-                p.ex === sig.ex &&
-                p.sym === sig.sym &&
-                p.tf === sig.tf &&
-                p.type === sig.type &&
-                p.direction === sig.direction &&
-                Math.abs(p.price - sig.price) / sig.price < 0.005
-              );
-
-              if (existingIdx >= 0) {
-                patternsCache[existingIdx].ts = sig.ts;
-                patternsCache[existingIdx].meta = sig.meta;
-                patternsCache[existingIdx].confidence = sig.confidence;
-              } else {
-                patternsCache.push(sig);
-                newSignalsCount++;
-              }
+              patternsCache.push(sig);
+              newSignalsCount++;
             }
           } catch (e) {}
-          await new Promise(r => setTimeout(r, 80));
+          await new Promise(r => setTimeout(r, 40));
         }
       }
 
       patternsCache.sort((a, b) => b.ts - a.ts);
-      if (patternsCache.length > 1000) {
-        patternsCache = patternsCache.slice(0, 1000);
+      if (patternsCache.length > 2000) {
+        patternsCache = patternsCache.slice(0, 2000);
       }
 
-      console.log(`[PATTERNS] Scan completed in ${((Date.now() - startTime) / 1000).toFixed(1)}s. Found ${newSignalsCount} new signals. Total cached: ${patternsCache.length}`);
+      console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Total cached: ${patternsCache.length}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
+      // Endless 24/7 loop: schedule next scan 5 seconds after current finishes
+      setTimeout(scanAllPatterns, 5000);
     }
   }
 
-  // Initial trigger after 8 seconds, then every 5 minutes
-  setTimeout(() => {
-    scanAllPatterns();
-    setInterval(scanAllPatterns, 5 * 60 * 1000);
-  }, 8000);
+  // Initial trigger after 3 seconds
+  setTimeout(scanAllPatterns, 3000);
   
   // Periodic snapshots as data arrives
   let snapCount = 0;
