@@ -1491,6 +1491,10 @@ button {
     cursor: pointer;
     transition: all 0.12s ease;
     text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 4px;
 }
 
 .chart-indicator-grid-btn:hover {

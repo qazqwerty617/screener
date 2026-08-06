@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 // ═══ State ═══════════════════════════════════════════════════════════════════
 window.DEBUG_LEVELS = false;
@@ -94,6 +94,7 @@ let chartDensityMarket = "all";
 let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
 let chartActiveIndicators = new Set([]);
 let chartActiveFormations = new Set(["levels", "breakouts", "retests", "trendlines", "impulses"]);
+let chartActiveSmc = new Set(["ob", "fvg", "bos", "eqh"]);
 const TAG_PALETTE = [
   "#ff4560",
   "#26c97a",
@@ -853,6 +854,564 @@ function calcCVD(data) {
   return cvd;
 }
 
+function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP) {
+  if (!candles || candles.length < 15 || !chartActiveSmc || chartActiveSmc.size === 0) return;
+
+  const getCandleX = (idx) => (idx - s + futureGap) * candleW + candleW / 2;
+  const numCandles = candles.length;
+  const startVisIdx = Math.max(0, s - 200);
+  const lastPrice = candles[numCandles - 1].c;
+
+  const drawSmcPill = (text, x, y, bgCol, textCol, borderCol) => {
+    ctx.font = "bold 9px Inter";
+    const padX = 6;
+    const w = ctx.measureText(text).width + padX * 2;
+    const h = 16;
+    const bx = Math.max(4, Math.min(x, PW - w - 4));
+    const by = Math.max(TOP + 4, Math.min(y - h / 2, TOP + PH - h - 4));
+
+    ctx.save();
+    roundRect(ctx, bx, by, w, h, 4);
+    ctx.fillStyle = bgCol;
+    ctx.fill();
+    ctx.strokeStyle = borderCol || bgCol;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = textCol;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, bx + w / 2, by + h / 2);
+    ctx.restore();
+  };
+
+  // 1. UNMITIGATED ORDER BLOCKS (OB)
+  if (chartActiveSmc.has("ob")) {
+    const orderBlocks = [];
+    const minImpulseRatio = 0.006;
+
+    for (let i = Math.max(1, startVisIdx); i < numCandles - 3; i++) {
+      const cCurr = candles[i];
+      const isBear = cCurr.c < cCurr.o;
+      const isBull = cCurr.c > cCurr.o;
+
+      if (isBear) {
+        const nextHigh = Math.max(candles[i + 1].h, candles[i + 2].h, candles[i + 3].h);
+        const impulse = (nextHigh - cCurr.l) / cCurr.l;
+        if (impulse >= minImpulseRatio) {
+          let mitigated = false;
+          for (let k = i + 3; k < numCandles; k++) {
+            if (candles[k].l < cCurr.l) {
+              mitigated = true;
+              break;
+            }
+          }
+          if (!mitigated) {
+            orderBlocks.push({
+              type: "bull",
+              startIdx: i,
+              high: cCurr.h,
+              low: cCurr.l,
+              dist: Math.abs(lastPrice - cCurr.h) / lastPrice
+            });
+          }
+        }
+      }
+
+      if (isBull) {
+        const nextLow = Math.min(candles[i + 1].l, candles[i + 2].l, candles[i + 3].l);
+        const impulse = (cCurr.h - nextLow) / cCurr.h;
+        if (impulse >= minImpulseRatio) {
+          let mitigated = false;
+          for (let k = i + 3; k < numCandles; k++) {
+            if (candles[k].h > cCurr.h) {
+              mitigated = true;
+              break;
+            }
+          }
+          if (!mitigated) {
+            orderBlocks.push({
+              type: "bear",
+              startIdx: i,
+              high: cCurr.h,
+              low: cCurr.l,
+              dist: Math.abs(lastPrice - cCurr.l) / lastPrice
+            });
+          }
+        }
+      }
+    }
+
+    orderBlocks.sort((a, b) => a.dist - b.dist);
+    const activeOBs = orderBlocks.slice(0, 3);
+
+    for (const ob of activeOBs) {
+      const x1 = Math.max(0, getCandleX(ob.startIdx));
+      const x2 = PW;
+      const yTop = toY(ob.high);
+      const yBot = toY(ob.low);
+      const h = Math.max(4, yBot - yTop);
+
+      if (yBot < TOP || yTop > TOP + PH) continue;
+
+      ctx.save();
+      if (ob.type === "bull") {
+        ctx.fillStyle = "rgba(38, 201, 122, 0.12)";
+        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.strokeStyle = "rgba(38, 201, 122, 0.75)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x1, yTop, x2 - x1, h);
+        drawSmcPill("OB (Bull)", x1 + 10, yTop + h / 2, "#14532d", "#4ade80", "#22c55e");
+      } else {
+        ctx.fillStyle = "rgba(255, 69, 96, 0.12)";
+        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.strokeStyle = "rgba(255, 69, 96, 0.75)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x1, yTop, x2 - x1, h);
+        drawSmcPill("OB (Bear)", x1 + 10, yTop + h / 2, "#7f1d1d", "#fca5a5", "#ef4444");
+      }
+      ctx.restore();
+    }
+  }
+
+  // 2. UNFILLED FAIR VALUE GAPS (FVG)
+  if (chartActiveSmc.has("fvg")) {
+    const fvgs = [];
+    for (let i = Math.max(2, startVisIdx); i < numCandles; i++) {
+      const c1 = candles[i - 2];
+      const c3 = candles[i];
+
+      if (c3.l > c1.h) {
+        const gapSize = (c3.l - c1.h) / c1.h;
+        if (gapSize >= 0.0015) {
+          let filled = false;
+          for (let k = i + 1; k < numCandles; k++) {
+            if (candles[k].l <= c1.h) {
+              filled = true;
+              break;
+            }
+          }
+          if (!filled) {
+            fvgs.push({
+              type: "bull",
+              startIdx: i - 2,
+              topPrice: c3.l,
+              botPrice: c1.h,
+              dist: Math.abs(lastPrice - (c3.l + c1.h) / 2) / lastPrice
+            });
+          }
+        }
+      }
+
+      if (c3.h < c1.l) {
+        const gapSize = (c1.l - c3.h) / c3.h;
+        if (gapSize >= 0.0015) {
+          let filled = false;
+          for (let k = i + 1; k < numCandles; k++) {
+            if (candles[k].h >= c1.l) {
+              filled = true;
+              break;
+            }
+          }
+          if (!filled) {
+            fvgs.push({
+              type: "bear",
+              startIdx: i - 2,
+              topPrice: c1.l,
+              botPrice: c3.h,
+              dist: Math.abs(lastPrice - (c1.l + c3.h) / 2) / lastPrice
+            });
+          }
+        }
+      }
+    }
+
+    fvgs.sort((a, b) => a.dist - b.dist);
+    const activeFVGs = fvgs.slice(0, 3);
+
+    for (const fvg of activeFVGs) {
+      const x1 = Math.max(0, getCandleX(fvg.startIdx));
+      const x2 = PW;
+      const yTop = toY(fvg.topPrice);
+      const yBot = toY(fvg.botPrice);
+      const h = Math.max(3, yBot - yTop);
+
+      if (yBot < TOP || yTop > TOP + PH) continue;
+
+      ctx.save();
+      if (fvg.type === "bull") {
+        ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
+        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.strokeStyle = "rgba(6, 182, 212, 0.65)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x1, yTop, x2 - x1, h);
+        drawSmcPill("FVG (Bull)", x1 + 50, yTop + h / 2, "#164e63", "#67e8f9", "#06b6d4");
+      } else {
+        ctx.fillStyle = "rgba(168, 85, 247, 0.12)";
+        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.strokeStyle = "rgba(168, 85, 247, 0.65)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x1, yTop, x2 - x1, h);
+        drawSmcPill("FVG (Bear)", x1 + 50, yTop + h / 2, "#581c87", "#e9d5ff", "#a855f7");
+      }
+      ctx.restore();
+    }
+  }
+
+  // 3. BREAK OF STRUCTURE (BOS / CHoCH)
+  if (chartActiveSmc.has("bos")) {
+    const swings = [];
+    for (let i = 2; i < numCandles - 2; i++) {
+      const isHigh = candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
+                     candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h;
+      const isLow  = candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
+                     candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l;
+      if (isHigh) swings.push({ idx: i, price: candles[i].h, type: "high" });
+      if (isLow)  swings.push({ idx: i, price: candles[i].l, type: "low" });
+    }
+
+    const structureBreaks = [];
+    for (let sIdx = 0; sIdx < swings.length; sIdx++) {
+      const sw = swings[sIdx];
+      for (let k = sw.idx + 1; k < numCandles; k++) {
+        if (sw.type === "high" && candles[k].c > sw.price) {
+          const isChoch = sIdx > 0 && swings[sIdx - 1].type === "low";
+          structureBreaks.push({
+            type: isChoch ? "CHoCH ▲" : "BOS ▲",
+            startIdx: sw.idx,
+            breakIdx: k,
+            price: sw.price,
+            isBull: true
+          });
+          break;
+        }
+        if (sw.type === "low" && candles[k].c < sw.price) {
+          const isChoch = sIdx > 0 && swings[sIdx - 1].type === "high";
+          structureBreaks.push({
+            type: isChoch ? "CHoCH ▼" : "BOS ▼",
+            startIdx: sw.idx,
+            breakIdx: k,
+            price: sw.price,
+            isBull: false
+          });
+          break;
+        }
+      }
+    }
+
+    const recentBreaks = structureBreaks.slice(-3);
+    for (const sb of recentBreaks) {
+      const x1 = getCandleX(sb.startIdx);
+      const x2 = getCandleX(sb.breakIdx);
+      const y = toY(sb.price);
+
+      if (y < TOP || y > TOP + PH) continue;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = sb.isBull ? "#eab308" : "#f43f5e";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x2, y);
+      ctx.stroke();
+
+      const bgCol = sb.isBull ? "#713f12" : "#881337";
+      const textCol = sb.isBull ? "#fef08a" : "#fecdd3";
+      const borderCol = sb.isBull ? "#eab308" : "#f43f5e";
+      drawSmcPill(sb.type, (x1 + x2) / 2 - 15, y, bgCol, textCol, borderCol);
+      ctx.restore();
+    }
+  }
+
+  // 4. UNSWEPT EQUAL HIGHS / EQUAL LOWS (EQH / EQL LIQUIDITY POOLS)
+  if (chartActiveSmc.has("eqh")) {
+    const swingHighs = [];
+    const swingLows = [];
+
+    for (let i = 2; i < numCandles - 2; i++) {
+      if (candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
+          candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h) {
+        swingHighs.push({ idx: i, price: candles[i].h });
+      }
+      if (candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
+          candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l) {
+        swingLows.push({ idx: i, price: candles[i].l });
+      }
+    }
+
+    const liquidityPools = [];
+
+    for (let a = 0; a < swingHighs.length; a++) {
+      for (let b = a + 1; b < swingHighs.length; b++) {
+        const p1 = swingHighs[a].price;
+        const p2 = swingHighs[b].price;
+        if (Math.abs(p1 - p2) / p1 <= 0.0018) {
+          const levelPrice = Math.max(p1, p2);
+          const secondIdx = swingHighs[b].idx;
+
+          let swept = false;
+          for (let k = secondIdx + 1; k < numCandles; k++) {
+            if (candles[k].h > levelPrice) {
+              swept = true;
+              break;
+            }
+          }
+
+          if (!swept) {
+            liquidityPools.push({
+              type: "EQH",
+              startIdx: swingHighs[a].idx,
+              confirmIdx: secondIdx,
+              price: levelPrice,
+              label: "$$$ EQH",
+              dist: Math.abs(lastPrice - levelPrice) / lastPrice
+            });
+          }
+        }
+      }
+    }
+
+    for (let a = 0; a < swingLows.length; a++) {
+      for (let b = a + 1; b < swingLows.length; b++) {
+        const p1 = swingLows[a].price;
+        const p2 = swingLows[b].price;
+        if (Math.abs(p1 - p2) / p1 <= 0.0018) {
+          const levelPrice = Math.min(p1, p2);
+          const secondIdx = swingLows[b].idx;
+
+          let swept = false;
+          for (let k = secondIdx + 1; k < numCandles; k++) {
+            if (candles[k].l < levelPrice) {
+              swept = true;
+              break;
+            }
+          }
+
+          if (!swept) {
+            liquidityPools.push({
+              type: "EQL",
+              startIdx: swingLows[a].idx,
+              confirmIdx: secondIdx,
+              price: levelPrice,
+              label: "$$$ EQL",
+              dist: Math.abs(lastPrice - levelPrice) / lastPrice
+            });
+          }
+        }
+      }
+    }
+
+    const cleanPools = [];
+    for (const pool of liquidityPools) {
+      const exists = cleanPools.some(p => p.type === pool.type && Math.abs(p.price - pool.price) / pool.price < 0.001);
+      if (!exists) cleanPools.push(pool);
+    }
+
+    cleanPools.sort((a, b) => a.dist - b.dist);
+    const activePools = cleanPools.slice(0, 3);
+
+    for (const pool of activePools) {
+      const x1 = Math.max(0, getCandleX(pool.startIdx));
+      const x2 = PW;
+      const y = toY(pool.price);
+
+      if (y < TOP || y > TOP + PH) continue;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = pool.type === "EQH" ? "#38bdf8" : "#fb923c";
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([3, 4]);
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x2, y);
+      ctx.stroke();
+
+      const bgCol = pool.type === "EQH" ? "#0c4a6e" : "#7c2d12";
+      const textCol = pool.type === "EQH" ? "#bae6fd" : "#ffedd5";
+      const borderCol = pool.type === "EQH" ? "#38bdf8" : "#fb923c";
+      drawSmcPill(pool.label, PW - 65, y, bgCol, textCol, borderCol);
+      ctx.restore();
+    }
+  }
+}
+
+function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP) {
+  if (!candles || candles.length < 20) return;
+
+  const numCandles = candles.length;
+  const lastPrice = candles[numCandles - 1].c;
+  const getCandleX = (idx) => (idx - s + futureGap) * candleW + candleW / 2;
+
+  // 1. Detect key leverage entry pivots (Swing Highs & Lows over last 250 candles)
+  const startScan = Math.max(0, numCandles - 250);
+  const pivots = [];
+
+  for (let i = startScan + 2; i < numCandles - 2; i++) {
+    const isHigh = candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
+                   candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h;
+    const isLow  = candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
+                   candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l;
+    if (isHigh) pivots.push({ idx: i, price: candles[i].h, type: "high", vol: candles[i].v });
+    if (isLow)  pivots.push({ idx: i, price: candles[i].l, type: "low", vol: candles[i].v });
+  }
+
+  // 2. Generate estimated Liquidation Pool Levels for 100x, 50x, 25x leverage
+  const LEVERAGES = [
+    { lev: "100x", offsetLong: 0.009, offsetShort: 0.009, weight: 1.0 },
+    { lev: "50x",  offsetLong: 0.018, offsetShort: 0.018, weight: 0.85 },
+    { lev: "25x",  offsetLong: 0.037, offsetShort: 0.037, weight: 0.65 },
+  ];
+
+  const liqLevels = [];
+
+  for (const p of pivots) {
+    for (const levInfo of LEVERAGES) {
+      if (p.type === "high") {
+        const liqPrice = p.price * (1 + levInfo.offsetShort);
+        let swept = false;
+        for (let k = p.idx + 1; k < numCandles; k++) {
+          if (candles[k].h >= liqPrice) {
+            swept = true;
+            break;
+          }
+        }
+        if (!swept) {
+          liqLevels.push({
+            type: "short",
+            lev: levInfo.lev,
+            price: liqPrice,
+            startIdx: p.idx,
+            estVolK: Math.round((p.vol || 500) * levInfo.weight),
+            dist: Math.abs(lastPrice - liqPrice) / lastPrice
+          });
+        }
+      } else {
+        const liqPrice = p.price * (1 - levInfo.offsetLong);
+        let swept = false;
+        for (let k = p.idx + 1; k < numCandles; k++) {
+          if (candles[k].l <= liqPrice) {
+            swept = true;
+            break;
+          }
+        }
+        if (!swept) {
+          liqLevels.push({
+            type: "long",
+            lev: levInfo.lev,
+            price: liqPrice,
+            startIdx: p.idx,
+            estVolK: Math.round((p.vol || 500) * levInfo.weight),
+            dist: Math.abs(lastPrice - liqPrice) / lastPrice
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Cluster Liquidation Levels into continuous Heatmap bands
+  const clusters = [];
+  for (const item of liqLevels) {
+    const existing = clusters.find(c => c.type === item.type && Math.abs(c.price - item.price) / item.price < 0.0025);
+    if (existing) {
+      existing.volK += item.estVolK;
+      existing.count += 1;
+      if (item.lev === "100x" || existing.topLev === "100x") existing.topLev = "100x";
+    } else {
+      clusters.push({
+        type: item.type,
+        price: item.price,
+        startIdx: item.startIdx,
+        volK: item.estVolK,
+        topLev: item.lev,
+        count: 1,
+        dist: item.dist
+      });
+    }
+  }
+
+  if (!clusters.length) return;
+
+  const maxVol = Math.max(...clusters.map(c => c.volK), 1);
+  clusters.sort((a, b) => a.dist - b.dist);
+  const activeClusters = clusters.slice(0, 8);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, TOP, PW, PH);
+  ctx.clip();
+
+  for (const cl of activeClusters) {
+    const y = toY(cl.price);
+    if (y < TOP || y > TOP + PH) continue;
+
+    const x1 = Math.max(0, getCandleX(cl.startIdx));
+    const x2 = PW;
+    const intensity = Math.min(1.0, cl.volK / maxVol);
+
+    const bandH = Math.max(4, Math.round(intensity * 14));
+    const yTop = y - bandH / 2;
+
+    let gradColorCenter, gradColorEdge, strokeColor;
+    if (intensity > 0.65) {
+      gradColorCenter = `rgba(250, 204, 21, ${0.25 + intensity * 0.35})`;
+      gradColorEdge = "rgba(250, 204, 21, 0.02)";
+      strokeColor = `rgba(250, 204, 21, ${0.7 + intensity * 0.3})`;
+    } else if (intensity > 0.35) {
+      gradColorCenter = `rgba(6, 182, 212, ${0.2 + intensity * 0.3})`;
+      gradColorEdge = "rgba(6, 182, 212, 0.02)";
+      strokeColor = `rgba(6, 182, 212, 0.65)`;
+    } else {
+      gradColorCenter = `rgba(168, 85, 247, ${0.15 + intensity * 0.25})`;
+      gradColorEdge = "rgba(168, 85, 247, 0.02)";
+      strokeColor = `rgba(168, 85, 247, 0.55)`;
+    }
+
+    const grad = ctx.createLinearGradient(0, yTop, 0, yTop + bandH);
+    grad.addColorStop(0, gradColorEdge);
+    grad.addColorStop(0.5, gradColorCenter);
+    grad.addColorStop(1, gradColorEdge);
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(x1, yTop, x2 - x1, bandH);
+
+    ctx.beginPath();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = intensity > 0.65 ? 1.5 : 1.0;
+    ctx.setLineDash(intensity > 0.65 ? [] : [4, 3]);
+    ctx.moveTo(x1, y);
+    ctx.lineTo(x2, y);
+    ctx.stroke();
+
+    const volStr = cl.volK >= 1000 ? (cl.volK / 1000).toFixed(1) + "M" : cl.volK + "K";
+    const badgeText = `${cl.topLev} $${volStr} Liq`;
+
+    ctx.font = "bold 9px Inter";
+    const badgeW = ctx.measureText(badgeText).width + 10;
+    const badgeH = 15;
+    const bx = PW - badgeW - 6;
+    const by = Math.max(TOP + 2, Math.min(y - badgeH / 2, TOP + PH - badgeH - 2));
+
+    ctx.save();
+    roundRect(ctx, bx, by, badgeW, badgeH, 4);
+    ctx.fillStyle = cl.type === "short" ? "rgba(127, 29, 29, 0.9)" : "rgba(20, 83, 45, 0.9)";
+    ctx.fill();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.stroke();
+
+    ctx.fillStyle = cl.type === "short" ? "#fca5a5" : "#4ade80";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(badgeText, bx + badgeW / 2, by + badgeH / 2);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
 
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
@@ -1181,6 +1740,15 @@ function drawChart() {
     }
     ctx.stroke();
   }
+
+  // ── Smart Money Concepts (SMC) Overlay ──
+  renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP);
+
+  // ── Liquidation Heatmap Overlay ──
+  if (chartActiveIndicators.has("LIQMAP")) {
+    renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP);
+  }
+
   ctx.restore();
 
   // ── Draw Sub-indicators / Oscillators in separated rows of Volume Pane ──
@@ -3862,7 +4430,8 @@ const indicatorIdToName = {
   "ind-atr": "ATR",
   "ind-volprofile": "VP",
   "ind-bb": "BB",
-  "ind-macd": "MACD"
+  "ind-macd": "MACD",
+  "ind-liqmap": "LIQMAP"
 };
 const formationIdToName = {
   "fmt-levels": "levels",
@@ -3871,25 +4440,43 @@ const formationIdToName = {
   "fmt-trendlines": "trendlines",
   "fmt-impulses": "impulses"
 };
+const smcIdToName = {
+  "smc-ob": "ob",
+  "smc-fvg": "fvg",
+  "smc-bos": "bos",
+  "smc-eqh": "eqh"
+};
 document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
-  // Initialize button state based on chartActiveIndicators & chartActiveFormations
+  // Initialize button state based on chartActiveIndicators & chartActiveFormations & chartActiveSmc
   const indicatorName = indicatorIdToName[btn.id];
   const formationName = formationIdToName[btn.id];
+  const smcName = smcIdToName[btn.id];
   if (indicatorName && chartActiveIndicators.has(indicatorName)) {
     btn.classList.add("on");
   }
   if (formationName && chartActiveFormations.has(formationName)) {
     btn.classList.add("on");
   }
+  if (smcName && chartActiveSmc.has(smcName)) {
+    btn.classList.add("on");
+  }
   btn.onclick = () => {
     btn.classList.toggle("on");
     const indName = indicatorIdToName[btn.id];
     const fmtName = formationIdToName[btn.id];
+    const smcName = smcIdToName[btn.id];
     if (indName) {
       if (btn.classList.contains("on")) {
         chartActiveIndicators.add(indName);
       } else {
         chartActiveIndicators.delete(indName);
+      }
+    }
+    if (smcName) {
+      if (btn.classList.contains("on")) {
+        chartActiveSmc.add(smcName);
+      } else {
+        chartActiveSmc.delete(smcName);
       }
     }
     if (fmtName) {

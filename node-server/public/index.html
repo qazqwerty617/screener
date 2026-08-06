@@ -67,6 +67,7 @@
                 <div class="ntab" role="tab">Арбитраж</div>
                 <div class="ntab" role="tab">Формации</div>
                 <div class="ntab" role="tab">Бэктесты</div>
+                <div class="ntab" role="tab" id="tab-journal">Дневник</div>
             </div>
             <div class="nright">
                 <div style="display: flex; align-items: center; gap: 4px">
@@ -456,6 +457,22 @@
                                     data-desc="Bollinger Bands — ценовой канал волатильности. Отскоки от краев указывают на зоны перепроданности/перекупленности.">BB</button>
                                 <button class="chart-indicator-grid-btn" id="ind-macd"
                                     data-desc="MACD — схождение/расхождение средних. Пересечение линий дает сигналы на разворот тренда.">MACD</button>
+                                <button class="chart-indicator-grid-btn" id="ind-liqmap"
+                                    data-desc="Liquidation Heatmap — Карта ликвидаций (Coinglass style): тепловая карта зон сгорания маржинальных позиций (100x, 50x, 25x, 10x).">LIQ MAP</button>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Smart Money & Структура</span>
+                            <div class="chart-density-indicators-grid">
+                                <button class="chart-indicator-grid-btn" id="smc-ob"
+                                    data-desc="OB (Order Block) — ордер-блоки: институциональные зоны покупок и продаж перед импульсом.">OB</button>
+                                <button class="chart-indicator-grid-btn" id="smc-fvg"
+                                    data-desc="FVG (Fair Value Gap) — дисбаланс цены: 3-свечной гэп ликвидности.">FVG</button>
+                                <button class="chart-indicator-grid-btn" id="smc-bos"
+                                    data-desc="BOS (Break of Structure) — пробой структуры рынка и сменность тренда (CHoCH).">BOS</button>
+                                <button class="chart-indicator-grid-btn" id="smc-eqh"
+                                    data-desc="EQH/EQL (Liquidity Pools) — пулы неснятой ликвидности над/под равными верхушками и низинами.">EQH/EQL</button>
                             </div>
                         </div>
 
