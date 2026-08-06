@@ -24,7 +24,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/css/app.css" />
+    <link rel="stylesheet" href="/css/app.css?v=7" />
     <script type="application/ld+json">
             {
                 "@context": "https://schema.org",
@@ -66,6 +66,7 @@
                 <div class="ntab" role="tab">Карта</div>
                 <div class="ntab" role="tab">Арбитраж</div>
                 <div class="ntab" role="tab">Формации</div>
+                <div class="ntab" role="tab">Бэктесты</div>
             </div>
             <div class="nright">
                 <div style="display: flex; align-items: center; gap: 4px">
@@ -390,7 +391,8 @@
                         <div class="chart-density-panel-head">
                             <div>
                                 <div class="chart-density-panel-title">Настройки плотностей</div>
-                                <div class="chart-density-panel-subtitle" id="chart-density-panel-subtitle">Для текущей монеты</div>
+                                <div class="chart-density-panel-subtitle" id="chart-density-panel-subtitle">Для текущей
+                                    монеты</div>
                             </div>
                             <div style="display: flex; gap: 8px; align-items: center;">
                                 <button id="chart-density-switch" class="chart-density-switch"
@@ -454,20 +456,6 @@
                                     data-desc="Bollinger Bands — ценовой канал волатильности. Отскоки от краев указывают на зоны перепроданности/перекупленности.">BB</button>
                                 <button class="chart-indicator-grid-btn" id="ind-macd"
                                     data-desc="MACD — схождение/расхождение средних. Пересечение линий дает сигналы на разворот тренда.">MACD</button>
-                            </div>
-                        </div>
-
-                        <div class="chart-density-panel-section">
-                            <span class="chart-density-section-label">Смарт-анализ & SMC</span>
-                            <div class="chart-density-indicators-grid">
-                                <button class="chart-indicator-grid-btn smc-btn" id="ind-ob"
-                                    data-desc="Order Block (OB) — авто-отрисовка бычьих и медвежьих институциональных блоков набора позиций.">OB</button>
-                                <button class="chart-indicator-grid-btn smc-btn" id="ind-fvg"
-                                    data-desc="Fair Value Gap (FVG / Order Flow) — зоны ценового дисбаланса и импульсного движения.">FVG</button>
-                                <button class="chart-indicator-grid-btn smc-btn" id="ind-bos"
-                                    data-desc="BOS / CHoCH — отслеживание слома рыночной структуры (Break of Structure & Change of Character).">BOS</button>
-                                <button class="chart-indicator-grid-btn smc-btn" id="ind-sweep"
-                                    data-desc="Liquidity Sweep — уровни снятия ликвидности над/под равными экстремумами (EQH/EQL).">SWEEP</button>
                             </div>
                         </div>
 
@@ -913,6 +901,215 @@
                 <button id="formations-page-next" class="fg-page-btn">Вперёд ›</button>
             </div>
         </div>
+
+        <!-- Backtests / blind bar replay -->
+        <div id="backtest-view" style="display:none">
+            <div id="bt-toolbar">
+                <div class="bt-module-name">
+                    <span class="bt-module-icon">B</span>
+                    <div><strong>Тренажёр решений</strong><span>слепой исторический сценарий</span></div>
+                </div>
+                <div class="bt-title">
+                    <span id="bt-symbol">СЛУЧАЙНЫЙ РЫНОК</span>
+                    <span class="bt-muted" id="bt-exchange">Bybit Futures</span>
+                </div>
+                <select id="bt-exchange-select" class="bt-exchange-select" aria-label="Биржа для бэктеста">
+                    <option value="BB">Bybit</option>
+                    <option value="BN">Binance</option>
+                    <option value="OX">OKX</option>
+                    <option value="BG">Bitget</option>
+                    <option value="GT">Gate</option>
+                    <option value="MX">MEXC</option>
+                    <option value="KC">KuCoin</option>
+                    <option value="BX">BingX</option>
+                    <option value="HT">HTX</option>
+                    <option value="HL">Hyperliquid</option>
+                    <option value="AD">Asterdex</option>
+                </select>
+                <div class="bt-tfs" role="group" aria-label="Таймфрейм бэктеста">
+                    <button class="bt-tf" data-bt-tf="1m">1М</button>
+                    <button class="bt-tf on" data-bt-tf="5m">5М</button>
+                    <button class="bt-tf" data-bt-tf="15m">15М</button>
+                    <button class="bt-tf" data-bt-tf="30m">30М</button>
+                    <button class="bt-tf" data-bt-tf="1h">1Ч</button>
+                    <button class="bt-tf" data-bt-tf="4h">4Ч</button>
+                    <button class="bt-tf" data-bt-tf="1d">1Д</button>
+                </div>
+                <div class="bt-sep"></div>
+                <div class="bt-indicator-settings">
+                    <button id="bt-indicators-btn" class="bt-indicators-btn" title="Все индикаторы">Индикаторы
+                        ▾</button>
+                    <div id="bt-indicators-menu" class="bt-indicators-menu" hidden>
+                        <div class="bt-indicators-head"><strong>Индикаторы графика</strong><span>Как в основном
+                                скринере</span></div>
+                        <div class="bt-indicators-grid">
+                            <button class="on" data-bt-indicator="volume"><span>VOL</span><b>Объём свечей</b></button>
+                            <button data-bt-indicator="cvd"><span>CVD</span><b>Дельта объёма</b></button>
+                            <button data-bt-indicator="ema20"><span>EMA 20</span><b>Быстрая</b></button>
+                            <button data-bt-indicator="ema50"><span>EMA 50</span><b>Средняя</b></button>
+                            <button data-bt-indicator="ema200"><span>EMA 200</span><b>Долгая</b></button>
+                            <button data-bt-indicator="vwap"><span>VWAP</span><b>Средняя цена</b></button>
+                            <button data-bt-indicator="rsi"><span>RSI</span><b>14 периодов</b></button>
+                            <button data-bt-indicator="atr"><span>ATR</span><b>Волатильность</b></button>
+                            <button data-bt-indicator="vp"><span>VP</span><b>Volume Profile</b></button>
+                            <button data-bt-indicator="bb"><span>BB</span><b>Полосы 20/2</b></button>
+                            <button data-bt-indicator="macd"><span>MACD</span><b>12/26/9</b></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="bt-toolbar-spacer"></div>
+                <span class="bt-pool" id="bt-pool">Ликвидный топ · до 300 монет</span>
+                <button id="bt-new" class="bt-primary">Следующий кейс</button>
+            </div>
+
+            <div id="bt-workspace">
+                <section id="bt-chart-panel">
+                    <div id="bt-chart-head">
+                        <div><strong id="bt-watermark">—</strong><span id="bt-date">Выберите таймфрейм и нажмите «Новый
+                                случай»</span></div>
+                        <div id="bt-ohlc" class="bt-ohlc">O — H — L — C —</div>
+                    </div>
+                    <div id="bt-canvas-wrap">
+                        <canvas id="bt-canvas"></canvas>
+                        <div id="bt-draw-tools" aria-label="Инструменты разметки">
+                            <button class="dt-btn bt-dt-btn on" data-bt-tool="none" title="Курсор и перемещение (V)">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.6"
+                                        stroke-linecap="round" />
+                                    <line x1="8" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.6"
+                                        stroke-linecap="round" />
+                                    <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" stroke-width="1.6"
+                                        stroke-linecap="round" />
+                                    <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.6"
+                                        stroke-linecap="round" />
+                                </svg>
+                            </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="h-ray" title="Горизонтальный луч">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <circle cx="3" cy="8" r="1.2" stroke="currentColor" stroke-width="1.2" />
+                                    <line x1="4.5" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.2" />
+                                </svg>
+                            </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="line" title="Линия (L)">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <circle cx="3" cy="13" r="1" stroke="currentColor" stroke-width="1.2" />
+                                    <circle cx="13" cy="3" r="1" stroke="currentColor" stroke-width="1.2" />
+                                    <line x1="3.7" y1="12.3" x2="12.3" y2="3.7" stroke="currentColor"
+                                        stroke-width="1.2" />
+                                </svg>
+                            </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="rect" title="Прямоугольник">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <rect x="3" y="4.5" width="10" height="7" rx="1" stroke="currentColor"
+                                        stroke-width="1.2" />
+                                </svg>
+                            </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="brush" title="Кисть (B)">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <path d="M12 2L14 4L5 13H3V11L12 2Z" stroke="currentColor" stroke-width="1.2"
+                                        stroke-linejoin="round" />
+                                    <path d="M10 4L12 6" stroke="currentColor" stroke-width="1.2" />
+                                </svg>
+                            </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="ruler" title="Линейка">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <rect x="2" y="5" width="12" height="6" rx="1" transform="rotate(-45 8 8)"
+                                        stroke="currentColor" stroke-width="1.2" />
+                                    <line x1="6" y1="6" x2="7" y2="7" stroke="currentColor" />
+                                    <line x1="9" y1="9" x2="10" y2="10" stroke="currentColor" />
+                                </svg>
+                            </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="fibgrid" title="Коррекция Фибоначчи">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <line x1="2" y1="4" x2="11" y2="4" stroke="currentColor" stroke-width="1.2" />
+                                    <line x1="2" y1="7" x2="14" y2="7" stroke="currentColor" stroke-width="1.2" />
+                                    <line x1="2" y1="10" x2="12" y2="10" stroke="currentColor" stroke-width="1.2" />
+                                    <line x1="2" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.2" />
+                                </svg>
+                            </button>
+                            <div class="dt-sep"></div>
+                            <button class="dt-btn bt-dt-btn" id="bt-magnet" title="Магнит (M)">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <path d="M3 3C3 3 3 10 8 10C13 10 13 3 13 3" stroke="currentColor"
+                                        stroke-width="1.4" />
+                                    <line x1="3" y1="3" x2="3" y2="6" stroke="currentColor" stroke-width="1.8" />
+                                    <line x1="13" y1="3" x2="13" y2="6" stroke="currentColor" stroke-width="1.8" />
+                                </svg>
+                            </button>
+                            <div class="dt-sep"></div>
+                            <button class="dt-btn bt-dt-btn" id="bt-undo" title="Отменить">↶</button>
+                            <button class="dt-btn bt-dt-btn del" id="bt-clear" title="Очистить (Del)">
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                    <path d="M3 4H13M6 4V2.5H10V4M5.5 4L6 13H10L10.5 4" stroke="currentColor"
+                                        stroke-width="1.4" stroke-linecap="round" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="bt-loader" class="bt-loader">
+                            <div class="sp"></div>
+                            <span>Подбираем ликвидный исторический участок…</span>
+                        </div>
+                        <div id="bt-result" class="bt-result" hidden></div>
+                    </div>
+                    <div id="bt-replaybar">
+                        <span class="bt-replay-label">РАСКРЫТИЕ РЫНКА</span>
+                        <button id="bt-play" class="bt-control">▶ Запустить</button>
+                        <button id="bt-step" class="bt-control">+1 свеча</button>
+                        <div class="bt-speeds">
+                            <button data-bt-speed="900">0.5x</button>
+                            <button class="on" data-bt-speed="450">1x</button>
+                            <button data-bt-speed="220">2x</button>
+                            <button data-bt-speed="100">4x</button>
+                            <button data-bt-speed="45">10x</button>
+                        </div>
+                        <div class="bt-progress"><span id="bt-progress-fill"></span></div>
+                        <span id="bt-remaining" class="bt-muted">Будущее скрыто</span>
+                        <button id="bt-reveal" class="bt-reveal">Проверить сценарий</button>
+                    </div>
+                </section>
+
+                <aside id="bt-trade-panel">
+                    <div class="bt-plan-head">
+                        <div><strong>Торговый план</strong><span>Зафиксируйте решение до раскрытия</span></div>
+                        <b id="bt-plan-state">АНАЛИЗ</b>
+                    </div>
+                    <div class="bt-stage-row"><span class="on">1 Анализ</span><span>2 Решение</span><span>3
+                            Разбор</span></div>
+                    <label class="bt-field bt-thesis-field"><span>ВАША ЛОГИКА</span><textarea id="bt-thesis" rows="3"
+                            placeholder="Например: снятие ликвидности и возврат над уровнем…"></textarea></label>
+                    <div class="bt-panel-heading">НАПРАВЛЕНИЕ СЦЕНАРИЯ</div>
+                    <div class="bt-side-actions"><button id="bt-long">LONG</button><button id="bt-short">SHORT</button>
+                    </div>
+                    <div class="bt-plan-grid">
+                        <label class="bt-field"><span>ОБЪЁМ, USDT</span><input id="bt-size" type="number" min="10"
+                                step="10" value="1000"></label>
+                        <label class="bt-field"><span>СТОП</span>
+                            <div class="bt-level-input"><input id="bt-sl" type="number" min="0" step="0.1"
+                                    placeholder="1.0"><button id="bt-sl-mode" type="button"
+                                    data-mode="percent">%</button></div>
+                        </label>
+                        <label class="bt-field"><span>ЦЕЛЬ</span>
+                            <div class="bt-level-input"><input id="bt-tp" type="number" min="0" step="0.1"
+                                    placeholder="3.0"><button id="bt-tp-mode" type="button"
+                                    data-mode="percent">%</button></div>
+                        </label>
+                    </div>
+                    <button id="bt-commit-plan" class="bt-commit-plan" disabled>Зафиксировать прогноз</button>
+                    <div class="bt-account-strip"><span>Учебный счёт <b
+                                id="bt-balance">$10,000.00</b></span><span>Текущий PnL <b id="bt-pnl">$0.00</b></span>
+                    </div>
+                    <div class="bt-panel-heading">АКТИВНЫЙ ПРОГНОЗ</div>
+                    <div id="bt-position-empty" class="bt-empty">Разметьте график, выберите направление и зафиксируйте
+                        идею</div>
+                    <div id="bt-position" class="bt-position" hidden></div>
+                    <button id="bt-close-position" class="bt-close-position" disabled>Закрыть идею по текущей
+                        цене</button>
+                    <div class="bt-panel-heading">ПРОГРЕСС ТРЕНИРОВКИ</div>
+                    <div id="bt-session-stats" class="bt-stats"><span>Сделок <b>0</b></span><span>Win rate
+                            <b>—</b></span><span>Результат <b>$0.00</b></span></div>
+                </aside>
+            </div>
+        </div>
     </div>
 
     <div id="tag-menu">
@@ -1259,7 +1456,8 @@
         </div>
     </div>
 
-    <script src="/js/app.js?v=4"></script>
+    <script src="/js/app.js?v=6"></script>
+    <script src="/js/backtest.js?v=7"></script>
 </body>
 
 </html>

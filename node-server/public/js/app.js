@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 
 // ═══ State ═══════════════════════════════════════════════════════════════════
 window.DEBUG_LEVELS = false;
@@ -853,288 +853,6 @@ function calcCVD(data) {
   return cvd;
 }
 
-function calcSMC(candles, tf) {
-  if (!candles || candles.length < 8) return { obs: [], fvgs: [], boss: [], sweeps: [] };
-
-  const obs = [];
-  const fvgs = [];
-  const boss = [];
-  const sweeps = [];
-
-  const total = candles.length;
-
-  // 1. Adaptive Swing Detection
-  let swingWindow = 3;
-  if (tf === '1m' || tf === '3m') swingWindow = 2;
-  else if (tf === '1h' || tf === '4h' || tf === '1d') swingWindow = 4;
-
-  const swings = [];
-  for (let i = swingWindow; i < total - swingWindow; i++) {
-    const c = candles[i];
-    let isHigh = true, isLow = true;
-    for (let j = i - swingWindow; j <= i + swingWindow; j++) {
-      if (j === i) continue;
-      if (candles[j].h >= c.h) isHigh = false;
-      if (candles[j].l <= c.l) isLow = false;
-    }
-    if (isHigh) swings.push({ idx: i, price: c.h, type: 'high', time: c.t });
-    if (isLow) swings.push({ idx: i, price: c.l, type: 'low', time: c.t });
-  }
-
-  // 2. Order Block (OB) Detection
-  for (let i = 1; i < total - 2; i++) {
-    const c = candles[i];
-    const nextC = candles[i + 1];
-    const nnextC = candles[i + 2];
-    if (!c || !nextC) continue;
-
-    const range = c.h - c.l || 1e-9;
-    const isUpImpulse = (nextC.c - nextC.o > range * 0.7) || (nnextC && nnextC.c - c.o > range * 1.5);
-    const isDnImpulse = (nextC.o - nextC.c > range * 0.7) || (nnextC && c.o - nnextC.c > range * 1.5);
-
-    // Bullish OB: Bearish/Consolidation candle before upward expansion
-    if (isUpImpulse && c.c <= c.o + range * 0.3) {
-      let mitigated = false;
-      for (let k = i + 2; k < total; k++) {
-        if (candles[k].l < c.l) { mitigated = true; break; }
-      }
-      if (!mitigated) {
-        obs.push({
-          type: 'bullish',
-          idx: i,
-          time: c.t,
-          top: Math.max(c.o, c.c),
-          bottom: c.l,
-          price: (Math.max(c.o, c.c) + c.l) / 2
-        });
-      }
-    }
-
-    // Bearish OB: Bullish/Consolidation candle before downward expansion
-    if (isDnImpulse && c.c >= c.o - range * 0.3) {
-      let mitigated = false;
-      for (let k = i + 2; k < total; k++) {
-        if (candles[k].h > c.h) { mitigated = true; break; }
-      }
-      if (!mitigated) {
-        obs.push({
-          type: 'bearish',
-          idx: i,
-          time: c.t,
-          top: c.h,
-          bottom: Math.min(c.o, c.c),
-          price: (c.h + Math.min(c.o, c.c)) / 2
-        });
-      }
-    }
-  }
-
-  // 3. Fair Value Gap (FVG / Order Flow) Detection
-  for (let i = 2; i < total; i++) {
-    const c1 = candles[i - 2];
-    const c2 = candles[i - 1];
-    const c3 = candles[i];
-
-    // Bullish FVG (c3.l > c1.h)
-    if (c3.l > c1.h + (c1.h * 0.0001)) {
-      let mitigated = false;
-      for (let k = i + 1; k < total; k++) {
-        if (candles[k].l <= c1.h) { mitigated = true; break; }
-      }
-      if (!mitigated) {
-        fvgs.push({
-          type: 'bullish',
-          idx: i - 1,
-          time: c2.t,
-          top: c3.l,
-          bottom: c1.h,
-          eq: (c3.l + c1.h) / 2
-        });
-      }
-    }
-
-    // Bearish FVG (c3.h < c1.l)
-    if (c3.h < c1.l - (c1.l * 0.0001)) {
-      let mitigated = false;
-      for (let k = i + 1; k < total; k++) {
-        if (candles[k].h >= c1.l) { mitigated = true; break; }
-      }
-      if (!mitigated) {
-        fvgs.push({
-          type: 'bearish',
-          idx: i - 1,
-          time: c2.t,
-          top: c1.l,
-          bottom: c3.h,
-          eq: (c1.l + c3.h) / 2
-        });
-      }
-    }
-  }
-
-  // 4. Liquidity Sweeps (SWEEP)
-  const recentSwings = swings.slice(-15);
-  for (let s1 = 0; s1 < recentSwings.length; s1++) {
-    for (let s2 = s1 + 1; s2 < recentSwings.length; s2++) {
-      const sw1 = recentSwings[s1];
-      const sw2 = recentSwings[s2];
-      if (sw1.type !== sw2.type) continue;
-      const diffPct = Math.abs(sw1.price - sw2.price) / sw1.price;
-      if (diffPct < 0.0015) {
-        for (let k = sw2.idx + 1; k < total; k++) {
-          const c = candles[k];
-          if (sw1.type === 'high' && c.h > sw1.price && c.c < sw1.price) {
-            sweeps.push({ type: 'high', idx: k, time: c.t, price: c.h, level: sw1.price });
-          } else if (sw1.type === 'low' && c.l < sw1.price && c.c > sw1.price) {
-            sweeps.push({ type: 'low', idx: k, time: c.t, price: c.l, level: sw1.price });
-          }
-        }
-      }
-    }
-  }
-
-  return {
-    obs: obs.slice(-6),
-    fvgs: fvgs.slice(-8),
-    boss: boss.slice(-5),
-    sweeps: sweeps.slice(-4)
-  };
-}
-
-function drawSMCOverlays(ctx, candles, s, vis, futureGap, candleW, toY, PW, PH, TOP, tf) {
-  if (!candles || candles.length < 10) return;
-  const smcData = calcSMC(candles, tf);
-
-  // 1. Draw Order Blocks (OB)
-  if (chartActiveIndicators.has("OB")) {
-    smcData.obs.forEach(ob => {
-      const yTop = toY(ob.top);
-      const yBottom = toY(ob.bottom);
-      const h = Math.max(2, Math.abs(yBottom - yTop));
-
-      const startIdx = ob.idx;
-      const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
-      const boxW = PW - startX;
-      if (boxW <= 0) return;
-
-      const isBull = ob.type === "bullish";
-      const fillColor = isBull ? "rgba(38, 201, 122, 0.14)" : "rgba(255, 69, 96, 0.14)";
-      const borderColor = isBull ? "rgba(38, 201, 122, 0.85)" : "rgba(255, 69, 96, 0.85)";
-      const textColor = isBull ? "#26c97a" : "#ff4560";
-
-      ctx.save();
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(startX, Math.min(yTop, yBottom), boxW, h);
-
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 1.5;
-      ctx.strokeRect(startX, Math.min(yTop, yBottom), boxW, h);
-
-      ctx.fillStyle = textColor;
-      ctx.font = "bold 9px Inter";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "top";
-      const obLabel = (isBull ? "BULLISH OB " : "BEARISH OB ") + `[${fP(ob.bottom)} - ${fP(ob.top)}]`;
-      ctx.fillText(obLabel, startX + 6, Math.min(yTop, yBottom) + 3);
-      ctx.restore();
-    });
-  }
-
-  // 2. Draw Fair Value Gaps (FVG / Order Flow)
-  if (chartActiveIndicators.has("FVG")) {
-    smcData.fvgs.forEach(fvg => {
-      const yTop = toY(fvg.top);
-      const yBottom = toY(fvg.bottom);
-      const yEq = toY(fvg.eq);
-      const h = Math.max(2, Math.abs(yBottom - yTop));
-
-      const startIdx = fvg.idx;
-      const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
-      const boxW = PW - startX;
-      if (boxW <= 0) return;
-
-      const isBull = fvg.type === "bullish";
-      const fillColor = isBull ? "rgba(139, 92, 246, 0.12)" : "rgba(245, 158, 11, 0.12)";
-      const borderColor = isBull ? "rgba(139, 92, 246, 0.6)" : "rgba(245, 158, 11, 0.6)";
-      const textColor = isBull ? "#a78bfa" : "#fbbf24";
-
-      ctx.save();
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(startX, Math.min(yTop, yBottom), boxW, h);
-
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 1.2;
-      ctx.strokeRect(startX, Math.min(yTop, yBottom), boxW, h);
-
-      ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = borderColor;
-      ctx.beginPath();
-      ctx.moveTo(startX, yEq);
-      ctx.lineTo(startX + boxW, yEq);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.fillStyle = textColor;
-      ctx.font = "bold 9px Inter";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(`FVG 50%: ${fP(fvg.eq)}`, startX + 6, yEq - 6);
-      ctx.restore();
-    });
-  }
-
-  // 3. Draw Market Structure Breaks (BOS)
-  if (chartActiveIndicators.has("BOS")) {
-    smcData.boss.forEach(bos => {
-      const y = toY(bos.price);
-      if (y < TOP || y > TOP + PH) return;
-      const startIdx = bos.idx;
-      const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
-
-      const isBull = bos.type === "bullish";
-      const color = isBull ? "#26c97a" : "#ff4560";
-
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1.4;
-      ctx.setLineDash([4, 3]);
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.lineTo(PW, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.fillStyle = color;
-      ctx.font = "bold 9px Inter";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "bottom";
-      ctx.fillText(`${bos.label} (${fP(bos.price)})`, startX + 8, y - 2);
-      ctx.restore();
-    });
-  }
-
-  // 4. Draw Liquidity Sweeps (SWEEP)
-  if (chartActiveIndicators.has("SWEEP")) {
-    smcData.sweeps.forEach(sw => {
-      const y = toY(sw.price);
-      if (y < TOP || y > TOP + PH) return;
-      const startIdx = sw.idx;
-      const startX = (startIdx - s + futureGap) * candleW + candleW / 2;
-      if (startX < 0 || startX > PW) return;
-
-      const isHigh = sw.type === "high";
-      const color = isHigh ? "#ff4560" : "#26c97a";
-
-      ctx.save();
-      ctx.fillStyle = color;
-      ctx.font = "bold 10px Inter";
-      ctx.textAlign = "center";
-      ctx.textBaseline = isHigh ? "bottom" : "top";
-      ctx.fillText("⚡ SWEEP", startX, isHigh ? y - 4 : y + 4);
-      ctx.restore();
-    });
-  }
-}
 
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
@@ -1150,7 +868,7 @@ function drawChart() {
   const fixedVolumeHeight = 60;
   const indicatorHeightPer = 40;
   const newVolH = fixedVolumeHeight + (activeIndicators.length * indicatorHeightPer);
-  
+
   // Update volH if needed and adjust canvas
   if (newVolH !== volH) {
     volH = newVolH;
@@ -1339,7 +1057,7 @@ function drawChart() {
         pocPrice = bin + binSize / 2;
       }
     }
-    
+
     // Draw Profile Bins on the RIGHT
     for (const bin in bins) {
       const p = parseFloat(bin);
@@ -1347,7 +1065,7 @@ function drawChart() {
       const yBottom = toY(p + binSize);
       const height = Math.abs(yBottom - y);
       const width = (bins[bin] / maxBinVol) * (PW * 0.20); // Max 20% width
-      const isPOC = Math.abs(p + binSize/2 - pocPrice) < binSize*0.1;
+      const isPOC = Math.abs(p + binSize / 2 - pocPrice) < binSize * 0.1;
       ctx.fillStyle = isPOC ? "rgba(255, 69, 96, 0.5)" : "rgba(108, 93, 211, 0.15)";
       ctx.fillRect(PW - width, yBottom, width, height - 1);
     }
@@ -1361,14 +1079,14 @@ function drawChart() {
       ctx.font = "bold 10px Inter";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("POC " + fP(pocPrice), PW - pocWidth/2, pocY);
+      ctx.fillText("POC " + fP(pocPrice), PW - pocWidth / 2, pocY);
     }
   }
 
   // 2. Bollinger Bands (BB)
   if (chartActiveIndicators.has("BB")) {
     const bb = calcBB(candles);
-    
+
     // Draw Upper Band
     ctx.beginPath();
     ctx.strokeStyle = "rgba(167, 139, 250, 0.5)";
@@ -1477,7 +1195,7 @@ function drawChart() {
     const indicatorSubH = indicatorsHeight / activeIndicators.length;
     activeIndicators.forEach((subType, subIdx) => {
       const yStart = subIdx * indicatorSubH;
-      
+
       vCtx.save();
       vCtx.beginPath();
       vCtx.rect(0, yStart, PW, indicatorSubH);
@@ -1512,7 +1230,7 @@ function drawChart() {
         vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
         vCtx.setLineDash([3, 3]);
         vCtx.lineWidth = 1;
-        
+
         vCtx.beginPath();
         vCtx.moveTo(0, y30); vCtx.lineTo(PW, y30);
         vCtx.moveTo(0, y50); vCtx.lineTo(PW, y50);
@@ -1761,16 +1479,16 @@ function drawChart() {
   if (chartDensityEnabled) {
     const ticker = coins.get(activeEx + ":" + activeSym);
     const activeBase = ticker ? ticker.base : activeSym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
-    
+
     const walls = densityData.filter(w => {
       if (w.base !== activeBase) return false;
       if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
       if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
       if (!chartDensityExes.has(w.ex)) return false;
-      
+
       const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
       if (!chartDensitySizes.has(sizeType)) return false;
-      
+
       return true;
     });
 
@@ -1782,11 +1500,11 @@ function drawChart() {
 
       // Exchange abbreviation map for clearer labels
       const EX_NAMES = {
-        BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX", 
-        KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate", 
+        BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX",
+        KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate",
         HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
       };
-      
+
       for (const w of walls) {
         const wy = toY(w.price);
         if (wy < TOP || wy > TOP + PH) continue;
@@ -1800,12 +1518,12 @@ function drawChart() {
 
         const isBid = w.side === "bid";
         const baseColor = isBid ? "rgb(38,201,122)" : "rgb(255,69,96)";
-        
+
         ctx.strokeStyle = baseColor;
         // Nicer line thickness
         ctx.lineWidth = Math.min(6, 1.5 + w.rtwi / 5);
         ctx.lineCap = "round";
-        
+
         ctx.beginPath();
         ctx.moveTo(startX, wy);
         ctx.lineTo(PW, wy);
@@ -1819,19 +1537,19 @@ function drawChart() {
         ctx.font = "bold 9px Inter";
         ctx.textAlign = "left";
         ctx.textBaseline = "bottom";
-        
+
         // Draw a little pill/background for label
         const labelWidth = ctx.measureText(label).width + 10;
         const labelHeight = 14;
         ctx.fillStyle = isBid ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
         roundRect(ctx, Math.min(startX + 2, PW - labelWidth - 4), wy - labelHeight - 2, labelWidth, labelHeight, 3);
         ctx.fill();
-        
+
         ctx.fillStyle = baseColor;
         ctx.fillText(label, Math.min(startX + 7, PW - labelWidth), wy - 5);
 
         // Save badge coordinate and info to draw on price scale later (outside of clip)
-        wallBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38,201,122] : [255,69,96] });
+        wallBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38, 201, 122] : [255, 69, 96] });
       }
       ctx.restore();
     }
@@ -1988,15 +1706,15 @@ function drawChart() {
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.lineWidth = d.lineWidth || 2;
-        
+
         // Simplify path by skipping some points for performance
         const step = Math.max(1, Math.floor(d.points.length / 200));
-        
+
         const firstPoint = d.points[0];
         const startX = getX(firstPoint.t);
         const startY = getY(firstPoint.p);
         ctx.moveTo(startX, startY);
-        
+
         for (let i = 1; i < d.points.length; i += step) {
           const pt = d.points[i];
           const px = getX(pt.t);
@@ -2187,12 +1905,12 @@ function drawChart() {
     for (const badge of wallBadges) {
       ctx.save();
       const badgeY = badge.y - badgeH / 2;
-      
+
       // Draw background
       roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
       ctx.fillStyle = "#1e1f2e";
       ctx.fill();
-      
+
       // Draw border in wall color
       ctx.strokeStyle = `rgba(${badge.baseColorArr.join(',')},1)`;
       ctx.lineWidth = 2;
@@ -2581,21 +2299,21 @@ function openDrawColorMenu({
   const brushControl = $("brush-thickness-control");
   const brushSlider = $("brush-thickness-slider");
   const brushValue = $("brush-thickness-value");
-  
+
   titleEl.textContent = title;
   grid.innerHTML = "";
   drawColorSelectHandler = onSelect || null;
-  
+
   // Show/hide brush thickness control
   if (showBrushThickness) {
     brushControl.style.display = "block";
     brushSlider.value = brushLineWidth;
     brushValue.textContent = brushLineWidth + "px";
-    
+
     // Remove old listener if exists
     const newSlider = brushSlider.cloneNode(true);
     brushSlider.parentNode.replaceChild(newSlider, brushSlider);
-    
+
     newSlider.addEventListener("input", (e) => {
       brushLineWidth = parseInt(e.target.value, 10);
       brushValue.textContent = brushLineWidth + "px";
@@ -2603,7 +2321,7 @@ function openDrawColorMenu({
   } else {
     brushControl.style.display = "none";
   }
-  
+
   DRAW_COLOR_PALETTE.forEach((clr) => {
     const b = document.createElement("div");
     b.className = "tag-btn" + (currentColor === clr ? " on" : "");
@@ -2950,7 +2668,7 @@ canvas.addEventListener("mousemove", (e) => {
       // Brush: add points to the path with throttling
       const { t, p } = getCursorTP(mX, mY);
       const lastPoint = tempDrawing.points[tempDrawing.points.length - 1];
-      
+
       // Only add point if it's significantly different (min distance check)
       if (lastPoint) {
         const dt = Math.abs(t - lastPoint.t);
@@ -3016,7 +2734,7 @@ canvas.addEventListener("mousemove", (e) => {
 canvas.addEventListener("mouseup", () => {
   if (dragDrawing) { saveDrawings(); dragDrawing = null; }
   if (activeTool === 'ruler') setTool('none');
-  
+
   // Finish brush drawing
   if (activeTool === 'brush' && tempDrawing && drawingPhase === 1) {
     if (tempDrawing.points && tempDrawing.points.length > 1) {
@@ -3027,7 +2745,7 @@ canvas.addEventListener("mouseup", () => {
     drawingPhase = 0;
     setTool("none");
   }
-  
+
   quickMeasure = null;
   isDragX = false; isDragY = false; isDragYScale = false;
   requestDraw();
@@ -4045,259 +3763,255 @@ const _magnetBtn = $("magnet-btn");
 if (_magnetBtn) _magnetBtn.onclick = toggleMagnet;
 applyToolButtonColors();
 
-  // ── Density settings panel toggle ────────────────────────────────────────────
-  const densitySettingsToggle = $("chart-density-settings-toggle");
-  const densityPanel = $("chart-density-panel");
-  const densityClose = $("chart-density-close");
+// ── Density settings panel toggle ────────────────────────────────────────────
+const densitySettingsToggle = $("chart-density-settings-toggle");
+const densityPanel = $("chart-density-panel");
+const densityClose = $("chart-density-close");
 
-  if (densitySettingsToggle && densityPanel) {
-    densitySettingsToggle.onclick = (e) => {
-      e.stopPropagation();
-      const open = densityPanel.classList.contains("open");
-      if (open) {
-        densityPanel.classList.remove("open");
-        densitySettingsToggle.classList.remove("on");
-      } else {
-        densityPanel.classList.add("open");
-        densitySettingsToggle.classList.add("on");
-      }
-    };
-  }
-
-  if (densityClose && densityPanel && densitySettingsToggle) {
-    densityClose.onclick = (e) => {
-      e.stopPropagation();
+if (densitySettingsToggle && densityPanel) {
+  densitySettingsToggle.onclick = (e) => {
+    e.stopPropagation();
+    const open = densityPanel.classList.contains("open");
+    if (open) {
       densityPanel.classList.remove("open");
       densitySettingsToggle.classList.remove("on");
-    };
-  }
-
-  // Hide density panel when clicking outside
-  document.addEventListener("click", (e) => {
-    if (densityPanel && densityPanel.classList.contains("open")) {
-      const clickedToggle = densitySettingsToggle && densitySettingsToggle.contains(e.target);
-      const clickedExWrap = document.getElementById("chart-density-exc-wrap");
-      const clickedExMenu = clickedExWrap && clickedExWrap.contains(e.target);
-      if (!densityPanel.contains(e.target) && !clickedToggle && !clickedExMenu) {
-        densityPanel.classList.remove("open");
-        if (densitySettingsToggle) densitySettingsToggle.classList.remove("on");
-      }
-    }
-  });
-
-  // Switch inside density settings panel
-  const densitySwitch = $("chart-density-switch");
-  if (densitySwitch) {
-    if (chartDensityEnabled) densitySwitch.classList.add("on"); // match chartDensityEnabled default
-    densitySwitch.onclick = () => {
-      densitySwitch.classList.toggle("on");
-      chartDensityEnabled = densitySwitch.classList.contains("on");
-      requestAnimationFrame(drawChart);
-    };
-  }
-
-  // Filter buttons inside density settings panel (toggle active states)
-  document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forEach(btn => {
-    btn.onclick = () => {
-      const side = btn.dataset.chartDensitySide;
-      const market = btn.dataset.chartDensityMarket;
-      if (side) {
-        const parent = btn.parentElement;
-        if (parent) {
-          parent.querySelectorAll("[data-chart-density-side]").forEach(b => b.classList.remove("on"));
-        }
-        btn.classList.add("on");
-        chartDensitySide = side;
-      } else if (market) {
-        const parent = btn.parentElement;
-        if (parent) {
-          parent.querySelectorAll("[data-chart-density-market]").forEach(b => b.classList.remove("on"));
-        }
-        btn.classList.add("on");
-        chartDensityMarket = market;
-      } else {
-        btn.classList.toggle("on");
-        const sizeId = btn.id; // e.g. chart-density-small
-        if (sizeId) {
-          const sizeType = sizeId.replace("chart-density-", "");
-          if (btn.classList.contains("on")) {
-            chartDensitySizes.add(sizeType);
-          } else {
-            chartDensitySizes.delete(sizeType);
-          }
-        }
-      }
-      requestAnimationFrame(drawChart);
-    };
-  });
-
-  // Indicators buttons inside density settings panel
-  const indInfoBox = $("chart-indicator-info-box");
-  // Map button IDs to correct indicator names that code expects
-  const indicatorIdToName = {
-    "ind-cvd": "CVD",
-    "ind-ema20": "EMA 20",
-    "ind-ema50": "EMA 50",
-    "ind-ema200": "EMA 200",
-    "ind-vwap": "VWAP",
-    "ind-rsi": "RSI",
-    "ind-atr": "ATR",
-    "ind-volprofile": "VP",
-    "ind-bb": "BB",
-    "ind-macd": "MACD",
-    "ind-ob": "OB",
-    "ind-fvg": "FVG",
-    "ind-bos": "BOS",
-    "ind-sweep": "SWEEP"
-  };
-  const formationIdToName = {
-    "fmt-levels": "levels",
-    "fmt-breakouts": "breakouts",
-    "fmt-retests": "retests",
-    "fmt-trendlines": "trendlines",
-    "fmt-impulses": "impulses"
-  };
-  document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
-    // Initialize button state based on chartActiveIndicators & chartActiveFormations
-    const indicatorName = indicatorIdToName[btn.id];
-    const formationName = formationIdToName[btn.id];
-    if (indicatorName && chartActiveIndicators.has(indicatorName)) {
-      btn.classList.add("on");
-    }
-    if (formationName && chartActiveFormations.has(formationName)) {
-      btn.classList.add("on");
-    }
-    btn.onclick = () => {
-      btn.classList.toggle("on");
-      const indName = indicatorIdToName[btn.id];
-      const fmtName = formationIdToName[btn.id];
-      if (indName) {
-        if (btn.classList.contains("on")) {
-          chartActiveIndicators.add(indName);
-        } else {
-          chartActiveIndicators.delete(indName);
-        }
-      }
-      if (fmtName) {
-        if (btn.classList.contains("on")) {
-          chartActiveFormations.add(fmtName);
-        } else {
-          chartActiveFormations.delete(fmtName);
-        }
-        // Sync left panel button if present
-        const leftBtn = $(`fmt-left-${fmtName}`);
-        if (leftBtn) {
-          if (btn.classList.contains("on")) leftBtn.classList.add("on");
-          else leftBtn.classList.remove("on");
-        }
-        if (typeof window.loadFormations === "function") window.loadFormations();
-      }
-      requestAnimationFrame(drawChart);
-    };
-
-    // Hover descriptions
-    btn.onmouseenter = () => {
-      if (indInfoBox) {
-        indInfoBox.textContent = btn.dataset.desc || "";
-      }
-    };
-    btn.onmouseleave = () => {
-      if (indInfoBox) {
-        indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
-      }
-    };
-  });
-
-  // Touches filter buttons inside main settings panel
-  document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-      const val = parseInt(btn.dataset.fmtTouches, 10);
-      if (val) formationsMinTouches = val;
-      if (typeof window.loadFormations === "function") window.loadFormations();
-      requestAnimationFrame(drawChart);
-    };
-  });
-
-  // Cascade filter buttons inside main settings panel
-  document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-      const val = parseInt(btn.dataset.fmtCascade, 10);
-      if (val) formationsMinCascade = val;
-      if (typeof window.loadFormations === "function") window.loadFormations();
-      requestAnimationFrame(drawChart);
-    };
-  });
-
-  // Tolerance filter buttons inside main settings panel
-  document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(btn => {
-    btn.onclick = () => {
-      document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(b => b.classList.remove("on"));
-      btn.classList.add("on");
-      const val = parseFloat(btn.dataset.fmtTol);
-      if (val) formationsTolerance = val;
-      if (typeof window.loadFormations === "function") window.loadFormations();
-      requestAnimationFrame(drawChart);
-    };
-  });
-
-  // Exchange selector inside density settings panel
-  const cDexBtn = $("chart-density-exc-btn");
-  const cDexMenu = $("chart-density-exc-menu");
-  const cDexName = $("chart-density-exc-name");
-  const cDexCbAll = document.querySelector(".chart-dex-cb-all");
-  const cDexCbs = document.querySelectorAll(".chart-dex-cb");
-
-  if (cDexBtn && cDexMenu) {
-    cDexBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      cDexBtn.classList.toggle("open");
-      cDexMenu.classList.toggle("open");
-    });
-  }
-
-  function updateChartDexDropdownUI() {
-    const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
-    if (chartDensityExes.size === allExes.length) {
-      if (cDexName) cDexName.textContent = "Все биржи";
-      if (cDexCbAll) cDexCbAll.checked = true;
-      cDexCbs.forEach(cb => cb.checked = true);
     } else {
-      if (chartDensityExes.size === 0) {
-        if (cDexName) cDexName.textContent = "Выберите биржу";
-      } else {
-        if (cDexName) cDexName.textContent = `Выбрано: ${chartDensityExes.size}`;
-      }
-      if (cDexCbAll) cDexCbAll.checked = false;
-      cDexCbs.forEach(cb => cb.checked = chartDensityExes.has(cb.value));
+      densityPanel.classList.add("open");
+      densitySettingsToggle.classList.add("on");
+    }
+  };
+}
+
+if (densityClose && densityPanel && densitySettingsToggle) {
+  densityClose.onclick = (e) => {
+    e.stopPropagation();
+    densityPanel.classList.remove("open");
+    densitySettingsToggle.classList.remove("on");
+  };
+}
+
+// Hide density panel when clicking outside
+document.addEventListener("click", (e) => {
+  if (densityPanel && densityPanel.classList.contains("open")) {
+    const clickedToggle = densitySettingsToggle && densitySettingsToggle.contains(e.target);
+    const clickedExWrap = document.getElementById("chart-density-exc-wrap");
+    const clickedExMenu = clickedExWrap && clickedExWrap.contains(e.target);
+    if (!densityPanel.contains(e.target) && !clickedToggle && !clickedExMenu) {
+      densityPanel.classList.remove("open");
+      if (densitySettingsToggle) densitySettingsToggle.classList.remove("on");
     }
   }
+});
 
-  if (cDexCbAll) {
-    cDexCbAll.addEventListener("change", (e) => {
-      const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
-      if (e.target.checked) chartDensityExes = new Set(allExes);
-      else chartDensityExes.clear();
-      updateChartDexDropdownUI();
-      requestAnimationFrame(drawChart);
-    });
+// Switch inside density settings panel
+const densitySwitch = $("chart-density-switch");
+if (densitySwitch) {
+  if (chartDensityEnabled) densitySwitch.classList.add("on"); // match chartDensityEnabled default
+  densitySwitch.onclick = () => {
+    densitySwitch.classList.toggle("on");
+    chartDensityEnabled = densitySwitch.classList.contains("on");
+    requestAnimationFrame(drawChart);
+  };
+}
+
+// Filter buttons inside density settings panel (toggle active states)
+document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forEach(btn => {
+  btn.onclick = () => {
+    const side = btn.dataset.chartDensitySide;
+    const market = btn.dataset.chartDensityMarket;
+    if (side) {
+      const parent = btn.parentElement;
+      if (parent) {
+        parent.querySelectorAll("[data-chart-density-side]").forEach(b => b.classList.remove("on"));
+      }
+      btn.classList.add("on");
+      chartDensitySide = side;
+    } else if (market) {
+      const parent = btn.parentElement;
+      if (parent) {
+        parent.querySelectorAll("[data-chart-density-market]").forEach(b => b.classList.remove("on"));
+      }
+      btn.classList.add("on");
+      chartDensityMarket = market;
+    } else {
+      btn.classList.toggle("on");
+      const sizeId = btn.id; // e.g. chart-density-small
+      if (sizeId) {
+        const sizeType = sizeId.replace("chart-density-", "");
+        if (btn.classList.contains("on")) {
+          chartDensitySizes.add(sizeType);
+        } else {
+          chartDensitySizes.delete(sizeType);
+        }
+      }
+    }
+    requestAnimationFrame(drawChart);
+  };
+});
+
+// Indicators buttons inside density settings panel
+const indInfoBox = $("chart-indicator-info-box");
+// Map button IDs to correct indicator names that code expects
+const indicatorIdToName = {
+  "ind-cvd": "CVD",
+  "ind-ema20": "EMA 20",
+  "ind-ema50": "EMA 50",
+  "ind-ema200": "EMA 200",
+  "ind-vwap": "VWAP",
+  "ind-rsi": "RSI",
+  "ind-atr": "ATR",
+  "ind-volprofile": "VP",
+  "ind-bb": "BB",
+  "ind-macd": "MACD"
+};
+const formationIdToName = {
+  "fmt-levels": "levels",
+  "fmt-breakouts": "breakouts",
+  "fmt-retests": "retests",
+  "fmt-trendlines": "trendlines",
+  "fmt-impulses": "impulses"
+};
+document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
+  // Initialize button state based on chartActiveIndicators & chartActiveFormations
+  const indicatorName = indicatorIdToName[btn.id];
+  const formationName = formationIdToName[btn.id];
+  if (indicatorName && chartActiveIndicators.has(indicatorName)) {
+    btn.classList.add("on");
   }
+  if (formationName && chartActiveFormations.has(formationName)) {
+    btn.classList.add("on");
+  }
+  btn.onclick = () => {
+    btn.classList.toggle("on");
+    const indName = indicatorIdToName[btn.id];
+    const fmtName = formationIdToName[btn.id];
+    if (indName) {
+      if (btn.classList.contains("on")) {
+        chartActiveIndicators.add(indName);
+      } else {
+        chartActiveIndicators.delete(indName);
+      }
+    }
+    if (fmtName) {
+      if (btn.classList.contains("on")) {
+        chartActiveFormations.add(fmtName);
+      } else {
+        chartActiveFormations.delete(fmtName);
+      }
+      // Sync left panel button if present
+      const leftBtn = $(`fmt-left-${fmtName}`);
+      if (leftBtn) {
+        if (btn.classList.contains("on")) leftBtn.classList.add("on");
+        else leftBtn.classList.remove("on");
+      }
+      if (typeof window.loadFormations === "function") window.loadFormations();
+    }
+    requestAnimationFrame(drawChart);
+  };
 
-  cDexCbs.forEach(cb => {
-    cb.addEventListener("change", (e) => {
-      if (e.target.checked) chartDensityExes.add(cb.value);
-      else chartDensityExes.delete(cb.value);
-      updateChartDexDropdownUI();
-      requestAnimationFrame(drawChart);
-    });
+  // Hover descriptions
+  btn.onmouseenter = () => {
+    if (indInfoBox) {
+      indInfoBox.textContent = btn.dataset.desc || "";
+    }
+  };
+  btn.onmouseleave = () => {
+    if (indInfoBox) {
+      indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
+    }
+  };
+});
+
+// Touches filter buttons inside main settings panel
+document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = parseInt(btn.dataset.fmtTouches, 10);
+    if (val) formationsMinTouches = val;
+    if (typeof window.loadFormations === "function") window.loadFormations();
+    requestAnimationFrame(drawChart);
+  };
+});
+
+// Cascade filter buttons inside main settings panel
+document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = parseInt(btn.dataset.fmtCascade, 10);
+    if (val) formationsMinCascade = val;
+    if (typeof window.loadFormations === "function") window.loadFormations();
+    requestAnimationFrame(drawChart);
+  };
+});
+
+// Tolerance filter buttons inside main settings panel
+document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    const val = parseFloat(btn.dataset.fmtTol);
+    if (val) formationsTolerance = val;
+    if (typeof window.loadFormations === "function") window.loadFormations();
+    requestAnimationFrame(drawChart);
+  };
+});
+
+// Exchange selector inside density settings panel
+const cDexBtn = $("chart-density-exc-btn");
+const cDexMenu = $("chart-density-exc-menu");
+const cDexName = $("chart-density-exc-name");
+const cDexCbAll = document.querySelector(".chart-dex-cb-all");
+const cDexCbs = document.querySelectorAll(".chart-dex-cb");
+
+if (cDexBtn && cDexMenu) {
+  cDexBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cDexBtn.classList.toggle("open");
+    cDexMenu.classList.toggle("open");
   });
+}
 
-  const settingsBtn = $("settings-btn");
-  const settingsOverlay = $("settings-overlay");
-  const settingsClose = $("settings-close");
+function updateChartDexDropdownUI() {
+  const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
+  if (chartDensityExes.size === allExes.length) {
+    if (cDexName) cDexName.textContent = "Все биржи";
+    if (cDexCbAll) cDexCbAll.checked = true;
+    cDexCbs.forEach(cb => cb.checked = true);
+  } else {
+    if (chartDensityExes.size === 0) {
+      if (cDexName) cDexName.textContent = "Выберите биржу";
+    } else {
+      if (cDexName) cDexName.textContent = `Выбрано: ${chartDensityExes.size}`;
+    }
+    if (cDexCbAll) cDexCbAll.checked = false;
+    cDexCbs.forEach(cb => cb.checked = chartDensityExes.has(cb.value));
+  }
+}
+
+if (cDexCbAll) {
+  cDexCbAll.addEventListener("change", (e) => {
+    const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
+    if (e.target.checked) chartDensityExes = new Set(allExes);
+    else chartDensityExes.clear();
+    updateChartDexDropdownUI();
+    requestAnimationFrame(drawChart);
+  });
+}
+
+cDexCbs.forEach(cb => {
+  cb.addEventListener("change", (e) => {
+    if (e.target.checked) chartDensityExes.add(cb.value);
+    else chartDensityExes.delete(cb.value);
+    updateChartDexDropdownUI();
+    requestAnimationFrame(drawChart);
+  });
+});
+
+const settingsBtn = $("settings-btn");
+const settingsOverlay = $("settings-overlay");
+const settingsClose = $("settings-close");
 
 if (settingsBtn && settingsOverlay && settingsClose) {
   settingsBtn.onclick = () => {
@@ -5729,7 +5443,7 @@ class ChartInstance {
 
       const visibleLevels = this.levels.filter(setup => setup.labelY >= 2 && setup.labelY <= ch - 2);
       visibleLevels.sort((a, b) => a.labelY - b.labelY);
-      
+
       const minSpacing = 16;
       for (let i = 1; i < visibleLevels.length; i++) {
         const prev = visibleLevels[i - 1];
@@ -5762,7 +5476,7 @@ class ChartInstance {
           // Draw Trendline
           const x1 = getX(setup.p1.idx);
           const y1 = toY(setup.p1.price);
-          
+
           // Project trendline to the current candle + 4 candles in length
           const endIdx = N - 1 + 4;
           const endPrice = setup.p1.price + (setup.p2.price - setup.p1.price) * (endIdx - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
@@ -5890,7 +5604,7 @@ class ChartInstance {
           pocPrice = bin + binSize / 2;
         }
       }
-      
+
       // Draw Profile Bins on the RIGHT (same as main chart)
       for (const bin in bins) {
         const p = parseFloat(bin);
@@ -5898,7 +5612,7 @@ class ChartInstance {
         const yBottom = toY(p + binSize);
         const height = Math.abs(yBottom - y);
         const width = (bins[bin] / maxBinVol) * (PW * 0.20);
-        const isPOC = Math.abs(p + binSize/2 - pocPrice) < binSize*0.1;
+        const isPOC = Math.abs(p + binSize / 2 - pocPrice) < binSize * 0.1;
         ctx.fillStyle = isPOC ? "rgba(255, 69, 96, 0.5)" : "rgba(108, 93, 211, 0.15)";
         ctx.fillRect(PW - width, yBottom, width, height - 1);
       }
@@ -5911,14 +5625,14 @@ class ChartInstance {
         ctx.font = "bold 9px Inter";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText("POC " + fP(pocPrice), PW - pocWidth/2, pocY);
+        ctx.fillText("POC " + fP(pocPrice), PW - pocWidth / 2, pocY);
       }
     }
 
     // 2. Bollinger Bands (BB)
     if (chartActiveIndicators.has("BB")) {
       const bb = calcBB(this.candles);
-      
+
       // Upper Band
       ctx.beginPath();
       ctx.strokeStyle = "rgba(167, 139, 250, 0.5)";
@@ -6020,16 +5734,16 @@ class ChartInstance {
     if (chartDensityEnabled) {
       const ticker = coins.get(this.ex + ":" + this.sym);
       const activeBase = ticker ? ticker.base : this.sym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
-      
+
       const walls = densityData.filter(w => {
         if (w.base !== activeBase) return false;
         if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
         if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
         if (!chartDensityExes.has(w.ex)) return false;
-        
+
         const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
         if (!chartDensitySizes.has(sizeType)) return false;
-        
+
         return true;
       });
 
@@ -6041,11 +5755,11 @@ class ChartInstance {
 
         // Exchange abbreviation map for clearer labels
         const EX_NAMES = {
-          BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX", 
-          KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate", 
+          BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX",
+          KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate",
           HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
         };
-        
+
         for (const w of walls) {
           const wy = toY(w.price);
           if (wy < 0 || wy > ch) continue;
@@ -6059,11 +5773,11 @@ class ChartInstance {
 
           const isBid = w.side === "bid";
           const baseColor = isBid ? "rgb(38,201,122)" : "rgb(255,69,96)";
-          
+
           ctx.strokeStyle = baseColor;
           ctx.lineWidth = Math.min(8, 2.0 + w.rtwi / 4);
           ctx.lineCap = "round";
-          
+
           ctx.beginPath();
           ctx.moveTo(startX, wy);
           ctx.lineTo(PW, wy);
@@ -6077,19 +5791,19 @@ class ChartInstance {
           ctx.font = "bold 9px Inter";
           ctx.textAlign = "left";
           ctx.textBaseline = "bottom";
-          
+
           // Draw a little pill/background for label
           const labelWidth = ctx.measureText(label).width + 10;
           const labelHeight = 14;
           ctx.fillStyle = isBid ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
           roundRect(ctx, Math.min(startX + 2, PW - labelWidth - 4), wy - labelHeight - 2, labelWidth, labelHeight, 3);
           ctx.fill();
-          
+
           ctx.fillStyle = baseColor;
           ctx.fillText(label, Math.min(startX + 7, PW - labelWidth), wy - 5);
 
           // Save badge coordinate and info to draw on price scale later (outside of clip)
-          gridBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38,201,122] : [255,69,96] });
+          gridBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38, 201, 122] : [255, 69, 96] });
         }
         ctx.restore();
       }
@@ -6108,7 +5822,7 @@ class ChartInstance {
         roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
         ctx.fillStyle = "#1e1f2e";
         ctx.fill();
-        
+
         ctx.strokeStyle = `rgba(${badge.baseColorArr.join(',')},1)`;
         ctx.lineWidth = 2;
         ctx.stroke();
@@ -6134,7 +5848,7 @@ class ChartInstance {
       ctx.save();
       ctx.fillStyle = "rgba(0, 186, 255, 0.12)";
       ctx.fillRect(xStart, Math.min(yStart, yEnd), xEnd - xStart, Math.abs(yEnd - yStart));
-      
+
       // Border of the region
       ctx.strokeStyle = "rgba(0, 186, 255, 0.6)";
       ctx.lineWidth = 1;
@@ -6181,7 +5895,7 @@ class ChartInstance {
         else if (this.tf.endsWith("h")) tfMin = parseInt(this.tf) * 60;
         else if (this.tf.endsWith("d")) tfMin = parseInt(this.tf) * 1440;
         else if (this.tf.endsWith("w")) tfMin = parseInt(this.tf) * 10080;
-        
+
         const totalMin = bars * tfMin;
         if (totalMin < 60) timeStr = totalMin + "m";
         else if (totalMin < 1440) {
@@ -7467,7 +7181,7 @@ window.addEventListener("resize", () => {
   //     atr           : ATR at detection time (for projection sizing)
   //   }
   //
-  window.detectChartLevelsAndTouches = function(candles) {
+  window.detectChartLevelsAndTouches = function (candles) {
     if (!candles || candles.length < 40) return [];
 
     const N = candles.length;
@@ -7478,8 +7192,8 @@ window.addEventListener("resize", () => {
       const c = candles[i], p = candles[i - 1];
       atrSum += Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c));
     }
-    const atr  = atrSum / 14;
-    const tol  = atr * 0.4;   // within 40% ATR = "price visited this zone"
+    const atr = atrSum / 14;
+    const tol = atr * 0.4;   // within 40% ATR = "price visited this zone"
     const minDep = atr * 0.8; // departure must be at least 80% ATR in 3 bars
 
     // ── 2. Swing Highs & Lows (window=3) ─────────────────────────────────────
@@ -7493,7 +7207,7 @@ window.addEventListener("resize", () => {
         if (candles[j].l <= candles[i].l) isL = false;
       }
       if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
-      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low' });
     }
 
     const lastPrice = candles[N - 1].c;
@@ -7556,9 +7270,9 @@ window.addEventListener("resize", () => {
       const strength = recency * 2.5 + Math.min(distance, 5) * 0.4;
 
       candidates.push({
-        price:        lvl,
+        price: lvl,
         direction,
-        swingIdx:     sw.idx,
+        swingIdx: sw.idx,
         departureIdx,
         strength,
         atr
@@ -7578,7 +7292,7 @@ window.addEventListener("resize", () => {
     return kept;
   };
 
-  window.detectChartBreakoutLevels = function(candles) {
+  window.detectChartBreakoutLevels = function (candles) {
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
@@ -7594,7 +7308,7 @@ window.addEventListener("resize", () => {
         if (candles[j].l <= candles[i].l) isL = false;
       }
       if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
-      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low' });
     }
 
     const highSwings = swings.filter(s => s.type === 'high');
@@ -7627,7 +7341,7 @@ window.addEventListener("resize", () => {
     for (const cl of resClusters) {
       if (cl.touches < formationsMinCascade) continue;
       const firstIdx = Math.min(...cl.swingIndices);
-      
+
       let active = true;
       let touchIndices = new Set(cl.swingIndices);
       let lastTouchIndex = cl.lastTouch;
@@ -7730,19 +7444,19 @@ window.addEventListener("resize", () => {
 
     // Sort by relevance (highest relevance first)
     candidates.sort((a, b) => b.relevance - a.relevance);
-    
+
     // Deduplicate: min distance 0.5%
     const kept = [];
     for (const c of candidates) {
       const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
       if (!near) kept.push(c);
     }
-    
+
     // Limit to 3 most relevant active levels
     return kept.slice(0, 3);
   };
 
-  window.detectChartTrendlines = function(candles) {
+  window.detectChartTrendlines = function (candles) {
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
@@ -7758,7 +7472,7 @@ window.addEventListener("resize", () => {
         if (candles[j].l <= candles[i].l) isL = false;
       }
       if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
-      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low' });
     }
 
     const highSwings = swings.filter(s => s.type === 'high');
@@ -7774,7 +7488,7 @@ window.addEventListener("resize", () => {
         if (s2.price >= s1.price) continue; // must be downward sloping
 
         const slope = (s2.price - s1.price) / (s2.idx - s1.idx);
-        
+
         // Check if unbroken and count touches
         let broken = false;
         const swingIndices = [];
@@ -7879,7 +7593,7 @@ window.addEventListener("resize", () => {
     return kept;
   };
 
-  window.detectChartRetests = function(candles) {
+  window.detectChartRetests = function (candles) {
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
@@ -7894,7 +7608,7 @@ window.addEventListener("resize", () => {
         if (candles[j].l <= candles[i].l) isL = false;
       }
       if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
-      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low' });
     }
 
     const highSwings = swings.filter(s => s.type === 'high');
@@ -7927,13 +7641,13 @@ window.addEventListener("resize", () => {
 
     for (const cl of resClusters) {
       if (cl.touches < 2 || cl.touches > 5) continue; // Must be 2-5 touches
-      
+
       // GLOBAL LEVEL CLEANLINESS: level cannot have more than 2 total crossovers across chart history
       const firstSwingIdx = Math.min(...cl.swingIndices);
       let totalCrosses = 0;
       for (let k = firstSwingIdx; k < N - 1; k++) {
         if ((candles[k].c < cl.price && candles[k + 1].c > cl.price) ||
-            (candles[k].c > cl.price && candles[k + 1].c < cl.price)) {
+          (candles[k].c > cl.price && candles[k + 1].c < cl.price)) {
           totalCrosses++;
         }
       }
@@ -8036,7 +7750,7 @@ window.addEventListener("resize", () => {
       let totalCrosses = 0;
       for (let k = firstSwingIdx; k < N - 1; k++) {
         if ((candles[k].c < cl.price && candles[k + 1].c > cl.price) ||
-            (candles[k].c > cl.price && candles[k + 1].c < cl.price)) {
+          (candles[k].c > cl.price && candles[k + 1].c < cl.price)) {
           totalCrosses++;
         }
       }
@@ -8121,7 +7835,7 @@ window.addEventListener("resize", () => {
     return kept.slice(0, 1);
   };
 
-  window.detectChartApproachingRetests = function(candles) {
+  window.detectChartApproachingRetests = function (candles) {
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
@@ -8136,11 +7850,11 @@ window.addEventListener("resize", () => {
         if (candles[j].l <= candles[i].l) isL = false;
       }
       if (isH) swings.push({ idx: i, price: candles[i].h, type: 'high' });
-      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low'  });
+      if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low' });
     }
 
     const highSwings = swings.filter(s => s.type === 'high');
-    const lowSwings  = swings.filter(s => s.type === 'low');
+    const lowSwings = swings.filter(s => s.type === 'low');
     const tol = 0.003; // wider clustering tolerance to build stronger levels
     const candidates = [];
     const MIN_TOUCHES = 2; // level must have at least 2 swing touches
@@ -8325,7 +8039,7 @@ window.addEventListener("resize", () => {
     return kept.slice(0, 3);
   };
 
-  window.detectChartLevelsFn = function(candles) {
+  window.detectChartLevelsFn = function (candles) {
     if (!candles || candles.length < 30) return [];
 
     if (typeof activeFormation !== 'undefined') {
@@ -8392,9 +8106,9 @@ window.addEventListener("resize", () => {
     let label = formationsCols + " Графиков";
     if (formationsCols === 1) label = formationsCols + " График";
     else if (formationsCols >= 2 && formationsCols <= 4) label = formationsCols + " Графика";
-    
+
     fgGridVal.textContent = label;
-    
+
     fgGridMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
       const val = parseInt(item.dataset.value, 10);
       if (val === formationsCols) {
@@ -8495,7 +8209,7 @@ window.addEventListener("resize", () => {
       item.onclick = () => {
         const cex = item.dataset.cex;
         const wasOn = item.classList.contains("on");
-        
+
         if (cex === "ALL") {
           const turnOn = !wasOn;
           fgExcMenu.querySelectorAll(".exc-item").forEach(x => {
@@ -8509,7 +8223,7 @@ window.addEventListener("resize", () => {
             item.classList.add("on");
           }
         }
-        
+
         syncFormationsExchangeSelect();
         window.loadFormations();
       };
@@ -8599,7 +8313,7 @@ window.addEventListener("resize", () => {
       } else {
         fgSelectMenu.classList.add("open");
         fgSelectBtn.classList.add("open");
-        
+
         // Close other menus
         fgSettingsMenu?.classList.remove("open");
         fgSettingsBtn?.classList.remove("open");
@@ -8657,7 +8371,7 @@ window.addEventListener("resize", () => {
       } else {
         fgSettingsMenu.classList.add("open");
         fgSettingsBtn.classList.add("open");
-        
+
         // Close other menus
         fgSelectMenu?.classList.remove("open");
         fgSelectBtn?.classList.remove("open");
@@ -8794,14 +8508,14 @@ window.addEventListener("resize", () => {
                 KLINES_CACHE.set(key, { ts: Date.now(), data: rawKlines });
               }
             }
-          } catch (e) {}
+          } catch (e) { }
         }
 
         if (klinesData) {
           const flat = [];
           if (typeof klinesData[0] === 'number') {
             for (let i = 0; i < klinesData.length; i += 6) {
-              flat.push({ t: klinesData[i], o: klinesData[i+1], h: klinesData[i+2], l: klinesData[i+3], c: klinesData[i+4], v: klinesData[i+5] });
+              flat.push({ t: klinesData[i], o: klinesData[i + 1], h: klinesData[i + 2], l: klinesData[i + 3], c: klinesData[i + 4], v: klinesData[i + 5] });
             }
           } else {
             flat.push(...klinesData);
@@ -8860,10 +8574,10 @@ window.addEventListener("resize", () => {
   }
 
   // Called by ChartInstance after klines load and levels are computed
-  window.registerFormationsCoinLevels = function(ex, sym, levels) {
+  window.registerFormationsCoinLevels = function (ex, sym, levels) {
     const key = ex + ':' + sym;
     const had = formationsCoinsLevelsMap.has(key);
-    
+
     let wasEligible = false;
     if (had) {
       if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
@@ -8939,7 +8653,7 @@ window.addEventListener("resize", () => {
 
   const fgFormationsNearestToggle = $("formations-nearest-toggle");
 
-  window.loadFormations = function(resetPage = false) {
+  window.loadFormations = function (resetPage = false) {
     if (resetPage) formationsPage = 0;
     const checkedEx = [];
     if (fgExcMenu) {
