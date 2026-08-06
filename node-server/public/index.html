@@ -2,8 +2,10 @@
 <html lang="ru">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#12141a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>
         CryptoScreen Pro — Фьючерсный скринер криптовалют | Binance Bybit
         OKX
@@ -76,9 +78,10 @@
                 </div>
                 <div class="sbox" role="search">
                     <span class="sico">⌕</span>
-                    <input id="si" type="search" placeholder="Поиск монеты..." autocomplete="off"
+                    <input id="si" type="search" placeholder="Поиск (Ctrl+K или /)..." autocomplete="off"
                         aria-label="Поиск монеты" />
                 </div>
+                <button class="shortcuts-btn" id="shortcuts-btn" title="Горячие клавиши (?)">?</button>
                 <button class="lang-btn" title="Язык">Ru</button>
                 <button class="settings-btn" id="settings-btn" title="Настройки">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -706,6 +709,12 @@
                     <button class="density-filter-btn" data-dmarket="spot">Spot</button>
                     <button class="density-filter-btn" data-dmarket="futures">Futures</button>
                 </div>
+                <div class="density-filters">
+                    <button class="density-filter-btn on" data-dsize="all">Все размеры</button>
+                    <button class="density-filter-btn" data-dsize="small">Мелкие</button>
+                    <button class="density-filter-btn" data-dsize="medium">Средние</button>
+                    <button class="density-filter-btn" data-dsize="large">Крупные</button>
+                </div>
 
 
                 <div class="density-legend">
@@ -930,19 +939,59 @@
                     <span id="bt-symbol">СЛУЧАЙНЫЙ РЫНОК</span>
                     <span class="bt-muted" id="bt-exchange">Bybit Futures</span>
                 </div>
-                <select id="bt-exchange-select" class="bt-exchange-select" aria-label="Биржа для бэктеста">
-                    <option value="BB">Bybit</option>
-                    <option value="BN">Binance</option>
-                    <option value="OX">OKX</option>
-                    <option value="BG">Bitget</option>
-                    <option value="GT">Gate</option>
-                    <option value="MX">MEXC</option>
-                    <option value="KC">KuCoin</option>
-                    <option value="BX">BingX</option>
-                    <option value="HT">HTX</option>
-                    <option value="HL">Hyperliquid</option>
-                    <option value="AD">Asterdex</option>
-                </select>
+                <div class="exc-wrap" id="bt-exc-wrap" style="margin-left:0; padding-right:0;">
+                    <div class="exc-btn" id="bt-exc-btn" role="button" aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                        <div class="exc-dot" id="bt-exc-dot" style="background: center/contain no-repeat url('/img/BB.png')"></div>
+                        <span id="bt-exc-name">Bybit</span>
+                        <span class="exc-arrow">▼</span>
+                    </div>
+                    <div class="exc-menu" id="bt-exc-menu" role="listbox" aria-label="Биржа для бэктеста">
+                        <div class="exc-item on" data-cex="BB" data-label="Bybit" data-img="/img/BB.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BB.png')"></div>
+                            Bybit
+                        </div>
+                        <div class="exc-item" data-cex="BN" data-label="Binance" data-img="/img/BN.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BN.png')"></div>
+                            Binance
+                        </div>
+                        <div class="exc-item" data-cex="OX" data-label="OKX" data-img="/img/OK.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/OK.png')"></div>
+                            OKX
+                        </div>
+                        <div class="exc-item" data-cex="BG" data-label="Bitget" data-img="/img/BG.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BG.png')"></div>
+                            Bitget
+                        </div>
+                        <div class="exc-item" data-cex="GT" data-label="Gate" data-img="/img/GT.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/GT.png')"></div>
+                            Gate
+                        </div>
+                        <div class="exc-item" data-cex="MX" data-label="MEXC" data-img="/img/MX.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/MX.png')"></div>
+                            MEXC
+                        </div>
+                        <div class="exc-item" data-cex="KC" data-label="KuCoin" data-img="/img/KC.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/KC.png')"></div>
+                            KuCoin
+                        </div>
+                        <div class="exc-item" data-cex="BX" data-label="BingX" data-img="/img/BX.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/BX.png')"></div>
+                            BingX
+                        </div>
+                        <div class="exc-item" data-cex="HT" data-label="HTX" data-img="/img/HX.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/HX.png')"></div>
+                            HTX
+                        </div>
+                        <div class="exc-item" data-cex="HL" data-label="Hyperliquid" data-img="/img/HL.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/HL.png')"></div>
+                            Hyperliquid
+                        </div>
+                        <div class="exc-item" data-cex="AD" data-label="Asterdex" data-img="/img/AS.png" role="option">
+                            <div class="exc-dot" style="background: center/contain no-repeat url('/img/AS.png')"></div>
+                            Asterdex
+                        </div>
+                    </div>
+                </div>
                 <div class="bt-tfs" role="group" aria-label="Таймфрейм бэктеста">
                     <button class="bt-tf" data-bt-tf="1m">1М</button>
                     <button class="bt-tf on" data-bt-tf="5m">5М</button>
@@ -959,6 +1008,7 @@
                     <div id="bt-indicators-menu" class="bt-indicators-menu" hidden>
                         <div class="bt-indicators-head"><strong>Индикаторы графика</strong><span>Как в основном
                                 скринере</span></div>
+                        <div class="bt-section-title">Объёмы & Тренды</div>
                         <div class="bt-indicators-grid">
                             <button class="on" data-bt-indicator="volume"><span>VOL</span><b>Объём свечей</b></button>
                             <button data-bt-indicator="cvd"><span>CVD</span><b>Дельта объёма</b></button>
@@ -966,11 +1016,22 @@
                             <button data-bt-indicator="ema50"><span>EMA 50</span><b>Средняя</b></button>
                             <button data-bt-indicator="ema200"><span>EMA 200</span><b>Долгая</b></button>
                             <button data-bt-indicator="vwap"><span>VWAP</span><b>Средняя цена</b></button>
+                        </div>
+                        <div class="bt-section-title">Осцилляторы & Профиль</div>
+                        <div class="bt-indicators-grid">
                             <button data-bt-indicator="rsi"><span>RSI</span><b>14 периодов</b></button>
                             <button data-bt-indicator="atr"><span>ATR</span><b>Волатильность</b></button>
                             <button data-bt-indicator="vp"><span>VP</span><b>Volume Profile</b></button>
                             <button data-bt-indicator="bb"><span>BB</span><b>Полосы 20/2</b></button>
                             <button data-bt-indicator="macd"><span>MACD</span><b>12/26/9</b></button>
+                            <button data-bt-indicator="liqmap"><span>LIQ</span><b>Карта ликвидаций</b></button>
+                        </div>
+                        <div class="bt-section-title">Smart Money Concepts</div>
+                        <div class="bt-indicators-grid">
+                            <button data-bt-indicator="ob"><span>OB</span><b>Order Blocks</b></button>
+                            <button data-bt-indicator="fvg"><span>FVG</span><b>Fair Value Gap</b></button>
+                            <button data-bt-indicator="bos"><span>BOS</span><b>Break Structure</b></button>
+                            <button data-bt-indicator="eqh"><span>EQH</span><b>Equal High/Low</b></button>
                         </div>
                     </div>
                 </div>
@@ -984,10 +1045,10 @@
                     <div id="bt-chart-head">
                         <div><strong id="bt-watermark">—</strong><span id="bt-date">Выберите таймфрейм и нажмите «Новый
                                 случай»</span></div>
-                        <div id="bt-ohlc" class="bt-ohlc">O — H — L — C —</div>
                     </div>
                     <div id="bt-canvas-wrap">
                         <canvas id="bt-canvas"></canvas>
+                        <canvas id="bt-vol-canvas"></canvas>
                         <div id="bt-draw-tools" aria-label="Инструменты разметки">
                             <button class="dt-btn bt-dt-btn on" data-bt-tool="none" title="Курсор и перемещение (V)">
                                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -1470,6 +1531,28 @@
                 <button class="settings-apply-btn" id="settings-apply-btn">Применить</button>
             </div>
             <button class="settings-close" id="settings-close">×</button>
+        </div>
+    </div>
+
+    <!-- Shortcuts Cheat Sheet Modal -->
+    <div id="shortcuts-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content shortcuts-modal-content">
+            <div class="modal-header">
+                <h3>Горячие клавиши</h3>
+                <button class="modal-close" id="shortcuts-modal-close">×</button>
+            </div>
+            <div class="shortcuts-grid">
+                <div class="shortcut-item"><kbd>Ctrl + K</kbd> или <kbd>/</kbd> <span>Быстрый поиск монеты</span></div>
+                <div class="shortcut-item"><kbd>1 - 6</kbd> <span>Переключение таймфрейма (1m-1d)</span></div>
+                <div class="shortcut-item"><kbd>U</kbd> <span>Линейка (измерение)</span></div>
+                <div class="shortcut-item"><kbd>L</kbd> <span>Трендовая линия</span></div>
+                <div class="shortcut-item"><kbd>X</kbd> <span>Прямоугольник (область)</span></div>
+                <div class="shortcut-item"><kbd>H</kbd> <span>Горизонтальный луч</span></div>
+                <div class="shortcut-item"><kbd>F</kbd> <span>Сетка Фибоначчи</span></div>
+                <div class="shortcut-item"><kbd>M</kbd> <span>Магнитный режим</span></div>
+                <div class="shortcut-item"><kbd>Shift + Drag</kbd> <span>Быстрая линейка</span></div>
+                <div class="shortcut-item"><kbd>Esc</kbd> <span>Отменить / Сбросить инструмент</span></div>
+            </div>
         </div>
     </div>
 

@@ -21,7 +21,7 @@
 
 // ═══ Configuration ═══════════════════════════════════════════════════════════
 
-const SCAN_GAP_MS = 13000;  // minimum gap between scan cycles
+const SCAN_GAP_MS = 20000;  // minimum gap between scan cycles (optimized from 13s)
 const API_TIMEOUT = 3500;   // per-request timeout
 const POOL_EX = 12;     // exchanges scanned in parallel
 const POOL_COIN = 8;    // coins per exchange in parallel

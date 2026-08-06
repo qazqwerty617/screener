@@ -93,8 +93,8 @@ let chartDensitySizes = new Set(["small", "medium", "large"]);
 let chartDensityMarket = "all";
 let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
 let chartActiveIndicators = new Set([]);
-let chartActiveFormations = new Set(["levels", "breakouts", "retests", "trendlines", "impulses"]);
-let chartActiveSmc = new Set(["ob", "fvg", "bos", "eqh"]);
+let chartActiveFormations = new Set([]);
+let chartActiveSmc = new Set([]);
 const TAG_PALETTE = [
   "#ff4560",
   "#26c97a",
@@ -447,14 +447,11 @@ let lastTickTs = 0;
 let mcRunning = false;
 let lastVltRankTs = 0;
 
-// High-frequency tick channel (logic + DOM, not paint)
-const _mc = new MessageChannel();
-_mc.port2.onmessage = () => {
+// ── Clean V-Sync Aligned Tick Processor (No CPU-hogging spinlocks) ──
+function processTickData(dt) {
   const now = performance.now();
-  const dt = Math.min((now - lastTickTs) / 1000, 0.05); // max 50ms step
-  lastTickTs = now;
 
-  // ── Interpolate all active coins ─────────────────────────────────────────
+  // 1. Interpolate active coins
   if (interpActive.size > 0) {
     const keysToRemove = [];
     for (const [key, info] of interpActive) {
@@ -462,16 +459,13 @@ _mc.port2.onmessage = () => {
       if (!c) { keysToRemove.push(key); continue; }
       if (!c.displayP) { c.displayP = c.p; keysToRemove.push(key); continue; }
 
-      // Update target if price changed
       if (c.p !== info.target) { info.target = c.p; info.lastUpdate = now; }
 
-      // Exponential smoothing for ultra-smooth price movement
       const diff = c.p - c.displayP;
       const absDiff = Math.abs(diff);
-
-      // SNAP logic: if difference is too large (>0.005%) OR it is the active coin, just jump instantly
       const pDiffPct = absDiff / c.p;
       const isActive = (c.ex === activeEx && c.sym === activeSym);
+
       if (pDiffPct > SNAP_THRESHOLD) {
         c.displayP = c.p;
         keysToRemove.push(key);
@@ -483,10 +477,7 @@ _mc.port2.onmessage = () => {
         c.displayP = c.p;
         keysToRemove.push(key);
       } else {
-        // SKIP active coin in MessageChannel loop - it's handled in Ultra-Flow rAF for perfect sync
         if (isActive) continue;
-
-        // Adaptive: faster for big jumps, smoother for small
         const adaptiveFactor = Math.min(1, INTERP_SPEED * dt * (1 + pDiffPct * 20));
         c.displayP += diff * adaptiveFactor;
         dirty.add(key);
@@ -495,11 +486,10 @@ _mc.port2.onmessage = () => {
     keysToRemove.forEach(k => interpActive.delete(k));
   }
 
-  // ── DOM: update dirty rows ────────────────────────────────────────────────
+  // 2. DOM updates for dirty rows
   if (dirty.size > 0 || needRebuild) {
     const now2 = performance.now();
-    // Only rebuild every 1000ms even if needRebuild is set (unless it's initial)
-    if ((needRebuild || now2 - lastSort > 500) && (lastSort === 0 || now2 - lastSort > 500)) {
+    if ((needRebuild || now2 - lastSort > 1000) && (lastSort === 0 || now2 - lastSort > 1000)) {
       rebuildList();
       lastSort = now2;
       needRebuild = false;
@@ -509,32 +499,25 @@ _mc.port2.onmessage = () => {
         updateRow(key);
         dirty.delete(key);
         processed++;
-        if (processed >= MAX_DIRTY_ROWS_PER_TICK) break;
+        if (processed >= 40) break;
       }
     }
     if (needRebuild) dirty.clear();
     lastRender = now2;
   }
 
-  // ── Chart: update last candle with interpolated price ────────────────────
+  // 3. Update main chart active coin OHLC
   const activeKey = `${activeEx}:${activeSym}`;
   const ac = coins.get(activeKey);
-  if (
-    (chartNeedsDraw || interpActive.has(activeKey)) &&
-    ac &&
-    candles.length > 0
-  ) {
+  if (ac && candles.length > 0) {
     const last = candles[candles.length - 1];
     const dp = getDisplayP(ac);
-    // Only apply displayP if it's close to the candle price (within 20%)
-    // This prevents the giant candle bug when switching symbols
     const ratio = last.c > 0 ? dp / last.c : 0;
     if (dp > 0 && ratio > 0.8 && ratio < 1.2) {
       last.c = dp;
       if (dp > last.h) last.h = dp;
       if (dp < last.l) last.l = dp;
 
-      // Fast DOM update for main chart close price
       const oc = document.getElementById("oc");
       if (oc) {
         const pStr = fP(dp);
@@ -544,22 +527,11 @@ _mc.port2.onmessage = () => {
         }
       }
     }
-    chartNeedsDraw = true; // signal rAF to repaint
   }
-
-  if (chartNeedsDraw) {
-    requestDraw();
-  }
-
-  // schedule next tick immediately
-  if (mcRunning) _mc.port1.postMessage(0);
-};
+}
 
 function startMcLoop() {
-  if (mcRunning) return;
-  mcRunning = true;
-  lastTickTs = performance.now();
-  _mc.port1.postMessage(0);
+  // Deprecated: Tick processing now cleanly integrated into rAF loop
 }
 
 function scheduleInterp(key) {
@@ -735,42 +707,67 @@ function requestDraw() {
   chartNeedsDraw = true;
 }
 
-// ── Indicator Calculations ──
+// ── Indicator Calculations (Memoized for max 120fps smooth performance) ──
+function clearCandleCaches(data) {
+  if (data && data._cache) delete data._cache;
+}
+
 function calcEMA(data, period) {
+  if (!data || data.length === 0) return [];
+  if (!data._cache) data._cache = {};
+  const key = `ema_${period}`;
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
   const k = 2 / (period + 1);
   let ema = new Array(data.length);
-  if (data.length === 0) return ema;
   ema[0] = data[0].c;
   for (let i = 1; i < data.length; i++) {
     ema[i] = data[i].c * k + ema[i - 1] * (1 - k);
   }
+  ema._len = data.length;
+  data._cache[key] = ema;
   return ema;
 }
 
 function calcBB(data, period = 20, stdDevMult = 2) {
-  let bb = new Array(data.length).fill(null).map(() => ({ middle: 0, upper: 0, lower: 0 }));
-  if (data.length < period) return bb;
-  for (let i = period - 1; i < data.length; i++) {
-    let sum = 0;
-    for (let j = i - period + 1; j <= i; j++) {
-      sum += data[j].c;
+  if (!data || data.length === 0) return [];
+  if (!data._cache) data._cache = {};
+  const key = `bb_${period}_${stdDevMult}`;
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
+  let bb = new Array(data.length);
+  if (data.length < period) {
+    for (let i = 0; i < data.length; i++) bb[i] = { middle: 0, upper: 0, lower: 0 };
+  } else {
+    for (let i = 0; i < period - 1; i++) bb[i] = { middle: 0, upper: 0, lower: 0 };
+    for (let i = period - 1; i < data.length; i++) {
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += data[j].c;
+      const mean = sum / period;
+      let varianceSum = 0;
+      for (let j = i - period + 1; j <= i; j++) {
+        const diff = data[j].c - mean;
+        varianceSum += diff * diff;
+      }
+      const stdDev = Math.sqrt(varianceSum / period);
+      bb[i] = {
+        middle: mean,
+        upper: mean + stdDevMult * stdDev,
+        lower: mean - stdDevMult * stdDev
+      };
     }
-    const mean = sum / period;
-    let varianceSum = 0;
-    for (let j = i - period + 1; j <= i; j++) {
-      varianceSum += Math.pow(data[j].c - mean, 2);
-    }
-    const stdDev = Math.sqrt(varianceSum / period);
-    bb[i] = {
-      middle: mean,
-      upper: mean + stdDevMult * stdDev,
-      lower: mean - stdDevMult * stdDev
-    };
   }
+  bb._len = data.length;
+  data._cache[key] = bb;
   return bb;
 }
 
 function calcVWAP(data) {
+  if (!data || data.length === 0) return [];
+  if (!data._cache) data._cache = {};
+  const key = "vwap";
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
   let vwap = new Array(data.length);
   let sumPV = 0, sumV = 0;
   for (let i = 0; i < data.length; i++) {
@@ -779,68 +776,94 @@ function calcVWAP(data) {
     sumV += data[i].v;
     vwap[i] = sumV > 0 ? sumPV / sumV : tp;
   }
+  vwap._len = data.length;
+  data._cache[key] = vwap;
   return vwap;
 }
 
 function calcRSI(data, period = 14) {
+  if (!data || data.length === 0) return [];
+  if (!data._cache) data._cache = {};
+  const key = `rsi_${period}`;
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
   let rsi = new Array(data.length).fill(50);
-  if (data.length <= period) return rsi;
-  let gains = 0, losses = 0;
-  for (let i = 1; i <= period; i++) {
-    const diff = data[i].c - data[i - 1].c;
-    if (diff > 0) gains += diff;
-    else losses -= diff;
+  if (data.length > period) {
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+      const diff = data[i].c - data[i - 1].c;
+      if (diff > 0) gains += diff; else losses -= diff;
+    }
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    rsi[period] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+    for (let i = period + 1; i < data.length; i++) {
+      const diff = data[i].c - data[i - 1].c;
+      avgGain = (avgGain * (period - 1) + (diff > 0 ? diff : 0)) / period;
+      avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
+      rsi[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+    }
   }
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
-  rsi[period] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-  for (let i = period + 1; i < data.length; i++) {
-    const diff = data[i].c - data[i - 1].c;
-    avgGain = (avgGain * (period - 1) + (diff > 0 ? diff : 0)) / period;
-    avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
-    rsi[i] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-  }
+  rsi._len = data.length;
+  data._cache[key] = rsi;
   return rsi;
 }
 
 function calcATR(data, period = 14) {
+  if (!data || data.length === 0) return [];
+  if (!data._cache) data._cache = {};
+  const key = `atr_${period}`;
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
   let atr = new Array(data.length).fill(0);
-  if (data.length === 0) return atr;
-  let trSum = 0;
-  for (let i = 1; i < data.length; i++) {
-    const h = data[i].h, l = data[i].l, pc = data[i - 1].c;
-    const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-    if (i <= period) {
-      trSum += tr;
-      if (i === period) atr[i] = trSum / period;
-    } else {
-      atr[i] = (atr[i - 1] * (period - 1) + tr) / period;
+  if (data.length > 0) {
+    let trSum = 0;
+    for (let i = 1; i < data.length; i++) {
+      const h = data[i].h, l = data[i].l, pc = data[i - 1].c;
+      const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+      if (i <= period) {
+        trSum += tr;
+        if (i === period) atr[i] = trSum / period;
+      } else {
+        atr[i] = (atr[i - 1] * (period - 1) + tr) / period;
+      }
     }
   }
+  atr._len = data.length;
+  data._cache[key] = atr;
   return atr;
 }
 
 function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
+  if (!data || data.length === 0) return { macd: [], signal: [], hist: [] };
+  if (!data._cache) data._cache = {};
+  const key = `macd_${shortP}_${longP}_${signalP}`;
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
   const emaS = calcEMA(data, shortP);
   const emaL = calcEMA(data, longP);
   let macd = new Array(data.length).fill(0);
-  for (let i = 0; i < data.length; i++) {
-    macd[i] = emaS[i] - emaL[i];
-  }
+  for (let i = 0; i < data.length; i++) macd[i] = emaS[i] - emaL[i];
+
   const k = 2 / (signalP + 1);
   let signal = new Array(data.length).fill(0);
   signal[0] = macd[0];
-  for (let i = 1; i < data.length; i++) {
-    signal[i] = macd[i] * k + signal[i - 1] * (1 - k);
-  }
+  for (let i = 1; i < data.length; i++) signal[i] = macd[i] * k + signal[i - 1] * (1 - k);
+
   let hist = new Array(data.length).fill(0);
-  for (let i = 0; i < data.length; i++) {
-    hist[i] = macd[i] - signal[i];
-  }
-  return { macd, signal, hist };
+  for (let i = 0; i < data.length; i++) hist[i] = macd[i] - signal[i];
+
+  const res = { macd, signal, hist, _len: data.length };
+  data._cache[key] = res;
+  return res;
 }
 
 function calcCVD(data) {
+  if (!data || data.length === 0) return [];
+  if (!data._cache) data._cache = {};
+  const key = "cvd";
+  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+
   let cvd = new Array(data.length).fill(0);
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
@@ -851,13 +874,15 @@ function calcCVD(data) {
     sum += c.v * (buyR - sellR);
     cvd[i] = sum;
   }
+  cvd._len = data.length;
+  data._cache[key] = cvd;
   return cvd;
 }
 
-function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP) {
+function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
   if (!candles || candles.length < 15 || !chartActiveSmc || chartActiveSmc.size === 0) return;
 
-  const getCandleX = (idx) => (idx - s + futureGap) * candleW + candleW / 2;
+  const getCandleX = (idx) => (idx - viewStart) * candleW + candleW / 2;
   const numCandles = candles.length;
   const startVisIdx = Math.max(0, s - 200);
   const lastPrice = candles[numCandles - 1].c;
@@ -1238,12 +1263,12 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   }
 }
 
-function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP) {
+function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
   if (!candles || candles.length < 20) return;
 
   const numCandles = candles.length;
   const lastPrice = candles[numCandles - 1].c;
-  const getCandleX = (idx) => (idx - s + futureGap) * candleW + candleW / 2;
+  const getCandleX = (idx) => (idx - viewStart) * candleW + candleW / 2;
 
   // 1. Detect key leverage entry pivots (Swing Highs & Lows over last 250 candles)
   const startScan = Math.max(0, numCandles - 250);
@@ -1429,13 +1454,14 @@ function drawChart() {
   const newVolH = fixedVolumeHeight + (activeIndicators.length * indicatorHeightPer);
 
   // Update volH if needed and adjust canvas
+  const dpr = window.devicePixelRatio || 1;
   if (newVolH !== volH) {
     volH = newVolH;
-    const dpr = window.devicePixelRatio || 1;
     const volCanvas = document.getElementById('vol-canvas');
     if (volCanvas) {
       volCanvas.height = volH * dpr;
       volCanvas.style.height = volH + 'px';
+      vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
   }
 
@@ -1450,6 +1476,8 @@ function drawChart() {
   ctx.clearRect(0, 0, chartW, chartH);
   ctx.fillStyle = getCanvasBgColor();
   ctx.fillRect(0, 0, chartW, chartH);
+  
+  vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   vCtx.clearRect(0, 0, chartW, volH);
   vCtx.fillStyle = getCanvasBgColor();
   vCtx.fillRect(0, 0, chartW, volH);
@@ -1522,7 +1550,7 @@ function drawChart() {
   // ── Clipping Area (Pre-render) ─────────────────────────────────────────────
   ctx.save();
   ctx.beginPath();
-  ctx.rect(0, 0, PW, chartH);
+  ctx.rect(0, 0, PW, PH);
   ctx.clip();
 
   // ── Candles ────────────────────────────────────────────────────────────────
@@ -1540,10 +1568,8 @@ function drawChart() {
   const upBorderCol = hexToRgba(cs.border.up, cs.border.upOp);
   const dnBorderCol = hexToRgba(cs.border.down, cs.border.downOp);
 
-  const dpr = window.devicePixelRatio || 1;
-
   vis.forEach((c, i) => {
-    const rawX = (i + futureGap) * candleW + candleW / 2;
+    const rawX = (s + i - viewStart) * candleW + candleW / 2;
     const up = c.c >= c.o;
 
     const yH = toY(c.h),
@@ -1653,7 +1679,7 @@ function drawChart() {
     for (let i = 0; i < vis.length; i++) {
       const val = bb[s + i];
       if (val && val.upper) {
-        const x = (i + futureGap) * candleW + candleW / 2;
+        const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val.upper);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
@@ -1665,7 +1691,7 @@ function drawChart() {
     for (let i = 0; i < vis.length; i++) {
       const val = bb[s + i];
       if (val && val.lower) {
-        const x = (i + futureGap) * candleW + candleW / 2;
+        const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val.lower);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
@@ -1682,7 +1708,7 @@ function drawChart() {
     for (let i = 0; i < vis.length; i++) {
       const val = ema20[s + i];
       if (val) {
-        const x = (i + futureGap) * candleW + candleW / 2;
+        const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
@@ -1699,7 +1725,7 @@ function drawChart() {
     for (let i = 0; i < vis.length; i++) {
       const val = ema50[s + i];
       if (val) {
-        const x = (i + futureGap) * candleW + candleW / 2;
+        const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
@@ -1716,7 +1742,7 @@ function drawChart() {
     for (let i = 0; i < vis.length; i++) {
       const val = ema200[s + i];
       if (val) {
-        const x = (i + futureGap) * candleW + candleW / 2;
+        const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
@@ -1733,7 +1759,7 @@ function drawChart() {
     for (let i = 0; i < vis.length; i++) {
       const val = vwap[s + i];
       if (val) {
-        const x = (i + futureGap) * candleW + candleW / 2;
+        const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val);
         if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
@@ -1742,11 +1768,11 @@ function drawChart() {
   }
 
   // ── Smart Money Concepts (SMC) Overlay ──
-  renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP);
+  renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
 
   // ── Liquidation Heatmap Overlay ──
   if (chartActiveIndicators.has("LIQMAP")) {
-    renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP);
+    renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
   }
 
   ctx.restore();
@@ -1821,7 +1847,7 @@ function drawChart() {
         for (let i = 0; i < vis.length; i++) {
           const val = rsi[s + i];
           if (val != null) {
-            const x = (i + futureGap) * candleW + candleW / 2;
+            const x = (s + i - viewStart) * candleW + candleW / 2;
             const y = yStart + indicatorSubH - (val / 100) * (indicatorSubH - 25) - 15;
             if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
           }
@@ -1853,7 +1879,7 @@ function drawChart() {
         for (let i = 0; i < vis.length; i++) {
           const val = atr[s + i];
           if (val) {
-            const x = (i + futureGap) * candleW + candleW / 2;
+            const x = (s + i - viewStart) * candleW + candleW / 2;
             const y = yStart + indicatorSubH - (val / maxAtr) * (indicatorSubH - 25) - 15;
             if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
           }
@@ -1895,7 +1921,7 @@ function drawChart() {
         // Hist bars
         for (let i = 0; i < vis.length; i++) {
           const val = macdData.hist[s + i];
-          const x = (i + futureGap) * candleW + candleW / 2;
+          const x = (s + i - viewStart) * candleW + candleW / 2;
           const yVal = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
           vCtx.fillStyle = val >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
           vCtx.fillRect(x - 1.5, Math.min(yZero, yVal), 3, Math.max(1, Math.abs(yZero - yVal)));
@@ -1907,7 +1933,7 @@ function drawChart() {
         vCtx.lineWidth = 2;
         for (let i = 0; i < vis.length; i++) {
           const val = macdData.macd[s + i];
-          const x = (i + futureGap) * candleW + candleW / 2;
+          const x = (s + i - viewStart) * candleW + candleW / 2;
           const y = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
           if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
@@ -1919,7 +1945,7 @@ function drawChart() {
         vCtx.lineWidth = 2;
         for (let i = 0; i < vis.length; i++) {
           const val = macdData.signal[s + i];
-          const x = (i + futureGap) * candleW + candleW / 2;
+          const x = (s + i - viewStart) * candleW + candleW / 2;
           const y = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
           if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
@@ -1962,7 +1988,7 @@ function drawChart() {
         for (let i = 0; i < vis.length; i++) {
           const val = cvd[s + i];
           if (val != null) {
-            const x = (i + futureGap) * candleW + candleW / 2;
+            const x = (s + i - viewStart) * candleW + candleW / 2;
             const y = yStart + indicatorSubH - ((val - minCvd) / cvdRange) * (indicatorSubH - 25) - 15;
             if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
           }
@@ -2004,10 +2030,6 @@ function drawChart() {
   vCtx.stroke();
 
   if (mv > 0) {
-    // Exchange kline APIs already return per-candle volume. The old cumulative
-    // detector subtracted adjacent candles and incorrectly turned normal volume
-    // into near-zero dots. Use the raw candle values and a robust scale so one
-    // exceptional spike does not flatten the other 99% of the histogram.
     const renderVols = vis.map(c => Number.isFinite(c.v) && c.v > 0 ? c.v : 0);
     const sortedVols = renderVols.filter(v => v > 0).sort((a, b) => a - b);
     const absoluteMax = sortedVols[sortedVols.length - 1] || 0;
@@ -2017,12 +2039,12 @@ function drawChart() {
     const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
     for (let i = 0; i < vis.length; i++) {
       const c = vis[i];
-      const x = Math.round((i + futureGap) * candleW + candleW / 2);
+      const x = (s + i - viewStart) * candleW + candleW / 2;
       const up = c.c >= c.o;
       const vRatio = trueMv > 0 ? (renderVols[i] / trueMv) : 0;
       const vh = renderVols[i] > 0 ? Math.max(1, Math.min(1, vRatio) * (volumeHeight - 10)) : 0;
       vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
-      if (vh > 0) vCtx.fillRect(x - Math.floor(volW / 2), volumeYStart + volumeHeight - vh, volW, vh);
+      if (vh > 0) vCtx.fillRect(x - volW / 2, volumeYStart + volumeHeight - vh, volW, vh);
     }
   }
   vCtx.restore();
@@ -2127,7 +2149,7 @@ function drawChart() {
   const getX = (t) => {
     // If it's a timestamp (large number), convert to index
     const idx = (t > 1000000000) ? getIdxFromTime(t) : t;
-    return Math.round((idx - s + futureGap) * candleW + candleW / 2);
+    return (idx - viewStart) * candleW + candleW / 2;
   };
   const getY = (p) => TOP + ((mx - p) / pr) * PH;
 
@@ -2254,19 +2276,113 @@ function drawChart() {
       drawHandle(x1, y1, col, 4);
       drawHandle(x2, y2, col, 4);
     } else if (d.type === "ruler") {
-      ctx.setLineDash([7, 5]);
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      drawHandle(x1, y1, col, 4);
-      drawHandle(x2, y2, col, 4);
+      // Multichart-style ruler: shaded rectangle + crosshair + info box
+      try {
+        const isBull = d.p2 >= d.p1;
+        const areaColor = isBull ? "rgba(38,201,122," : "rgba(255,69,96,";
 
-      const pct = ((d.p2 - d.p1) / d.p1) * 100;
-      const sign = pct > 0 ? "+" : "";
-      const label = sign + pct.toFixed(2) + "%";
-      drawPill(label, (x1 + x2) / 2, (y1 + y2) / 2 - 20, col);
+        // Shaded rectangle
+        ctx.fillStyle = areaColor + "0.15)";
+        ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+
+        // Border
+        ctx.strokeStyle = areaColor + "0.6)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+
+        // Crosshair dashed lines
+        ctx.strokeStyle = areaColor + "0.8)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(Math.min(x1, x2), y2); ctx.lineTo(Math.max(x1, x2), y2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x2, Math.min(y1, y2)); ctx.lineTo(x2, Math.max(y1, y2)); ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Stats
+        const deltaPrice = d.p2 - d.p1;
+        const pct = d.p1 !== 0 ? (deltaPrice / d.p1) * 100 : 0;
+
+        // Bars count
+        let bars = 0;
+        if (typeof candles !== 'undefined' && candles && candles.length > 0) {
+          const idx1 = (d.t1 > 1000000000) ? candles.findIndex(c => c.t >= d.t1) : Math.round(d.t1);
+          const idx2 = (d.t2 > 1000000000) ? candles.findIndex(c => c.t >= d.t2) : Math.round(d.t2);
+          if (idx1 >= 0 && idx2 >= 0) bars = Math.abs(idx2 - idx1);
+        }
+
+        // Time duration
+        let timeStr = "";
+        const diffMs = Math.abs(d.t2 - d.t1);
+        if (d.t1 > 1000000000 && d.t2 > 1000000000) {
+          if (diffMs < 60000) {
+            timeStr = Math.round(diffMs / 1000) + "с";
+          } else if (diffMs < 3600000) {
+            timeStr = Math.round(diffMs / 60000) + "м";
+          } else if (diffMs < 86400000) {
+            const hours = Math.floor(diffMs / 3600000);
+            const mins = Math.round((diffMs % 3600000) / 60000);
+            timeStr = hours + "ч " + mins + "м";
+          } else {
+            const days = Math.floor(diffMs / 86400000);
+            const hours = Math.round((diffMs % 86400000) / 3600000);
+            timeStr = days + "д " + hours + "ч";
+          }
+        }
+
+        // Info box at center
+        const pctSign = pct >= 0 ? "+" : "";
+        const priceSign = deltaPrice >= 0 ? "+" : "";
+        const text1 = pctSign + pct.toFixed(2) + "% (" + priceSign + fP(deltaPrice) + ")";
+        const text2 = timeStr ? (bars + " свечей, " + timeStr) : (bars + " свечей");
+
+        ctx.font = "bold 10px Inter";
+        const w1 = ctx.measureText(text1).width;
+        const w2 = ctx.measureText(text2).width;
+        const boxW = Math.max(w1, w2) + 18;
+        const boxH = 36;
+        const midX = (x1 + x2) / 2;
+        const midY = (y1 + y2) / 2;
+        const boxX = Math.max(4, Math.min(midX - boxW / 2, PW - boxW - 4));
+        const boxY = Math.max(4, Math.min(midY - boxH / 2, PH - boxH - 4));
+
+        // Rounded box background
+        const bR = 5;
+        ctx.beginPath();
+        ctx.moveTo(boxX + bR, boxY);
+        ctx.lineTo(boxX + boxW - bR, boxY);
+        ctx.arcTo(boxX + boxW, boxY, boxX + boxW, boxY + bR, bR);
+        ctx.lineTo(boxX + boxW, boxY + boxH - bR);
+        ctx.arcTo(boxX + boxW, boxY + boxH, boxX + boxW - bR, boxY + boxH, bR);
+        ctx.lineTo(boxX + bR, boxY + boxH);
+        ctx.arcTo(boxX, boxY + boxH, boxX, boxY + boxH - bR, bR);
+        ctx.lineTo(boxX, boxY + bR);
+        ctx.arcTo(boxX, boxY, boxX + bR, boxY, bR);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(20, 24, 33, 0.92)";
+        ctx.fill();
+        ctx.strokeStyle = areaColor + "0.8)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // Text line 1 (% and price)
+        ctx.fillStyle = isBull ? "#26c97a" : "#ff4560";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.font = "bold 10px Inter";
+        ctx.fillText(text1, boxX + boxW / 2, boxY + 6);
+
+        // Text line 2 (bars and time)
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "10px Inter";
+        ctx.fillText(text2, boxX + boxW / 2, boxY + 20);
+      } catch (err) {
+        console.error("Ruler error:", err);
+      }
+
+      // Reset styles for subsequent drawings
+      ctx.strokeStyle = col;
+      ctx.lineWidth = isHovered ? 2.5 : 1.8;
+      ctx.setLineDash([]);
     } else if (d.type === "brush") {
       // Brush drawing - freehand path with optimization
       if (d.points && d.points.length > 1) {
@@ -3268,7 +3384,7 @@ canvas.addEventListener("mousemove", (e) => {
 
   if (quickMeasure) {
     const { t, p } = getCursorTP(mX, mY);
-    quickMeasure.t2 = quickMeasure.t1; // Lock X to start position
+    quickMeasure.t2 = t;
     quickMeasure.p2 = p;
     normalizeDrawing(quickMeasure);
   }
@@ -3329,13 +3445,138 @@ canvas.addEventListener("mouseleave", () => {
   requestDraw();
 });
 
+// ── Touch Gesture Support for Mobile & Tablets (iPhones, iPads, Touchscreen Laptops) ──
+let touchStartX = 0, touchStartY = 0;
+let touchDragOffX = 0;
+let touchPinchDist = 0;
+let touchStartCandleW = 10;
+let isTouchPanning = false;
+
+canvas.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    const r = canvas.getBoundingClientRect();
+    const px = t.clientX - r.left;
+    const py = t.clientY - r.top;
+
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+    touchDragOffX = offsetX;
+    mX = px; mY = py;
+
+    const PW = chartW - PR_WIDTH;
+    if (px < PW && activeTool === "none") {
+      isTouchPanning = true;
+      isDragX = true;
+      dragStartX = t.clientX;
+      dragOffX = offsetX;
+    } else if (activeTool === "ruler") {
+      updateMagnetSnap(px, py);
+      const { t: ct, p: cp } = getCursorTP(px, py);
+      quickMeasure = normalizeDrawing({
+        type: "ruler",
+        t1: ct, p1: cp, t2: ct, p2: cp,
+        color: getToolColor("ruler"),
+      });
+      requestDraw();
+    }
+  } else if (e.touches.length === 2) {
+    isTouchPanning = false;
+    isDragX = false;
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
+    touchPinchDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+    touchStartCandleW = candleW;
+  }
+}, { passive: true });
+
+canvas.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 1 && isTouchPanning) {
+    const t = e.touches[0];
+    const dx = t.clientX - touchStartX;
+    offsetX = getClampedOffsetX(touchDragOffX + dx / (candleW || 10));
+    requestDraw();
+  } else if (e.touches.length === 2 && touchPinchDist > 0) {
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
+    const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+    if (touchPinchDist > 0 && currentDist > 0) {
+      const ratio = currentDist / touchPinchDist;
+      candleW = clamp(touchStartCandleW * ratio, 1.5, 50);
+      requestDraw();
+    }
+  } else if (quickMeasure && e.touches.length === 1) {
+    const t = e.touches[0];
+    const r = canvas.getBoundingClientRect();
+    const px = t.clientX - r.left;
+    const py = t.clientY - r.top;
+    const { t: ct, p: cp } = getCursorTP(px, py);
+    quickMeasure.t2 = ct;
+    quickMeasure.p2 = cp;
+    normalizeDrawing(quickMeasure);
+    requestDraw();
+  }
+}, { passive: true });
+
+canvas.addEventListener("touchend", () => {
+  isTouchPanning = false;
+  isDragX = false;
+  touchPinchDist = 0;
+  if (activeTool === "ruler") setTool("none");
+  quickMeasure = null;
+  requestDraw();
+}, { passive: true });
+
+canvas.addEventListener("touchcancel", () => {
+  isTouchPanning = false;
+  isDragX = false;
+  touchPinchDist = 0;
+  quickMeasure = null;
+  requestDraw();
+}, { passive: true });
+
 // Keyboard shortcuts
 document.addEventListener("keydown", (e) => {
+  // Global search shortcut (Ctrl+K, Cmd+K, or / when not typing)
+  if (( (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' ) || (e.key === '/' && e.target.tagName !== 'INPUT')) {
+    e.preventDefault();
+    const si = $("si");
+    if (si) {
+      si.focus();
+      si.select();
+    }
+    return;
+  }
+
+  // Shortcuts cheat sheet modal toggle (?)
+  if (e.key === '?' && e.target.tagName !== 'INPUT') {
+    e.preventDefault();
+    const modal = $("shortcuts-modal");
+    if (modal) modal.style.display = modal.style.display === "none" ? "flex" : "none";
+    return;
+  }
+
   if (e.target.tagName === 'INPUT') return;
+
   if (e.key === 'Escape') {
+    const modal = $("shortcuts-modal");
+    if (modal && modal.style.display !== "none") {
+      modal.style.display = "none";
+      return;
+    }
     if (drawingPhase > 0) { cancelDrawing(); }
     else { setTool('none'); }
   }
+
+  // Numeric timeframe shortcuts (1-6)
+  const tfMap = { '1': '1m', '2': '5m', '3': '15m', '4': '1h', '5': '4h', '6': '1d' };
+  if (tfMap[e.key]) {
+    const targetTf = tfMap[e.key];
+    const tfBtn = document.querySelector(`.tfb[data-tf="${targetTf}"]`);
+    if (tfBtn) tfBtn.click();
+    return;
+  }
+
   if (e.key === 'h' || e.key === 'H') setTool('h-ray');
   if (e.key === 'l' || e.key === 'L') setTool('line');
   if (e.key === 'x' || e.key === 'X') setTool('rect');
@@ -3351,6 +3592,24 @@ document.addEventListener("keydown", (e) => {
     }
     saveDrawings();
     requestAnimationFrame(drawChart);
+  }
+});
+
+// Shortcuts modal handlers
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = $("shortcuts-btn");
+  const modal = $("shortcuts-modal");
+  const closeBtn = $("shortcuts-modal-close");
+  if (btn && modal) {
+    btn.onclick = () => { modal.style.display = "flex"; };
+  }
+  if (closeBtn && modal) {
+    closeBtn.onclick = () => { modal.style.display = "none"; };
+  }
+  if (modal) {
+    modal.onclick = (e) => {
+      if (e.target === modal) modal.style.display = "none";
+    };
   }
 });
 
@@ -3370,39 +3629,43 @@ function toggleMagnet() {
   if (btn) btn.classList.toggle('magnet-on', magnetMode);
 }
 
-// Scroll: vertical = X-zoom; horizontal = X-pan; Ctrl = Y-zoom
+// Scroll: vertical = X-zoom; horizontal = X-pan; Ctrl/Cmd = Y-zoom
 canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
     const PW = chartW - PR_WIDTH;
 
-    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-      // Trackpad horizontal swipe = PAN left/right
-      offsetX = getClampedOffsetX(offsetX + e.deltaX / candleW);
-    } else if (e.ctrlKey || e.altKey) {
-      // Ctrl/Alt + scroll = Y zoom around mouse position
+    let dx = e.deltaX || 0;
+    let dy = e.deltaY || 0;
+    if (e.deltaMode === 1) { dx *= 16; dy *= 16; }
+    else if (e.deltaMode === 2) { dx *= 100; dy *= 100; }
+
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // Trackpad horizontal swipe = PAN left/right smoothly
+      const panShift = clamp(dx * 0.015, -8, 8);
+      offsetX = getClampedOffsetX(offsetX + panShift);
+    } else if (e.ctrlKey || e.altKey || e.metaKey) {
+      // Ctrl/Alt/Cmd + scroll = Y zoom around mouse position
       autoFitY = false;
-      const factor = e.deltaY > 0 ? 1.15 : 0.87;
+      const factor = clamp(1 + dy * 0.0004, 0.90, 1.10);
       const center = (viewMn + viewMx) / 2;
       let half = ((viewMx - viewMn) / 2) * factor;
-      // Clamp: prevent zoom-in so far that range becomes ~0 (disappearing bug)
       const minHalf = Math.max(Math.abs(center) * 0.0001, 1e-8);
-      // Clamp: prevent zoom-out so extreme that scale is meaningless
       const maxHalf = Math.max(Math.abs(center) * 50, 1);
       half = clamp(half, minHalf, maxHalf);
       viewMn = center - half;
       viewMx = center + half;
     } else {
-      // Vertical scroll = X-zoom anchored at mouse (fully free-floating)
+      // Vertical scroll = Smooth X-zoom anchored at mouse (TradingView trackpad feel)
       const r = canvas.getBoundingClientRect();
       const mouseX = e.clientX - r.left;
       const nBefore = PW / candleW;
       const vStartBefore = candles.length - nBefore - offsetX;
       const pivot = vStartBefore + mouseX / candleW;
 
-      const factor = e.deltaY > 0 ? 0.88 : 1.14;
-      candleW = clamp(candleW * factor, 2, 60);
+      const factor = clamp(1 - dy * 0.0004, 0.90, 1.10);
+      candleW = clamp(candleW * factor, 1.5, 60);
 
       const nAfter = PW / candleW;
       const vStartAfter = pivot - mouseX / candleW;
@@ -3940,10 +4203,9 @@ function appendCandle(k) {
       }
       return;
     }
-    const clean = sanitizeCandle(k, last.c);
-    if (!clean) return;
     candles.push(clean);
-    if (candles.length > 1500) candles.shift(); // Keep buffer small
+    if (candles.length > 1500) candles.shift();
+    clearCandleCaches(candles);
   }
   chartNeedsDraw = true;
   updateOHLC();
@@ -3991,6 +4253,9 @@ function rafLoop() {
 
   requestAnimationFrame(rafLoop);
 
+  // Process price interpolations and DOM row updates aligned with V-Sync
+  processTickData(dt);
+
   // ── Ultra-Flow: Sync active coin interpolation with V-Sync ────────────────
   const ak = `${activeEx}:${activeSym}`;
   const ac = coins.get(ak);
@@ -4012,7 +4277,11 @@ function rafLoop() {
   }
 
   if (screenerView === "multichart" || activeView === "formations") {
-    chartInstances.forEach(inst => inst.draw());
+    chartInstances.forEach(inst => {
+      if (inst.dirty) {
+        inst.draw(true);
+      }
+    });
   } else if (chartNeedsDraw || isActiveAnimating) {
     chartNeedsDraw = false;
     drawChart();
@@ -4021,22 +4290,21 @@ function rafLoop() {
 
 function isUsdtFutures(c) {
   if (!c || !c.sym || !c.key) return false;
+  if (c._isUsdtFutures !== undefined) return c._isUsdtFutures;
   const s = c.sym.toUpperCase();
   const k = c.key.toUpperCase();
 
-  // Aggressive SPOT filtering
-  if (k.includes("SPOT") || s.includes("SPOT")) return false;
+  if (k.includes("SPOT") || s.includes("SPOT")) return (c._isUsdtFutures = false);
 
-  // Binance/Bybit/Kucoin/OKX etc. futures patterns
   const isFuture = s.endsWith("USDT") ||
-    s.endsWith("USDTM") || // KuCoin Futures
+    s.endsWith("USDTM") ||
     s.includes("USDT-") ||
     s.includes("USDT_") ||
     s.includes("-SWAP") ||
     s.includes("-PERP") ||
-    c.ex === "HL"; // Hyperliquid
+    c.ex === "HL";
 
-  return isFuture;
+  return (c._isUsdtFutures = isFuture);
 }
 
 const STABLECOIN_BASES = new Set(['USDC', 'USDD', 'TUSD', 'DAI', 'FDUSD', 'USDP', 'BUSD', 'PYUSD', 'EUSD', 'USD', 'USDE', 'USDJ', 'FRAX', 'LUSD', 'GUSD', 'SUSD', 'CEUR', 'CUSD', 'USDY', 'USDX']);
@@ -4106,11 +4374,14 @@ function rebuildList() {
     fillRow(c, rr);
   }
 
-  // Use replaceChildren every time rebuildList is called to ensure DOM is fresh and filtered
-  // SMART PAUSE: Do not re-order if mouse is hovering over the list (prevents click misses)
+  // SMART PAUSE & DOM DIFFING: Only re-order DOM nodes if order actually changed or filter changed
   if (!isHoveringScreener || needRebuild) {
-    const nodes = sortedList.map(c => rowEls.get(c.key).el);
-    cl.replaceChildren(...nodes);
+    const newKeyOrder = sortedList.map(c => c.key).join(",");
+    if (cl._lastOrder !== newKeyOrder) {
+      cl._lastOrder = newKeyOrder;
+      const nodes = sortedList.map(c => rowEls.get(c.key).el);
+      cl.replaceChildren(...nodes);
+    }
   }
 
   $("cnt").textContent = `(${list.length})`;
@@ -5232,6 +5503,14 @@ $("si").addEventListener("input", (e) => {
   }
 });
 window.addEventListener("resize", resizeChart);
+if (typeof ResizeObserver !== "undefined" && $("cwrap")) {
+  try {
+    const cwrapObserver = new ResizeObserver(() => {
+      resizeChart();
+    });
+    cwrapObserver.observe($("cwrap"));
+  } catch (_) {}
+}
 
 // ═══ Color Tagging & Filtering Logic ═════════════════════════════════════════
 const tagMenu = $("tag-menu"),
@@ -5415,6 +5694,7 @@ let densityData = [];     // raw wall objects from server
 let densityBubbles = [];  // layout objects with {x,y,vx,vy,r,...}
 let densityFilter = "all";
 let densityMarket = "all";
+let densitySize = "all";
 let densitySort = "score"; // "score" | "size" | "dist"
 let densitySearch = "";
 let densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
@@ -5452,6 +5732,7 @@ class ChartInstance {
     this.offsetX = 0;
     this.candleW = 8;
     this.lastDrawTs = 0;
+    this.dirty = true;
 
     this.isDrag = false;
     this.isDragY = false;
@@ -5723,8 +6004,10 @@ class ChartInstance {
     this.canvas.onwheel = (e) => {
       if (activeView === "screener" && screenerView !== "multichart") return;
       e.preventDefault();
-      const dir = e.deltaY > 0 ? -1 : 1;
-      this.candleW = clamp(this.candleW * (1 + dir * 0.15), 1.5, 50);
+      let dy = e.deltaY || 0;
+      if (e.deltaMode === 1) dy *= 16;
+      const factor = clamp(1 - dy * 0.0004, 0.90, 1.10);
+      this.candleW = clamp(this.candleW * factor, 1.5, 50);
       this.draw(true);
       e.stopPropagation();
     };
@@ -5732,6 +6015,7 @@ class ChartInstance {
 
   update(ticker) {
     if (!ticker) return;
+    this.dirty = true;
     const changed = this.sym !== ticker.sym || this.ex !== ticker.ex;
     this.ex = ticker.ex;
     this.sym = ticker.sym;
@@ -5857,6 +6141,7 @@ class ChartInstance {
     const now = Date.now();
     if (!force && now - this.lastDrawTs < 16) return; // Increased to ~60fps
     this.lastDrawTs = now;
+    this.dirty = false;
 
     // Apply smooth price to last candle
     const last = this.candles[this.candles.length - 1];
@@ -5954,7 +6239,7 @@ class ChartInstance {
     }
 
     vis.forEach((c, i) => {
-      const rawX = (i + futureGap) * candleWidth + candleWidth / 2;
+      const rawX = (s + i - viewStart) * candleWidth + candleWidth / 2;
       if (rawX > PW + candleWidth) return;
       const up = c.c >= c.o;
       const side = up ? "up" : "down";
@@ -6015,7 +6300,7 @@ class ChartInstance {
 
     // ── Unmitigated Levels overlay ────────────────────────────────────────────
     if (activeView === "formations" && this.levels && this.levels.length > 0) {
-      const getX = (idx) => (idx - s + futureGap) * candleWidth + candleWidth / 2;
+      const getX = (idx) => (idx - viewStart) * candleWidth + candleWidth / 2;
       const N = this.candles.length;
 
       // ── Pre-calculate and adjust Y label coordinates to prevent overlapping ────
@@ -6847,6 +7132,10 @@ function getFilteredDensity() {
   return densityData.filter(d => {
     if (densityFilter !== "all" && d.side !== densityFilter) return false;
     if (densityMarket !== "all" && d.market !== densityMarket) return false;
+    if (densitySize !== "all") {
+      const sizeType = d.rtwi < 10 ? "small" : (d.rtwi < 20 ? "medium" : "large");
+      if (sizeType !== densitySize) return false;
+    }
     if (!densityExFilter.has(d.ex)) return false;
     if (densitySearch) {
       const q = densitySearch.toLowerCase();
@@ -7352,6 +7641,15 @@ document.querySelectorAll(".density-filter-btn[data-dmarket]").forEach(btn => {
     document.querySelectorAll(".density-filter-btn[data-dmarket]").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     densityMarket = btn.dataset.dmarket;
+    layoutDensityBadges();
+  });
+});
+
+document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(b => b.classList.remove("on"));
+    btn.classList.add("on");
+    densitySize = btn.dataset.dsize;
     layoutDensityBadges();
   });
 });

@@ -64,27 +64,25 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   }
 
   function connectWs() {
-    const adBatchSize = 80;
-    for (let i = 0; i < adSyms.length; i += adBatchSize) {
-      const chunk = adSyms.slice(i, i + adBatchSize);
-      const connId = `AD-Trades-${i}`;
-      mkExWs(connId, "wss://fstream.asterdex.com/stream", (raw) => {
-        try {
-          const payload = JSON.parse(raw.toString());
-          const d = payload.data;
-          if (!d || !d.s || !d.p) return;
+    // Single !miniTicker@arr stream replaces 7 aggTrade connections
+    // One batch message per second instead of thousands of individual trade events
+    mkExWs("AD-MiniTicker", "wss://fstream.asterdex.com/ws/!miniTicker@arr", (raw) => {
+      try {
+        const batch = JSON.parse(raw.toString());
+        if (!Array.isArray(batch)) return;
+        for (const d of batch) {
           const t = tickers.get("AD:" + d.s);
           if (t) {
-              t.p = +d.p;
+            const p = +d.c; // close price = latest price
+            if (p > 0) {
+              t.p = p;
               if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
               dirtyKeys.add(t.key);
+            }
           }
-        } catch (_) {}
-      }, (ws) => {
-        const streams = chunk.map(s => `${s.toLowerCase()}@aggTrade`);
-        ws.send(JSON.stringify({ method: "SUBSCRIBE", params: streams, id: Date.now() + i }));
-      });
-    }
+        }
+      } catch (_) {}
+    });
   }
 
   return { init };

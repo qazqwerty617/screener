@@ -46,32 +46,27 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
   }
 
   function initStreams() {
-    const bnSymbols = Array.from(tradingSet);
-    const bnBatchSize = Math.ceil(bnSymbols.length / 4); // 4 connections for better performance
-    for (let i = 0; i < bnSymbols.length; i += bnBatchSize) {
-      const chunk = bnSymbols.slice(i, i + bnBatchSize);
-      const connId = `BN-Trades-${i}`;
-      mkExWs(connId, "wss://fstream.binance.com/market/stream", (raw) => {
-        try {
-          const payload = JSON.parse(raw.toString());
-          const d = payload.data;
-          if (!d || !d.s || !d.p) return;
+    // 1. Price stream: !miniTicker@arr sends ALL symbols' last price in one batch (~1s)
+    // This replaces aggTrade per-symbol subscriptions (thousands of events → 1 event/sec)
+    mkExWs("BN-MiniTicker", "wss://fstream.binance.com/market/ws/!miniTicker@arr", (raw) => {
+      try {
+        const batch = JSON.parse(raw.toString());
+        if (!Array.isArray(batch)) return;
+        for (const d of batch) {
+          if (!tradingSet.has(d.s)) continue;
           const t = tickers.get("BN:" + d.s);
           if (t) {
-            t.p = +d.p; // DRIVE via Last Trade Price (Absolute Accuracy)
-            if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
-            dirtyKeys.add(t.key);
+            const p = +d.c; // close price = latest price
+            if (p > 0) {
+              t.p = p;
+              if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+              dirtyKeys.add(t.key);
+            }
           }
-        } catch (_) { }
-      }, (ws) => {
-        // Subscribe to aggTrade for each symbol in chunk
-        // aggTrade is real-time and provides the exact execution price
-        for (let j = 0; j < chunk.length; j += 100) {
-          const streams = chunk.slice(j, j + 100).map(s => `${s.toLowerCase()}@aggTrade`);
-          ws.send(JSON.stringify({ method: "SUBSCRIBE", params: streams, id: Date.now() + j }));
         }
-      });
-    }
+      } catch (_) {}
+    });
+
 
     // 2. Stats stream: 24h tickers every 1s (Volumes, OHLC, Count)
     mkExWs("BN-Stats", "wss://fstream.binance.com/market/ws/!ticker@arr", (raw) => {

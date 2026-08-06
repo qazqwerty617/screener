@@ -116,10 +116,14 @@ function getTickerIndex(key) {
   return idx;
 }
 
-// Broadcast loop: 8ms = 125fps for ultra-smooth price updates
+// Broadcast loop: 50ms = 20fps (optimized from 6ms/166fps to reduce CPU)
 let broadcastBuf = null;
 let broadcastDirty = false;
 let snapshotSent = false;
+
+// Pre-allocated broadcast buffer (reused to avoid GC pressure)
+const MAX_TICKERS_ESTIMATE = 5000;
+let reusableBroadcastBuffer = Buffer.alloc(MAX_TICKERS_ESTIMATE * 11 * 8);
 
 // Send snapshot to all connected clients
 function broadcastSnapshot() {
@@ -144,9 +148,13 @@ setInterval(() => {
   }
 
   // Build binary buffer: [ID, p, chg, v, h, l, o, funding, nextFunding, oi, trades] x N
-  // 11 fields: ID as Float64 (8 bytes), all others as Float64 (8 bytes) for full precision
   const count = dirtyKeys.size;
-  const buffer = Buffer.alloc(count * 11 * 8);
+  const requiredBytes = count * 11 * 8;
+
+  // Grow reusable buffer only if needed
+  if (reusableBroadcastBuffer.length < requiredBytes) {
+    reusableBroadcastBuffer = Buffer.alloc(requiredBytes + 1024);
+  }
   let offset = 0;
 
   for (const key of dirtyKeys) {
@@ -154,32 +162,35 @@ setInterval(() => {
     if (!t) continue;
     const idx = getTickerIndex(key);
     
-    buffer.writeDoubleLE(idx, offset); offset += 8;
-    buffer.writeDoubleLE(t.p || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.chg || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.v || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.h || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.l || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.o || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.funding || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.nextFunding || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.oi || 0, offset); offset += 8;
-    buffer.writeDoubleLE(t.trades || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(idx, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.p || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.chg || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.v || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.h || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.l || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.o || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.funding || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.nextFunding || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.oi || 0, offset); offset += 8;
+    reusableBroadcastBuffer.writeDoubleLE(t.trades || 0, offset); offset += 8;
   }
   dirtyKeys.clear();
+
+  // Slice to actual used bytes
+  const sendBuf = reusableBroadcastBuffer.subarray(0, offset);
 
   for (const ws of clients) {
     if (ws.readyState === WebSocket.OPEN) {
       try {
         if (ws.bufferedAmount > 2_000_000) continue;
-        ws.send(buffer, { binary: true });
+        ws.send(sendBuf, { binary: true });
       } catch (_) {
         clients.delete(ws);
         try { ws.terminate(); } catch (__) {}
       }
     }
   }
-}, 6);
+}, 50);
 
 // ─── Kline broadcast to clients ─────────────────────────────────────────────
 function broadcastKline(ex, sym, tf, candle) {
@@ -541,6 +552,8 @@ function startKlinePolling(sub) {
 // ─── Reconnecting WebSocket helper ──────────────────────────────────────────
 function mkExWs(exId, url, onMsg, onOpen) {
   let ws, alive = true, retryMs = 1000, lastMsg = 0;
+  let connectTime = 0; // track when connection was established
+  let rapidFailCount = 0; // count rapid disconnects for backoff
   
   function connect() {
     if (!alive) return;
@@ -569,6 +582,7 @@ function mkExWs(exId, url, onMsg, onOpen) {
     ws.on("open", () => {
       retryMs = 1000;
       lastMsg = Date.now();
+      connectTime = Date.now();
       updateExStatus(exId, "online");
       console.log(`[WS OPEN] ${exId}`);
       if (onOpen) onOpen(ws);
@@ -584,25 +598,40 @@ function mkExWs(exId, url, onMsg, onOpen) {
     });
 
     ws.on("close", (code, reason) => {
-      console.log(`[WS CLOSE] ${exId}: code=${code} ${reason||""}`);
       updateExStatus(exId, "offline", "Connection closed");
       if (alive) {
+        // Rapid-fail detection: if connection lived < 10s, it's a storm
+        const lifetime = Date.now() - (connectTime || 0);
+        if (lifetime < 10000) {
+          rapidFailCount++;
+          // Aggressive backoff for rapid failures
+          retryMs = Math.min(retryMs * 2, 60000);
+          if (rapidFailCount >= 5) {
+            retryMs = Math.max(retryMs, 30000); // at least 30s after 5 rapid fails
+          }
+          if (rapidFailCount % 10 === 0) {
+            console.warn(`[WS STORM] ${exId}: ${rapidFailCount} rapid disconnects, backing off ${(retryMs/1000).toFixed(0)}s`);
+          }
+        } else {
+          // Normal disconnect — reset rapid fail counter
+          rapidFailCount = Math.max(0, rapidFailCount - 1);
+          retryMs = Math.min(retryMs * 1.5, 30000);
+        }
         setTimeout(connect, retryMs);
-        retryMs = Math.min(retryMs * 1.5, 30000);
       }
     });
   }
 
-  // Watchdog: check every 15s, reconnect if no data for 20s
+  // Watchdog: check every 30s, reconnect if no data for 45s
   const watchdog = setInterval(() => {
     if (!alive) return clearInterval(watchdog);
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const silent = Date.now() - lastMsg;
-    if (lastMsg > 0 && silent > 20000) {
+    if (lastMsg > 0 && silent > 45000) {
       console.warn(`[WS WATCHDOG] ${exId}: No data for ${(silent/1000).toFixed(0)}s, reconnecting...`);
       try { ws.terminate(); } catch (_) {}
     }
-  }, 15000);
+  }, 30000);
 
   connect();
   return {
@@ -1057,7 +1086,7 @@ app.get("/api/backtest/new", async (req, res) => {
 app.post("/api/backtest/:id/step", (req, res) => {
   const session = backtestSessions.get(req.params.id);
   if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
-  const requested = Math.max(1, Math.min(20, parseInt(req.query.count, 10) || 1));
+  const requested = Math.max(1, Math.min(200, parseInt(req.query.count, 10) || 1));
   const from = session.revealed;
   const to = Math.min(session.future.length, from + requested);
   session.revealed = to;
@@ -1148,7 +1177,7 @@ server.listen(PORT, () => {
   console.log(`║  CryptoScreen Pro  →  port ${PORT}                      ║`);
   console.log(`║  Exchanges: ${Object.keys(exchanges).length} modules (parallel init)            ║`);
   console.log(`║  Protocol: Flat Array (ultra-fast)                      ║`);
-  console.log(`║  Broadcast: 8ms (125fps)                                ║`);
+  console.log(`║  Broadcast: 50ms (20fps, CPU-optimized)                 ║`);
   console.log(`╚════════════════════════════════════════════════════════╝\n`);
   
   // Parallel init — all exchanges start simultaneously
@@ -1213,7 +1242,7 @@ server.listen(PORT, () => {
               newSignalsCount++;
             }
           } catch (e) {}
-          await new Promise(r => setTimeout(r, 40));
+          await new Promise(r => setTimeout(r, 100));
         }
       }
 
@@ -1228,7 +1257,7 @@ server.listen(PORT, () => {
     } finally {
       isScanningPatterns = false;
       // Endless 24/7 loop: schedule next scan 5 seconds after current finishes
-      setTimeout(scanAllPatterns, 5000);
+      setTimeout(scanAllPatterns, 30000);
     }
   }
 

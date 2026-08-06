@@ -394,7 +394,18 @@ button {
     color: var(--t1);
     user-select: none;
     transition: all 0.12s;
-    min-width: 150px;
+    min-width: 0;
+    max-width: 180px;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+#exc-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
 }
 
 .exc-btn:hover {
@@ -3774,7 +3785,8 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 .bt-indicators-head { display: flex; align-items: flex-end; justify-content: space-between; padding: 1px 2px 9px; border-bottom: 1px solid var(--bd); }
 .bt-indicators-head strong { color: var(--t1); font-size: 11px; }
 .bt-indicators-head span { color: var(--t3); font-size: 8px; }
-.bt-indicators-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 6px; padding-top: 8px; }
+.bt-section-title { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--t3); margin: 8px 0 4px 2px; }
+.bt-indicators-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 6px; padding-top: 2px; margin-bottom: 4px; }
 .bt-indicators-grid button { min-height: 29px; padding: 5px 3px; display: flex; align-items: center; justify-content: center; color: var(--t2); background: rgba(255,255,255,.025); border: 1px solid var(--bd); border-radius: 7px; text-align: center; }
 .bt-indicators-grid button span { font-size: 9px; font-weight: 700; }
 .bt-indicators-grid button b { display: none; }
@@ -3791,6 +3803,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 .bt-ohlc { display: flex; gap: 8px; font-size: 10px; color: var(--t2); font-variant-numeric: tabular-nums; }
 #bt-canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 #bt-canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
+#bt-vol-canvas { position: absolute; bottom: 0; left: 0; width: 100%; pointer-events: none; }
 #bt-draw-tools { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 34px; padding: 6px 4px; border: 1px solid rgba(160,124,255,.16); border-radius: 8px; background: linear-gradient(180deg,rgba(94,58,238,.16),rgba(18,20,30,.96) 18%,rgba(18,20,30,.92)); backdrop-filter: blur(14px); box-shadow: 0 14px 32px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.05); user-select: none; }
 #bt-draw-tools .dt-btn { color: var(--tool-accent,var(--t3)); }
 #bt-draw-tools .dt-btn.on { color: #fff; }
@@ -3882,6 +3895,204 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 }
 .smc-btn:hover {
     border-color: rgba(167, 139, 250, 0.4);
+}
+
+/* ── Cross-Device & Touch Responsiveness Optimization ── */
+
+/* Canvas touch handling */
+#chart-canvas, .cell-canvas, #vol-canvas {
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Safe Area Insets for iPhones / Notch displays */
+body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Smooth custom horizontal scrollbars for overflow control bars */
+.chart-bar, .chart-controls, .screener-header, .screener-filters, .exc-menu {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.chart-bar::-webkit-scrollbar, .chart-controls::-webkit-scrollbar {
+    height: 4px;
+}
+.chart-bar::-webkit-scrollbar-thumb, .chart-controls::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+}
+
+/* ── Breakpoint L: MacBook 13"/14" & Medium Laptops (1024px - 1439px) ── */
+@media (max-width: 1439px) {
+    .exc-btn {
+        max-width: 140px;
+    }
+    .chart-bar {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+        padding-bottom: 2px;
+    }
+    .chart-btn-group {
+        flex-shrink: 0;
+    }
+}
+
+/* ── Breakpoint M: Tablets / iPads / Small Laptops (768px - 1023px) ── */
+@media (max-width: 1023px) {
+    .exc-btn {
+        max-width: 120px;
+        font-size: 11px;
+    }
+    #exc-name {
+        font-size: 11px;
+    }
+    .chart-bar {
+        gap: 6px;
+        padding: 4px 8px;
+    }
+    .chart-btn-group button, .chart-tf-btn, .vt-btn {
+        padding: 4px 8px;
+        font-size: 11px;
+    }
+    /* Modal responsive fit */
+    .modal-content, .density-settings-modal {
+        width: 92% !important;
+        max-width: 500px !important;
+        margin: 20px auto !important;
+    }
+    /* Table horizontal scrolling wrapper */
+    .table-container, .screener-table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+}
+
+/* ── Breakpoint S: Mobile Phones / Small Tablets (< 768px) ── */
+@media (max-width: 767px) {
+    /* Responsive Header & Navigation */
+    .screener-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        padding: 8px 10px;
+        height: auto;
+    }
+    
+    .chart-bar {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        gap: 4px;
+        padding: 4px 6px;
+    }
+
+    .exc-btn {
+        max-width: 110px;
+        padding: 3px 6px;
+        font-size: 10px;
+    }
+
+    /* Mobile Table priority columns */
+    .screener-table {
+        min-width: 600px;
+    }
+
+    /* Modals on mobile */
+    .modal-content, .density-settings-modal {
+        width: 95% !important;
+        max-width: 100% !important;
+        padding: 14px !important;
+        border-radius: 8px !important;
+    }
+
+    /* Larger touch targets for mobile usability */
+    .chart-tf-btn, .vt-btn, .chart-indicator-grid-btn {
+        min-height: 32px;
+        min-width: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* Multi-chart grid cell mobile header */
+    .cell-header {
+        font-size: 10px;
+        padding: 0 4px;
+    }
+}
+
+/* ── Usability & Shortcut Modal Enhancements ── */
+.shortcuts-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: var(--bg3);
+    border: 1px solid var(--bd);
+    border-radius: var(--radius);
+    color: var(--t2);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.shortcuts-btn:hover {
+    color: var(--t1);
+    border-color: var(--ac);
+    background: var(--bgh);
+}
+
+.shortcuts-modal-content {
+    max-width: 480px;
+    background: var(--bg2);
+    border: 1px solid var(--bd2);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+.shortcuts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.shortcut-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--t2);
+}
+
+.shortcut-item kbd {
+    background: #202433;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-family: monospace;
+    font-size: 11px;
+    color: #f3f4f6;
+    box-shadow: 0 2px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* Sticky screener table headers */
+.screener-table th, .table-container th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg2);
+    box-shadow: 0 1px 0 var(--bd);
 }
 
 

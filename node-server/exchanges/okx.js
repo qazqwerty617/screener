@@ -102,37 +102,9 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   }
 
   function connectWs() {
-    // ── 1. Trades: real-time price via executed trades (like BN aggTrade) ──
-    // OKX allows up to 100 args per subscribe. Split into connections of ~80 symbols.
-    const tradesBatch = 80;
-    for (let i = 0; i < okSyms.length; i += tradesBatch) {
-      const chunk = okSyms.slice(i, i + tradesBatch);
-      mkExWs(`OX-Trades-${i}`, "wss://ws.okx.com:8443/ws/v5/public", (raw) => {
-        if (raw.toString() === "pong") return;
-        try {
-          const d = JSON.parse(raw.toString());
-          if (!d.data || d.arg?.channel !== "trades") return;
-          for (const trade of d.data) {
-            const instId = trade.instId || d.arg.instId;
-            const t = tickers.get("OX:" + instId);
-            if (!t) continue;
-            const p = +trade.px;
-            if (p > 0) {
-              t.p = p;
-              if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
-              dirtyKeys.add(t.key);
-            }
-          }
-        } catch (_) {}
-      }, (ws) => {
-        // Subscribe in batches of 20 (OKX recommends small batches)
-        for (let j = 0; j < chunk.length; j += 20) {
-          const args = chunk.slice(j, j + 20).map(instId => ({ channel: "trades", instId }));
-          ws.send(JSON.stringify({ op: "subscribe", args }));
-        }
-        setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 20000);
-      });
-    }
+    // Trades WS removed — tickers channel already provides lastPrice with ~1s latency
+    // This eliminates 6 WebSocket connections and thousands of JSON.parse calls/sec
+
 
     // ── 2. Stats: tickers for vol, high, low, open (~1s updates) ──
     const statsBatch = Math.ceil(okSyms.length / 2);
@@ -152,10 +124,11 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
               const ctVal = ctValMap.get(instId) || 1;
               t.v = +tick.vol24h * ctVal * (t.p || +tick.last || 1);
             }
+            if (tick.last) { const p = +tick.last; if (p > 0) t.p = p; }
             if (tick.high24h) t.h = +tick.high24h;
             if (tick.low24h) t.l = +tick.low24h;
             if (tick.open24h) t.o = +tick.open24h;
-            // Don't update price here — trades channel is faster & more accurate
+            // Price now comes from tickers channel (trades WS removed for CPU savings)
             
             if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
             dirtyKeys.add(t.key);

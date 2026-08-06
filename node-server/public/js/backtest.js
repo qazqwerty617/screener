@@ -14,6 +14,9 @@
     session: null,
     requestSeq: 0,
     candles: [],
+    stepBuffer: [],
+    fetchingBuffer: false,
+    serverDone: false,
     initialCount: 0,
     initialPrice: 0,
     speed: 450,
@@ -47,8 +50,10 @@
   };
 
   const canvas = $("bt-canvas");
+  const volCv = $("bt-vol-canvas");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
+  const vCtx = volCv ? volCv.getContext("2d") : null;
   const wrap = $("bt-canvas-wrap");
 
   const parseCandle = row => ({ t: +row[0], o: +row[1], h: +row[2], l: +row[3], c: +row[4], v: +row[5] });
@@ -81,11 +86,16 @@
   function hideResult() { $("bt-result").hidden = true; }
 
   function updateControls() {
-    const ready = Boolean(state.session) && !state.stepping;
-    $("bt-step").disabled = !ready || state.done || state.revealQueue.length > 0;
-    $("bt-play").disabled = !ready || state.done || state.revealQueue.length > 0;
-    $("bt-reveal").disabled = !ready || state.done;
+    const ready = Boolean(state.session);
+    $("bt-step").disabled = !ready || state.done || state.playing || state.stepping || state.revealQueue.length > 0;
+    $("bt-play").disabled = !ready || state.done || state.stepping || state.revealQueue.length > 0;
+    $("bt-reveal").disabled = !ready || state.done || state.playing || state.stepping;
     $("bt-play").textContent = state.playing ? "❚❚ Пауза" : "▶ Запустить";
+    $("bt-play").classList.toggle("playing", state.playing);
+    updateProgressUI();
+  }
+
+  function updateProgressUI() {
     const revealed = Math.max(0, state.candles.length - state.initialCount);
     const total = state.session?.futureCount || 0;
     $("bt-progress-fill").style.width = total ? `${Math.min(100, revealed / total * 100)}%` : "0%";
@@ -96,6 +106,9 @@
     stopPlaying();
     state.session = null;
     state.candles = [];
+    state.stepBuffer = [];
+    state.fetchingBuffer = false;
+    state.serverDone = false;
     state.initialCount = 0;
     state.initialPrice = 0;
     state.done = false;
@@ -127,6 +140,22 @@
     draw();
   }
 
+  async function fetchStepBuffer(count = 50) {
+    if (!state.session || state.serverDone || state.fetchingBuffer) return;
+    state.fetchingBuffer = true;
+    try {
+      const response = await fetch(`/api/backtest/${state.session.id}/step?count=${count}`, { method: "POST", cache: "no-store" });
+      const data = await response.json();
+      if (response.ok && data.candles) {
+        for (const row of data.candles) state.stepBuffer.push(parseCandle(row));
+        if (data.done) state.serverDone = true;
+      }
+    } catch (_) {
+    } finally {
+      state.fetchingBuffer = false;
+    }
+  }
+
   async function newCase() {
     const requestSeq = ++state.requestSeq;
     resetCase();
@@ -149,6 +178,8 @@
       setLoading(false);
       updateControls();
       draw();
+      // Pre-buffer first batch of candles in background
+      fetchStepBuffer(50);
     } catch (error) {
       if (requestSeq === state.requestSeq) setLoading(true, error.message || "Ошибка загрузки. Попробуйте ещё раз.");
     } finally {
@@ -157,19 +188,23 @@
   }
 
   async function step() {
-    if (!state.session || state.done || state.stepping || state.revealQueue.length) return false;
+    if (!state.session || state.done || state.stepping || state.playing || state.revealQueue.length) return false;
     state.stepping = true;
     updateControls();
     try {
-      const response = await fetch(`/api/backtest/${state.session.id}/step?count=1`, { method: "POST", cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Ошибка реплея");
-      for (const row of data.candles || []) appendCandle(parseCandle(row));
-      if (data.done) finishCase();
-      return (data.candles || []).length > 0;
-    } catch (error) {
-      stopPlaying();
-      showResult("Реплей остановлен", error.message, "bad");
+      if (!state.stepBuffer.length && !state.serverDone) {
+        await fetchStepBuffer(20);
+      }
+      if (state.stepBuffer.length > 0) {
+        const c = state.stepBuffer.shift();
+        appendCandle(c);
+        if (state.stepBuffer.length < 15 && !state.serverDone) fetchStepBuffer(50);
+        if (!state.stepBuffer.length && state.serverDone) finishCase();
+        return true;
+      } else if (state.serverDone) {
+        finishCase();
+        return false;
+      }
       return false;
     } finally {
       state.stepping = false;
@@ -179,8 +214,10 @@
 
   function stopPlaying() {
     state.playing = false;
-    clearTimeout(state.playTimer);
-    state.playTimer = null;
+    if (state.playTimer) {
+      clearTimeout(state.playTimer);
+      state.playTimer = null;
+    }
     updateControls();
   }
 
@@ -189,13 +226,40 @@
     if (!state.session || state.done) return;
     state.playing = true;
     updateControls();
-    const loop = async () => {
+
+    if (state.stepBuffer.length < 25 && !state.serverDone) {
+      fetchStepBuffer(50);
+    }
+
+    const playTick = async () => {
       if (!state.playing || state.done) return;
-      const advanced = await step();
-      if (!advanced || state.done) return stopPlaying();
-      state.playTimer = setTimeout(loop, state.speed);
+
+      if (state.stepBuffer.length > 0) {
+        const candle = state.stepBuffer.shift();
+        appendCandle(candle);
+
+        if (state.stepBuffer.length < 15 && !state.serverDone && !state.fetchingBuffer) {
+          fetchStepBuffer(50);
+        }
+      } else if (state.serverDone) {
+        finishCase();
+        return stopPlaying();
+      } else if (!state.fetchingBuffer) {
+        await fetchStepBuffer(30);
+        if (state.stepBuffer.length > 0) {
+          const candle = state.stepBuffer.shift();
+          appendCandle(candle);
+        }
+      }
+
+      if (state.playing && !state.done) {
+        state.playTimer = setTimeout(playTick, state.speed);
+      } else {
+        stopPlaying();
+      }
     };
-    loop();
+
+    playTick();
   }
 
   async function reveal() {
@@ -207,7 +271,9 @@
       const response = await fetch(`/api/backtest/${state.session.id}/reveal`, { method: "POST", cache: "no-store" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Ошибка раскрытия");
-      state.revealQueue = (data.candles || []).map(parseCandle);
+      const revealCandles = (data.candles || []).map(parseCandle);
+      state.revealQueue = [...state.stepBuffer, ...revealCandles];
+      state.stepBuffer = [];
       state.stepping = false;
       animateReveal();
     } catch (error) {
@@ -223,15 +289,15 @@
       return;
     }
     appendCandle(state.revealQueue.shift());
-    updateControls();
-    state.playTimer = setTimeout(animateReveal, Math.max(35, Math.min(120, state.speed / 4)));
+    state.playTimer = setTimeout(animateReveal, Math.max(25, Math.min(80, state.speed / 4)));
   }
 
   function appendCandle(candle) {
+    if (!candle) return;
     if (state.panBars > 0) state.panBars++;
     state.candles.push(candle);
     updateTrade(candle);
-    updateControls();
+    updateProgressUI();
     draw();
   }
 
@@ -442,17 +508,22 @@
   }
 
   function drawSubIndicators(m, allClose) {
-    if (!m.subKeys.length) return;
+    if (!m.subKeys.length || !vCtx) return;
     const all = state.candles;
     const cache = {};
     m.subKeys.forEach((key, panelIndex) => {
-      const top = m.plot.priceH + m.volumeH + panelIndex * m.subPanelH;
+      const top = panelIndex * m.subPanelH;
       const height = m.subPanelH;
-      ctx.save();
-      ctx.fillStyle = "rgba(8,10,15,.78)";
-      ctx.fillRect(0, top, m.plot.w, height);
-      ctx.strokeStyle = "rgba(255,255,255,.065)";
-      ctx.beginPath(); ctx.moveTo(0, top + .5); ctx.lineTo(m.plot.w, top + .5); ctx.stroke();
+      vCtx.save();
+      vCtx.beginPath();
+      vCtx.rect(0, top, m.plot.w, height);
+      vCtx.clip();
+
+      vCtx.fillStyle = "rgba(13, 15, 20, 0.95)";
+      vCtx.fillRect(0, top, m.plot.w, height);
+      vCtx.strokeStyle = "rgba(255,255,255,.06)";
+      vCtx.lineWidth = 1;
+      vCtx.beginPath(); vCtx.moveTo(0, top + .5); vCtx.lineTo(m.plot.w, top + .5); vCtx.stroke();
 
       let values;
       let label = key.toUpperCase();
@@ -464,11 +535,11 @@
       } else if (key === "atr") {
         values = cache.atr || (cache.atr = atrValues(all));
         const visible = values.slice(m.start, m.end).filter(Number.isFinite);
-        min = 0; max = Math.max(...visible, 1e-12); color = "#f59e0b"; label = "ATR 14";
+        min = 0; max = Math.max(...visible, 1e-12); color = "#fb923c"; label = "ATR 14";
       } else if (key === "cvd") {
         values = cache.cvd || (cache.cvd = cvdValues(all));
         const visible = values.slice(m.start, m.end).filter(Number.isFinite);
-        min = Math.min(...visible, 0); max = Math.max(...visible, 1); color = "#22d3ee"; label = "CVD";
+        min = Math.min(...visible, 0); max = Math.max(...visible, 1); color = "#ec4899"; label = "CVD";
       } else if (key === "macd") {
         const fast = cache.fast12 || (cache.fast12 = ema(allClose, 12));
         const slow = cache.slow26 || (cache.slow26 = ema(allClose, 26));
@@ -477,33 +548,62 @@
         const histogram = values.map((value, i) => value - signal[i]);
         const visible = [...values.slice(m.start, m.end), ...signal.slice(m.start, m.end), ...histogram.slice(m.start, m.end)].filter(Number.isFinite);
         const bound = Math.max(...visible.map(Math.abs), 1e-12);
-        min = -bound; max = bound; color = "#38bdf8"; label = "MACD 12 26 9";
-        const yFor = value => top + 5 + (max - value) / (max - min) * (height - 10);
+        min = -bound; max = bound; color = "#3b82f6"; label = "MACD 12 26 9";
+        const yFor = value => top + 4 + (max - value) / (max - min) * (height - 8);
         const zeroY = yFor(0);
         histogram.slice(m.start, m.end).forEach((value, i) => {
           if (!Number.isFinite(value)) return;
           const y = yFor(value);
-          ctx.fillStyle = value >= 0 ? "rgba(38,201,122,.48)" : "rgba(255,69,96,.48)";
-          ctx.fillRect(m.xForIndex(i) - Math.max(.5, m.stepX * .27), Math.min(y, zeroY), Math.max(1, m.stepX * .54), Math.max(1, Math.abs(zeroY - y)));
+          vCtx.fillStyle = value >= 0 ? "rgba(34,197,94,.7)" : "rgba(239,68,68,.7)";
+          vCtx.fillRect(m.xForIndex(i) - Math.max(.5, m.stepX * .27), Math.min(y, zeroY), Math.max(1, m.stepX * .54), Math.max(1, Math.abs(zeroY - y)));
         });
-        drawSeries(m, signal, "#f59e0b", yFor, 1);
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#f43f5e";
+        vCtx.lineWidth = 1.2;
+        signal.slice(m.start, m.end).forEach((value, i) => {
+          if (!Number.isFinite(value)) return;
+          const x = m.xForIndex(i);
+          const y = yFor(value);
+          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+        });
+        vCtx.stroke();
       }
 
-      const yFor = value => top + 5 + (max - value) / Math.max(1e-12, max - min) * (height - 10);
+      const yFor = value => top + 4 + (max - value) / Math.max(1e-12, max - min) * (height - 8);
       if (key === "rsi") {
         [30, 70].forEach(level => {
-          const y = yFor(level); ctx.setLineDash([3, 4]); ctx.strokeStyle = "rgba(255,255,255,.12)";
-          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(m.plot.w, y); ctx.stroke(); ctx.setLineDash([]);
+          const y = yFor(level); vCtx.setLineDash([3, 4]); vCtx.strokeStyle = "rgba(255,255,255,.15)";
+          vCtx.beginPath(); vCtx.moveTo(0, y); vCtx.lineTo(m.plot.w, y); vCtx.stroke(); vCtx.setLineDash([]);
         });
       }
       if (key === "macd") {
-        const zeroY = yFor(0); ctx.strokeStyle = "rgba(255,255,255,.1)"; ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(m.plot.w, zeroY); ctx.stroke();
+        const zeroY = yFor(0); vCtx.strokeStyle = "rgba(255,255,255,.12)"; vCtx.beginPath(); vCtx.moveTo(0, zeroY); vCtx.lineTo(m.plot.w, zeroY); vCtx.stroke();
       }
-      drawSeries(m, values, color, yFor, 1.15);
+
+      vCtx.beginPath();
+      vCtx.strokeStyle = color;
+      vCtx.lineWidth = 1.5;
+      values.slice(m.start, m.end).forEach((value, i) => {
+        if (!Number.isFinite(value)) return;
+        const x = m.xForIndex(i);
+        const y = yFor(value);
+        if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+      });
+      vCtx.stroke();
+
       const lastValue = values?.[values.length - 1];
-      ctx.fillStyle = color; ctx.font = "700 8px Inter, sans-serif";
-      ctx.fillText(`${label}${Number.isFinite(lastValue) ? `  ${price(lastValue)}` : ""}`, 7, top + 11);
-      ctx.restore();
+      // Rounded dark glass pill badge for indicator label
+      vCtx.fillStyle = "rgba(18, 20, 29, 0.85)";
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      vCtx.lineWidth = 1;
+      const textStr = `${label}${Number.isFinite(lastValue) ? `  ${price(lastValue)}` : ""}`;
+      vCtx.font = "bold 9px Inter, sans-serif";
+      const tw = vCtx.measureText(textStr).width;
+      vCtx.fillRect(6, top + 4, tw + 10, 15);
+      vCtx.strokeRect(6, top + 4, tw + 10, 15);
+      vCtx.fillStyle = color;
+      vCtx.fillText(textStr, 11, top + 15);
+      vCtx.restore();
     });
   }
 
@@ -516,11 +616,21 @@
       canvas.style.width = `${w}px`; canvas.style.height = `${h}px`;
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const right = 66, bottom = 23;
+    const right = 82, bottom = 23;
     const subKeys = ["rsi", "atr", "macd", "cvd"].filter(key => state.indicators.has(key));
-    const subPanelH = Math.min(58, Math.max(42, (h - bottom) * .105));
+    const subPanelH = Math.min(54, Math.max(38, (h - bottom) * .10));
     const subTotalH = subKeys.length * subPanelH;
-    const volumeH = state.indicators.has("volume") ? Math.min(76, h * .14) : 0;
+    const volumeH = state.indicators.has("volume") ? Math.min(70, h * .13) : 0;
+    const volTotalH = volumeH + subTotalH;
+
+    if (volCv && vCtx) {
+      if (volCv.width !== Math.round(w * dpr) || volCv.height !== Math.round(volTotalH * dpr)) {
+        volCv.width = Math.round(w * dpr); volCv.height = Math.round(volTotalH * dpr);
+        volCv.style.width = `${w}px`; volCv.style.height = `${volTotalH}px`;
+      }
+      vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
     const plot = { x: 0, y: 0, w: Math.max(20, w - right), h: Math.max(40, h - bottom), priceH: Math.max(90, h - bottom - volumeH - subTotalH) };
     const count = Math.min(state.viewBars, state.candles.length);
     const minPan = -Math.floor(count * .45);
@@ -543,7 +653,7 @@
     const stepX = plot.w / Math.max(1, count);
     const xForIndex = i => plot.x + (i + .5) * stepX;
     const yForPrice = p => plot.y + (max - p) / Math.max(1e-12, max - min) * plot.priceH;
-    return { w, h, plot, data, start, end, min, max, stepX, xForIndex, yForPrice, volumeH, range, subKeys, subPanelH, subTotalH, futureGap: actualGap };
+    return { w, h, plot, data, start, end, min, max, stepX, xForIndex, yForPrice, volumeH, range, subKeys, subPanelH, subTotalH, volTotalH, futureGap: actualGap };
   }
 
   function draw() {
@@ -553,13 +663,33 @@
     ctx.lineWidth = 1;
     ctx.font = "9px Inter, sans-serif";
 
-    // Grid + scales
-    for (let i = 0; i <= 5; i++) {
-      const y = m.plot.priceH * i / 5 + .5;
-      ctx.strokeStyle = "rgba(255,255,255,.045)"; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(m.plot.w, y); ctx.stroke();
-      const p = m.max - (m.max - m.min) * i / 5;
-      ctx.fillStyle = "#596071"; ctx.fillText(price(p), m.plot.w + 6, y + 3);
+    if (volCv && vCtx) {
+      vCtx.clearRect(0, 0, m.w, m.volTotalH);
+      vCtx.fillStyle = "#0d0f14";
+      vCtx.fillRect(0, 0, m.w, m.volTotalH);
     }
+
+    // Dynamic price scale grid using calcNiceStep (matching Screener 1:1)
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const pr = m.max - m.min || 1;
+    const gridStep = typeof calcNiceStep === "function" ? calcNiceStep(pr, Math.max(4, Math.floor(m.plot.priceH / 70))) : pr / 5;
+    let gridPrice = Math.ceil(m.min / gridStep) * gridStep;
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(255,255,255,.045)";
+    ctx.lineWidth = 1;
+    ctx.font = "10px Inter, sans-serif";
+    ctx.fillStyle = "#64748b";
+    ctx.textAlign = "left";
+    while (gridPrice <= m.max + gridStep * 0.01) {
+      const y = m.yForPrice(gridPrice);
+      if (y >= 0 && y <= m.plot.priceH) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(m.plot.w, y); ctx.stroke();
+        ctx.fillText(price(gridPrice), m.plot.w + 6, y + 4);
+      }
+      gridPrice += gridStep;
+    }
+
+    // Time grid lines
     for (let i = 0; i <= 6; i++) {
       const x = m.plot.w * i / 6 + .5;
       ctx.strokeStyle = "rgba(255,255,255,.035)"; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, m.plot.h); ctx.stroke();
@@ -574,25 +704,45 @@
 
     drawVolumeProfile(m);
 
-    // Volume
-    if (m.volumeH && m.data.length) {
+    // Volume on vCtx
+    if (m.volumeH && m.data.length && vCtx) {
       const visibleVols = m.data.map(c => Number.isFinite(c.v) && c.v > 0 ? c.v : 0);
       const sortedVols = visibleVols.filter(v => v > 0).sort((a, b) => a - b);
       const absoluteMax = sortedVols[sortedVols.length - 1] || 0;
       const p97 = sortedVols[Math.floor((sortedVols.length - 1) * .97)] || absoluteMax;
       const maxVol = Math.max(1, Math.min(absoluteMax, p97 * 1.2));
-      const baseY = m.plot.priceH + m.volumeH;
-      ctx.fillStyle = "rgba(8,10,15,.48)";
-      ctx.fillRect(0, m.plot.priceH, m.plot.w, m.volumeH);
-      ctx.strokeStyle = "rgba(255,255,255,.06)";
-      ctx.beginPath(); ctx.moveTo(0, m.plot.priceH + .5); ctx.lineTo(m.plot.w, m.plot.priceH + .5); ctx.stroke();
+      const volumeTop = m.subTotalH;
+
+      vCtx.save();
+      vCtx.beginPath();
+      vCtx.rect(0, volumeTop, m.plot.w, m.volumeH);
+      vCtx.clip();
+
+      vCtx.fillStyle = "rgba(13, 15, 20, 0.95)";
+      vCtx.fillRect(0, volumeTop, m.plot.w, m.volumeH);
+      vCtx.strokeStyle = "rgba(255,255,255,.06)";
+      vCtx.beginPath(); vCtx.moveTo(0, volumeTop + .5); vCtx.lineTo(m.plot.w, volumeTop + .5); vCtx.stroke();
+
+      const volW = Math.max(1, m.stepX > 3 ? m.stepX - 2 : m.stepX);
       m.data.forEach((c, i) => {
         const vh = Math.min(1, visibleVols[i] / maxVol) * (m.volumeH - 8);
-        ctx.fillStyle = c.c >= c.o ? "rgba(38,201,122,.28)" : "rgba(255,69,96,.28)";
-        if (vh > 0) ctx.fillRect(m.xForIndex(i) - Math.max(1, m.stepX * .31), baseY - Math.max(1, vh), Math.max(1, m.stepX * .62), Math.max(1, vh));
+        vCtx.fillStyle = c.c >= c.o ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+        if (vh > 0) vCtx.fillRect(m.xForIndex(i) - volW / 2, volumeTop + m.volumeH - Math.max(1, vh), volW, Math.max(1, vh));
       });
-      ctx.fillStyle = "rgba(148,163,184,.7)"; ctx.font = "700 8px Inter, sans-serif"; ctx.fillText("VOL", 7, m.plot.priceH + 11);
+
+      vCtx.fillStyle = "rgba(18, 20, 29, 0.85)";
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      vCtx.fillRect(6, volumeTop + 4, 38, 15);
+      vCtx.strokeRect(6, volumeTop + 4, 38, 15);
+      vCtx.fillStyle = "rgba(255,255,255,.6)"; vCtx.font = "bold 9px Inter, sans-serif"; vCtx.fillText("VOL", 11, volumeTop + 15);
+      vCtx.restore();
     }
+
+    // Clip main price chart area so candles & overlay indicators never bleed into volume/sub-indicators
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, m.plot.w, m.plot.priceH);
+    ctx.clip();
 
     // Indicators
     const allClose = state.candles.map(c => c.c);
@@ -611,15 +761,51 @@
       drawSeries(m, bands.lower, "rgba(56,189,248,.8)");
     }
 
-    // Candles
-    const bodyW = Math.max(1, Math.min(9, m.stepX * .66));
+    // Smart Money Concepts & Liquidation Heatmap
+    if (typeof renderSmartMoneyConcepts === "function") {
+      window.chartActiveSmc = state.indicators;
+      renderSmartMoneyConcepts(ctx, state.candles, m.start, m.data.length, m.stepX, m.futureGap || 0, m.yForPrice, m.plot.w, m.plot.priceH, 0, m.start);
+    }
+    if (state.indicators.has("liqmap") && typeof renderLiquidationHeatmap === "function") {
+      renderLiquidationHeatmap(ctx, state.candles, m.start, m.data.length, m.stepX, m.futureGap || 0, m.yForPrice, m.plot.w, m.plot.priceH, 0, m.start);
+    }
+
+    // Pixel-perfect Sub-pixel Candles matching main Screener 1:1
+    const hw = Math.max(0.5, (m.stepX - 2) / 2);
     m.data.forEach((c, i) => {
-      const x = m.xForIndex(i), yo = m.yForPrice(c.o), yc = m.yForPrice(c.c), yh = m.yForPrice(c.h), yl = m.yForPrice(c.l);
+      const rawX = m.xForIndex(i);
       const up = c.c >= c.o;
-      ctx.strokeStyle = ctx.fillStyle = up ? "#26c97a" : "#ff4560";
-      ctx.beginPath(); ctx.moveTo(x + .5, yh); ctx.lineTo(x + .5, yl); ctx.stroke();
-      ctx.fillRect(x - bodyW / 2, Math.min(yo, yc), bodyW, Math.max(1, Math.abs(yc - yo)));
+      const yH = m.yForPrice(c.h), yL = m.yForPrice(c.l);
+      const yO = m.yForPrice(c.o), yC = m.yForPrice(c.c);
+      const bT = Math.min(yO, yC), bH = Math.max(1, Math.abs(yC - yO));
+
+      // 1px wicks aligned on DPR grid
+      const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
+      const wickYH = Math.round(yH * dpr) / dpr;
+      const wickYL = Math.round(yL * dpr) / dpr;
+      ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
+      ctx.lineWidth = 1 / dpr;
+      ctx.beginPath();
+      ctx.moveTo(wickX, wickYH);
+      ctx.lineTo(wickX, wickYL);
+      ctx.stroke();
+
+      // Solid filled candle body
+      const leftX = Math.round((rawX - hw) * dpr);
+      const rightX = Math.round((rawX + hw) * dpr);
+      const topY = Math.round(bT * dpr);
+      const bottomY = Math.round((bT + bH) * dpr);
+
+      const fillX = leftX / dpr;
+      const fillY = topY / dpr;
+      const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
+      const fillH = Math.max(1 / dpr, (bottomY - topY) / dpr);
+
+      ctx.fillStyle = up ? "#26c97a" : "#ff4560";
+      ctx.fillRect(fillX, fillY, fillW, fillH);
     });
+
+    ctx.restore();
 
     drawSubIndicators(m, allClose);
 
@@ -634,12 +820,43 @@
     drawUserObjects(m);
     drawPositionLines(m);
 
-    // Last price
+    // Right axis thin divider
+    ctx.strokeStyle = "rgba(255,255,255,.06)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(m.plot.w, 0);
+    ctx.lineTo(m.plot.w, m.h);
+    ctx.stroke();
+
+    // Last price line & rounded badge (matching Screener 1:1)
     const last = m.data[m.data.length - 1];
     if (last) {
-      const y = m.yForPrice(last.c); ctx.save(); ctx.setLineDash([2, 3]); ctx.strokeStyle = last.c >= last.o ? "rgba(38,201,122,.6)" : "rgba(255,69,96,.6)";
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(m.plot.w, y); ctx.stroke(); ctx.restore();
-      ctx.fillStyle = last.c >= last.o ? "#26c97a" : "#ff4560"; ctx.fillRect(m.plot.w, y - 8, 66, 16); ctx.fillStyle = "#07110b"; ctx.font = "700 9px Inter"; ctx.fillText(price(last.c), m.plot.w + 5, y + 3);
+      const ly = m.yForPrice(last.c);
+      const up = last.c >= last.o;
+      const ly2 = Math.max(10, Math.min(m.plot.priceH - 10, ly));
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,.15)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, ly2);
+      ctx.lineTo(m.plot.w, ly2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const tH = 22, tW = 74, tX = m.plot.w + 4, tY = ly2 - tH / 2;
+      if (typeof roundRect === "function") roundRect(ctx, tX, tY, tW, tH, 6);
+      else ctx.rect(tX, tY, tW, tH);
+      ctx.fillStyle = "#0d0f14";
+      ctx.fill();
+      ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 11px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(price(last.c), m.plot.w + 41, ly2 + 4);
+      ctx.restore();
     }
 
     if (state.hover && state.tool === "none") drawCrosshair(m);
@@ -718,10 +935,33 @@
 
   function drawCrosshair(m) {
     const x = state.hover.x, y = state.hover.y;
-    ctx.save(); ctx.setLineDash([3,3]); ctx.strokeStyle = "rgba(209,212,220,.3)"; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,m.plot.h); ctx.moveTo(0,y); ctx.lineTo(m.plot.w,y); ctx.stroke(); ctx.restore();
-    const local = Math.max(0, Math.min(m.data.length - 1, Math.floor(x / Math.max(1,m.stepX))));
-    const c = m.data[local];
-    if (c) $("bt-ohlc").innerHTML = `<span>O ${price(c.o)}</span><span>H ${price(c.h)}</span><span>L ${price(c.l)}</span><span>C ${price(c.c)}</span>`;
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "rgba(209,212,220,.3)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0); ctx.lineTo(x, m.plot.h);
+    ctx.moveTo(0, y); ctx.lineTo(m.plot.w, y);
+    ctx.stroke();
+    ctx.restore();
+
+    if (y >= 0 && y <= m.plot.priceH) {
+      const hoverPrice = m.max - (y / m.plot.priceH) * (m.max - m.min);
+      const tH = 20, tW = 74, tX = m.plot.w + 4, tY = y - tH / 2;
+      ctx.save();
+      if (typeof roundRect === "function") roundRect(ctx, tX, tY, tW, tH, 4);
+      else ctx.rect(tX, tY, tW, tH);
+      ctx.fillStyle = "#1e1f2e";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.3)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 10px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(price(hoverPrice), m.plot.w + 41, y + 4);
+      ctx.restore();
+    }
   }
 
   function drawingScreenPoints(drawing, m) {
@@ -972,8 +1212,15 @@
   canvas.addEventListener("contextmenu", event => event.preventDefault());
   canvas.addEventListener("wheel", event => {
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) state.priceZoom = Math.max(.3, Math.min(4, state.priceZoom * (event.deltaY > 0 ? 1.12 : .89)));
-    else state.viewBars = Math.max(45, Math.min(280, state.viewBars + (event.deltaY > 0 ? 14 : -14)));
+    let dy = event.deltaY || 0;
+    if (event.deltaMode === 1) dy *= 16;
+    if (event.ctrlKey || event.metaKey) {
+      const factor = Math.max(0.90, Math.min(1.10, 1 + dy * 0.0004));
+      state.priceZoom = Math.max(.3, Math.min(4, state.priceZoom * factor));
+    } else {
+      const barShift = Math.round(dy * 0.04);
+      state.viewBars = Math.max(45, Math.min(280, state.viewBars + barShift));
+    }
     draw();
   }, { passive: false });
   canvas.addEventListener("dblclick", () => { state.panBars = 0; state.priceOffset = 0; state.priceZoom = 1; state.viewBars = 170; draw(); });
@@ -1023,7 +1270,48 @@
   }));
 
   $("bt-new").addEventListener("click", newCase);
-  $("bt-exchange-select").addEventListener("change", event => { state.exchange = event.target.value; newCase(); });
+
+  const btExcWrap = $("bt-exc-wrap");
+  const btExcBtn = $("bt-exc-btn");
+  const btExcMenu = $("bt-exc-menu");
+  const btExcDot = $("bt-exc-dot");
+  const btExcName = $("bt-exc-name");
+
+  if (btExcBtn && btExcMenu) {
+    btExcBtn.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const open = btExcBtn.classList.toggle("open");
+      btExcMenu.classList.toggle("open", open);
+      btExcBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+
+    btExcMenu.querySelectorAll(".exc-item").forEach(item => {
+      item.addEventListener("click", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const cex = item.dataset.cex;
+        const label = item.dataset.label;
+        const img = item.dataset.img;
+        state.exchange = cex;
+        if (btExcDot) btExcDot.style.background = `center/contain no-repeat url('${img}')`;
+        if (btExcName) btExcName.textContent = label;
+        btExcMenu.querySelectorAll(".exc-item").forEach(i => i.classList.toggle("on", i.dataset.cex === cex));
+        btExcBtn.classList.remove("open");
+        btExcMenu.classList.remove("open");
+        btExcBtn.setAttribute("aria-expanded", "false");
+        newCase();
+      });
+    });
+
+    document.addEventListener("click", event => {
+      if (!event.target.closest("#bt-exc-wrap")) {
+        btExcBtn.classList.remove("open");
+        btExcMenu.classList.remove("open");
+        btExcBtn.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
   $("bt-indicators-btn").addEventListener("click", event => {
     event.preventDefault(); event.stopPropagation();
     const menu = $("bt-indicators-menu");
