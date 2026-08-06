@@ -7008,39 +7008,34 @@ function renderScreenerHeatmap() {
 
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
-document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll("#nav .ntab").forEach(t => {
-      t.classList.remove("on");
-      t.setAttribute("aria-selected", "false");
-    });
-    tab.classList.add("on");
-    tab.setAttribute("aria-selected", "true");
-    if (idx === 0) {
-      switchView("screener");
-    } else if (idx === 1) {
-      switchView("map");
-    } else if (idx === 3) {
-      switchView("formations");
-    } else if (idx === 4) {
-      switchView("backtest");
-    }
-  });
-});
-
-function switchView(view) {
+window.switchView = function switchView(view) {
   activeView = view;
   densityHover = -1; // Reset hover index when switching views
-  const mainEl = $("main");
-  const densityEl = $("density-view");
-  const formationsEl = $("formations-view");
-  const backtestEl = $("backtest-view");
+  const mainEl = document.getElementById("main");
+  const densityEl = document.getElementById("density-view");
+  const formationsEl = document.getElementById("formations-view");
+  const backtestEl = document.getElementById("backtest-view");
+  const journalEl = document.getElementById("journal-view");
+
+  // Highlight active navbar tab
+  document.querySelectorAll("#nav .ntab").forEach(t => {
+    const text = t.textContent.trim().toLowerCase();
+    const isMatch =
+      (view === "screener" && (text.includes("скринер") || t.id === "tab-screener")) ||
+      (view === "map" && text.includes("карта")) ||
+      (view === "formations" && text.includes("формации")) ||
+      (view === "backtest" && text.includes("бэктест")) ||
+      (view === "journal" && (text.includes("дневник") || t.id === "tab-journal"));
+    t.classList.toggle("on", isMatch);
+    t.setAttribute("aria-selected", isMatch ? "true" : "false");
+  });
 
   if (view === "screener") {
-    mainEl.style.display = "flex";
-    densityEl.style.display = "none";
+    if (mainEl) mainEl.style.display = "flex";
+    if (densityEl) densityEl.style.display = "none";
     if (formationsEl) formationsEl.style.display = "none";
     if (backtestEl) backtestEl.style.display = "none";
+    if (journalEl) journalEl.style.display = "none";
     if (densityAnimFrame) { cancelAnimationFrame(densityAnimFrame); densityAnimFrame = null; }
     document.querySelectorAll(".vt-btn").forEach(btn => {
       btn.onclick = () => toggleScreenerView(btn.dataset.view);
@@ -7058,29 +7053,58 @@ function switchView(view) {
     }, 3000);
     resizeChart();
   } else if (view === "map") {
-    mainEl.style.display = "none";
-    densityEl.style.display = "flex";
+    if (mainEl) mainEl.style.display = "none";
+    if (densityEl) densityEl.style.display = "flex";
     if (formationsEl) formationsEl.style.display = "none";
     if (backtestEl) backtestEl.style.display = "none";
+    if (journalEl) journalEl.style.display = "none";
     initDensityCanvas();
     fetchWalls();
     startDensityLoop();
   } else if (view === "formations") {
-    mainEl.style.display = "none";
-    densityEl.style.display = "none";
+    if (mainEl) mainEl.style.display = "none";
+    if (densityEl) densityEl.style.display = "none";
     if (formationsEl) {
       formationsEl.style.display = "flex";
       window.loadFormations();
     }
     if (backtestEl) backtestEl.style.display = "none";
+    if (journalEl) journalEl.style.display = "none";
   } else if (view === "backtest") {
-    mainEl.style.display = "none";
-    densityEl.style.display = "none";
+    if (mainEl) mainEl.style.display = "none";
+    if (densityEl) densityEl.style.display = "none";
     if (formationsEl) formationsEl.style.display = "none";
     if (backtestEl) backtestEl.style.display = "flex";
+    if (journalEl) journalEl.style.display = "none";
     if (window.CryptoBacktest) window.CryptoBacktest.activate();
+  } else if (view === "journal") {
+    if (mainEl) mainEl.style.display = "none";
+    if (densityEl) densityEl.style.display = "none";
+    if (formationsEl) formationsEl.style.display = "none";
+    if (backtestEl) backtestEl.style.display = "none";
+    if (journalEl) journalEl.style.display = "flex";
+    if (window.CryptoJournal && typeof window.CryptoJournal.activate === "function") {
+      window.CryptoJournal.activate();
+    }
   }
-}
+};
+
+document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
+  tab.addEventListener("click", (e) => {
+    const text = tab.textContent.trim().toLowerCase();
+    if (text.includes("скринер") || idx === 0) {
+      window.switchView("screener");
+    } else if (text.includes("карта") || idx === 1) {
+      window.switchView("map");
+    } else if (text.includes("формации") || idx === 3) {
+      window.switchView("formations");
+    } else if (text.includes("бэктест") || idx === 4) {
+      window.switchView("backtest");
+    } else if (text.includes("дневник") || tab.id === "tab-journal" || idx === 5) {
+      window.switchView("journal");
+    }
+  });
+});
 
 // ═══ Density Map — Radar Visualization ════════════════════════════════════════
 
