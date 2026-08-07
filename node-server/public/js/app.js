@@ -3827,6 +3827,34 @@ setInterval(() => {
   }
 }, 5000);
 
+// Instant Background Tab & Window Focus Auto-Resync (Zero Freeze)
+function handleVisibilityOrFocusResync() {
+  if (document.hidden) return;
+  const now = Date.now();
+
+  // 1. Check WebSocket connection health. Reconnect immediately if closed or stalled > 5s
+  if (!ws || ws.readyState !== WebSocket.OPEN || (lastWsMsg > 0 && now - lastWsMsg > 5000)) {
+    console.warn("[VISIBILITY/FOCUS] WS stalled or closed in background — instant reconnect");
+    lastWsMsg = 0;
+    connectWS();
+  } else if (activeEx && activeSym && activeTf) {
+    // 2. Fetch fresh klines for active symbol to catch up on missed background candles
+    fetchKlines(activeEx, activeSym, activeTf);
+  }
+
+  // 3. Force canvas repaints
+  chartNeedsDraw = true;
+  if (screenerView === "multichart" || activeView === "formations") {
+    chartInstances.forEach(inst => {
+      inst.dirty = true;
+      inst.loadKlines();
+    });
+  }
+}
+
+document.addEventListener("visibilitychange", handleVisibilityOrFocusResync);
+window.addEventListener("focus", handleVisibilityOrFocusResync);
+
 function connectWS() {
   // Cancel any pending reconnect
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
@@ -3892,12 +3920,17 @@ function connectWS() {
           continue;
         }
         c.prev = c.p;
-        if (!c.displayP) c.displayP = c.p;
         const oldP = c.p;
         c.p = p; c.chg = chg; c.v = v; c.h = h; c.l = l; c.o = o;
         c.funding = funding; c.nextFunding = nextFunding; c.oi = oi; c.trades = trades;
+
+        // If tab is in background, sync displayP immediately so memory never gets stale
+        if (document.hidden || !c.displayP) {
+          c.displayP = p;
+        }
+
         dirty.add(key);
-        if (c.p !== oldP) scheduleInterp(key);
+        if (c.p !== oldP && !document.hidden) scheduleInterp(key);
       }
       return;
     }
