@@ -1374,12 +1374,10 @@
 
     const secOverview = document.getElementById("j-sec-overview");
     const secTrades = document.getElementById("j-sec-trades");
-    const secJournal = document.getElementById("j-sec-journal");
     const secApi = document.getElementById("j-sec-apikeys");
 
     if (secOverview) secOverview.style.display = tabId === "overview" ? "flex" : "none";
     if (secTrades) secTrades.style.display = tabId === "trades" ? "flex" : "none";
-    if (secJournal) secJournal.style.display = tabId === "journal" ? "flex" : "none";
     if (secApi) secApi.style.display = tabId === "apikeys" ? "flex" : "none";
 
     updateUI();
@@ -1421,8 +1419,6 @@
       renderCalendarView();
     } else if (currentTab === "trades") {
       renderTradesTable();
-    } else if (currentTab === "journal") {
-      renderMonthlyJournalView();
     }
   }
 

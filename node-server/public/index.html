@@ -1197,7 +1197,6 @@
                 <div class="j-sub-tabs">
                     <div class="j-sub-tab on" data-jtab="overview" onclick="if(window.switchJournalTab) window.switchJournalTab('overview')">Сводка</div>
                     <div class="j-sub-tab" data-jtab="trades" onclick="if(window.switchJournalTab) window.switchJournalTab('trades')">Мои сделки</div>
-                    <div class="j-sub-tab" data-jtab="journal" onclick="if(window.switchJournalTab) window.switchJournalTab('journal')">Журнал</div>
                     <div class="j-sub-tab" data-jtab="apikeys" onclick="if(window.switchJournalTab) window.switchJournalTab('apikeys')">API Интеграция</div>
                 </div>
                 <div class="j-actions">
@@ -1330,16 +1329,6 @@
                 </div>
             </div>
 
-            <!-- TAB 3: ЖУРНАЛ (MONTHLY & WEEKLY CARDS) -->
-            <div id="j-sec-journal" class="j-section" style="display:none; flex-direction:column; gap:16px;">
-                <div class="j-card">
-                    <div class="j-card-title">Журнал — Анализ по месяцам и неделям</div>
-                    <p style="font-size:12px; color:var(--t2); margin-top:4px;">Сводные данные по торговым неделям</p>
-                </div>
-                <div id="journal-monthly-container" style="display:flex; flex-direction:column; gap:20px;">
-                    <!-- Monthly cards dynamically generated -->
-                </div>
-            </div>
 
             <!-- TAB 4: API ИНТЕГРАЦИЯ -->
             <div id="j-sec-apikeys" class="j-section" style="display:none; flex-direction:column; gap:16px;">
