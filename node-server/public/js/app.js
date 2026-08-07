@@ -447,11 +447,11 @@ let lastTickTs = 0;
 let mcRunning = false;
 let lastVltRankTs = 0;
 
-// ── Clean V-Sync Aligned Tick Processor (No CPU-hogging spinlocks) ──
+// ── Clean V-Sync Aligned High-Fidelity Lerp Interpolator ( Butter-Smooth Price Motion ) ──
 function processTickData(dt) {
-  const now = performance.now();
+  const clampedDt = Math.min(dt, 0.05);
 
-  // 1. Interpolate active coins
+  // 1. Interpolate all active coin prices with smooth exponential lerp (no teleportation)
   if (interpActive.size > 0) {
     const keysToRemove = [];
     for (const [key, info] of interpActive) {
@@ -459,27 +459,16 @@ function processTickData(dt) {
       if (!c) { keysToRemove.push(key); continue; }
       if (!c.displayP) { c.displayP = c.p; keysToRemove.push(key); continue; }
 
-      if (c.p !== info.target) { info.target = c.p; info.lastUpdate = now; }
-
       const diff = c.p - c.displayP;
       const absDiff = Math.abs(diff);
-      const pDiffPct = absDiff / c.p;
-      const isActive = (c.ex === activeEx && c.sym === activeSym);
 
-      if (pDiffPct > SNAP_THRESHOLD) {
-        c.displayP = c.p;
-        keysToRemove.push(key);
-        dirty.add(key);
-        continue;
-      }
-
-      if (absDiff < 1e-10) {
+      if (absDiff < 1e-9) {
         c.displayP = c.p;
         keysToRemove.push(key);
       } else {
-        if (isActive) continue;
-        const adaptiveFactor = Math.min(1, INTERP_SPEED * dt * (1 + pDiffPct * 20));
-        c.displayP += diff * adaptiveFactor;
+        // High-frequency responsive exponential easing (1 - e^(-28 * dt))
+        const factor = 1 - Math.exp(-28 * clampedDt);
+        c.displayP += diff * factor;
         dirty.add(key);
       }
     }
@@ -506,7 +495,7 @@ function processTickData(dt) {
     lastRender = now2;
   }
 
-  // 3. Update main chart active coin OHLC in REAL TIME (zero-lag tick updates + auto new candle)
+  // 3. Update main chart active coin OHLC in REAL TIME using smooth displayP
   const activeKey = `${activeEx}:${activeSym}`;
   const ac = coins.get(activeKey);
   if (ac && candles.length > 0) {
@@ -532,7 +521,7 @@ function processTickData(dt) {
     }
 
     const curLast = candles[candles.length - 1];
-    const liveP = ac.p;
+    const liveP = getDisplayP(ac);
     if (liveP > 0 && curLast) {
       // Price scale sanity check: ensure liveP is on same price scale as curLast (ratio 0.4 to 2.5)
       const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
@@ -4403,25 +4392,9 @@ function rafLoop() {
   // Process price interpolations and DOM row updates aligned with V-Sync
   processTickData(dt);
 
-  // ── Ultra-Flow: Sync active coin interpolation with V-Sync ────────────────
   const ak = `${activeEx}:${activeSym}`;
   const ac = coins.get(ak);
-  let isActiveAnimating = false;
-  if (ac && ac.displayP && ac.p !== ac.displayP) {
-    const diff = ac.p - ac.displayP;
-    const absDiff = Math.abs(diff);
-    const pDiffPct = absDiff / ac.p;
-
-    if (pDiffPct > SNAP_THRESHOLD || absDiff < 1e-10) {
-      ac.displayP = ac.p;
-    } else {
-      // High-Fidelity Exponential Smoothing (independent of monitor Hz)
-      const factor = 1 - Math.pow(0.001, dt / INTERP_PERIOD);
-      ac.displayP += diff * factor;
-      isActiveAnimating = true;
-    }
-    dirty.add(ak);
-  }
+  const isActiveAnimating = ac && ac.displayP && Math.abs(ac.p - ac.displayP) > 1e-8;
 
   if (screenerView === "multichart" || activeView === "formations") {
     chartInstances.forEach(inst => {
