@@ -3595,8 +3595,104 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// Shortcuts modal handlers
+// ── TOAST NOTIFICATIONS & COPY COIN TO CLIPBOARD ─────────────────────────────
+function showToast(msg) {
+  let toast = $("global-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "global-toast";
+    toast.style.cssText = `
+      position: fixed;
+      top: 65px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-10px);
+      background: rgba(16, 22, 34, 0.94);
+      color: #fff;
+      padding: 9px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: Inter, system-ui, -apple-system, sans-serif;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(12px);
+      z-index: 99999;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    `;
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = `<span style="color: #26c97a; font-size: 15px; font-weight: 800;">✓</span> ${msg}`;
+  toast.style.opacity = "1";
+  toast.style.transform = "translateX(-50%) translateY(0)";
+
+  if (toast._timer) clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateX(-50%) translateY(-10px)";
+  }, 1800);
+}
+
+function copyCoinNameToClipboard(rawText) {
+  if (!rawText) return;
+  const cleanName = rawText.replace(/\.F$/i, "").trim();
+
+  const doCopy = (text) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  };
+
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  doCopy(cleanName);
+  showToast(`Скопировано: <b style="color:#26c97a; margin-left:4px;">${cleanName}</b>`);
+
+  const symBtn = $("sym-btn");
+  if (symBtn) {
+    symBtn.style.transition = "transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease";
+    symBtn.style.transform = "scale(1.06)";
+    symBtn.style.background = "rgba(38, 201, 122, 0.22)";
+    symBtn.style.boxShadow = "0 0 12px rgba(38, 201, 122, 0.4)";
+    setTimeout(() => {
+      symBtn.style.transform = "";
+      symBtn.style.background = "";
+      symBtn.style.boxShadow = "";
+    }, 220);
+  }
+}
+window.copyCoinNameToClipboard = copyCoinNameToClipboard;
+window.showToast = showToast;
+
+// Shortcuts modal & symbol copy handlers
 document.addEventListener("DOMContentLoaded", () => {
+  const symBtn = $("sym-btn");
+  if (symBtn) {
+    symBtn.title = "Нажмите, чтобы скопировать название монеты";
+    symBtn.onclick = (e) => {
+      e.stopPropagation();
+      const sn = $("sn");
+      const textToCopy = sn ? sn.textContent : activeSym;
+      copyCoinNameToClipboard(textToCopy);
+    };
+  }
+
   const btn = $("shortcuts-btn");
   const modal = $("shortcuts-modal");
   const closeBtn = $("shortcuts-modal-close");
