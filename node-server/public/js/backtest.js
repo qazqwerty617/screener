@@ -375,14 +375,22 @@
 
   function renderPosition() {
     const p = state.position;
-    $("bt-position-empty").hidden = Boolean(p);
-    $("bt-position").hidden = !p;
-    $("bt-close-position").disabled = !p;
-    $("bt-balance").textContent = money(state.balance);
-    $("bt-pnl").textContent = money(p?.unrealized || 0);
-    $("bt-pnl").style.color = !p ? "" : p.unrealized >= 0 ? "var(--gr)" : "var(--rd)";
-    if (!p) return;
-    $("bt-position").innerHTML = `
+    const posEmpty = $("bt-position-empty");
+    const posEl = $("bt-position");
+    const closeBtn = $("bt-close-position");
+    const balEl = $("bt-balance");
+    const pnlEl = $("bt-pnl");
+
+    if (posEmpty) posEmpty.hidden = Boolean(p);
+    if (posEl) posEl.hidden = !p;
+    if (closeBtn) closeBtn.disabled = !p;
+    if (balEl) balEl.textContent = money(state.balance);
+    if (pnlEl) {
+      pnlEl.textContent = money(p?.unrealized || 0);
+      pnlEl.style.color = !p ? "" : p.unrealized >= 0 ? "var(--gr)" : "var(--rd)";
+    }
+    if (!p || !posEl) return;
+    posEl.innerHTML = `
       <span>Направление<b style="color:${p.direction === "long" ? "var(--gr)" : "var(--rd)"}">${p.direction.toUpperCase()}</b></span>
       <span>Вход<b>${price(p.entry)}</b></span>
       <span>Стоп<b>${p.sl ? price(p.sl) : "—"}</b></span>
@@ -390,9 +398,11 @@
   }
 
   function renderStats() {
+    const statsEl = $("bt-session-stats");
+    if (!statsEl) return;
     const wins = state.trades.filter(t => t.pnl > 0).length;
     const totalPnl = state.trades.reduce((sum, t) => sum + t.pnl, 0);
-    $("bt-session-stats").innerHTML = `<span>Сделок <b>${state.trades.length}</b></span><span>Win rate <b>${state.trades.length ? Math.round(wins / state.trades.length * 100) + "%" : "—"}</b></span><span>Результат <b style="color:${totalPnl >= 0 ? "var(--gr)" : "var(--rd)"}">${money(totalPnl)}</b></span>`;
+    statsEl.innerHTML = `<span>Сделок <b>${state.trades.length}</b></span><span>Win rate <b>${state.trades.length ? Math.round(wins / state.trades.length * 100) + "%" : "—"}</b></span><span>Результат <b style="color:${totalPnl >= 0 ? "var(--gr)" : "var(--rd)"}">${money(totalPnl)}</b></span>`;
   }
 
   function finishCase() {
@@ -1312,35 +1322,46 @@
       }
     });
   }
-  $("bt-indicators-btn").addEventListener("click", event => {
+  const addEvt = (id, event, fn) => {
+    const el = $(id);
+    if (el) el.addEventListener(event, fn);
+  };
+
+  addEvt("bt-indicators-btn", "click", event => {
     event.preventDefault(); event.stopPropagation();
     const menu = $("bt-indicators-menu");
-    menu.hidden = !menu.hidden;
-    $("bt-indicators-btn").classList.toggle("open", !menu.hidden);
-  });
-  $("bt-indicators-menu").addEventListener("click", event => event.stopPropagation());
-  document.addEventListener("click", event => {
-    if (!event.target.closest(".bt-indicator-settings")) {
-      $("bt-indicators-menu").hidden = true;
-      $("bt-indicators-btn").classList.remove("open");
+    if (menu) {
+      menu.hidden = !menu.hidden;
+      const btn = $("bt-indicators-btn");
+      if (btn) btn.classList.toggle("open", !menu.hidden);
     }
   });
-  $("bt-step").addEventListener("click", step);
-  $("bt-play").addEventListener("click", togglePlay);
-  $("bt-reveal").addEventListener("click", reveal);
-  $("bt-long").addEventListener("click", () => selectDirection("long"));
-  $("bt-short").addEventListener("click", () => selectDirection("short"));
-  $("bt-commit-plan").addEventListener("click", () => openPosition());
-  $("bt-close-position").addEventListener("click", () => state.position && closePosition(state.candles[state.candles.length - 1].c));
-  $("bt-undo").addEventListener("click", () => { state.drawings.pop(); draw(); });
-  $("bt-clear").addEventListener("click", () => { state.drawings = []; draw(); });
-  $("bt-sl-mode").addEventListener("click", () => toggleLevelMode("sl"));
-  $("bt-tp-mode").addEventListener("click", () => toggleLevelMode("tp"));
-  $("bt-sl").addEventListener("input", draw);
-  $("bt-tp").addEventListener("input", draw);
+  addEvt("bt-indicators-menu", "click", event => event.stopPropagation());
+  document.addEventListener("click", event => {
+    if (!event.target.closest(".bt-indicator-settings")) {
+      const menu = $("bt-indicators-menu");
+      const btn = $("bt-indicators-btn");
+      if (menu) menu.hidden = true;
+      if (btn) btn.classList.remove("open");
+    }
+  });
+  addEvt("bt-step", "click", step);
+  addEvt("bt-play", "click", togglePlay);
+  addEvt("bt-reveal", "click", reveal);
+  addEvt("bt-long", "click", () => selectDirection("long"));
+  addEvt("bt-short", "click", () => selectDirection("short"));
+  addEvt("bt-commit-plan", "click", () => openPosition());
+  addEvt("bt-close-position", "click", () => state.position && closePosition(state.candles[state.candles.length - 1].c));
+  addEvt("bt-undo", "click", () => { state.drawings.pop(); draw(); });
+  addEvt("bt-clear", "click", () => { state.drawings = []; draw(); });
+  addEvt("bt-sl-mode", "click", () => toggleLevelMode("sl"));
+  addEvt("bt-tp-mode", "click", () => toggleLevelMode("tp"));
+  addEvt("bt-sl", "input", draw);
+  addEvt("bt-tp", "input", draw);
 
   document.addEventListener("keydown", event => {
-    if ($("backtest-view").style.display === "none" || ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+    const btView = $("backtest-view");
+    if ((btView && btView.style.display === "none") || ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
     if (event.code === "Space") { event.preventDefault(); togglePlay(); }
     if (event.code === "ArrowRight") { event.preventDefault(); step(); }
     const key = event.key.toLowerCase();
@@ -1352,16 +1373,20 @@
     if (key === "b") setBtTool("brush");
     if (key === "u") setBtTool("ruler");
     if (key === "f") setBtTool("fibgrid");
-    if (key === "m") { state.magnet = !state.magnet; $("bt-magnet").classList.toggle("magnet-on", state.magnet); }
+    if (key === "m") {
+      state.magnet = !state.magnet;
+      const magBtn = $("bt-magnet");
+      if (magBtn) magBtn.classList.toggle("magnet-on", state.magnet);
+    }
     if ((event.key === "Delete" || event.key === "Backspace") && !state.drawingPhase && state.drawings.length) { state.drawings.pop(); draw(); }
   });
 
-  new ResizeObserver(draw).observe(wrap);
+  if (wrap) new ResizeObserver(draw).observe(wrap);
   renderStats();
   renderPosition();
   applyToolButtonColors();
   ["volume", "vp", "vwap", "ema20", "ema50", "ema200", "rsi", "atr", "bb", "macd", "cvd"].forEach(syncIndicatorButtons);
-  canvas.style.cursor = "crosshair";
+  if (canvas) canvas.style.cursor = "crosshair";
   updateControls();
   draw();
 

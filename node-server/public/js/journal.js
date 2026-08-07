@@ -843,7 +843,7 @@
     const titleEl = document.getElementById("j-chart-modal-title");
     const detailsEl = document.getElementById("j-chart-modal-details");
     const canvas = document.getElementById("journal-trade-candle-canvas");
-    if (!modal || !canvas) return;
+    if (!modal || !canvas || !titleEl || !detailsEl) return;
 
     chartState.canvas = canvas;
     chartState.trade = trade;

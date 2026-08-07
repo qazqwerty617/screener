@@ -2984,8 +2984,8 @@ function openDrawColorMenu({
   const brushSlider = $("brush-thickness-slider");
   const brushValue = $("brush-thickness-value");
 
-  titleEl.textContent = title;
-  grid.innerHTML = "";
+  if (titleEl) titleEl.textContent = title;
+  if (grid) grid.innerHTML = "";
   drawColorSelectHandler = onSelect || null;
 
   // Show/hide brush thickness control
@@ -4974,6 +4974,7 @@ if (settingsBtn && settingsOverlay && settingsClose) {
 
     // Reusable Color Picker Logic
     const createColorPicker = (el, initialColor, initialOpacity, onUpdate) => {
+      if (!el) return;
       el.innerHTML = `
         <div class="color-preview" style="background-color: ${hexToRgba(initialColor, initialOpacity)}"></div>
         <div class="color-dropdown">
@@ -5544,6 +5545,7 @@ function showColorPicker(e, c) {
 
 function showFilterMenu(e) {
   const grid = $("filter-grid");
+  if (!grid) return;
   grid.innerHTML = "";
   TAG_PALETTE.forEach((clr, i) => {
     const hasTag = Array.from(Object.values(coinTags)).includes(i);
@@ -6912,6 +6914,7 @@ function showMiniTfMenu(idx, e) {
 
 function renderMiniSearchResults(q) {
   const container = $("mini-search-results");
+  if (!container) return;
   container.innerHTML = "";
   const query = q.toUpperCase();
   const matches = Array.from(coins.values())
@@ -6922,14 +6925,21 @@ function renderMiniSearchResults(q) {
   matches.forEach(c => container.appendChild(renderMiniSearchItem(c)));
 }
 
-$("mini-search-input").oninput = (e) => renderMiniSearchResults(e.target.value);
+const miniSearchInput = $("mini-search-input");
+if (miniSearchInput) {
+  miniSearchInput.oninput = (e) => renderMiniSearchResults(e.target.value);
+}
+
 document.addEventListener("mousedown", (e) => {
-  if (!$("mini-search-box").contains(e.target)) $("mini-search-box").style.display = "none";
-  if (!$("mini-tf-menu").contains(e.target)) $("mini-tf-menu").style.display = "none";
+  const box = $("mini-search-box");
+  const menu = $("mini-tf-menu");
+  if (box && !box.contains(e.target)) box.style.display = "none";
+  if (menu && !menu.contains(e.target)) menu.style.display = "none";
 });
 
 function initChartGrid() {
   const container = $("chart-grid-container");
+  if (!container) return;
   container.innerHTML = "";
   chartInstances = [];
 
