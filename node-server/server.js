@@ -731,7 +731,7 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
     return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}` + (before ? `&endTime=${before}` : "");
   }
   if (ex === "HT") {
-    return `https://api.hbdm.vn/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;
+    return `https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;
   }
   if (ex === "HL") {
     return null; // HL uses POST
@@ -741,28 +741,35 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
 
 function parseKlines(ex, data) {
   try {
-    if (ex === "BN" || ex === "AD") return data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] }));
-    if (ex === "BB") return (data.result?.list || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
-    if (ex === "OX") return (data.data || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
-    if (ex === "BG") return (data.data || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
-    if (ex === "GT") return (Array.isArray(data) ? data : []).map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }));
-    if (ex === "MX") return (data.data?.time || []).map((t, i) => ({ t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c: +data.data.close[i], v: +data.data.vol[i] }));
-    if (ex === "KC") return (data.data || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
-    if (ex === "BX") return (data.data || []).map(k => {
+    let rawList = [];
+    if (ex === "BN" || ex === "AD") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[7] || k[5] }));
+    else if (ex === "BB") rawList = (data.result?.list || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
+    else if (ex === "OX") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
+    else if (ex === "BG") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
+    else if (ex === "GT") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }));
+    else if (ex === "MX") rawList = (data.data?.time || []).map((t, i) => ({ t: t, o: data.data.open[i], h: data.data.high[i], l: data.data.low[i], c: data.data.close[i], v: data.data.vol[i] }));
+    else if (ex === "KC") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[5] }));
+    else if (ex === "BX") rawList = (data.data || []).map(k => {
       const closeP = +(k.close || k.c || 0);
       const baseVol = +(k.volume || k.v || 0);
-      const quoteVol = baseVol * closeP;
-      return {
-        t: +(k.time || k.t || 0),
-        o: +(k.open || k.o || 0),
-        h: +(k.high || k.h || 0),
-        l: +(k.low || k.l || 0),
-        c: closeP,
-        v: quoteVol
-      };
+      return { t: k.time || k.t || 0, o: k.open || k.o || 0, h: k.high || k.h || 0, l: k.low || k.l || 0, c: closeP, v: baseVol * closeP };
     });
-    if (ex === "HT") return (data.data || []).map(k => ({ t: +k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.vol }));
+    else if (ex === "HT") rawList = (data.data || []).map(k => ({ t: k.id, o: k.open, h: k.high, l: k.low, c: k.close, v: k.vol }));
+
+    const cleaned = [];
+    for (const k of rawList) {
+      const t = normalizeTimestamp(k.t);
+      const o = +k.o, h = +k.h, l = +k.l, c = +k.c, v = +k.v;
+      if (t > 0 && o > 0 && h > 0 && l > 0 && c > 0) {
+        cleaned.push({ t, o, h, l, c, v: Number.isFinite(v) && v >= 0 ? v : 0 });
+      }
+    }
+    cleaned.sort((a, b) => a.t - b.t);
+    return cleaned;
   } catch (e) {
+    return [];
+  }
+}
     console.error(`[KLINES] Parse error for ${ex}:`, e.message);
   }
   return [];
