@@ -895,26 +895,51 @@ function isEligibleBacktestTicker(ticker, exchange) {
 function getBacktestUniverse(exchange) {
   return Array.from(tickers.values())
     .filter(ticker => isEligibleBacktestTicker(ticker, exchange))
-    .sort((a, b) => b.v - a.v)
-    .slice(0, 300);
+    .sort((a, b) => {
+      const chgA = Math.abs(a.chg || 0);
+      const chgB = Math.abs(b.chg || 0);
+      const scoreA = chgA * 2.5 + Math.log10(Math.max(1, a.v || 1));
+      const scoreB = chgB * 2.5 + Math.log10(Math.max(1, b.v || 1));
+      return scoreB - scoreA;
+    })
+    .slice(0, 350);
+}
+
+function calcWindowVolatilityScore(candles, tf) {
+  if (!candles || candles.length < 80) return 0;
+  const sample = candles.slice(-Math.min(160, candles.length));
+  const firstOpen = sample[0].o;
+  const lastClose = sample[sample.length - 1].c;
+  if (!lastClose || lastClose <= 0 || !firstOpen || firstOpen <= 0) return 0;
+
+  const high = Math.max(...sample.map(c => c.h));
+  const low = Math.min(...sample.map(c => c.l));
+  const rangePct = (high - low) / lastClose;
+
+  let trSum = 0;
+  let bodySum = 0;
+  for (let i = 1; i < sample.length; i++) {
+    const prev = sample[i - 1].c;
+    const cur = sample[i];
+    trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - prev), Math.abs(cur.l - prev));
+    bodySum += Math.abs(cur.c - cur.o);
+  }
+  const avgTr = trSum / (sample.length - 1);
+  const avgBody = bodySum / (sample.length - 1);
+  const atrPct = avgTr / lastClose;
+  const bodyPct = avgBody / lastClose;
+  const trendPct = Math.abs(lastClose - firstOpen) / firstOpen;
+
+  const minRange = { "1m": 0.022, "5m": 0.035, "15m": 0.050, "30m": 0.065, "1h": 0.085, "4h": 0.120, "1d": 0.160 }[tf] || 0.045;
+  const minAtr = { "1m": 0.0009, "5m": 0.0016, "15m": 0.0025, "30m": 0.0035, "1h": 0.0048, "4h": 0.0075, "1d": 0.0130 }[tf] || 0.0022;
+
+  if (rangePct < minRange || atrPct < minAtr) return 0;
+
+  return (rangePct * 100) * 1.5 + (atrPct * 1000) * 2.0 + (trendPct * 100) * 1.2 + (bodyPct * 1000) * 1.0;
 }
 
 function isInterestingBacktestWindow(candles, tf) {
-  const sample = candles.slice(-Math.min(160, candles.length));
-  if (sample.length < 80) return false;
-  const close = sample[sample.length - 1].c;
-  const high = Math.max(...sample.map(c => c.h));
-  const low = Math.min(...sample.map(c => c.l));
-  const rangePct = close > 0 ? (high - low) / close : 0;
-  let trSum = 0;
-  for (let i = 1; i < sample.length; i++) {
-    const prev = sample[i - 1].c;
-    trSum += Math.max(sample[i].h - sample[i].l, Math.abs(sample[i].h - prev), Math.abs(sample[i].l - prev));
-  }
-  const atrPct = close > 0 ? (trSum / Math.max(1, sample.length - 1)) / close : 0;
-  const minRange = { "1m": 0.012, "5m": 0.018, "15m": 0.024, "30m": 0.03, "1h": 0.038, "4h": 0.055, "1d": 0.09 }[tf] || 0.03;
-  const minAtr = { "1m": 0.00035, "5m": 0.0007, "15m": 0.001, "30m": 0.00135, "1h": 0.0018, "4h": 0.003, "1d": 0.006 }[tf] || 0.0015;
-  return rangePct >= minRange && atrPct >= minAtr;
+  return calcWindowVolatilityScore(candles, tf) > 0;
 }
 
 function publicBacktestCandle(c) {
@@ -1041,13 +1066,24 @@ app.get("/api/backtest/new", async (req, res) => {
       const maxCut = candles.length - futureBars;
       if (maxCut <= minCut) continue;
 
-      let cut = 0, visible = null;
-      for (let attempt = 0; attempt < 28; attempt++) {
+      const candidates = [];
+      for (let attempt = 0; attempt < 35; attempt++) {
         const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
         const candidate = candles.slice(candidateCut - visibleBars, candidateCut);
-        if (isInterestingBacktestWindow(candidate, tf)) { cut = candidateCut; visible = candidate; break; }
+        const score = calcWindowVolatilityScore(candidate, tf);
+        if (score > 0) {
+          candidates.push({ cut: candidateCut, visible: candidate, score });
+        }
       }
-      if (!visible) continue;
+      if (candidates.length === 0) continue;
+
+      // Sort by volatility score descending and pick from top 3
+      candidates.sort((a, b) => b.score - a.score);
+      const topCandidates = candidates.slice(0, Math.min(3, candidates.length));
+      const best = topCandidates[Math.floor(Math.random() * topCandidates.length)];
+
+      const cut = best.cut;
+      const visible = best.visible;
       const future = candles.slice(cut, cut + futureBars);
       if (visible.length < 150 || future.length < 40) continue;
 
