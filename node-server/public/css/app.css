@@ -96,6 +96,20 @@ button {
     user-select: none;
 }
 
+.logo-img {
+    height: 24px;
+    width: auto;
+    object-fit: contain;
+    margin-right: 6px;
+    filter: drop-shadow(0 0 6px rgba(171, 71, 188, 0.4));
+    transition: transform 0.2s ease, filter 0.2s ease;
+}
+
+.logo:hover .logo-img {
+    transform: scale(1.08);
+    filter: drop-shadow(0 0 10px rgba(171, 71, 188, 0.7));
+}
+
 .logo-c {
     color: var(--ac);
 }
