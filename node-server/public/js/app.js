@@ -4129,22 +4129,36 @@ let klPoll = null;
 
 function sanitizeCandle(raw, prevClose = null) {
   if (!raw) return null;
-  const t = +raw.t;
+  let t = +raw.t;
+  if (!Number.isFinite(t) || t <= 0) return null;
+
+  // Normalize timestamp: convert ns -> ms, sec -> ms
+  if (t > 1e14) t = Math.floor(t / 1e6);
+  if (t < 1e11) t = t * 1000;
+  t = Math.floor(t);
+
   let o = +raw.o,
     h = +raw.h,
     l = +raw.l,
     c = +raw.c,
     v = +raw.v;
-  if (![t, o, h, l, c].every(Number.isFinite)) return null;
-  if (t <= 0 || o <= 0 || h <= 0 || l <= 0 || c <= 0) return null;
+
+  if (![o, h, l, c].every(Number.isFinite)) return null;
+  if (o <= 0 || h <= 0 || l <= 0 || c <= 0) return null;
+
+  // Reject phantom future candles (> 1 hour in future)
+  if (t > Date.now() + 3600000) return null;
+
   h = Math.max(h, o, l, c);
   l = Math.min(l, o, h, c);
+
   if (prevClose && prevClose > 0) {
-    const hiRatio = Math.max(o, h, l, c) / prevClose;
-    const loRatio = Math.min(o, h, l, c) / prevClose;
-    if (hiRatio > 20 || loRatio < 0.05) return null;
+    const hiRatio = h / prevClose;
+    const loRatio = l / prevClose;
+    // Reject extreme glitch spikes (> 8x or < 0.1x of previous candle close)
+    if (hiRatio > 8 || loRatio < 0.1) return null;
   }
-  return { t, o, h, l, c, v: Number.isFinite(v) ? v : 0 };
+  return { t, o, h, l, c, v: Number.isFinite(v) && v >= 0 ? v : 0 };
 }
 
 function sanitizeCandles(list) {
@@ -4175,7 +4189,7 @@ async function fetchKlines(ex, sym, tf) {
   if (klWs) { try { klWs.onclose = null; klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
-  candles = [];
+  // Do not wipe candles array immediately - keep previous candles visible until new ones arrive to prevent blinking!
   offsetX = 0;
   chartNeedsDraw = false;
   viewMn = null;

@@ -193,8 +193,18 @@ setInterval(() => {
 }, 50);
 
 // ─── Kline broadcast to clients ─────────────────────────────────────────────
+function normalizeTimestamp(t) {
+  let ts = +t;
+  if (!Number.isFinite(ts) || ts <= 0) return 0;
+  if (ts > 1e14) ts = Math.floor(ts / 1e6); // nanoseconds to ms
+  if (ts < 1e11) ts = ts * 1000; // seconds to ms
+  return Math.floor(ts);
+}
+
 function broadcastKline(ex, sym, tf, candle) {
-  const msg = JSON.stringify({ type: "kline", ex, sym, tf, data: [candle.t, candle.o, candle.h, candle.l, candle.c, candle.v] });
+  const normT = normalizeTimestamp(candle.t);
+  if (!normT) return;
+  const msg = JSON.stringify({ type: "kline", ex, sym, tf, data: [normT, +candle.o, +candle.h, +candle.l, +candle.c, +candle.v] });
   for (const ws of klineClients) {
     if (ws.readyState === WebSocket.OPEN) {
       try { ws.send(msg); } catch (_) {}
