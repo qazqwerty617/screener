@@ -4179,17 +4179,19 @@ function sanitizeCandles(list) {
 
 let currentLoadedEx = null;
 let currentLoadedSym = null;
+let currentLoadedTf = null;
 
 async function fetchKlines(ex, sym, tf) {
   const fetchToken = ++klFetchToken;
   if (klWs) { try { klWs.onclose = null; klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
-  // When switching to a DIFFERENT coin or exchange, clear candles immediately to prevent old coin price scale corruption!
-  if (currentLoadedEx !== ex || currentLoadedSym !== sym) {
+  // When switching coin, exchange OR timeframe, clear candles so old timeframe candles do not mix!
+  if (currentLoadedEx !== ex || currentLoadedSym !== sym || currentLoadedTf !== tf) {
     candles = [];
     currentLoadedEx = ex;
     currentLoadedSym = sym;
+    currentLoadedTf = tf;
   }
 
   offsetX = 0;
@@ -4229,7 +4231,7 @@ async function fetchKlines(ex, sym, tf) {
       const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`);
       const dataLite = await rLite.json();
 
-      if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym) {
+      if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf) {
         if (Array.isArray(dataLite) && dataLite.length > 0) {
           // Handle both object format and flat array format
           if (typeof dataLite[0] === 'number') {
@@ -4241,6 +4243,7 @@ async function fetchKlines(ex, sym, tf) {
           } else {
             candles = sanitizeCandles(dataLite);
           }
+          KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
           updateOHLC();
           if (!chartW || !chartH) resizeChart();
           chartNeedsDraw = true;
