@@ -3872,11 +3872,6 @@ function connectWS() {
 
   ws.onmessage = (e) => {
     lastWsMsg = Date.now();
-    // Flash the live indicator on every binary packet
-    if (e.data instanceof ArrayBuffer) {
-      const dot = $("cd-go");
-      if (dot) { dot.style.opacity = "0.3"; clearTimeout(dot._ft); dot._ft = setTimeout(() => dot.style.opacity = "", 80); }
-    }
     // ── Binary Protocol Handler (Ultra-Sync 3.0) ──
     if (e.data instanceof ArrayBuffer) {
       const floatData = new Float64Array(e.data);
