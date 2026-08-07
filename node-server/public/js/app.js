@@ -5559,6 +5559,11 @@ document.querySelectorAll("#exc-menu .exc-item:not(.disabled)").forEach((item) =
     }
     if (cex) {
       activeEx = cex;
+      const EXC_BTC_MAP = {
+        BN: "BTCUSDT", BB: "BTCUSDT", OX: "BTC-USDT-SWAP", BG: "BTCUSDT",
+        GT: "BTC_USDT", MX: "BTC_USDT", KC: "XBTUSDTM", BX: "BTC-USDT",
+        HT: "BTC-USDT", HL: "BTC", AD: "BTCUSDT"
+      };
       const btcSearch = ["BTCUSDT", "BTC_USDT", "BTC-USDT", "BTC-USDT-SWAP", "XBTUSDTM", "BTC"];
       let foundSym = btcSearch.find(s => coins.has(cex + ":" + s));
       if (!foundSym) {
@@ -5566,7 +5571,7 @@ document.querySelectorAll("#exc-menu .exc-item:not(.disabled)").forEach((item) =
           if (t.ex === cex) { foundSym = t.sym; break; }
         }
       }
-      const btcSym = foundSym || (cex === "OX" ? "BTC-USDT-SWAP" : "BTCUSDT");
+      const btcSym = foundSym || EXC_BTC_MAP[cex] || "BTCUSDT";
       activeSym = btcSym;
       const newTicker = coins.get(cex + ":" + btcSym);
       if (newTicker) {
