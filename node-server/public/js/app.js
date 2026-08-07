@@ -534,19 +534,23 @@ function processTickData(dt) {
     const curLast = candles[candles.length - 1];
     const liveP = ac.p;
     if (liveP > 0 && curLast) {
-      if (curLast.c !== liveP) {
-        curLast.c = liveP;
-        if (liveP > curLast.h) curLast.h = liveP;
-        if (liveP < curLast.l) curLast.l = liveP;
-        chartNeedsDraw = true;
-      }
+      // Price scale sanity check: ensure liveP is on same price scale as curLast (ratio 0.4 to 2.5)
+      const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
+      if (ratio > 0.4 && ratio < 2.5) {
+        if (curLast.c !== liveP) {
+          curLast.c = liveP;
+          if (liveP > curLast.h) curLast.h = liveP;
+          if (liveP < curLast.l) curLast.l = liveP;
+          chartNeedsDraw = true;
+        }
 
-      const oc = document.getElementById("oc");
-      if (oc) {
-        const pStr = fP(liveP);
-        if (oc._lastPStr !== pStr) {
-          oc.textContent = pStr;
-          oc._lastPStr = pStr;
+        const oc = document.getElementById("oc");
+        if (oc) {
+          const pStr = fP(liveP);
+          if (oc._lastPStr !== pStr) {
+            oc.textContent = pStr;
+            oc._lastPStr = pStr;
+          }
         }
       }
     }
@@ -4184,12 +4188,21 @@ function sanitizeCandles(list) {
   return out.slice(-1500);
 }
 
+let currentLoadedEx = null;
+let currentLoadedSym = null;
+
 async function fetchKlines(ex, sym, tf) {
   const fetchToken = ++klFetchToken;
   if (klWs) { try { klWs.onclose = null; klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
-  // Do not wipe candles array immediately - keep previous candles visible until new ones arrive to prevent blinking!
+  // When switching to a DIFFERENT coin or exchange, clear candles immediately to prevent old coin price scale corruption!
+  if (currentLoadedEx !== ex || currentLoadedSym !== sym) {
+    candles = [];
+    currentLoadedEx = ex;
+    currentLoadedSym = sym;
+  }
+
   offsetX = 0;
   chartNeedsDraw = false;
   viewMn = null;
