@@ -902,7 +902,7 @@ function getBacktestUniverse(exchange) {
       const scoreB = chgB * 2.5 + Math.log10(Math.max(1, b.v || 1));
       return scoreB - scoreA;
     })
-    .slice(0, 350);
+    .slice(0, 500);
 }
 
 function calcWindowVolatilityScore(candles, tf) {
