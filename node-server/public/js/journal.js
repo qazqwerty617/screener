@@ -1233,7 +1233,7 @@
       ctx.fillText(p.toFixed(p > 10 ? 2 : 4), CHART_W + 8, y + 3);
     }
 
-    // ── DRAW TMM-STYLE EXECUTIONS & PRICE LINES ───────────────────────────────
+    // ── DRAW TMM-STYLE EXECUTIONS & PRICE LINES (FULL TMM CLONE) ──────────────
     if (trade) {
       const isWin = trade.pnl >= 0;
       const executions = chartState.executions || [];
@@ -1241,6 +1241,8 @@
       const exitPrice = trade.exit || 0;
       const avgEntryY = getY(avgEntry);
       const exitY = exitPrice > 0 ? getY(exitPrice) : 0;
+      const isLong = trade.side === "LONG" || trade.side === "BUY";
+      const fmtP = (p) => p > 10 ? p.toFixed(2) : p.toFixed(4);
 
       // Helper: find candle index by timestamp string
       function findCandleIdx(dateStr) {
@@ -1255,122 +1257,341 @@
         return best;
       }
 
-      // Helper: draw TMM outlined hollow chevron arrow
-      //   dir = 1 (up/buy) or -1 (down/sell)
-      //   color = stroke color
-      function drawChevronArrow(cx, cy, dir, color) {
-        const size = 8;
-        const strokeW = 2.5;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = strokeW;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
+      // Helper: draw filled arrow marker (TMM style - solid triangle)
+      function drawArrowMarker(cx, cy, dir, color, size) {
+        size = size || 10;
+        ctx.fillStyle = color;
         ctx.beginPath();
         if (dir === 1) {
-          // ▲ upward chevron (buy)
-          ctx.moveTo(cx - size, cy + size * 0.6);
-          ctx.lineTo(cx, cy - size * 0.4);
-          ctx.lineTo(cx + size, cy + size * 0.6);
+          // ▲ upward (buy)
+          ctx.moveTo(cx, cy - size);
+          ctx.lineTo(cx - size * 0.7, cy + size * 0.4);
+          ctx.lineTo(cx + size * 0.7, cy + size * 0.4);
         } else {
-          // ▼ downward chevron (sell)
-          ctx.moveTo(cx - size, cy - size * 0.6);
-          ctx.lineTo(cx, cy + size * 0.4);
-          ctx.lineTo(cx + size, cy - size * 0.6);
+          // ▼ downward (sell)
+          ctx.moveTo(cx, cy + size);
+          ctx.lineTo(cx - size * 0.7, cy - size * 0.4);
+          ctx.lineTo(cx + size * 0.7, cy - size * 0.4);
         }
-        ctx.stroke();
-      }
-
-      // ── GREEN DASHED LINE — Average Entry Price (ТВХ) ──────────────────
-      if (avgEntry > 0) {
-        ctx.strokeStyle = "#26c97a";
+        ctx.closePath();
+        ctx.fill();
+        // White outline
+        ctx.strokeStyle = "rgba(255,255,255,0.5)";
         ctx.lineWidth = 1;
-        ctx.setLineDash([6, 4]);
-        ctx.beginPath();
-        ctx.moveTo(0, avgEntryY);
-        ctx.lineTo(CHART_W, avgEntryY);
         ctx.stroke();
-        ctx.setLineDash([]);
       }
 
-      // ── RED DASHED LINE — Exit Price ──────────────────────────────────────
-      if (exitPrice > 0 && Math.abs(exitPrice - avgEntry) > 0.00001) {
-        ctx.strokeStyle = "#ff4560";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([6, 4]);
+      // Helper: draw price label bubble attached to marker
+      function drawPriceLabel(cx, cy, text, bgColor, dir) {
+        ctx.font = "bold 10px Inter";
+        const tw = ctx.measureText(text).width;
+        const padX = 5, padY = 3;
+        const bw = tw + padX * 2;
+        const bh = 16;
+        const offsetY = dir === 1 ? 8 : -(bh + 8);
+        const bx = cx - bw / 2;
+        const by = cy + offsetY;
+        ctx.fillStyle = bgColor;
         ctx.beginPath();
-        ctx.moveTo(0, exitY);
-        ctx.lineTo(CHART_W, exitY);
+        ctx.roundRect(bx, by, bw, bh, 3);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.3)";
+        ctx.lineWidth = 0.5;
         ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.fillText(text, cx, by + bh - padY);
       }
 
-      // ── DRAW CHEVRON ARROWS FOR EACH EXECUTION ─────────────────────────
+      // ── RESOLVE EXECUTION CANDLE INDICES ─────────────────────────────────
+      const buyExecs = [];
+      const sellExecs = [];
       let fallbackOffset = 0;
+
       executions.forEach(exec => {
         const isBuy = exec.side === "LONG" || exec.side === "BUY";
         let idx = findCandleIdx(exec.date);
-
-        // Fallback: if all execs map to same candle, offset them
         if (idx < 0) {
           idx = Math.floor(candles.length * 0.3) + fallbackOffset;
           fallbackOffset += 3;
         }
-
         idx = Math.max(0, Math.min(candles.length - 1, idx));
-        const x = idx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
-        if (x < -30 || x > CHART_W + 30) return;
-
-        const c = candles[idx];
-        if (isBuy) {
-          // Place arrow below the candle low
-          const arrowY = getY(c.l) + 14;
-          drawChevronArrow(x, arrowY, 1, "#26c97a");
-        } else {
-          // Place arrow above the candle high
-          const arrowY = getY(c.h) - 14;
-          drawChevronArrow(x, arrowY, -1, "#ff4560");
-        }
+        const resolved = { ...exec, candleIdx: idx, price: parseFloat(exec.price) || 0, qty: parseFloat(exec.size) || 0 };
+        if (isBuy) buyExecs.push(resolved);
+        else sellExecs.push(resolved);
       });
 
-      // If no sell executions found but we have an exit price, draw one sell arrow
-      if (executions.every(e => e.side === "LONG" || e.side === "BUY") && exitPrice > 0) {
-        // Find last buy execution index and place sell a few candles later
-        let lastBuyIdx = -1;
-        executions.forEach(exec => {
-          const idx = findCandleIdx(exec.date);
-          if (idx > lastBuyIdx) lastBuyIdx = idx;
+      // Sort buys by candle index (chronological)
+      buyExecs.sort((a, b) => a.candleIdx - b.candleIdx);
+
+      // ── COMPUTE PROGRESSIVE AVERAGE ENTRY (ТВХ) ──────────────────────────
+      // Each buy shifts the average — we track it as a stepped line
+      const tvxSteps = []; // { fromIdx, toIdx, avgPrice }
+      let runQty = 0, runCost = 0;
+      buyExecs.forEach((b, i) => {
+        const prevIdx = i === 0 ? 0 : buyExecs[i - 1].candleIdx;
+        runQty += b.qty || 1;
+        runCost += (b.qty || 1) * (b.price || avgEntry);
+        const curAvg = runQty > 0 ? runCost / runQty : avgEntry;
+        const nextIdx = i < buyExecs.length - 1 ? buyExecs[i + 1].candleIdx : candles.length - 1;
+        tvxSteps.push({ fromIdx: b.candleIdx, toIdx: nextIdx, avgPrice: curAvg });
+      });
+
+      // Fallback: if no buy execs resolved, just use avgEntry as flat line
+      if (tvxSteps.length === 0 && avgEntry > 0) {
+        tvxSteps.push({ fromIdx: 0, toIdx: candles.length - 1, avgPrice: avgEntry });
+      }
+
+      // Determine sell index
+      let sellCandleIdx = -1;
+      if (sellExecs.length > 0) {
+        sellCandleIdx = sellExecs[sellExecs.length - 1].candleIdx;
+      } else if (exitPrice > 0 && buyExecs.length > 0) {
+        const lastBuyIdx = buyExecs[buyExecs.length - 1].candleIdx;
+        sellCandleIdx = Math.min(candles.length - 1, lastBuyIdx + Math.max(4, Math.floor(candles.length * 0.06)));
+      }
+
+      // ── FILLED ZONE BETWEEN ТВХ AND EXIT ───────────────────────────────
+      if (exitPrice > 0 && tvxSteps.length > 0 && sellCandleIdx >= 0) {
+        const firstBuyIdx = tvxSteps[0].fromIdx;
+        const zoneColor = isWin ? "rgba(38, 201, 122, 0.08)" : "rgba(255, 69, 96, 0.08)";
+        ctx.fillStyle = zoneColor;
+        ctx.beginPath();
+        // Top path: along ТВХ stepped line
+        let started = false;
+        tvxSteps.forEach(step => {
+          const fromI = Math.max(step.fromIdx, firstBuyIdx);
+          const toI = Math.min(step.toIdx, sellCandleIdx);
+          if (fromI > toI) return;
+          const fromX = fromI * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+          const toX = toI * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+          const y = getY(step.avgPrice);
+          if (!started) { ctx.moveTo(fromX, y); started = true; }
+          else { ctx.lineTo(fromX, y); }
+          ctx.lineTo(toX, y);
         });
-        if (lastBuyIdx < 0) lastBuyIdx = Math.floor(candles.length * 0.5);
-        const sellIdx = Math.min(candles.length - 1, lastBuyIdx + Math.max(3, Math.floor(candles.length * 0.05)));
-        const sellX = sellIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
-        if (sellX >= -30 && sellX <= CHART_W + 30) {
-          const c = candles[sellIdx];
-          drawChevronArrow(sellX, getY(c.h) - 14, -1, "#ff4560");
+        // Bottom path: along exit price back
+        if (started) {
+          const sellX = sellCandleIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+          const firstX = firstBuyIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+          ctx.lineTo(sellX, exitY);
+          ctx.lineTo(firstX, exitY);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      // ── STEPPED ТВХ LINE (green dashed, steps at each add) ──────────────
+      if (tvxSteps.length > 0) {
+        ctx.strokeStyle = "#26c97a";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 4]);
+        ctx.beginPath();
+        let moveStarted = false;
+        tvxSteps.forEach(step => {
+          const fromX = step.fromIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+          const toIdx = sellCandleIdx >= 0 ? Math.min(step.toIdx, sellCandleIdx) : step.toIdx;
+          const toX = toIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+          const y = getY(step.avgPrice);
+          if (!moveStarted) { ctx.moveTo(fromX, y); moveStarted = true; }
+          else { ctx.lineTo(fromX, y); }
+          ctx.lineTo(toX, y);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // ТВХ label on the right axis for final average
+        const finalAvg = tvxSteps[tvxSteps.length - 1].avgPrice;
+        const finalAvgY = getY(finalAvg);
+        const clampedAvgY = Math.max(14, Math.min(H - BOTTOM_MARGIN - 14, finalAvgY));
+        ctx.fillStyle = "#26c97a";
+        ctx.beginPath();
+        ctx.roundRect(CHART_W + 4, clampedAvgY - 9, 68, 18, 3);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 10px Inter";
+        ctx.textAlign = "center";
+        ctx.fillText("ТВХ " + fmtP(finalAvg), CHART_W + 38, clampedAvgY + 4);
+      }
+
+      // ── EXIT DASHED LINE ───────────────────────────────────────────────────
+      if (exitPrice > 0) {
+        const exitLineColor = isWin ? "#26c97a" : "#ff4560";
+        ctx.strokeStyle = exitLineColor;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        // Draw exit line only from first buy to sell candle
+        const lineStart = buyExecs.length > 0 ? buyExecs[0].candleIdx : 0;
+        const lineEnd = sellCandleIdx >= 0 ? sellCandleIdx : candles.length - 1;
+        const lsx = lineStart * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+        const lex = lineEnd * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+        ctx.moveTo(lsx, exitY);
+        ctx.lineTo(lex, exitY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Exit price badge on right axis
+        const clampedExitY = Math.max(14, Math.min(H - BOTTOM_MARGIN - 14, exitY));
+        // Don't overlap with ТВХ badge
+        let exitBadgeY = clampedExitY;
+        if (tvxSteps.length > 0) {
+          const tvxBadgeY = Math.max(14, Math.min(H - BOTTOM_MARGIN - 14, getY(tvxSteps[tvxSteps.length - 1].avgPrice)));
+          if (Math.abs(exitBadgeY - tvxBadgeY) < 22) {
+            exitBadgeY = exitBadgeY > tvxBadgeY ? tvxBadgeY + 22 : tvxBadgeY - 22;
+          }
+        }
+        ctx.fillStyle = isWin ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
+        ctx.strokeStyle = exitLineColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(CHART_W + 4, exitBadgeY - 9, 68, 18, 3);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = exitLineColor;
+        ctx.font = "bold 10px Inter";
+        ctx.textAlign = "center";
+        ctx.fillText("Exit " + fmtP(exitPrice), CHART_W + 38, exitBadgeY + 4);
+      }
+
+      // ── DRAW BUY MARKERS WITH LABELS ────────────────────────────────────
+      let progressiveQty = 0, progressiveCost = 0;
+      buyExecs.forEach((b, i) => {
+        const x = b.candleIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+        if (x < -40 || x > CHART_W + 40) return;
+
+        const c = candles[b.candleIdx];
+        const arrowY = getY(c.l) + 18;
+        drawArrowMarker(x, arrowY, 1, "#26c97a", 11);
+
+        // Compute progressive average
+        progressiveQty += b.qty || 1;
+        progressiveCost += (b.qty || 1) * (b.price || avgEntry);
+        const curAvg = progressiveQty > 0 ? progressiveCost / progressiveQty : avgEntry;
+
+        // Label: "BUY $price" or "ADD $price" for subsequent buys
+        const labelText = i === 0 ? `Вход $${fmtP(b.price || avgEntry)}` : `Докуп $${fmtP(b.price || avgEntry)}`;
+        drawPriceLabel(x, arrowY + 6, labelText, "rgba(38,201,122,0.85)", 1);
+
+        // If this is an add (not first buy), show how ТВХ changed
+        if (i > 0) {
+          const prevAvg = (progressiveCost - (b.qty || 1) * (b.price || avgEntry)) / (progressiveQty - (b.qty || 1));
+          const tvxChangeText = `ТВХ: ${fmtP(prevAvg)} → ${fmtP(curAvg)}`;
+          ctx.font = "9px Inter";
+          ctx.fillStyle = "rgba(255,255,255,0.6)";
+          ctx.textAlign = "center";
+          ctx.fillText(tvxChangeText, x, arrowY + 40);
+        }
+
+        // Vertical dotted connector from arrow to candle
+        ctx.strokeStyle = "rgba(38,201,122,0.3)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x, getY(c.l));
+        ctx.lineTo(x, arrowY - 10);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+
+      // ── DRAW SELL MARKERS WITH LABELS ───────────────────────────────────
+      sellExecs.forEach(s => {
+        const x = s.candleIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+        if (x < -40 || x > CHART_W + 40) return;
+
+        const c = candles[s.candleIdx];
+        const arrowY = getY(c.h) - 18;
+        drawArrowMarker(x, arrowY, -1, "#ff4560", 11);
+
+        const labelText = `Выход $${fmtP(s.price || exitPrice)}`;
+        drawPriceLabel(x, arrowY - 6, labelText, "rgba(255,69,96,0.85)", -1);
+
+        // Vertical dotted connector from arrow to candle
+        ctx.strokeStyle = "rgba(255,69,96,0.3)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x, getY(c.h));
+        ctx.lineTo(x, arrowY + 10);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+
+      // If no sell execs but we have exit price, draw synthetic sell marker
+      if (sellExecs.length === 0 && exitPrice > 0 && sellCandleIdx >= 0) {
+        const x = sellCandleIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+        if (x >= -40 && x <= CHART_W + 40) {
+          const c = candles[sellCandleIdx];
+          const arrowY = getY(c.h) - 18;
+          drawArrowMarker(x, arrowY, -1, "#ff4560", 11);
+          drawPriceLabel(x, arrowY - 6, `Выход $${fmtP(exitPrice)}`, "rgba(255,69,96,0.85)", -1);
+
+          ctx.strokeStyle = "rgba(255,69,96,0.3)";
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+          ctx.beginPath();
+          ctx.moveTo(x, getY(c.h));
+          ctx.lineTo(x, arrowY + 10);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+
+      // ── PnL % BADGE AT EXIT POINT (on chart, not just axis) ─────────────
+      if (exitPrice > 0 && sellCandleIdx >= 0) {
+        const sellX = sellCandleIdx * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2;
+        if (sellX >= -40 && sellX <= CHART_W + 40) {
+          const pnlSign = isWin ? "+" : "";
+          const pnlText = `${pnlSign}${trade.pnlPercent}%`;
+          const pnlColor = isWin ? "#26c97a" : "#ff4560";
+
+          // Large PnL badge on chart near exit
+          ctx.font = "bold 13px Inter";
+          const tw = ctx.measureText(pnlText).width;
+          const bw = tw + 16;
+          const bh = 24;
+          const bx = sellX - bw / 2;
+          const c = candles[sellCandleIdx];
+          const by = getY(c.h) - 52;
+
+          // Glow effect
+          ctx.shadowColor = pnlColor;
+          ctx.shadowBlur = 12;
+          ctx.fillStyle = pnlColor;
+          ctx.beginPath();
+          ctx.roundRect(bx, by, bw, bh, 5);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 13px Inter";
+          ctx.textAlign = "center";
+          ctx.fillText(pnlText, sellX, by + bh - 7);
         }
       }
 
       // ── PnL % BADGE on Right Price Axis ─────────────────────────────────
-      const badgeRefY = exitPrice > 0 ? exitY : avgEntryY;
-      const clampedBadgeY = Math.max(20, Math.min(H - BOTTOM_MARGIN - 20, badgeRefY));
-      const pnlSign = isWin ? "+" : "";
-      const pnlText = `${pnlSign}${trade.pnlPercent}%`;
-
-      ctx.fillStyle = isWin ? "#26c97a" : "#ff4560";
-      ctx.beginPath();
-      ctx.roundRect(CHART_W + 6, clampedBadgeY - 10, 62, 20, 3);
-      ctx.fill();
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 11px Inter";
-      ctx.textAlign = "center";
-      ctx.fillText(pnlText, CHART_W + 37, clampedBadgeY + 4);
+      if (exitPrice > 0) {
+        const clampedBadgeY = Math.max(20, Math.min(H - BOTTOM_MARGIN - 20, exitY));
+        const pnlSign2 = isWin ? "+" : "";
+        const pnlAxisText = `${pnlSign2}${trade.pnlPercent}%`;
+        // Find a Y that doesn't overlap with exit/tvx badges
+        let pnlBadgeY = clampedBadgeY;
+        if (tvxSteps.length > 0) {
+          const tvxY = Math.max(14, Math.min(H - BOTTOM_MARGIN - 14, getY(tvxSteps[tvxSteps.length - 1].avgPrice)));
+          if (Math.abs(pnlBadgeY - tvxY) < 24) pnlBadgeY = tvxY > H / 2 ? tvxY - 24 : tvxY + 24;
+        }
+        // Only show axis PnL badge if it's far enough from other badges
+        const exitBY = Math.max(14, Math.min(H - BOTTOM_MARGIN - 14, exitY));
+        if (Math.abs(pnlBadgeY - exitBY) < 24) pnlBadgeY = exitBY > H / 2 ? exitBY - 24 : exitBY + 24;
+      }
     }
 
     // Watermark Top Right
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.font = "bold 16px Inter";
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    ctx.font = "bold 14px Inter";
     ctx.textAlign = "right";
-    ctx.fillText("TMM VISUALIZER", CHART_W - 15, 30);
+    ctx.fillText("OBSIDIAN PRO", CHART_W - 15, 28);
 
     // ── CROSSHAIR & HOVER TOOLTIP ───────────────────────────────────────────
     if (chartState.mouseX >= 0 && chartState.mouseX <= CHART_W && chartState.mouseY >= TOP_MARGIN && chartState.mouseY <= H - BOTTOM_MARGIN) {
