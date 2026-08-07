@@ -304,15 +304,19 @@ function connectKlineWs(sub) {
   const { ex, sym, tf } = sub;
   
   if (ex === "BN") {
-    return; // Binance disabled
+    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
+    const bnTf = tfMap[tf] || tf;
+    sub.ws = new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${bnTf}`, { perMessageDeflate: false });
+    sub.ws.on("error", (e) => console.warn(`[KL ERROR] BN:${sym}`, e.message));
     sub.ws.on("message", (raw) => {
       try {
-        const k = JSON.parse(raw.toString()).k;
+        const d = JSON.parse(raw.toString());
+        if (!d.k) return;
+        const k = d.k;
         broadcastKline(ex, sym, tf, { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
       } catch (_) {}
     });
     sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
-    sub.ws.on("error", () => {});
   } else if (ex === "BB") {
     const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" };
     sub.ws = new WebSocket("wss://stream.bybit.com/v5/public/linear", { perMessageDeflate: false });

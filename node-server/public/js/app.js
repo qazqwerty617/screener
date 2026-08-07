@@ -506,21 +506,44 @@ function processTickData(dt) {
     lastRender = now2;
   }
 
-  // 3. Update main chart active coin OHLC
+  // 3. Update main chart active coin OHLC in REAL TIME (zero-lag tick updates + auto new candle)
   const activeKey = `${activeEx}:${activeSym}`;
   const ac = coins.get(activeKey);
   if (ac && candles.length > 0) {
     const last = candles[candles.length - 1];
-    const dp = getDisplayP(ac);
-    const ratio = last.c > 0 ? dp / last.c : 0;
-    if (dp > 0 && ratio > 0.8 && ratio < 1.2) {
-      last.c = dp;
-      if (dp > last.h) last.h = dp;
-      if (dp < last.l) last.l = dp;
+    const tfMs = TF_MS[activeTf] || 60000;
+    const now = Date.now();
+    const expectedCandleStart = Math.floor(now / tfMs) * tfMs;
+
+    // Check if we passed a timeframe boundary and need to spawn a new candle instantly
+    if (expectedCandleStart > last.t) {
+      const newCandle = {
+        t: expectedCandleStart,
+        o: last.c,
+        h: last.c,
+        l: last.c,
+        c: last.c,
+        v: 0
+      };
+      candles.push(newCandle);
+      if (candles.length > 1500) candles.shift();
+      clearCandleCaches(candles);
+      chartNeedsDraw = true;
+    }
+
+    const curLast = candles[candles.length - 1];
+    const liveP = ac.p;
+    if (liveP > 0 && curLast) {
+      if (curLast.c !== liveP) {
+        curLast.c = liveP;
+        if (liveP > curLast.h) curLast.h = liveP;
+        if (liveP < curLast.l) curLast.l = liveP;
+        chartNeedsDraw = true;
+      }
 
       const oc = document.getElementById("oc");
       if (oc) {
-        const pStr = fP(dp);
+        const pStr = fP(liveP);
         if (oc._lastPStr !== pStr) {
           oc.textContent = pStr;
           oc._lastPStr = pStr;
@@ -4272,24 +4295,25 @@ async function fetchKlines(ex, sym, tf) {
 }
 
 function appendCandle(k) {
-  if (!candles.length) return;
+  if (!candles.length || !k) return;
   const last = candles[candles.length - 1];
 
+  const prev = candles.length > 1 ? candles[candles.length - 2].c : null;
+  const clean = sanitizeCandle(k, prev);
+  if (!clean) return;
+
   // Only accept updates that are NOT older than current last candle
-  if (k.t === last.t) {
-    const prev = candles.length > 1 ? candles[candles.length - 2].c : null;
-    const clean = sanitizeCandle(k, prev);
-    if (!clean) return;
+  if (clean.t === last.t) {
     last.o = clean.o;
     last.h = Math.max(last.h, clean.h); // Keep historical high/low for current candle
     last.l = Math.min(last.l, clean.l);
     last.c = clean.c;
     last.v = clean.v;
-  } else if (k.t > last.t) {
+  } else if (clean.t > last.t) {
     // Check if there's a gap (more than one TF)
     const tfMs = TF_MS[activeTf] || 60000;
-    if (k.t - last.t > tfMs * 1.5) {
-      console.warn("Gap detected in live stream, fetching full history to patch:", k.t - last.t);
+    if (clean.t - last.t > tfMs * 1.5) {
+      console.warn("Gap detected in live stream, fetching full history to patch:", clean.t - last.t);
       if (!window.isFetchingGap) {
         window.isFetchingGap = true;
         setTimeout(() => {
