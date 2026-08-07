@@ -767,12 +767,9 @@ function parseKlines(ex, data) {
     cleaned.sort((a, b) => a.t - b.t);
     return cleaned;
   } catch (e) {
+    console.error(`[KLINES] Parse error for ${ex}:`, e.message);
     return [];
   }
-}
-    console.error(`[KLINES] Parse error for ${ex}:`, e.message);
-  }
-  return [];
 }
 
 async function fetchFullHistory(ex, sym, tf, lite = false) {
