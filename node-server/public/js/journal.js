@@ -1445,7 +1445,112 @@
       sideBadge.className = `j-side-badge ${trade.side === 'LONG' ? 'j-side-long' : 'j-side-short'}`;
     }
 
+    const btnDownload = document.getElementById("j-btn-download-card");
+    if (btnDownload) {
+      btnDownload.onclick = downloadPnlCardPng;
+    }
+
     modal.style.display = "flex";
+  }
+
+  function downloadPnlCardPng() {
+    const symText = document.getElementById("j-card-sym")?.textContent || "BTCUSDT";
+    const pctText = document.getElementById("j-card-pct")?.textContent || "+0.00%";
+    const pnlText = document.getElementById("j-card-pnl-val")?.textContent || "$0.00";
+    const entryText = document.getElementById("j-card-entry")?.textContent || "$0";
+    const exitText = document.getElementById("j-card-exit")?.textContent || "$0";
+    const sideBadge = document.getElementById("j-card-side-badge");
+    const sideText = sideBadge?.textContent || "LONG";
+    const isWin = !pctText.includes("-");
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1200;
+    canvas.height = 675;
+    const ctx = canvas.getContext("2d");
+
+    // Dark Obsidian Card Background Gradient
+    const bgGrad = ctx.createLinearGradient(0, 0, 1200, 675);
+    bgGrad.addColorStop(0, "#0c0d12");
+    bgGrad.addColorStop(0.5, "#12141d");
+    bgGrad.addColorStop(1, isWin ? "#0d201a" : "#241017");
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, 1200, 675);
+
+    // Subtle Glowing Border
+    ctx.strokeStyle = isWin ? "rgba(38, 201, 122, 0.3)" : "rgba(255, 69, 96, 0.3)";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(10, 10, 1180, 655);
+
+    // Logo Image
+    const logoImg = new Image();
+    logoImg.crossOrigin = "anonymous";
+    logoImg.onload = () => {
+      ctx.drawImage(logoImg, 60, 60, 48, 48);
+
+      // Brand Title Text
+      ctx.font = "bold 28px Inter, sans-serif";
+      ctx.fillStyle = "#ab47bc";
+      ctx.fillText("OBSIDIAN ", 120, 94);
+      const obsW = ctx.measureText("OBSIDIAN ").width;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText("PRO", 120 + obsW, 94);
+
+      // Side Badge (LONG / SHORT)
+      const badgeColor = sideText === "LONG" ? "#26c97a" : "#ff4560";
+      ctx.fillStyle = badgeColor;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(1020, 60, 120, 44, 8);
+      else ctx.rect(1020, 60, 120, 44);
+      ctx.fill();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 20px Inter, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(sideText, 1080, 89);
+
+      // Symbol
+      ctx.textAlign = "center";
+      ctx.font = "bold 52px Inter, sans-serif";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(symText, 600, 240);
+
+      // PnL %
+      ctx.font = "bold 96px Inter, sans-serif";
+      ctx.fillStyle = isWin ? "#26c97a" : "#ff4560";
+      ctx.fillText(pctText, 600, 365);
+
+      // PnL $
+      ctx.font = "bold 44px Inter, sans-serif";
+      ctx.fillStyle = isWin ? "#26c97a" : "#ff4560";
+      ctx.fillText(pnlText, 600, 440);
+
+      // Footer Entry / Exit Line
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(100, 520);
+      ctx.lineTo(1100, 520);
+      ctx.stroke();
+
+      ctx.font = "24px Inter, sans-serif";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.textAlign = "left";
+      ctx.fillText("Вход: ", 120, 570);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(entryText, 185, 570);
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.fillText("Выход: ", 1020, 570);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(exitText, 1080, 570);
+
+      // Trigger Download
+      const link = document.createElement("a");
+      link.download = `Obsidian_PnL_${symText.replace(/[^a-zA-Z0-9]/g, "_")}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    };
+    logoImg.src = "/img/logo.png";
   }
 
   // ── API SYNC CALLER & AUTOMATIC BACKGROUND REFRESH ───────────────────────
