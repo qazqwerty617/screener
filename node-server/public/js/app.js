@@ -3810,50 +3810,19 @@ let wsPingTimer = null;
 let wsReconnectTimer = null;
 let lastWsMsg = 0;
 
-// Watchdog: if no data for 10s while connected — force reconnect
+// Watchdog: if no data for 4s while connected — force auto-reconnect instantly
 setInterval(() => {
-  if (ws && ws.readyState === WebSocket.OPEN && wsReady) {
-    if (lastWsMsg > 0 && Date.now() - lastWsMsg > 10000) {
-      console.warn("[WS] No data for 10s — forcing reconnect");
-      $("cd-label").textContent = "Переподключение...";
-      ws.onclose = null; ws.onerror = null;
-      try { ws.close(); } catch (_) { }
-      ws = null;
-      wsReady = false;
-      idToKey = {};
-      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
-      connectWS();
-    }
-  }
-}, 5000);
-
-// Instant Background Tab & Window Focus Auto-Resync (Zero Freeze)
-function handleVisibilityOrFocusResync() {
-  if (document.hidden) return;
-  const now = Date.now();
-
-  // 1. Check WebSocket connection health. Reconnect immediately if closed or stalled > 5s
-  if (!ws || ws.readyState !== WebSocket.OPEN || (lastWsMsg > 0 && now - lastWsMsg > 5000)) {
-    console.warn("[VISIBILITY/FOCUS] WS stalled or closed in background — instant reconnect");
-    lastWsMsg = 0;
+  if (lastWsMsg > 0 && Date.now() - lastWsMsg > 4000) {
+    console.warn("[WS] Quiet for 4s — auto-reconnecting...");
+    $("cd-label").textContent = "Переподключение...";
+    if (ws) { ws.onclose = null; ws.onerror = null; try { ws.close(); } catch (_) { } }
+    ws = null;
+    wsReady = false;
+    idToKey = {};
+    if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
     connectWS();
-  } else if (activeEx && activeSym && activeTf) {
-    // 2. Fetch fresh klines for active symbol to catch up on missed background candles
-    fetchKlines(activeEx, activeSym, activeTf);
   }
-
-  // 3. Force canvas repaints
-  chartNeedsDraw = true;
-  if (screenerView === "multichart" || activeView === "formations") {
-    chartInstances.forEach(inst => {
-      inst.dirty = true;
-      inst.loadKlines();
-    });
-  }
-}
-
-document.addEventListener("visibilitychange", handleVisibilityOrFocusResync);
-window.addEventListener("focus", handleVisibilityOrFocusResync);
+}, 2000);
 
 function connectWS() {
   // Cancel any pending reconnect
@@ -3920,17 +3889,12 @@ function connectWS() {
           continue;
         }
         c.prev = c.p;
+        if (!c.displayP) c.displayP = c.p;
         const oldP = c.p;
         c.p = p; c.chg = chg; c.v = v; c.h = h; c.l = l; c.o = o;
         c.funding = funding; c.nextFunding = nextFunding; c.oi = oi; c.trades = trades;
-
-        // If tab is in background, sync displayP immediately so memory never gets stale
-        if (document.hidden || !c.displayP) {
-          c.displayP = p;
-        }
-
         dirty.add(key);
-        if (c.p !== oldP && !document.hidden) scheduleInterp(key);
+        if (c.p !== oldP) scheduleInterp(key);
       }
       return;
     }
@@ -4067,22 +4031,39 @@ function connectWS() {
   };
 }
 
-// Reconnect when tab becomes visible (browser may freeze WS in background)
+// Reconnect & Auto-Unfreeze when tab becomes visible or window gains focus (prevents chart freezes on tab switch)
+function unfreezeAndResync() {
+  lastRafTs = performance.now();
+  chartNeedsDraw = true;
+  const isHealthy = ws && ws.readyState === WebSocket.OPEN && (lastWsMsg > 0 && Date.now() - lastWsMsg < 4000);
+
+  if (!isHealthy) {
+    console.log("[WS] Tab / Window active — socket quiet or closed, reconnecting...");
+    connectWS();
+  } else if (activeEx && activeSym && activeTf) {
+    fetchKlines(activeEx, activeSym, activeTf);
+  }
+
+  if (screenerView === "multichart" || activeView === "formations") {
+    chartInstances.forEach(inst => { inst.dirty = true; inst.draw(true); });
+  } else {
+    drawChart();
+  }
+}
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-      console.log("[WS] Tab visible, reconnecting...");
-      connectWS();
-    }
+    unfreezeAndResync();
   }
+});
+
+window.addEventListener("focus", () => {
+  unfreezeAndResync();
 });
 
 // Reconnect on network restore
 window.addEventListener("online", () => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.log("[WS] Network online, reconnecting...");
-    connectWS();
-  }
+  unfreezeAndResync();
 });
 
 function processTickerUpdate(t) {
