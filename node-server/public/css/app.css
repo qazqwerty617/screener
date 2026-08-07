@@ -4305,13 +4305,14 @@ body {
 
 .j-equity-wrap {
     width: 100%;
-    height: 200px;
+    height: 240px;
     position: relative;
 }
 
 .j-equity-wrap canvas {
     width: 100% !important;
     height: 100% !important;
+    cursor: crosshair;
 }
 
 /* ── Filter Bar ── */

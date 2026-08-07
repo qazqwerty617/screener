@@ -162,110 +162,312 @@
     };
   }
 
-  // ── EQUITY CURVE CANVAS RENDERER ─────────────────────────────────────────────
+  // ── EQUITY CURVE CANVAS RENDERER (SMOOTH & INTERACTIVE) ────────────────────
+  let equityHoverIndex = -1;
+  let equityListenersAttached = false;
+
+  function attachEquityCanvasListeners(canvas) {
+    if (equityListenersAttached || !canvas) return;
+    equityListenersAttached = true;
+
+    canvas.addEventListener("mousemove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const pts = canvas._equityPoints;
+      if (!pts || pts.length === 0) return;
+
+      let minDist = Infinity;
+      let nearestIdx = -1;
+      pts.forEach((pt, i) => {
+        const dist = Math.abs(pt.screenX - mouseX);
+        if (dist < minDist) {
+          minDist = dist;
+          nearestIdx = i;
+        }
+      });
+
+      if (nearestIdx !== equityHoverIndex) {
+        equityHoverIndex = nearestIdx;
+        drawEquityChart();
+      }
+    });
+
+    canvas.addEventListener("mouseleave", () => {
+      if (equityHoverIndex !== -1) {
+        equityHoverIndex = -1;
+        drawEquityChart();
+      }
+    });
+  }
+
+  function drawSmoothPath(ctx, pts) {
+    if (pts.length < 2) return;
+    ctx.moveTo(pts[0].screenX, pts[0].screenY);
+    if (pts.length === 2) {
+      ctx.lineTo(pts[1].screenX, pts[1].screenY);
+      return;
+    }
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i === 0 ? 0 : i - 1];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2 >= pts.length ? pts.length - 1 : i + 2];
+
+      const cp1x = p1.screenX + (p2.screenX - p0.screenX) * 0.18;
+      const cp1y = p1.screenY + (p2.screenY - p0.screenY) * 0.18;
+      const cp2x = p2.screenX - (p3.screenX - p1.screenX) * 0.18;
+      const cp2y = p2.screenY - (p3.screenY - p1.screenY) * 0.18;
+
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.screenX, p2.screenY);
+    }
+  }
+
   function drawEquityChart() {
     const canvas = document.getElementById("journal-equity-canvas");
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
 
-    canvas.width = rect.width * (window.devicePixelRatio || 1) || 800;
-    canvas.height = rect.height * (window.devicePixelRatio || 1) || 200;
-    const W = canvas.width;
-    const H = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    const W = rect.width || 600;
+    const H = rect.height || 240;
+
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.scale(dpr, dpr);
 
     ctx.clearRect(0, 0, W, H);
+    attachEquityCanvasListeners(canvas);
 
     const tradeList = getFilteredTrades();
-    if (tradeList.length < 2) {
-      ctx.fillStyle = "rgba(255,255,255,0.3)";
-      ctx.font = "12px Inter";
-      ctx.textAlign = "center";
-      ctx.fillText("Недостаточно сделок для построения графика доходности", W / 2, H / 2);
-      return;
-    }
-
     const sorted = [...tradeList].sort((a, b) => new Date(a.date) - new Date(b.date));
 
     let cumPnl = 0;
-    const points = [{ x: 0, pnl: 0 }];
+    const points = [{ x: 0, pnl: 0, date: "Старт", sym: "—", tradePnl: 0, side: "—" }];
     sorted.forEach((t, i) => {
       cumPnl += t.pnl;
-      points.push({ x: i + 1, pnl: cumPnl, date: t.date, sym: t.symbol, tradePnl: t.pnl });
+      points.push({
+        x: i + 1,
+        pnl: cumPnl,
+        date: t.date,
+        sym: t.symbol,
+        tradePnl: t.pnl,
+        side: t.side,
+        pnlPercent: t.pnlPercent
+      });
     });
 
-    const minPnl = Math.min(0, ...points.map(p => p.pnl));
-    const maxPnl = Math.max(100, ...points.map(p => p.pnl));
-    const range = maxPnl - minPnl || 1;
-
-    const padL = 50, padR = 20, padT = 20, padB = 30;
+    const padL = 60, padR = 20, padT = 25, padB = 30;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
-    const getX = (i) => padL + (i / (points.length - 1)) * plotW;
+    // Smart Auto-Scaling
+    const allPnls = points.map(p => p.pnl);
+    let realMin = Math.min(...allPnls);
+    let realMax = Math.max(...allPnls);
+
+    let rawRange = realMax - realMin;
+    if (rawRange === 0) rawRange = Math.abs(realMax) || 10;
+
+    const margin = Math.max(rawRange * 0.2, 1);
+    let minPnl = realMin - margin;
+    let maxPnl = realMax + margin;
+
+    // Zero alignment
+    if (minPnl > 0) minPnl = 0;
+    if (maxPnl < 0) maxPnl = 0;
+
+    const range = maxPnl - minPnl || 1;
+
+    const getX = (i) => padL + (i / Math.max(1, points.length - 1)) * plotW;
     const getY = (val) => padT + plotH - ((val - minPnl) / range) * plotH;
 
     const zeroY = getY(0);
 
-    // Zero line
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(padL, zeroY);
-    ctx.lineTo(W - padR, zeroY);
-    ctx.stroke();
+    points.forEach((p, i) => {
+      p.screenX = getX(i);
+      p.screenY = getY(p.pnl);
+    });
+    canvas._equityPoints = points;
 
-    // Gradient fill
-    const isProfitable = cumPnl >= 0;
+    // ── 1. Background Grid & Axis Lines ──
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+
+    const gridSteps = 4;
+    for (let g = 0; g <= gridSteps; g++) {
+      const gVal = minPnl + (g / gridSteps) * (maxPnl - minPnl);
+      const gY = getY(gVal);
+
+      ctx.beginPath();
+      ctx.moveTo(padL, gY);
+      ctx.lineTo(W - padR, gY);
+      ctx.stroke();
+
+      // Y-axis Label
+      ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+      ctx.font = "500 10px Inter, system-ui, sans-serif";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      const sign = gVal > 0 ? "+" : "";
+      ctx.fillText(`${sign}$${gVal.toFixed(2)}`, padL - 8, gY);
+    }
+    ctx.setLineDash([]);
+
+    // ── 2. Zero Level Baseline ──
+    if (zeroY >= padT && zeroY <= H - padB) {
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.15)";
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(padL, zeroY);
+      ctx.lineTo(W - padR, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // ── 3. Gradient Area Fill ──
+    const lastPnl = points[points.length - 1].pnl;
+    const isOverallWin = lastPnl >= 0;
+
     const grad = ctx.createLinearGradient(0, padT, 0, H - padB);
-    if (isProfitable) {
-      grad.addColorStop(0, "rgba(38, 201, 122, 0.35)");
+    if (isOverallWin) {
+      grad.addColorStop(0, "rgba(38, 201, 122, 0.32)");
+      grad.addColorStop(0.6, "rgba(38, 201, 122, 0.08)");
       grad.addColorStop(1, "rgba(38, 201, 122, 0.0)");
     } else {
-      grad.addColorStop(0, "rgba(255, 69, 96, 0.35)");
+      grad.addColorStop(0, "rgba(255, 69, 96, 0.32)");
+      grad.addColorStop(0.6, "rgba(255, 69, 96, 0.08)");
       grad.addColorStop(1, "rgba(255, 69, 96, 0.0)");
     }
 
     ctx.beginPath();
-    ctx.moveTo(getX(0), zeroY);
-    points.forEach((p, i) => {
-      ctx.lineTo(getX(i), getY(p.pnl));
-    });
-    ctx.lineTo(getX(points.length - 1), zeroY);
+    ctx.moveTo(points[0].screenX, zeroY);
+    ctx.lineTo(points[0].screenX, points[0].screenY);
+    drawSmoothPath(ctx, points);
+    ctx.lineTo(points[points.length - 1].screenX, zeroY);
     ctx.closePath();
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Equity Line
+    // ── 4. Glowing Smooth Line ──
+    ctx.save();
     ctx.beginPath();
-    ctx.strokeStyle = isProfitable ? "#26c97a" : "#ff4560";
-    ctx.lineWidth = 2.5;
-    points.forEach((p, i) => {
-      const x = getX(i);
-      const y = getY(p.pnl);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
+    drawSmoothPath(ctx, points);
+    ctx.strokeStyle = isOverallWin ? "#26c97a" : "#ff4560";
+    ctx.lineWidth = 3.5;
+    ctx.shadowColor = isOverallWin ? "rgba(38, 201, 122, 0.75)" : "rgba(255, 69, 96, 0.75)";
+    ctx.shadowBlur = 12;
+    ctx.stroke();
+    ctx.restore();
+
+    // Crisp stroke layer
+    ctx.beginPath();
+    drawSmoothPath(ctx, points);
+    ctx.strokeStyle = isOverallWin ? "#26c97a" : "#ff4560";
+    ctx.lineWidth = 2.2;
     ctx.stroke();
 
-    // Points
+    // ── 5. Vertices & Glowing Rings ──
     points.forEach((p, i) => {
-      const x = getX(i);
-      const y = getY(p.pnl);
+      const isWin = p.tradePnl >= 0;
+      const color = i === 0 ? "#7c3aed" : (isWin ? "#26c97a" : "#ff4560");
+
       ctx.beginPath();
-      ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = p.pnl >= 0 ? "#26c97a" : "#ff4560";
+      ctx.arc(p.screenX, p.screenY, 5, 0, Math.PI * 2);
+      ctx.fillStyle = i === 0 ? "rgba(124, 58, 237, 0.2)" : (isWin ? "rgba(38, 201, 122, 0.2)" : "rgba(255, 69, 96, 0.2)");
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(p.screenX, p.screenY, 3, 0, Math.PI * 2);
+      ctx.fillStyle = color;
       ctx.fill();
       ctx.strokeStyle = "#12131e";
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
 
-    // Y Axis Labels
-    ctx.fillStyle = "rgba(255,255,255,0.4)";
-    ctx.font = "10px Inter";
-    ctx.textAlign = "right";
-    ctx.fillText(`+$${maxPnl.toFixed(0)}`, padL - 6, padT + 8);
-    ctx.fillText(`$${minPnl.toFixed(0)}`, padL - 6, H - padB);
+    // ── 6. Hover Crosshair & Glassmorphism Tooltip ──
+    if (equityHoverIndex >= 0 && equityHoverIndex < points.length) {
+      const hp = points[equityHoverIndex];
+
+      // Vertical crosshair line
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(hp.screenX, padT);
+      ctx.lineTo(hp.screenX, H - padB);
+      ctx.stroke();
+
+      // Horizontal crosshair line
+      ctx.beginPath();
+      ctx.moveTo(padL, hp.screenY);
+      ctx.lineTo(W - padR, hp.screenY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Glowing active vertex target ring
+      ctx.beginPath();
+      ctx.arc(hp.screenX, hp.screenY, 8, 0, Math.PI * 2);
+      ctx.fillStyle = hp.pnl >= 0 ? "rgba(38, 201, 122, 0.35)" : "rgba(255, 69, 96, 0.35)";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(hp.screenX, hp.screenY, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = hp.pnl >= 0 ? "#26c97a" : "#ff4560";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Tooltip Card Box
+      const boxW = 160;
+      const boxH = hp.sym !== "—" ? 64 : 42;
+      let boxX = hp.screenX + 12;
+      let boxY = hp.screenY - 32;
+
+      if (boxX + boxW > W - padR) boxX = hp.screenX - boxW - 12;
+      if (boxY < padT) boxY = padT + 4;
+      if (boxY + boxH > H - padB) boxY = H - padB - boxH - 4;
+
+      ctx.fillStyle = "rgba(18, 19, 30, 0.94)";
+      ctx.strokeStyle = hp.pnl >= 0 ? "rgba(38, 201, 122, 0.4)" : "rgba(255, 69, 96, 0.4)";
+      ctx.lineWidth = 1.2;
+
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(boxX, boxY, boxW, boxH, 8);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        ctx.fillRect(boxX, boxY, boxW, boxH);
+        ctx.strokeRect(boxX, boxY, boxW, boxH);
+      }
+
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+      ctx.font = "600 10px Inter, system-ui, sans-serif";
+      const headerText = hp.sym !== "—" ? `${hp.sym} • ${hp.date.slice(0, 16)}` : `${hp.date}`;
+      ctx.fillText(headerText, boxX + 10, boxY + 8);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 12px Inter, system-ui, sans-serif";
+      const cumSign = hp.pnl >= 0 ? "+" : "";
+      ctx.fillText(`Equity: ${cumSign}$${hp.pnl.toFixed(2)}`, boxX + 10, boxY + 22);
+
+      if (hp.sym !== "—") {
+        ctx.font = "500 10px Inter, system-ui, sans-serif";
+        const trSign = hp.tradePnl >= 0 ? "+" : "";
+        const trColor = hp.tradePnl >= 0 ? "#26c97a" : "#ff4560";
+        ctx.fillStyle = trColor;
+        const pctStr = hp.pnlPercent !== undefined ? ` (${trSign}${hp.pnlPercent}%)` : "";
+        ctx.fillText(`Сделка: ${trSign}$${hp.tradePnl.toFixed(2)}${pctStr}`, boxX + 10, boxY + 42);
+      }
+    }
   }
 
   // ── RENDER TRADES TABLE (MATCHING TMM COLUMNS) ───────────────────────────
