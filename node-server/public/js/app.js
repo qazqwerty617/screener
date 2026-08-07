@@ -6009,10 +6009,19 @@ class ChartInstance {
       let dy = e.deltaY || 0;
       if (e.deltaMode === 1) dy *= 16;
       const factor = clamp(1 - dy * 0.0004, 0.90, 1.10);
-      this.candleW = clamp(this.candleW * factor, 1.5, 50);
+      this.candleW = clamp(this.candleW * factor, 0.90, 50);
       this.draw(true);
       e.stopPropagation();
     };
+
+    if (window.ResizeObserver && this.el) {
+      this._ro = new ResizeObserver(() => {
+        if (activeView === "formations" || (activeView === "screener" && screenerView === "multichart")) {
+          this.draw(true);
+        }
+      });
+      this._ro.observe(this.el);
+    }
   }
 
   update(ticker) {
@@ -6160,12 +6169,23 @@ class ChartInstance {
     const dpr = window.devicePixelRatio || 1;
     const cw = this.canvas.clientWidth;
     const ch = this.canvas.clientHeight;
+
+    if (!cw || !ch || cw < 30 || ch < 30) {
+      if (!this._layoutPending) {
+        this._layoutPending = true;
+        requestAnimationFrame(() => {
+          this._layoutPending = false;
+          this.draw(true);
+        });
+      }
+      return;
+    }
+
     if (this.canvas.width !== cw * dpr || this.canvas.height !== ch * dpr) {
       this.canvas.width = cw * dpr;
       this.canvas.height = ch * dpr;
-      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
-    if (!cw || !ch) return;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const ctx = this.ctx;
     ctx.fillStyle = getCanvasBgColor();
@@ -7077,6 +7097,9 @@ window.switchView = function switchView(view) {
     if (formationsEl) {
       formationsEl.style.display = "flex";
       window.loadFormations();
+      requestAnimationFrame(() => {
+        chartInstances.forEach(inst => inst && inst.draw(true));
+      });
     }
     if (backtestEl) backtestEl.style.display = "none";
     if (journalEl) journalEl.style.display = "none";
@@ -9682,6 +9705,9 @@ window.addEventListener("resize", () => {
       return;
     }
 
+    chartInstances.forEach(inst => {
+      if (inst && inst._ro) inst._ro.disconnect();
+    });
     grid.innerHTML = "";
     chartInstances = [];
 
@@ -9710,6 +9736,10 @@ window.addEventListener("resize", () => {
 
     if (chartInstances[0]) chartInstances[0].el.classList.add("active");
     updateFormationsPagination();
+
+    requestAnimationFrame(() => {
+      chartInstances.forEach(inst => inst && inst.draw(true));
+    });
   }
 
 })();
