@@ -550,7 +550,10 @@ function processTickData(dt) {
     if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances) && chartInstances.length > 0) {
       for (let i = 0; i < chartInstances.length; i++) {
         const inst = chartInstances[i];
-        if (inst && inst.candles && inst.candles.length > 0) {
+        if (inst && inst.key) {
+          const c = coins.get(inst.key);
+          if (c && c.p > 0) inst.update(c);
+        } else if (inst && inst.candles && inst.candles.length > 0) {
           inst.draw();
         }
       }
@@ -4002,7 +4005,14 @@ function connectWS() {
         } else {
           requestAnimationFrame(drawChart);
           if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
-            chartInstances.forEach(inst => inst.draw());
+            chartInstances.forEach(inst => {
+              if (inst && inst.key) {
+                const c = coins.get(inst.key);
+                if (c && c.p > 0) inst.update(c);
+              } else {
+                inst.draw();
+              }
+            });
           }
         }
       }
@@ -6352,6 +6362,7 @@ class ChartInstance {
         const w = this.canvas.clientWidth;
         const PR = 60;
         const PW = w - PR;
+        const n = PW / this.candleW;
         const minOffsetX = -Math.max(0, n - 2);
         const maxOffsetX = Math.max(0, this.candles.length - 2);
         this.offsetX = Math.max(minOffsetX, Math.min(maxOffsetX, this.dragOff + dx / this.candleW));
@@ -9974,6 +9985,7 @@ window.addEventListener("resize", () => {
       return;
     }
 
+    let processedCount = 0;
     async function nextBatch() {
       if (scanId !== activeScanId) return; // cancelled
       if (index >= total) {
@@ -9987,89 +9999,93 @@ window.addEventListener("resize", () => {
         return;
       }
 
-      const batch = eligibleCoins.slice(index, index + 40);
+      const batch = eligibleCoins.slice(index, index + 30);
       index += batch.length;
 
-      const rem = total - index;
-      const batchesRem = Math.ceil(rem / batch.length);
-      const secTotal = Math.ceil((batchesRem * 5) / 1000);
+      const rem = total - processedCount;
+      const secTotal = Math.max(0, Math.ceil((rem * 2) / 1000));
       const min = Math.floor(secTotal / 60);
       const sec = secTotal % 60;
       const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
-
-      scanProgressText = `Сканирование: ${index}/${total} (${etaText})`;
-      updateFormationsPagination();
 
       const promises = batch.map(async (c) => {
         const key = `${c.ex}|${c.sym}|${tf}`;
         let klinesData = null;
 
-        const cached = KLINES_CACHE.get(key);
-        if (cached && Date.now() - cached.ts < 300000) {
-          klinesData = cached.data;
-        } else {
-          try {
-            const r = await fetch(`/api/klines?ex=${c.ex}&sym=${c.sym}&tf=${tf}&lite=1`);
-            if (r.ok) {
-              const rawKlines = await r.json();
-              if (Array.isArray(rawKlines) && rawKlines.length > 0) {
-                klinesData = rawKlines;
-                KLINES_CACHE.set(key, { ts: Date.now(), data: rawKlines });
-              }
-            }
-          } catch (e) { }
-        }
-
-        if (klinesData) {
-          const flat = [];
-          if (typeof klinesData[0] === 'number') {
-            for (let i = 0; i < klinesData.length; i += 6) {
-              flat.push({ t: klinesData[i], o: klinesData[i + 1], h: klinesData[i + 2], l: klinesData[i + 3], c: klinesData[i + 4], v: klinesData[i + 5] });
-            }
+        try {
+          const cached = KLINES_CACHE.get(key);
+          if (cached && Date.now() - cached.ts < 300000) {
+            klinesData = cached.data;
           } else {
-            flat.push(...klinesData);
-          }
-          const candlesList = sanitizeCandles(flat);
-          const detectedLevels = window.detectChartLevelsFn(candlesList);
-          const coinKey = c.ex + ':' + c.sym;
-
-          let wasEligible = false;
-          const hadLevel = formationsCoinsLevelsMap.has(coinKey);
-          if (hadLevel) {
-            if (activeFormation === 'breakout' || activeFormation === 'trendline') {
-              wasEligible = true;
-            } else {
-              const prevLvls = formationsCoinsLevelsMap.get(coinKey);
-              let upC = 0, downC = 0;
-              for (const l of prevLvls) {
-                if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+            try {
+              const r = await fetch(`/api/klines?ex=${c.ex}&sym=${c.sym}&tf=${tf}&lite=1`);
+              if (r.ok) {
+                const rawKlines = await r.json();
+                if (Array.isArray(rawKlines) && rawKlines.length > 0) {
+                  klinesData = rawKlines;
+                  KLINES_CACHE.set(key, { ts: Date.now(), data: rawKlines });
+                }
               }
-              wasEligible = Math.max(upC, downC) >= formationsMinCascade;
+            } catch (e) { }
+          }
+
+          if (klinesData) {
+            const flat = [];
+            if (typeof klinesData[0] === 'number') {
+              for (let i = 0; i < klinesData.length; i += 6) {
+                flat.push({ t: klinesData[i], o: klinesData[i + 1], h: klinesData[i + 2], l: klinesData[i + 3], c: klinesData[i + 4], v: klinesData[i + 5] });
+              }
+            } else {
+              flat.push(...klinesData);
+            }
+            const candlesList = sanitizeCandles(flat);
+            const detectedLevels = window.detectChartLevelsFn(candlesList);
+            const coinKey = c.ex + ':' + c.sym;
+
+            let wasEligible = false;
+            const hadLevel = formationsCoinsLevelsMap.has(coinKey);
+            if (hadLevel) {
+              if (activeFormation === 'breakout' || activeFormation === 'trendline') {
+                wasEligible = true;
+              } else {
+                const prevLvls = formationsCoinsLevelsMap.get(coinKey);
+                let upC = 0, downC = 0;
+                for (const l of prevLvls) {
+                  if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+                }
+                wasEligible = Math.max(upC, downC) >= formationsMinCascade;
+              }
+            }
+
+            const hasLevel = detectedLevels && detectedLevels.length > 0;
+            if (hasLevel) {
+              formationsCoinsLevelsMap.set(coinKey, detectedLevels);
+            } else {
+              formationsCoinsLevelsMap.delete(coinKey);
+            }
+
+            let isEligible = false;
+            if (hasLevel) {
+              if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+                isEligible = true;
+              } else {
+                let upC = 0, downC = 0;
+                for (const l of detectedLevels) {
+                  if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+                }
+                isEligible = Math.max(upC, downC) >= formationsMinCascade;
+              }
+            }
+
+            if (wasEligible !== isEligible) {
+              triggerThrottledLoadFormations();
             }
           }
-
-          const hasLevel = detectedLevels && detectedLevels.length > 0;
-          if (hasLevel) {
-            formationsCoinsLevelsMap.set(coinKey, detectedLevels);
-          } else {
-            formationsCoinsLevelsMap.delete(coinKey);
-          }
-
-          let isEligible = false;
-          if (hasLevel) {
-            if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
-              isEligible = true;
-            } else {
-              let upC = 0, downC = 0;
-              for (const l of detectedLevels) {
-                if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
-              }
-              isEligible = Math.max(upC, downC) >= formationsMinCascade;
-            }
-          }
-
-          if (wasEligible !== isEligible) {
-            triggerThrottledLoadFormations();
+        } finally {
+          processedCount++;
+          if (scanId === activeScanId) {
+            scanProgressText = `Сканирование: ${processedCount}/${total} (${etaText})`;
+            updateFormationsPagination();
           }
         }
       });
