@@ -4960,15 +4960,19 @@ body {
 }
 
 .drawings-toggle-btn.on {
-    color: #c084fc;
-    background: rgba(168, 85, 247, 0.18);
-    border-color: rgba(168, 85, 247, 0.6);
-    box-shadow: 0 0 10px rgba(168, 85, 247, 0.35);
+    color: #c084fc !important;
+    background: rgba(168, 85, 247, 0.22) !important;
+    border: 1px solid rgba(168, 85, 247, 0.7) !important;
+    box-shadow: 0 0 12px rgba(168, 85, 247, 0.5) !important;
+}
+
+.drawings-toggle-btn.on svg {
+    stroke: #c084fc !important;
 }
 
 .drawings-toggle-btn.on:hover {
-    color: #e9d5ff;
-    background: rgba(168, 85, 247, 0.28);
-    border-color: rgba(168, 85, 247, 0.8);
-    box-shadow: 0 0 14px rgba(168, 85, 247, 0.5);
+    color: #e9d5ff !important;
+    background: rgba(168, 85, 247, 0.32) !important;
+    border-color: rgba(168, 85, 247, 0.9) !important;
+    box-shadow: 0 0 16px rgba(168, 85, 247, 0.65) !important;
 }
