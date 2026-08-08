@@ -198,8 +198,8 @@ function getClampedOffsetX(val) {
   if (!Number.isFinite(val) || candles.length === 0) return 0;
   const PW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const visibleCount = PW / (candleW || 10);
-  const minX = -visibleCount * 0.8;
-  const maxX = Math.max(0, candles.length - Math.min(visibleCount, candles.length) + 5);
+  const minX = -visibleCount * 5;
+  const maxX = candles.length + visibleCount * 5;
   return Math.max(minX, Math.min(maxX, val));
 }
 let candleW = 10;
@@ -4424,7 +4424,7 @@ async function fetchKlines(ex, sym, tf) {
               candles = sanitizeCandles(dataFull);
             }
 
-            if (offsetX === 0) {
+            if (offsetX === 0 && !isDragY && !isDragYScale && !isDragX) {
               offsetX = 0;
               autoFitY = true;
             } else if (centerTs != null && candles.length > 0) {
