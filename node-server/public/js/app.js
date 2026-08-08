@@ -9987,12 +9987,12 @@ window.addEventListener("resize", () => {
         return;
       }
 
-      const batch = eligibleCoins.slice(index, index + 3);
+      const batch = eligibleCoins.slice(index, index + 40);
       index += batch.length;
 
       const rem = total - index;
       const batchesRem = Math.ceil(rem / batch.length);
-      const secTotal = Math.ceil((batchesRem * 200) / 1000);
+      const secTotal = Math.ceil((batchesRem * 5) / 1000);
       const min = Math.floor(secTotal / 60);
       const sec = secTotal % 60;
       const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
@@ -10076,7 +10076,7 @@ window.addEventListener("resize", () => {
 
       await Promise.all(promises);
 
-      setTimeout(nextBatch, 200);
+      setTimeout(nextBatch, 5);
     }
 
     nextBatch();
