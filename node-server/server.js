@@ -1551,10 +1551,14 @@ server.listen(PORT, () => {
 
               // 24/7 Server-side pre-computation of formations levels
               const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
+              const coinKey = `${ex}:${sym}`;
+              if (!cachedTfMaps[tf]) cachedTfMaps[tf] = {};
               if (detectedLvls && detectedLvls.length > 0) {
                 serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedLvls);
+                cachedTfMaps[tf][coinKey] = detectedLvls;
               } else {
                 serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
+                delete cachedTfMaps[tf][coinKey];
               }
             } catch (e) {}
           }
@@ -1564,18 +1568,6 @@ server.listen(PORT, () => {
       patternsCache.sort((a, b) => b.ts - a.ts);
       if (patternsCache.length > 3000) {
         patternsCache = patternsCache.slice(0, 3000);
-      }
-
-      // Pre-assemble cached TF maps for 0ms endpoint response
-      for (const tf of timeframes) {
-        const out = {};
-        for (const [key, lvls] of serverFormationsMap.entries()) {
-          if (key.endsWith(`:${tf}`)) {
-            const parts = key.split(":");
-            out[`${parts[0]}:${parts[1]}`] = lvls;
-          }
-        }
-        cachedTfMaps[tf] = out;
       }
 
       console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);

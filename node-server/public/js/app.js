@@ -9988,7 +9988,7 @@ window.addEventListener("resize", () => {
       if (r.ok) {
         const mapData = await r.json();
         if (scanId !== activeScanId) return;
-        if (mapData && Object.keys(mapData).length > 0) {
+        if (mapData) {
           for (const coinKey in mapData) {
             formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
           }
