@@ -545,6 +545,17 @@ function processTickData(dt) {
       }
     }
   }
+
+  if (screenerView === "multichart" || activeView === "formations") {
+    if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances) && chartInstances.length > 0) {
+      for (let i = 0; i < chartInstances.length; i++) {
+        const inst = chartInstances[i];
+        if (inst && inst.candles && inst.candles.length > 0) {
+          inst.draw();
+        }
+      }
+    }
+  }
 }
 
 function startMcLoop() {
@@ -6569,6 +6580,23 @@ class ChartInstance {
     this.dirty = false;
 
     const last = this.candles[this.candles.length - 1];
+    const cData = coins.get(this.key || `${this.ex}:${this.sym}`);
+    if (cData && last) {
+      const liveP = getDisplayP(cData);
+      if (liveP > 0) {
+        const tfMs = TF_MS[this.tf] || 60000;
+        const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
+        if (expectedStart > last.t) {
+          const newCandle = { t: expectedStart, o: last.c, h: Math.max(last.c, liveP), l: Math.min(last.c, liveP), c: liveP, v: 0 };
+          this.candles.push(newCandle);
+          if (this.candles.length > 1500) this.candles.shift();
+        } else {
+          last.c = liveP;
+          if (liveP > last.h) last.h = liveP;
+          if (liveP < last.l) last.l = liveP;
+        }
+      }
+    }
 
     const dpr = window.devicePixelRatio || 1;
     const cw = this.canvas.clientWidth;
@@ -6610,7 +6638,6 @@ class ChartInstance {
     if (!vis.length) return;
 
     // Fast DOM text update for multichart (since binary protocol bypasses update())
-    const cData = coins.get(`${this.ex}:${this.sym}`);
     if (cData) {
       const dp = getDisplayP(cData);
 
