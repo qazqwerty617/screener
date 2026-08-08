@@ -1019,12 +1019,12 @@ function getSmcData(candles) {
 
     let mitigated = false;
     let endIdx = numCandles - 1;
-    for (let k = obCandleIdx + 1; k < numCandles; k++) {
+    for (let k = breakIdx + 1; k < numCandles; k++) {
       const c = candles[k];
       if (isBull) {
-        if (c.l <= obC.h) { mitigated = true; endIdx = k; break; }
+        if (c.l <= obC.l + (obC.h - obC.l) * 0.3) { mitigated = true; endIdx = k; break; }
       } else {
-        if (c.h >= obC.l) { mitigated = true; endIdx = k; break; }
+        if (c.h >= obC.h - (obC.h - obC.l) * 0.3) { mitigated = true; endIdx = k; break; }
       }
     }
 
