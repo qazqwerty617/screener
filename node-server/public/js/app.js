@@ -937,7 +937,7 @@ function calcCVD(data) {
 }
 
 function getSmcData(candles) {
-  if (!candles || candles.length < 15) return null;
+  if (!candles || candles.length < 20) return null;
   const lastC = candles[candles.length - 1].c;
   const lastT = candles[candles.length - 1].t;
   const key = `smc_${candles.length}_${lastT}_${lastC}`;
@@ -946,71 +946,135 @@ function getSmcData(candles) {
   }
 
   const numCandles = candles.length;
-  const startVisIdx = Math.max(0, numCandles - 350);
-  const minImpulseRatio = 0.006;
+  const startVisIdx = Math.max(0, numCandles - 400);
 
-  // 1. Order Blocks
-  const orderBlocks = [];
-  for (let i = Math.max(1, startVisIdx); i < numCandles - 3; i++) {
-    const cCurr = candles[i];
-    const isBear = cCurr.c < cCurr.o;
-    const isBull = cCurr.c > cCurr.o;
+  // 1. Major Swing Highs and Lows (Fractals, window=3)
+  const W = 3;
+  const swings = [];
+  for (let i = Math.max(W, startVisIdx); i < numCandles - W; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = i - W; j <= i + W; j++) {
+      if (j === i) continue;
+      if (candles[j].h >= candles[i].h) isHigh = false;
+      if (candles[j].l <= candles[i].l) isLow = false;
+    }
+    if (isHigh) swings.push({ idx: i, price: candles[i].h, type: "high" });
+    if (isLow)  swings.push({ idx: i, price: candles[i].l, type: "low" });
+  }
 
-    if (isBear) {
-      const nextHigh = Math.max(candles[i + 1].h, candles[i + 2].h, candles[i + 3].h);
-      const impulse = (nextHigh - cCurr.l) / cCurr.l;
-      if (impulse >= minImpulseRatio) {
-        let mitigated = false;
-        for (let k = i + 3; k < numCandles; k++) {
-          if (candles[k].l < cCurr.l) {
-            mitigated = true;
-            break;
-          }
-        }
-        if (!mitigated) {
-          orderBlocks.push({
-            type: "bull",
-            startIdx: i,
-            high: cCurr.h,
-            low: cCurr.l
-          });
-        }
-      }
+  // 2. Textbook BOS & CHoCH (Market Structure)
+  const structureBreaks = [];
+  let currentTrend = null; // 'bull' or 'bear'
+  let lastMajorHigh = null;
+  let lastMajorLow = null;
+
+  for (let i = Math.max(0, startVisIdx); i < numCandles; i++) {
+    const c = candles[i];
+
+    if (lastMajorHigh && c.c > lastMajorHigh.price) {
+      const isChoch = currentTrend === 'bear';
+      structureBreaks.push({
+        type: isChoch ? "CHoCH ▲" : "BOS ▲",
+        startIdx: lastMajorHigh.idx,
+        breakIdx: i,
+        price: lastMajorHigh.price,
+        isBull: true
+      });
+      currentTrend = 'bull';
+      lastMajorHigh = null;
+    } else if (lastMajorLow && c.c < lastMajorLow.price) {
+      const isChoch = currentTrend === 'bull';
+      structureBreaks.push({
+        type: isChoch ? "CHoCH ▼" : "BOS ▼",
+        startIdx: lastMajorLow.idx,
+        breakIdx: i,
+        price: lastMajorLow.price,
+        isBull: false
+      });
+      currentTrend = 'bear';
+      lastMajorLow = null;
     }
 
-    if (isBull) {
-      const nextLow = Math.min(candles[i + 1].l, candles[i + 2].l, candles[i + 3].l);
-      const impulse = (cCurr.h - nextLow) / cCurr.h;
-      if (impulse >= minImpulseRatio) {
-        let mitigated = false;
-        for (let k = i + 3; k < numCandles; k++) {
-          if (candles[k].h > cCurr.h) {
-            mitigated = true;
-            break;
-          }
-        }
-        if (!mitigated) {
-          orderBlocks.push({
-            type: "bear",
-            startIdx: i,
-            high: cCurr.h,
-            low: cCurr.l
-          });
-        }
-      }
+    const foundSwing = swings.find(s => s.idx === i - W);
+    if (foundSwing) {
+      if (foundSwing.type === 'high') lastMajorHigh = foundSwing;
+      if (foundSwing.type === 'low') lastMajorLow = foundSwing;
     }
   }
 
-  // 2. Fair Value Gaps (FVG)
+  // 3. INSTITUTIONAL QUALITY ORDER BLOCKS (OB - Unmitigated with Score Engine 0-100 pts)
+  const orderBlocks = [];
+  for (const sb of structureBreaks) {
+    const breakIdx = sb.breakIdx;
+    const isBull = sb.isBull;
+
+    let obCandleIdx = -1;
+    for (let k = breakIdx - 1; k >= Math.max(0, breakIdx - 15); k--) {
+      const c = candles[k];
+      if (isBull && c.c < c.o) { obCandleIdx = k; break; }
+      if (!isBull && c.c > c.o) { obCandleIdx = k; break; }
+    }
+    if (obCandleIdx === -1) obCandleIdx = Math.max(0, breakIdx - 1);
+    const obC = candles[obCandleIdx];
+
+    let mitigated = false;
+    let endIdx = numCandles - 1;
+    for (let k = obCandleIdx + 1; k < numCandles; k++) {
+      const c = candles[k];
+      if (isBull) {
+        if (c.l <= obC.h) { mitigated = true; endIdx = k; break; }
+      } else {
+        if (c.h >= obC.l) { mitigated = true; endIdx = k; break; }
+      }
+    }
+
+    if (!mitigated) {
+      // INSTITUTIONAL QUALITY SCORE ENGINE (0-100 pts)
+      let score = 50;
+
+      if (sb.type.includes("CHoCH")) score += 20;
+      else score += 10;
+
+      const next4High = Math.max(...candles.slice(obCandleIdx + 1, Math.min(numCandles, obCandleIdx + 6)).map(c => c.h));
+      const next4Low  = Math.min(...candles.slice(obCandleIdx + 1, Math.min(numCandles, obCandleIdx + 6)).map(c => c.l));
+      const impulsePct = isBull ? (next4High - obC.h) / obC.h : (obC.l - next4Low) / obC.l;
+      if (impulsePct >= 0.015) score += 25;
+      else if (impulsePct >= 0.008) score += 15;
+      else score += 5;
+
+      const hasFvg = candles.slice(obCandleIdx + 1, Math.min(numCandles - 1, obCandleIdx + 4)).some((c, idx) => {
+        const cIdx = obCandleIdx + 1 + idx;
+        if (cIdx < 2 || cIdx >= numCandles) return false;
+        return isBull ? (candles[cIdx].l > candles[cIdx - 2].h) : (candles[cIdx].h < candles[cIdx - 2].l);
+      });
+      if (hasFvg) score += 20;
+
+      const avgVol = candles.slice(Math.max(0, obCandleIdx - 10), obCandleIdx).reduce((a, b) => a + (b.v || 0), 0) / 10;
+      if (obC.v && avgVol && obC.v > avgVol * 1.25) score += 10;
+
+      score = Math.min(99, score);
+
+      orderBlocks.push({
+        type: isBull ? "bull" : "bear",
+        startIdx: obCandleIdx,
+        endIdx,
+        high: obC.h,
+        low: obC.l,
+        score
+      });
+    }
+  }
+
+  // 4. Textbook Fair Value Gaps (FVG - Unfilled with 30% Touch Mitigation)
   const fvgs = [];
   for (let i = Math.max(2, startVisIdx); i < numCandles; i++) {
     const c1 = candles[i - 2];
     const c3 = candles[i];
 
     if (c3.l > c1.h) {
-      const gapSize = (c3.l - c1.h) / c1.h;
-      if (gapSize >= 0.0015) {
-        const fillThreshold = c3.l - (c3.l - c1.h) * 0.3; // Filled/mitigated when price retraces 30% into FVG
+      const gapPct = (c3.l - c1.h) / c1.h;
+      if (gapPct >= 0.0015) {
+        const fillThreshold = c3.l - (c3.l - c1.h) * 0.3;
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
           if (candles[k].l <= fillThreshold) {
@@ -1022,6 +1086,7 @@ function getSmcData(candles) {
           fvgs.push({
             type: "bull",
             startIdx: i - 2,
+            endIdx: numCandles - 1,
             topPrice: c3.l,
             botPrice: c1.h
           });
@@ -1030,9 +1095,9 @@ function getSmcData(candles) {
     }
 
     if (c3.h < c1.l) {
-      const gapSize = (c1.l - c3.h) / c3.h;
-      if (gapSize >= 0.0015) {
-        const fillThreshold = c3.h + (c1.l - c3.h) * 0.3; // Filled/mitigated when price retraces 30% into FVG
+      const gapPct = (c1.l - c3.h) / c3.h;
+      if (gapPct >= 0.0015) {
+        const fillThreshold = c3.h + (c1.l - c3.h) * 0.3;
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
           if (candles[k].h >= fillThreshold) {
@@ -1044,6 +1109,7 @@ function getSmcData(candles) {
           fvgs.push({
             type: "bear",
             startIdx: i - 2,
+            endIdx: numCandles - 1,
             topPrice: c1.l,
             botPrice: c3.h
           });
@@ -1052,47 +1118,6 @@ function getSmcData(candles) {
     }
   }
 
-  // 3. Market Structure (BOS / CHoCH)
-  const swings = [];
-  for (let i = Math.max(2, startVisIdx); i < numCandles - 2; i++) {
-    const isHigh = candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
-                   candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h;
-    const isLow  = candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
-                   candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l;
-    if (isHigh) swings.push({ idx: i, price: candles[i].h, type: "high" });
-    if (isLow)  swings.push({ idx: i, price: candles[i].l, type: "low" });
-  }
-
-  const structureBreaks = [];
-  for (let sIdx = 0; sIdx < swings.length; sIdx++) {
-    const sw = swings[sIdx];
-    for (let k = sw.idx + 1; k < numCandles; k++) {
-      if (sw.type === "high" && candles[k].c > sw.price) {
-        const isChoch = sIdx > 0 && swings[sIdx - 1].type === "low";
-        structureBreaks.push({
-          type: isChoch ? "CHoCH ▲" : "BOS ▲",
-          startIdx: sw.idx,
-          breakIdx: k,
-          price: sw.price,
-          isBull: true
-        });
-        break;
-      }
-      if (sw.type === "low" && candles[k].c < sw.price) {
-        const isChoch = sIdx > 0 && swings[sIdx - 1].type === "high";
-        structureBreaks.push({
-          type: isChoch ? "CHoCH ▼" : "BOS ▼",
-          startIdx: sw.idx,
-          breakIdx: k,
-          price: sw.price,
-          isBull: false
-        });
-        break;
-      }
-    }
-  }
-
-  // 4. Liquidity Pools
   // 5. Liquidity Pools (Unswept EQH / EQL)
   const liquidityPools = [];
   const majorHighs = swings.filter(s => s.type === 'high');
@@ -1177,16 +1202,16 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
     ctx.restore();
   };
 
-  // 1. UNMITIGATED ORDER BLOCKS (OB) - Filter to 2 closest Bull & 2 closest Bear
+  // 1. UNMITIGATED ORDER BLOCKS (OB) - Ranked by Quality Score (0-100 pts)
   if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
     const bullOBs = smcData.orderBlocks
       .filter(ob => ob.type === "bull" && ob.high <= lastPrice)
-      .sort((a, b) => b.high - a.high)
+      .sort((a, b) => b.score - a.score || b.high - a.high)
       .slice(0, 2);
 
     const bearOBs = smcData.orderBlocks
       .filter(ob => ob.type === "bear" && ob.low >= lastPrice)
-      .sort((a, b) => a.low - b.low)
+      .sort((a, b) => b.score - a.score || a.low - b.low)
       .slice(0, 2);
 
     const activeOBs = [...bullOBs, ...bearOBs];
@@ -1210,13 +1235,13 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
         ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(38, 201, 122, 0.75)";
         ctx.strokeRect(x1, yTop, boxW, h);
-        drawSmcPill("OB (Bull)", x1 + 35, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
+        drawSmcPill(`OB (Bull) ⭐ ${ob.score}%`, x1 + 55, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
       } else {
         ctx.fillStyle = "rgba(255, 69, 96, 0.14)";
         ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(255, 69, 96, 0.75)";
         ctx.strokeRect(x1, yTop, boxW, h);
-        drawSmcPill("OB (Bear)", x1 + 35, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
+        drawSmcPill(`OB (Bear) ⭐ ${ob.score}%`, x1 + 55, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
       }
       ctx.restore();
     }
