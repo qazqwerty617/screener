@@ -6480,15 +6480,6 @@ class ChartInstance {
       const rFull = await fetch(`/api/klines?ex=${this.ex}&sym=${this.sym}&tf=${this.tf}&lite=0`);
       const dataFull = await rFull.json();
       if (Array.isArray(dataFull) && dataFull.length > 0) {
-        let centerTs = null;
-        const w = this.canvas ? (this.canvas.clientWidth || 300) : 300;
-        const PW = Math.max(10, w - 60);
-        const n = PW / (this.candleW || 8);
-        if (this.candles.length > 0) {
-          const curViewStart = this.candles.length - n - this.offsetX;
-          centerTs = getTimeFromIdx(curViewStart + n / 2, this.candles);
-        }
-
         const flat = [];
         if (typeof dataFull[0] === 'number') {
           for (let i = 0; i < dataFull.length; i += 6) {
@@ -6499,12 +6490,9 @@ class ChartInstance {
           this.candles = sanitizeCandles(dataFull);
         }
 
-        if (centerTs != null && this.candles.length > 0) {
-          const newCenterIdx = getIdxFromTime(centerTs, this.candles);
-          const newViewStart = newCenterIdx - n / 2;
-          const minOffsetX = -(n - 5);
-          const maxOffsetX = this.candles.length - 1;
-          this.offsetX = Math.max(minOffsetX, Math.min(maxOffsetX, this.candles.length - n - newViewStart));
+        if (this.offsetX === 0 || this.offsetX < 10) {
+          this.offsetX = 0;
+          this.autoFitY = true;
         }
 
         this.levels = window.detectChartLevelsFn(this.candles);
