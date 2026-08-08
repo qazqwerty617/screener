@@ -5645,18 +5645,19 @@ function getAxisTextColor() {
   return hexToRgba(color, opacity);
 }
 
-function hexToRgba(hex, opacity) {
+function hexToRgba(hex, opacity = 100) {
+  if (!hex || typeof hex !== 'string') return `rgba(255, 255, 255, ${(opacity || 100) / 100})`;
   let r = 0, g = 0, b = 0;
   if (hex.length === 4) {
-    r = parseInt(hex[1] + hex[1], 16);
-    g = parseInt(hex[2] + hex[2], 16);
-    b = parseInt(hex[3] + hex[3], 16);
-  } else if (hex.length === 7) {
-    r = parseInt(hex.substring(1, 3), 16);
-    g = parseInt(hex.substring(3, 5), 16);
-    b = parseInt(hex.substring(5, 7), 16);
+    r = parseInt(hex[1] + hex[1], 16) || 0;
+    g = parseInt(hex[2] + hex[2], 16) || 0;
+    b = parseInt(hex[3] + hex[3], 16) || 0;
+  } else if (hex.length >= 7) {
+    r = parseInt(hex.substring(1, 3), 16) || 0;
+    g = parseInt(hex.substring(3, 5), 16) || 0;
+    b = parseInt(hex.substring(5, 7), 16) || 0;
   }
-  return `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+  return `rgba(${r}, ${g}, ${b}, ${(opacity !== undefined ? opacity : 100) / 100})`;
 }
 
 function updateScreenerBgColor(color, save = true) {
@@ -6436,20 +6437,24 @@ class ChartInstance {
     const key = `${this.ex}|${this.sym}|${this.tf}`;
     const cached = KLINES_CACHE.get(key);
 
-    if (cached && Date.now() - cached.ts < 300000) {
+    if (cached && Date.now() - cached.ts < 300000 && Array.isArray(cached.data) && cached.data.length > 0) {
+      let candList = [];
       if (typeof cached.data[0] === 'number') {
         const flat = [];
         for (let i = 0; i < cached.data.length; i += 6) {
           flat.push({ t: cached.data[i], o: cached.data[i + 1], h: cached.data[i + 2], l: cached.data[i + 3], c: cached.data[i + 4], v: cached.data[i + 5] });
         }
-        this.candles = sanitizeCandles(flat);
+        candList = sanitizeCandles(flat);
       } else {
-        this.candles = sanitizeCandles(cached.data);
+        candList = sanitizeCandles(cached.data);
       }
-      this.levels = window.detectChartLevelsFn(this.candles);
-      if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
-      this.draw(true);
-      return;
+      if (candList.length > 0) {
+        this.candles = candList;
+        this.levels = window.detectChartLevelsFn(this.candles);
+        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
+        this.draw(true);
+        return;
+      }
     }
 
     try {
@@ -6647,16 +6652,23 @@ class ChartInstance {
       gridPrice += gridStep;
     }
 
+    const defaultCs = {
+      body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
+      border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
+      wick: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 }
+    };
+    const rawCs = window.candleSettings || {};
+    const cs = {
+      body: { ...defaultCs.body, ...(rawCs.body || {}) },
+      border: { ...defaultCs.border, ...(rawCs.border || {}) },
+      wick: { ...defaultCs.wick, ...(rawCs.wick || {}) }
+    };
+
     vis.forEach((c, i) => {
       const rawX = (s + i - viewStart) * candleWidth + candleWidth / 2;
       if (rawX > PW + candleWidth) return;
       const up = c.c >= c.o;
       const side = up ? "up" : "down";
-      const cs = window.candleSettings || {
-        body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
-        border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
-        wick: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 }
-      };
 
       const yH = toY(c.h), yL = toY(c.l);
       const yO = toY(c.o), yC = toY(c.c);
@@ -7125,65 +7137,68 @@ class ChartInstance {
           const drawingsList = JSON.parse(rawSaved);
           if (Array.isArray(drawingsList) && drawingsList.length > 0) {
             ctx.save();
-            ctx.beginPath();
-            ctx.rect(0, 0, PW, ch);
-            ctx.clip();
+            try {
+              ctx.beginPath();
+              ctx.rect(0, 0, PW, ch);
+              ctx.clip();
 
-            const getX = (t) => {
-              if (t > 1000000000 && this.candles.length > 0) {
-                const idx = getIdxFromTime(t, this.candles);
-                return (idx - s + futureGap) * candleWidth + candleWidth / 2;
-              }
-              return (t - s + futureGap) * candleWidth + candleWidth / 2;
-            };
-
-            drawingsList.forEach((d) => {
-              if (!d || d.type === "ruler") return;
-              const x1 = getX(d.t1), y1 = toY(d.p1);
-              const x2 = getX(d.t2), y2 = toY(d.p2);
-              const baseCol = d.color || getToolColor(d.type) || "#facc15";
-
-              ctx.lineWidth = 1.6;
-              ctx.setLineDash([]);
-              ctx.strokeStyle = baseCol;
-
-              if (d.type === "line") {
-                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-              } else if (d.type === "ray") {
-                const dx = x2 - x1, dy = y2 - y1;
-                const mag = Math.sqrt(dx * dx + dy * dy);
-                if (mag >= 0.01) {
-                  const big = Math.max(PW, ch) * 4;
-                  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + (dx / mag) * big, y1 + (dy / mag) * big); ctx.stroke();
+              const getX = (t) => {
+                if (t > 1000000000 && this.candles.length > 0) {
+                  const idx = getIdxFromTime(t, this.candles);
+                  return (idx - s + futureGap) * candleWidth + candleWidth / 2;
                 }
-              } else if (d.type === "h-ray") {
-                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(PW, y1); ctx.stroke();
-              } else if (d.type === "rect") {
-                const left = Math.min(x1, x2), top = Math.min(y1, y2);
-                const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
-                ctx.fillStyle = hexToRgba(baseCol, 15);
-                ctx.fillRect(left, top, width, height);
-                ctx.strokeRect(left, top, width, height);
-              } else if (d.type === "brush" && d.points && d.points.length > 1) {
-                ctx.beginPath(); ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = d.lineWidth || 2;
-                ctx.moveTo(getX(d.points[0].t), toY(d.points[0].p));
-                for (let k = 1; k < d.points.length; k++) {
-                  ctx.lineTo(getX(d.points[k].t), toY(d.points[k].p));
+                return (t - s + futureGap) * candleWidth + candleWidth / 2;
+              };
+
+              drawingsList.forEach((d) => {
+                if (!d || d.type === "ruler") return;
+                const x1 = getX(d.t1), y1 = toY(d.p1);
+                const x2 = getX(d.t2), y2 = toY(d.p2);
+                const baseCol = d.color || getToolColor(d.type) || "#facc15";
+
+                ctx.lineWidth = 1.6;
+                ctx.setLineDash([]);
+                ctx.strokeStyle = baseCol;
+
+                if (d.type === "line") {
+                  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+                } else if (d.type === "ray") {
+                  const dx = x2 - x1, dy = y2 - y1;
+                  const mag = Math.sqrt(dx * dx + dy * dy);
+                  if (mag >= 0.01) {
+                    const big = Math.max(PW, ch) * 4;
+                    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + (dx / mag) * big, y1 + (dy / mag) * big); ctx.stroke();
+                  }
+                } else if (d.type === "h-ray") {
+                  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(PW, y1); ctx.stroke();
+                } else if (d.type === "rect") {
+                  const left = Math.min(x1, x2), top = Math.min(y1, y2);
+                  const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
+                  ctx.fillStyle = hexToRgba(baseCol, 15);
+                  ctx.fillRect(left, top, width, height);
+                  ctx.strokeRect(left, top, width, height);
+                } else if (d.type === "brush" && d.points && d.points.length > 1) {
+                  ctx.beginPath(); ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = d.lineWidth || 2;
+                  ctx.moveTo(getX(d.points[0].t), toY(d.points[0].p));
+                  for (let k = 1; k < d.points.length; k++) {
+                    ctx.lineTo(getX(d.points[k].t), toY(d.points[k].p));
+                  }
+                  ctx.stroke();
+                } else if (d.type === "fibgrid") {
+                  const fibs = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+                  const left = Math.min(x1, x2), right = Math.max(x1, x2);
+                  fibs.forEach((level) => {
+                    const y = y1 + (y2 - y1) * level;
+                    ctx.strokeStyle = hexToRgba(baseCol, level === 0.5 ? 90 : 60);
+                    ctx.lineWidth = level === 0.5 ? 1.5 : 1;
+                    ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+                  });
+                  ctx.strokeRect(left, Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
                 }
-                ctx.stroke();
-              } else if (d.type === "fibgrid") {
-                const fibs = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
-                const left = Math.min(x1, x2), right = Math.max(x1, x2);
-                fibs.forEach((level) => {
-                  const y = y1 + (y2 - y1) * level;
-                  ctx.strokeStyle = hexToRgba(baseCol, level === 0.5 ? 90 : 60);
-                  ctx.lineWidth = level === 0.5 ? 1.5 : 1;
-                  ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
-                });
-                ctx.strokeRect(left, Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
-              }
-            });
-            ctx.restore();
+              });
+            } finally {
+              ctx.restore();
+            }
           }
         }
       } catch (_) {}
