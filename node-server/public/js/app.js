@@ -1551,7 +1551,6 @@ function drawChart() {
   if (autoFitY || viewMn == null) {
     viewMn = autoMn;
     viewMx = autoMx;
-    autoFitY = false;
   }
   curPH = PH;
 
@@ -3341,10 +3340,6 @@ canvas.addEventListener("mousedown", (e) => {
     }
     // Pan
     isDragX = true; dragStartX = e.clientX; dragOffX = offsetX;
-    if (viewMn != null && viewMx != null) {
-      isDragY = true; dragStartY = e.clientY; autoFitY = false;
-      dragMnOff = viewMn; dragMxOff = viewMx;
-    }
   }
 });
 
