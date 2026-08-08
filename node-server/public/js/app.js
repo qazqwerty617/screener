@@ -1,6 +1,6 @@
 "use strict";
 
-// ═══ State ═══════════════════════════════════════════════════════════════════
+// тХРтХРтХР State тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 window.DEBUG_LEVELS = false;
 const coins = new Map();
 const dirty = new Set();
@@ -38,7 +38,7 @@ function pearsonCorrelationAbs(x, y) {
 }
 
 function updatePriceHistory() {
-  // ─── Verified BTC key per exchange (from server tickers.set() calls) ───
+  // тФАтФАтФА Verified BTC key per exchange (from server tickers.set() calls) тФАтФАтФА
   const BTC_KEY = {
     BN: "BN:BTCUSDT",
     BB: "BB:BTCUSDT",
@@ -54,13 +54,13 @@ function updatePriceHistory() {
   };
 
   for (const [key, c] of coins.entries()) {
-    // ─── 1. Price history for correlation ───
+    // тФАтФАтФА 1. Price history for correlation тФАтФАтФА
     let hist = priceHistories.get(key);
     if (!hist) { hist = []; priceHistories.set(key, hist); }
     hist.push(c.p);
     if (hist.length > 120) hist.shift();
 
-    // ─── 2. Correlation vs BTC (percentage-return Pearson) ───
+    // тФАтФАтФА 2. Correlation vs BTC (percentage-return Pearson) тФАтФАтФА
     // Try exchange-native BTC first, fall back to Binance BTC
     const btcKey = BTC_KEY[c.ex];
     let btcHist = (btcKey && btcKey !== key) ? priceHistories.get(btcKey) : null;
@@ -222,7 +222,7 @@ let editingFibDrawing = null;
 let brushLineWidth = 2;       // brush line width in pixels (1-10)
 let brushDrawThrottle = null;  // throttle for brush drawing requests
 
-// ── Direct Trade WS (Zero-Lag Pricing) ───────────────────────────────────────
+// тФАтФА Direct Trade WS (Zero-Lag Pricing) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 let activeTradeWs = null;
 function updateActiveTradeStream(ex, sym) {
   try {
@@ -433,9 +433,9 @@ const KLINES_CACHE_TTL_MS = 15000;
 const KLINES_CACHE = new Map();
 let klFetchToken = 0;
 
-// ═══ 240fps Engine via MessageChannel ════════════════════════════════════════
+// тХРтХРтХР 240fps Engine via MessageChannel тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 // MessageChannel posts fire faster than setTimeout(0) and are not throttled
-// by the browser's 60fps rAF budget — giving us ~240fps logic ticks.
+// by the browser's 60fps rAF budget тАФ giving us ~240fps logic ticks.
 let INTERP_SPEED = 100.0; // catch-up speed per second (100.0 = Cinematic)
 const DEFAULT_INTERP_SPEED = 30.0;
 const INTERP_SMOOTH_FACTOR = 0.85; // exponential smoothing for ultra-smooth price movement
@@ -447,7 +447,7 @@ let lastTickTs = 0;
 let mcRunning = false;
 let lastVltRankTs = 0;
 
-// ── Clean V-Sync Aligned High-Fidelity Lerp Interpolator ( Butter-Smooth Price Motion ) ──
+// тФАтФА Clean V-Sync Aligned High-Fidelity Lerp Interpolator ( Butter-Smooth Price Motion ) тФАтФА
 function processTickData(dt) {
   const clampedDt = Math.min(dt, 0.05);
 
@@ -466,10 +466,18 @@ function processTickData(dt) {
         c.displayP = c.p;
         keysToRemove.push(key);
       } else {
-        // High-frequency responsive exponential easing (1 - e^(-28 * dt))
-        const factor = 1 - Math.exp(-28 * clampedDt);
+        // Ultra-responsive smooth exponential lerp (fast & buttery smooth 120 FPS Glide)
+        const factor = 1 - Math.exp(-35 * clampedDt);
         c.displayP += diff * factor;
         dirty.add(key);
+
+        if (key === `${activeEx}:${activeSym}` && candles.length > 0) {
+          const lastC = candles[candles.length - 1];
+          lastC.c = c.displayP;
+          if (c.displayP > lastC.h) lastC.h = c.displayP;
+          if (c.displayP < lastC.l) lastC.l = c.displayP;
+          chartNeedsDraw = true;
+        }
       }
     }
     keysToRemove.forEach(k => interpActive.delete(k));
@@ -569,18 +577,18 @@ const TF_MS = {
   "1w": 604800000,
 };
 
-// ═══ Utils ════════════════════════════════════════════════════════════════════
+// тХРтХРтХР Utils тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 window.onerror = (m, s, l, c, e) => {
   console.error("Global error:", m, "at", s, ":", l);
   if (document.getElementById("lt")) {
-    document.getElementById("lt").textContent = "Ошибка: " + m;
+    document.getElementById("lt").textContent = "╨Ю╤И╨╕╨▒╨║╨░: " + m;
   }
 };
 
 const $ = (id) => document.getElementById(id);
 
 const fP = (n) => {
-  if (!n || isNaN(n)) return "–";
+  if (!n || isNaN(n)) return "тАУ";
   if (n >= 1000) {
     return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
@@ -599,7 +607,7 @@ const fP = (n) => {
 };
 
 const fV = (n) => {
-  if (!n || isNaN(n)) return "–";
+  if (!n || isNaN(n)) return "тАУ";
   if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(0) + "K";
@@ -607,7 +615,7 @@ const fV = (n) => {
 };
 
 const fC = (n) => {
-  if (n == null || isNaN(n)) return "–";
+  if (n == null || isNaN(n)) return "тАУ";
   return (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
 };
 
@@ -624,11 +632,11 @@ function getOiRawPct(c) {
   if (!c) return 0;
   if (Number.isFinite(c.oiPct)) return clamp(c.oiPct, 1, 100);
 
-  // Оборачиваемость ОИ ("по-честному"): 
-  // Чтобы не было такого, что 30% монет бьются в потолок 100%, мы сильно ужесточаем фильтр.
-  // Теперь проверяется оборачиваемость ОИ за 1 час (c.v / 24) вместо 4 часов.
-  // Чтобы выбить 100% метрики, монета должна проторговать ВЕСЬ свой открытый интерес в течение ОДНОГО часа!
-  // Это оставит на 100% только единичные, самые мощно пампящиеся монеты.
+  // ╨Ю╨▒╨╛╤А╨░╤З╨╕╨▓╨░╨╡╨╝╨╛╤Б╤В╤М ╨Ю╨Ш ("по-╤З╨╡╤Б╤В╨╜╨╛╨╝╤Г"): 
+  // ╨з╤В╨╛╨▒╤Л не ╨▒╤Л╨╗╨╛ ╤В╨░╨║╨╛╨│╨╛, ╤З╤В╨╛ 30% ╨╝╨╛╨╜╨╡╤В ╨▒╤М╤О╤В╤Б╤П ╨▓ ╨┐╨╛╤В╨╛╨╗╨╛╨║ 100%, ╨╝╤Л ╤Б╨╕╨╗╤М╨╜╨╛ ╤Г╨╢╨╡╤Б╤В╨╛╤З╨░╨╡╨╝ ╤Д╨╕╨╗╤М╤В╤А.
+  // ╨в╨╡╨┐╨╡╤А╤М ╨┐╤А╨╛╨▓╨╡╤А╤П╨╡╤В╤Б╤П ╨╛╨▒╨╛╤А╨░╤З╨╕╨▓╨░╨╡╨╝╨╛╤Б╤В╤М ╨Ю╨Ш за 1 ╤З╨░╤Б (c.v / 24) ╨▓╨╝╨╡╤Б╤В╨╛ 4 ╤З╨░╤Б╨╛╨▓.
+  // ╨з╤В╨╛╨▒╤Л ╨▓╤Л╨▒╨╕╤В╤М 100% ╨╝╨╡╤В╤А╨╕╨║╨╕, ╨╝╨╛╨╜╨╡╤В╨░ должна ╨┐╤А╨╛╤В╨╛╤А╨│╨╛╨▓╨░╤В╤М ╨Т╨Х╨б╨м ╤Б╨▓╨╛╨╣ ╨╛╤В╨║╤А╤Л╤В╤Л╨╣ ╨╕╨╜╤В╨╡╤А╨╡╤Б ╨▓ ╤В╨╡╤З╨╡╨╜╨╕╨╡ ╨Ю╨Ф╨Э╨Ю╨У╨Ю ╤З╨░╤Б╨░!
+  // ╨н╤В╨╛ ╨╛╤Б╤В╨░╨▓╨╕╤В на 100% ╤В╨╛╨╗╤М╨║╨╛ ╨╡╨┤╨╕╨╜╨╕╤З╨╜╤Л╨╡, ╤Б╨░╨╝╤Л╨╡ ╨╝╨╛╤Й╨╜╨╛ ╨┐╨░╨╝╨┐╤П╤Й╨╕╨╡╤Б╤П ╨╝╨╛╨╜╨╡╤В╤Л.
   if (Number.isFinite(c.oi) && c.oi > 0 && c.v > 0) return clamp(((c.v / 24) / c.oi) * 100, 1, 100);
 
   return 0;
@@ -639,8 +647,8 @@ function getOiPct(c) {
 
   if (c.oi && c.oi > 0) return getOiRawPct(c);
 
-  // Универсальный прокси ОИ для бирж без нативных данных (Asterdex, Binance, BingX и т.д.)
-  // Используем усреднение по топовым биржам, которые отдают ОИ по сокетам
+  // ╨г╨╜╨╕╨▓╨╡╤А╤Б╨░╨╗╤М╨╜╤Л╨╣ ╨┐╤А╨╛╨║╤Б╨╕ ╨Ю╨Ш ╨┤╨╗╤П ╨▒╨╕╤А╨╢ без ╨╜╨░╤В╨╕╨▓╨╜╤Л╤Е ╨┤╨░╨╜╨╜╤Л╤Е (Asterdex, Binance, BingX ╨╕ ╤В.╨┤.)
+  // ╨Ш╤Б╨┐╨╛╨╗╤М╨╖╤Г╨╡╨╝ ╤Г╤Б╤А╨╡╨┤╨╜╨╡╨╜╨╕╨╡ по ╤В╨╛╨┐╨╛╨▓╤Л╨╝ ╨▒╨╕╤А╨╢╨░╨╝, ╨║╨╛╤В╨╛╤А╤Л╨╡ ╨╛╤В╨┤╨░╤О╤В ╨Ю╨Ш по ╤Б╨╛╨║╨╡╤В╨░╨╝
   const bbCoin = coins.get("BB:" + c.base + "USDT");
   const mxCoin = coins.get("MX:" + c.base + "_USDT");
   const gtCoin = coins.get("GT:" + c.base + "_USDT");
@@ -663,7 +671,7 @@ function getOiTone(oiPct) {
   return "mid";
 }
 
-// ═══ Chart ════════════════════════════════════════════════════════════════════
+// тХРтХРтХР Chart тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 const canvas = $("chart-canvas"),
   ctx = canvas.getContext("2d");
 const volCv = $("vol-canvas"),
@@ -696,7 +704,7 @@ function fTime(ts) {
   return h + ":" + m;
 }
 
-// ─── Chart draw helpers ──────────────────────────────────────────────────────
+// тФАтФАтФА Chart draw helpers тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function calcNiceStep(range, targetCount) {
   const rough = range / Math.max(targetCount, 1);
   const mag = Math.pow(10, Math.floor(Math.log10(rough)));
@@ -723,7 +731,7 @@ function requestDraw() {
   chartNeedsDraw = true;
 }
 
-// ── Indicator Calculations (Memoized for max 120fps smooth performance) ──
+// тФАтФА Indicator Calculations (Memoized for max 120fps smooth performance) тФАтФА
 function clearCandleCaches(data) {
   if (data && data._cache) delete data._cache;
 }
@@ -731,8 +739,10 @@ function clearCandleCaches(data) {
 function calcEMA(data, period) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = `ema_${period}`;
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   const k = 2 / (period + 1);
   let ema = new Array(data.length);
@@ -741,6 +751,8 @@ function calcEMA(data, period) {
     ema[i] = data[i].c * k + ema[i - 1] * (1 - k);
   }
   ema._len = data.length;
+  ema._lastC = lastC;
+  ema._lastT = lastT;
   data._cache[key] = ema;
   return ema;
 }
@@ -748,8 +760,10 @@ function calcEMA(data, period) {
 function calcBB(data, period = 20, stdDevMult = 2) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = `bb_${period}_${stdDevMult}`;
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   let bb = new Array(data.length);
   if (data.length < period) {
@@ -774,6 +788,8 @@ function calcBB(data, period = 20, stdDevMult = 2) {
     }
   }
   bb._len = data.length;
+  bb._lastC = lastC;
+  bb._lastT = lastT;
   data._cache[key] = bb;
   return bb;
 }
@@ -781,8 +797,10 @@ function calcBB(data, period = 20, stdDevMult = 2) {
 function calcVWAP(data) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = "vwap";
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   let vwap = new Array(data.length);
   let sumPV = 0, sumV = 0;
@@ -793,6 +811,8 @@ function calcVWAP(data) {
     vwap[i] = sumV > 0 ? sumPV / sumV : tp;
   }
   vwap._len = data.length;
+  vwap._lastC = lastC;
+  vwap._lastT = lastT;
   data._cache[key] = vwap;
   return vwap;
 }
@@ -800,8 +820,10 @@ function calcVWAP(data) {
 function calcRSI(data, period = 14) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = `rsi_${period}`;
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   let rsi = new Array(data.length).fill(50);
   if (data.length > period) {
@@ -821,6 +843,8 @@ function calcRSI(data, period = 14) {
     }
   }
   rsi._len = data.length;
+  rsi._lastC = lastC;
+  rsi._lastT = lastT;
   data._cache[key] = rsi;
   return rsi;
 }
@@ -895,13 +919,210 @@ function calcCVD(data) {
   return cvd;
 }
 
+function getSmcData(candles) {
+  if (!candles || candles.length < 15) return null;
+  const lastC = candles[candles.length - 1].c;
+  const lastT = candles[candles.length - 1].t;
+  const key = `smc_${candles.length}_${lastT}_${lastC}`;
+  if (candles._smcCache && candles._smcCache.key === key) {
+    return candles._smcCache.data;
+  }
+
+  const numCandles = candles.length;
+  const startVisIdx = Math.max(0, numCandles - 350);
+  const minImpulseRatio = 0.006;
+
+  // 1. Order Blocks
+  const orderBlocks = [];
+  for (let i = Math.max(1, startVisIdx); i < numCandles - 3; i++) {
+    const cCurr = candles[i];
+    const isBear = cCurr.c < cCurr.o;
+    const isBull = cCurr.c > cCurr.o;
+
+    if (isBear) {
+      const nextHigh = Math.max(candles[i + 1].h, candles[i + 2].h, candles[i + 3].h);
+      const impulse = (nextHigh - cCurr.l) / cCurr.l;
+      if (impulse >= minImpulseRatio) {
+        let mitigated = false;
+        for (let k = i + 3; k < numCandles; k++) {
+          if (candles[k].l < cCurr.l) {
+            mitigated = true;
+            break;
+          }
+        }
+        if (!mitigated) {
+          orderBlocks.push({
+            type: "bull",
+            startIdx: i,
+            high: cCurr.h,
+            low: cCurr.l
+          });
+        }
+      }
+    }
+
+    if (isBull) {
+      const nextLow = Math.min(candles[i + 1].l, candles[i + 2].l, candles[i + 3].l);
+      const impulse = (cCurr.h - nextLow) / cCurr.h;
+      if (impulse >= minImpulseRatio) {
+        let mitigated = false;
+        for (let k = i + 3; k < numCandles; k++) {
+          if (candles[k].h > cCurr.h) {
+            mitigated = true;
+            break;
+          }
+        }
+        if (!mitigated) {
+          orderBlocks.push({
+            type: "bear",
+            startIdx: i,
+            high: cCurr.h,
+            low: cCurr.l
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Fair Value Gaps (FVG)
+  const fvgs = [];
+  for (let i = Math.max(2, startVisIdx); i < numCandles; i++) {
+    const c1 = candles[i - 2];
+    const c3 = candles[i];
+
+    if (c3.l > c1.h) {
+      const gapSize = (c3.l - c1.h) / c1.h;
+      if (gapSize >= 0.0015) {
+        let filled = false;
+        for (let k = i + 1; k < numCandles; k++) {
+          if (candles[k].l <= c1.h) {
+            filled = true;
+            break;
+          }
+        }
+        if (!filled) {
+          fvgs.push({
+            type: "bull",
+            startIdx: i - 2,
+            topPrice: c3.l,
+            botPrice: c1.h
+          });
+        }
+      }
+    }
+
+    if (c3.h < c1.l) {
+      const gapSize = (c1.l - c3.h) / c3.h;
+      if (gapSize >= 0.0015) {
+        let filled = false;
+        for (let k = i + 1; k < numCandles; k++) {
+          if (candles[k].h >= c1.l) {
+            filled = true;
+            break;
+          }
+        }
+        if (!filled) {
+          fvgs.push({
+            type: "bear",
+            startIdx: i - 2,
+            topPrice: c1.l,
+            botPrice: c3.h
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Market Structure (BOS / CHoCH)
+  const swings = [];
+  for (let i = Math.max(2, startVisIdx); i < numCandles - 2; i++) {
+    const isHigh = candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
+                   candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h;
+    const isLow  = candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
+                   candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l;
+    if (isHigh) swings.push({ idx: i, price: candles[i].h, type: "high" });
+    if (isLow)  swings.push({ idx: i, price: candles[i].l, type: "low" });
+  }
+
+  const structureBreaks = [];
+  for (let sIdx = 0; sIdx < swings.length; sIdx++) {
+    const sw = swings[sIdx];
+    for (let k = sw.idx + 1; k < numCandles; k++) {
+      if (sw.type === "high" && candles[k].c > sw.price) {
+        const isChoch = sIdx > 0 && swings[sIdx - 1].type === "low";
+        structureBreaks.push({
+          type: isChoch ? "CHoCH ▲" : "BOS ▲",
+          startIdx: sw.idx,
+          breakIdx: k,
+          price: sw.price,
+          isBull: true
+        });
+        break;
+      }
+      if (sw.type === "low" && candles[k].c < sw.price) {
+        const isChoch = sIdx > 0 && swings[sIdx - 1].type === "high";
+        structureBreaks.push({
+          type: isChoch ? "CHoCH ▼" : "BOS ▼",
+          startIdx: sw.idx,
+          breakIdx: k,
+          price: sw.price,
+          isBull: false
+        });
+        break;
+      }
+    }
+  }
+
+  // 4. Liquidity Pools
+  const liquidityPools = [];
+  for (let i = Math.max(2, startVisIdx); i < numCandles - 2; i++) {
+    for (let j = i + 4; j < Math.min(numCandles - 1, i + 60); j++) {
+      if (Math.abs(candles[i].h - candles[j].h) / candles[i].h < 0.0012) {
+        let swept = false;
+        const poolPrice = Math.max(candles[i].h, candles[j].h);
+        for (let k = j + 1; k < numCandles; k++) {
+          if (candles[k].h > poolPrice * 1.0005) { swept = true; break; }
+        }
+        if (!swept) {
+          liquidityPools.push({
+            type: "EQH",
+            idx1: i,
+            idx2: j,
+            price: poolPrice
+          });
+        }
+      }
+      if (Math.abs(candles[i].l - candles[j].l) / candles[i].l < 0.0012) {
+        let swept = false;
+        const poolPrice = Math.min(candles[i].l, candles[j].l);
+        for (let k = j + 1; k < numCandles; k++) {
+          if (candles[k].l < poolPrice * 0.9995) { swept = true; break; }
+        }
+        if (!swept) {
+          liquidityPools.push({
+            type: "EQL",
+            idx1: i,
+            idx2: j,
+            price: poolPrice
+          });
+        }
+      }
+    }
+  }
+
+  const res = { orderBlocks, fvgs, structureBreaks, liquidityPools };
+  candles._smcCache = { key, data: res };
+  return res;
+}
+
 function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
   if (!candles || candles.length < 15 || !chartActiveSmc || chartActiveSmc.size === 0) return;
 
+  const smcData = getSmcData(candles);
+  if (!smcData) return;
+
   const getCandleX = (idx) => (idx - viewStart) * candleW + candleW / 2;
-  const numCandles = candles.length;
-  const startVisIdx = Math.max(0, s - 200);
-  const lastPrice = candles[numCandles - 1].c;
+  const lastPrice = candles[candles.length - 1].c;
 
   const drawSmcPill = (text, x, y, bgCol, textCol, borderCol) => {
     ctx.font = "bold 9px Inter";
@@ -927,66 +1148,13 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   };
 
   // 1. UNMITIGATED ORDER BLOCKS (OB)
-  if (chartActiveSmc.has("ob")) {
-    const orderBlocks = [];
-    const minImpulseRatio = 0.006;
+  if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
+    const sortedOBs = smcData.orderBlocks
+      .map(ob => ({ ...ob, dist: Math.abs(lastPrice - (ob.high + ob.low) / 2) / lastPrice }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 3);
 
-    for (let i = Math.max(1, startVisIdx); i < numCandles - 3; i++) {
-      const cCurr = candles[i];
-      const isBear = cCurr.c < cCurr.o;
-      const isBull = cCurr.c > cCurr.o;
-
-      if (isBear) {
-        const nextHigh = Math.max(candles[i + 1].h, candles[i + 2].h, candles[i + 3].h);
-        const impulse = (nextHigh - cCurr.l) / cCurr.l;
-        if (impulse >= minImpulseRatio) {
-          let mitigated = false;
-          for (let k = i + 3; k < numCandles; k++) {
-            if (candles[k].l < cCurr.l) {
-              mitigated = true;
-              break;
-            }
-          }
-          if (!mitigated) {
-            orderBlocks.push({
-              type: "bull",
-              startIdx: i,
-              high: cCurr.h,
-              low: cCurr.l,
-              dist: Math.abs(lastPrice - cCurr.h) / lastPrice
-            });
-          }
-        }
-      }
-
-      if (isBull) {
-        const nextLow = Math.min(candles[i + 1].l, candles[i + 2].l, candles[i + 3].l);
-        const impulse = (cCurr.h - nextLow) / cCurr.h;
-        if (impulse >= minImpulseRatio) {
-          let mitigated = false;
-          for (let k = i + 3; k < numCandles; k++) {
-            if (candles[k].h > cCurr.h) {
-              mitigated = true;
-              break;
-            }
-          }
-          if (!mitigated) {
-            orderBlocks.push({
-              type: "bear",
-              startIdx: i,
-              high: cCurr.h,
-              low: cCurr.l,
-              dist: Math.abs(lastPrice - cCurr.l) / lastPrice
-            });
-          }
-        }
-      }
-    }
-
-    orderBlocks.sort((a, b) => a.dist - b.dist);
-    const activeOBs = orderBlocks.slice(0, 3);
-
-    for (const ob of activeOBs) {
+    for (const ob of sortedOBs) {
       const x1 = Math.max(0, getCandleX(ob.startIdx));
       const x2 = PW;
       const yTop = toY(ob.high);
@@ -1016,61 +1184,13 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   }
 
   // 2. UNFILLED FAIR VALUE GAPS (FVG)
-  if (chartActiveSmc.has("fvg")) {
-    const fvgs = [];
-    for (let i = Math.max(2, startVisIdx); i < numCandles; i++) {
-      const c1 = candles[i - 2];
-      const c3 = candles[i];
+  if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
+    const sortedFVGs = smcData.fvgs
+      .map(fvg => ({ ...fvg, dist: Math.abs(lastPrice - (fvg.topPrice + fvg.botPrice) / 2) / lastPrice }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 3);
 
-      if (c3.l > c1.h) {
-        const gapSize = (c3.l - c1.h) / c1.h;
-        if (gapSize >= 0.0015) {
-          let filled = false;
-          for (let k = i + 1; k < numCandles; k++) {
-            if (candles[k].l <= c1.h) {
-              filled = true;
-              break;
-            }
-          }
-          if (!filled) {
-            fvgs.push({
-              type: "bull",
-              startIdx: i - 2,
-              topPrice: c3.l,
-              botPrice: c1.h,
-              dist: Math.abs(lastPrice - (c3.l + c1.h) / 2) / lastPrice
-            });
-          }
-        }
-      }
-
-      if (c3.h < c1.l) {
-        const gapSize = (c1.l - c3.h) / c3.h;
-        if (gapSize >= 0.0015) {
-          let filled = false;
-          for (let k = i + 1; k < numCandles; k++) {
-            if (candles[k].h >= c1.l) {
-              filled = true;
-              break;
-            }
-          }
-          if (!filled) {
-            fvgs.push({
-              type: "bear",
-              startIdx: i - 2,
-              topPrice: c1.l,
-              botPrice: c3.h,
-              dist: Math.abs(lastPrice - (c1.l + c3.h) / 2) / lastPrice
-            });
-          }
-        }
-      }
-    }
-
-    fvgs.sort((a, b) => a.dist - b.dist);
-    const activeFVGs = fvgs.slice(0, 3);
-
-    for (const fvg of activeFVGs) {
+    for (const fvg of sortedFVGs) {
       const x1 = Math.max(0, getCandleX(fvg.startIdx));
       const x2 = PW;
       const yTop = toY(fvg.topPrice);
@@ -1102,47 +1222,8 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   }
 
   // 3. BREAK OF STRUCTURE (BOS / CHoCH)
-  if (chartActiveSmc.has("bos")) {
-    const swings = [];
-    for (let i = 2; i < numCandles - 2; i++) {
-      const isHigh = candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
-                     candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h;
-      const isLow  = candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
-                     candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l;
-      if (isHigh) swings.push({ idx: i, price: candles[i].h, type: "high" });
-      if (isLow)  swings.push({ idx: i, price: candles[i].l, type: "low" });
-    }
-
-    const structureBreaks = [];
-    for (let sIdx = 0; sIdx < swings.length; sIdx++) {
-      const sw = swings[sIdx];
-      for (let k = sw.idx + 1; k < numCandles; k++) {
-        if (sw.type === "high" && candles[k].c > sw.price) {
-          const isChoch = sIdx > 0 && swings[sIdx - 1].type === "low";
-          structureBreaks.push({
-            type: isChoch ? "CHoCH ▲" : "BOS ▲",
-            startIdx: sw.idx,
-            breakIdx: k,
-            price: sw.price,
-            isBull: true
-          });
-          break;
-        }
-        if (sw.type === "low" && candles[k].c < sw.price) {
-          const isChoch = sIdx > 0 && swings[sIdx - 1].type === "high";
-          structureBreaks.push({
-            type: isChoch ? "CHoCH ▼" : "BOS ▼",
-            startIdx: sw.idx,
-            breakIdx: k,
-            price: sw.price,
-            isBull: false
-          });
-          break;
-        }
-      }
-    }
-
-    const recentBreaks = structureBreaks.slice(-3);
+  if (chartActiveSmc.has("bos") && smcData.structureBreaks.length > 0) {
+    const recentBreaks = smcData.structureBreaks.slice(-4);
     for (const sb of recentBreaks) {
       const x1 = getCandleX(sb.startIdx);
       const x2 = getCandleX(sb.breakIdx);
@@ -1152,110 +1233,23 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
       ctx.save();
       ctx.beginPath();
-      ctx.strokeStyle = sb.isBull ? "#eab308" : "#f43f5e";
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = sb.isBull ? "#26c97a" : "#ff4560";
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 3]);
       ctx.moveTo(x1, y);
       ctx.lineTo(x2, y);
       ctx.stroke();
 
-      const bgCol = sb.isBull ? "#713f12" : "#881337";
-      const textCol = sb.isBull ? "#fef08a" : "#fecdd3";
-      const borderCol = sb.isBull ? "#eab308" : "#f43f5e";
-      drawSmcPill(sb.type, (x1 + x2) / 2 - 15, y, bgCol, textCol, borderCol);
+      drawSmcPill(sb.type, (x1 + x2) / 2, y, sb.isBull ? "#14532d" : "#7f1d1d", sb.isBull ? "#4ade80" : "#fca5a5", sb.isBull ? "#22c55e" : "#ef4444");
       ctx.restore();
     }
   }
 
   // 4. UNSWEPT EQUAL HIGHS / EQUAL LOWS (EQH / EQL LIQUIDITY POOLS)
-  if (chartActiveSmc.has("eqh")) {
-    const swingHighs = [];
-    const swingLows = [];
-
-    for (let i = 2; i < numCandles - 2; i++) {
-      if (candles[i].h > candles[i - 1].h && candles[i].h > candles[i - 2].h &&
-          candles[i].h > candles[i + 1].h && candles[i].h > candles[i + 2].h) {
-        swingHighs.push({ idx: i, price: candles[i].h });
-      }
-      if (candles[i].l < candles[i - 1].l && candles[i].l < candles[i - 2].l &&
-          candles[i].l < candles[i + 1].l && candles[i].l < candles[i + 2].l) {
-        swingLows.push({ idx: i, price: candles[i].l });
-      }
-    }
-
-    const liquidityPools = [];
-
-    for (let a = 0; a < swingHighs.length; a++) {
-      for (let b = a + 1; b < swingHighs.length; b++) {
-        const p1 = swingHighs[a].price;
-        const p2 = swingHighs[b].price;
-        if (Math.abs(p1 - p2) / p1 <= 0.0018) {
-          const levelPrice = Math.max(p1, p2);
-          const secondIdx = swingHighs[b].idx;
-
-          let swept = false;
-          for (let k = secondIdx + 1; k < numCandles; k++) {
-            if (candles[k].h > levelPrice) {
-              swept = true;
-              break;
-            }
-          }
-
-          if (!swept) {
-            liquidityPools.push({
-              type: "EQH",
-              startIdx: swingHighs[a].idx,
-              confirmIdx: secondIdx,
-              price: levelPrice,
-              label: "$$$ EQH",
-              dist: Math.abs(lastPrice - levelPrice) / lastPrice
-            });
-          }
-        }
-      }
-    }
-
-    for (let a = 0; a < swingLows.length; a++) {
-      for (let b = a + 1; b < swingLows.length; b++) {
-        const p1 = swingLows[a].price;
-        const p2 = swingLows[b].price;
-        if (Math.abs(p1 - p2) / p1 <= 0.0018) {
-          const levelPrice = Math.min(p1, p2);
-          const secondIdx = swingLows[b].idx;
-
-          let swept = false;
-          for (let k = secondIdx + 1; k < numCandles; k++) {
-            if (candles[k].l < levelPrice) {
-              swept = true;
-              break;
-            }
-          }
-
-          if (!swept) {
-            liquidityPools.push({
-              type: "EQL",
-              startIdx: swingLows[a].idx,
-              confirmIdx: secondIdx,
-              price: levelPrice,
-              label: "$$$ EQL",
-              dist: Math.abs(lastPrice - levelPrice) / lastPrice
-            });
-          }
-        }
-      }
-    }
-
-    const cleanPools = [];
-    for (const pool of liquidityPools) {
-      const exists = cleanPools.some(p => p.type === pool.type && Math.abs(p.price - pool.price) / pool.price < 0.001);
-      if (!exists) cleanPools.push(pool);
-    }
-
-    cleanPools.sort((a, b) => a.dist - b.dist);
-    const activePools = cleanPools.slice(0, 3);
-
+  if (chartActiveSmc.has("liq") && smcData.liquidityPools.length > 0) {
+    const activePools = smcData.liquidityPools.slice(-4);
     for (const pool of activePools) {
-      const x1 = Math.max(0, getCandleX(pool.startIdx));
+      const x1 = getCandleX(pool.idx1);
       const x2 = PW;
       const y = toY(pool.price);
 
@@ -1263,30 +1257,29 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
       ctx.save();
       ctx.beginPath();
-      ctx.strokeStyle = pool.type === "EQH" ? "#38bdf8" : "#fb923c";
-      ctx.lineWidth = 1.4;
-      ctx.setLineDash([3, 4]);
+      ctx.strokeStyle = pool.type === "EQH" ? "rgba(250, 204, 21, 0.75)" : "rgba(56, 189, 248, 0.75)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
       ctx.moveTo(x1, y);
       ctx.lineTo(x2, y);
       ctx.stroke();
 
-      const bgCol = pool.type === "EQH" ? "#0c4a6e" : "#7c2d12";
-      const textCol = pool.type === "EQH" ? "#bae6fd" : "#ffedd5";
-      const borderCol = pool.type === "EQH" ? "#38bdf8" : "#fb923c";
-      drawSmcPill(pool.label, PW - 65, y, bgCol, textCol, borderCol);
+      drawSmcPill(pool.type === "EQH" ? "EQH Liq 🠅" : "EQL Liq 🠗", PW - 70, y, pool.type === "EQH" ? "#713f12" : "#0c4a6e", pool.type === "EQH" ? "#fde047" : "#7dd3fc", pool.type === "EQH" ? "#eab308" : "#0284c7");
       ctx.restore();
     }
   }
 }
 
-function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
-  if (!candles || candles.length < 20) return;
+function getLiqMapData(candles) {
+  if (!candles || candles.length < 20) return null;
+  const lastC = candles[candles.length - 1].c;
+  const lastT = candles[candles.length - 1].t;
+  const key = `liq_${candles.length}_${lastT}_${lastC}`;
+  if (candles._liqCache && candles._liqCache.key === key) {
+    return candles._liqCache.data;
+  }
 
   const numCandles = candles.length;
-  const lastPrice = candles[numCandles - 1].c;
-  const getCandleX = (idx) => (idx - viewStart) * candleW + candleW / 2;
-
-  // 1. Detect key leverage entry pivots (Swing Highs & Lows over last 250 candles)
   const startScan = Math.max(0, numCandles - 250);
   const pivots = [];
 
@@ -1299,7 +1292,6 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
     if (isLow)  pivots.push({ idx: i, price: candles[i].l, type: "low", vol: candles[i].v });
   }
 
-  // 2. Generate estimated Liquidation Pool Levels for 100x, 50x, 25x leverage
   const LEVERAGES = [
     { lev: "100x", offsetLong: 0.009, offsetShort: 0.009, weight: 1.0 },
     { lev: "50x",  offsetLong: 0.018, offsetShort: 0.018, weight: 0.85 },
@@ -1325,8 +1317,7 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
             lev: levInfo.lev,
             price: liqPrice,
             startIdx: p.idx,
-            estVolK: Math.round((p.vol || 500) * levInfo.weight),
-            dist: Math.abs(lastPrice - liqPrice) / lastPrice
+            estVolK: Math.round((p.vol || 500) * levInfo.weight)
           });
         }
       } else {
@@ -1344,15 +1335,13 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
             lev: levInfo.lev,
             price: liqPrice,
             startIdx: p.idx,
-            estVolK: Math.round((p.vol || 500) * levInfo.weight),
-            dist: Math.abs(lastPrice - liqPrice) / lastPrice
+            estVolK: Math.round((p.vol || 500) * levInfo.weight)
           });
         }
       }
     }
   }
 
-  // 3. Cluster Liquidation Levels into continuous Heatmap bands
   const clusters = [];
   for (const item of liqLevels) {
     const existing = clusters.find(c => c.type === item.type && Math.abs(c.price - item.price) / item.price < 0.0025);
@@ -1367,17 +1356,29 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
         startIdx: item.startIdx,
         volK: item.estVolK,
         topLev: item.lev,
-        count: 1,
-        dist: item.dist
+        count: 1
       });
     }
   }
 
-  if (!clusters.length) return;
+  candles._liqCache = { key, data: clusters };
+  return clusters;
+}
+
+function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
+  if (!candles || candles.length < 20) return;
+
+  const clusters = getLiqMapData(candles);
+  if (!clusters || !clusters.length) return;
+
+  const getCandleX = (idx) => (idx - viewStart) * candleW + candleW / 2;
+  const lastPrice = candles[candles.length - 1].c;
 
   const maxVol = Math.max(...clusters.map(c => c.volK), 1);
-  clusters.sort((a, b) => a.dist - b.dist);
-  const activeClusters = clusters.slice(0, 8);
+  const activeClusters = clusters
+    .map(c => ({ ...c, dist: Math.abs(lastPrice - c.price) / lastPrice }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, 8);
 
   ctx.save();
   ctx.beginPath();
@@ -1488,7 +1489,7 @@ function drawChart() {
   const TOP = 0;
   if (PH <= 20) return;
 
-  // ── Background ──────────────────────────────────────────────────────────────
+  // тФАтФА Background тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   ctx.clearRect(0, 0, chartW, chartH);
   ctx.fillStyle = getCanvasBgColor();
   ctx.fillRect(0, 0, chartW, chartH);
@@ -1498,7 +1499,7 @@ function drawChart() {
   vCtx.fillStyle = getCanvasBgColor();
   vCtx.fillRect(0, 0, chartW, volH);
 
-  // ── Visible candle window ──────────────────────────────────────────────────
+  // тФАтФА Visible candle window тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const n = Math.max(1, PW / candleW);
   const viewStart = candles.length - n - offsetX;
   const s = Math.max(0, Math.floor(viewStart));
@@ -1507,7 +1508,7 @@ function drawChart() {
   const futureGap = viewStart < 0 ? -viewStart : 0;
   if (!vis.length && futureGap <= 0.5) return;
 
-  // ── Auto price range ───────────────────────────────────────────────────────
+  // тФАтФА Auto price range тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let autoMn = Infinity,
     autoMx = -Infinity,
     mv = 0,
@@ -1546,7 +1547,7 @@ function drawChart() {
   const toY = (p) => TOP + (mx - p) * toYMult;
   Object.assign(chartState, { mx, mn, pr, PW, PH, TOP, viewStart });
 
-  // ── Grid lines ─────────────────────────────────────────────────────────────
+  // тФАтФА Grid lines тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const gridStep = calcNiceStep(pr, Math.max(4, Math.floor(PH / 70)));
   let gridPrice = Math.ceil(mn / gridStep) * gridStep;
   ctx.setLineDash([]);
@@ -1563,13 +1564,13 @@ function drawChart() {
   }
   ctx.stroke();
 
-  // ── Clipping Area (Pre-render) ─────────────────────────────────────────────
+  // тФАтФА Clipping Area (Pre-render) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, PW, PH);
   ctx.clip();
 
-  // ── Candles ────────────────────────────────────────────────────────────────
+  // тФАтФА Candles тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const hw = Math.max(0.5, (candleW - 2) / 2);
   const cs = window.candleSettings || {
     body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
@@ -1637,7 +1638,7 @@ function drawChart() {
     }
   });
 
-  // ── Draw Overlay Indicators on Chart ──
+  // тФАтФА Draw Overlay Indicators on Chart тФАтФА
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, TOP, PW, PH);
@@ -1783,17 +1784,17 @@ function drawChart() {
     ctx.stroke();
   }
 
-  // ── Smart Money Concepts (SMC) Overlay ──
+  // тФАтФА Smart Money Concepts (SMC) Overlay тФАтФА
   renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
 
-  // ── Liquidation Heatmap Overlay ──
+  // тФАтФА Liquidation Heatmap Overlay тФАтФА
   if (chartActiveIndicators.has("LIQMAP")) {
     renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
   }
 
   ctx.restore();
 
-  // ── Draw Sub-indicators / Oscillators in separated rows of Volume Pane ──
+  // тФАтФА Draw Sub-indicators / Oscillators in separated rows of Volume Pane тФАтФА
   // activeIndicators is already calculated above!
 
   // Fixed heights (already defined above, reuse variables)
@@ -2065,7 +2066,7 @@ function drawChart() {
   }
   vCtx.restore();
 
-  // ── Right axis panel (thin divider line) ─────────────────
+  // тФАтФА Right axis panel (thin divider line) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   // Note: Background is already filled once at the start of drawChart
   // ctx.fillStyle = getCanvasBgColor();
   // ctx.fillRect(PW, 0, PR, chartH);
@@ -2080,7 +2081,7 @@ function drawChart() {
   ctx.lineTo(PW, chartH);
   ctx.stroke();
 
-  // ── Draw Walls (Density) on Chart ──
+  // тФАтФА Draw Walls (Density) on Chart тФАтФА
   let wallBadges = [];
   if (chartDensityEnabled) {
     const ticker = coins.get(activeEx + ":" + activeSym);
@@ -2161,7 +2162,7 @@ function drawChart() {
     }
   }
 
-  // ── Drawings ───────────────────────────────────────────────────────────────
+  // тФАтФА Drawings тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const getX = (t) => {
     // If it's a timestamp (large number), convert to index
     const idx = (t > 1000000000) ? getIdxFromTime(t) : t;
@@ -2331,17 +2332,17 @@ function drawChart() {
         const diffMs = Math.abs(d.t2 - d.t1);
         if (d.t1 > 1000000000 && d.t2 > 1000000000) {
           if (diffMs < 60000) {
-            timeStr = Math.round(diffMs / 1000) + "с";
+            timeStr = Math.round(diffMs / 1000) + "╤Б";
           } else if (diffMs < 3600000) {
-            timeStr = Math.round(diffMs / 60000) + "м";
+            timeStr = Math.round(diffMs / 60000) + "╨╝";
           } else if (diffMs < 86400000) {
             const hours = Math.floor(diffMs / 3600000);
             const mins = Math.round((diffMs % 3600000) / 60000);
-            timeStr = hours + "ч " + mins + "м";
+            timeStr = hours + "╤З " + mins + "╨╝";
           } else {
             const days = Math.floor(diffMs / 86400000);
             const hours = Math.round((diffMs % 86400000) / 3600000);
-            timeStr = days + "д " + hours + "ч";
+            timeStr = days + "╨┤ " + hours + "╤З";
           }
         }
 
@@ -2349,7 +2350,7 @@ function drawChart() {
         const pctSign = pct >= 0 ? "+" : "";
         const priceSign = deltaPrice >= 0 ? "+" : "";
         const text1 = pctSign + pct.toFixed(2) + "% (" + priceSign + fP(deltaPrice) + ")";
-        const text2 = timeStr ? (bars + " свечей, " + timeStr) : (bars + " свечей");
+        const text2 = timeStr ? (bars + " ╤Б╨▓╨╡╤З╨╡╨╣, " + timeStr) : (bars + " ╤Б╨▓╨╡╤З╨╡╨╣");
 
         ctx.font = "bold 10px Inter";
         const w1 = ctx.measureText(text1).width;
@@ -2521,7 +2522,7 @@ function drawChart() {
   // Restore clipping for candles and drawings area before rendering Price Axis labels
   ctx.restore();
 
-  // ── Price Axis (Right) ───────────────────────────────────────────────────────
+  // тФАтФА Price Axis (Right) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   gridPrice = Math.ceil(mn / gridStep) * gridStep;
   ctx.font = "10px Inter";
   ctx.textAlign = "left";
@@ -2539,7 +2540,7 @@ function drawChart() {
   if (lc) {
     // Use interpolated display price for active symbol so pill moves smoothly
     const acTicker = coins.get(`${activeEx}:${activeSym}`);
-    const liveClose = acTicker ? getDisplayP(acTicker) : lc.c;
+    const liveClose = acTicker && acTicker.displayP > 0 ? acTicker.displayP : lc.c;
     const dispClose = liveClose > 0 ? liveClose : lc.c;
     const ly = toY(dispClose);
     const up = dispClose >= lc.o;
@@ -2626,7 +2627,7 @@ function drawChart() {
     }
   }
 
-  // ── Crosshair ──────────────────────────────────────────────────────────────
+  // тФАтФА Crosshair тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   if (mX >= 0 && mX < PW && mY >= TOP && mY <= TOP + PH) {
     ctx.strokeStyle = "rgba(255,255,255,.25)";
     ctx.lineWidth = 1;
@@ -2704,8 +2705,8 @@ function drawChart() {
 
       ctx.fillStyle = "#6b7080";
       ctx.textAlign = "left";
-      ctx.fillText("Объём:", ttX + 8, ttY + 38);
-      ctx.fillText("Средний:", ttX + 8, ttY + 55);
+      ctx.fillText("╨Ю╨▒╤К╤С╨╝:", ttX + 8, ttY + 38);
+      ctx.fillText("╨б╤А╨╡╨┤╨╜╨╕╨╣:", ttX + 8, ttY + 55);
 
       ctx.fillStyle = "#d1d4dc";
       ctx.textAlign = "right";
@@ -2719,7 +2720,7 @@ function drawChart() {
   }
 }
 
-// ─── Chart interaction ────────────────────────────────────────────────────────
+// тФАтФАтФА Chart interaction тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const PR_WIDTH = 82;
 let isDragYScale = false,
   yScaleStartY = 0,
@@ -2728,9 +2729,9 @@ let isDragYScale = false,
 
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-// ─── Drawing system (TradingView-style) ──────────────────────────────────────
+// тФАтФАтФА Drawing system (TradingView-style) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 
-// Convert pixel coords → chart time (timestamp) + price
+// Convert pixel coords тЖТ chart time (timestamp) + price
 function pxToTP(px, py) {
   const tIdx = px / candleW + chartState.viewStart;
   const t = getTimeFromIdx(tIdx);
@@ -2985,7 +2986,7 @@ function findDrawingIndexAt(px, py) {
 let drawColorSelectHandler = null;
 
 function openDrawColorMenu({
-  title = "Цвет линии",
+  title = "╨ж╨▓╨╡╤В линии",
   currentColor = "#facc15",
   pageX = window.innerWidth / 2,
   pageY = window.innerHeight / 2,
@@ -3050,7 +3051,7 @@ function pickToolColor(tool) {
   const btn = document.querySelector(`.dt-btn[data-tool="${tool}"]`);
   const rect = btn ? btn.getBoundingClientRect() : null;
   openDrawColorMenu({
-    title: "Цвет линии",
+    title: "╨ж╨▓╨╡╤В линии",
     currentColor: getToolColor(tool),
     pageX: rect ? rect.right + 10 : window.innerWidth / 2 - 70,
     pageY: rect ? rect.top : window.innerHeight / 2 - 60,
@@ -3105,7 +3106,7 @@ function renderFibLevelEditor() {
       e.stopPropagation();
       const rect = colorBtn.getBoundingClientRect();
       openDrawColorMenu({
-        title: "Цвет уровня",
+        title: "╨ж╨▓╨╡╤В ╤Г╤А╨╛╨▓╨╜╤П",
         currentColor: row.color || editingFibDrawing.color,
         pageX: rect.right + 8,
         pageY: rect.top,
@@ -3160,7 +3161,7 @@ function cancelDrawing() {
   requestAnimationFrame(drawChart);
 }
 
-// ── Mouse events ─────────────────────────────────────────────────────────────
+// тФАтФА Mouse events тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 
 canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
@@ -3196,7 +3197,7 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // ── Drawing mode ────────────────────────────────────────────────────────────
+  // тФАтФА Drawing mode тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   if (activeTool !== 'none' && e.button === 0) {
     updateMagnetSnap(px, py);
     const { t, p } = getCursorTP(px, py);
@@ -3225,7 +3226,7 @@ canvas.addEventListener("mousedown", (e) => {
     }
 
     if (drawingPhase === 0) {
-      // First click — place start point, enter phase 1
+      // First click тАФ place start point, enter phase 1
       tempDrawing = normalizeDrawing({
         type: activeTool,
         t1: t,
@@ -3246,7 +3247,7 @@ canvas.addEventListener("mousedown", (e) => {
         drawingPhase = 1;
       }
     } else {
-      // Second click — finish drawing
+      // Second click тАФ finish drawing
       tempDrawing.t2 = t;
       tempDrawing.p2 = p;
       normalizeDrawing(tempDrawing);
@@ -3461,7 +3462,7 @@ canvas.addEventListener("mouseleave", () => {
   requestDraw();
 });
 
-// ── Touch Gesture Support for Mobile & Tablets (iPhones, iPads, Touchscreen Laptops) ──
+// тФАтФА Touch Gesture Support for Mobile & Tablets (iPhones, iPads, Touchscreen Laptops) тФАтФА
 let touchStartX = 0, touchStartY = 0;
 let touchDragOffX = 0;
 let touchPinchDist = 0;
@@ -3611,7 +3612,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// ── TOAST NOTIFICATIONS & COPY COIN TO CLIPBOARD ─────────────────────────────
+// тФАтФА TOAST NOTIFICATIONS & COPY COIN TO CLIPBOARD тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function showToast(msg) {
   let toast = $("global-toast");
   if (!toast) {
@@ -3641,7 +3642,7 @@ function showToast(msg) {
     `;
     document.body.appendChild(toast);
   }
-  toast.innerHTML = `<span style="color: #26c97a; font-size: 15px; font-weight: 800;">✓</span> ${msg}`;
+  toast.innerHTML = `<span style="color: #26c97a; font-size: 15px; font-weight: 800;">тЬУ</span> ${msg}`;
   toast.style.opacity = "1";
   toast.style.transform = "translateX(-50%) translateY(0)";
 
@@ -3678,7 +3679,7 @@ function copyCoinNameToClipboard(rawText) {
   }
 
   doCopy(cleanName);
-  showToast(`Скопировано: <b style="color:#26c97a; margin-left:4px;">${cleanName}</b>`);
+  showToast(`╨б╨║╨╛╨┐╨╕╤А╨╛╨▓╨░╨╜╨╛: <b style="color:#26c97a; margin-left:4px;">${cleanName}</b>`);
 
   const symBtn = $("sym-btn");
   if (symBtn) {
@@ -3700,7 +3701,7 @@ window.showToast = showToast;
 document.addEventListener("DOMContentLoaded", () => {
   const symBtn = $("sym-btn");
   if (symBtn) {
-    symBtn.title = "Нажмите, чтобы скопировать название монеты";
+    symBtn.title = "╨Э╨░╨╢╨╝╨╕╤В╨╡, ╤З╤В╨╛╨▒╤Л ╤Б╨║╨╛╨┐╨╕╤А╨╛╨▓╨░╤В╤М название ╨╝╨╛╨╜╨╡╤В╤Л";
     symBtn.onclick = (e) => {
       e.stopPropagation();
       const sn = $("sn");
@@ -3793,28 +3794,33 @@ canvas.addEventListener("dblclick", (e) => {
   const r = canvas.getBoundingClientRect();
   const px = e.clientX - r.left;
   const py = e.clientY - r.top;
+
+  const PR_W = typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82;
+  if (px > chartW - PR_W) {
+    autoFitY = true;
+    viewMn = null;
+    viewMx = null;
+    requestDraw();
+    return;
+  }
+
   const idx = findDrawingIndexAt(px, py);
   if (idx >= 0 && chartDrawings[idx]?.type === "fibgrid") {
     configureFibDrawing(chartDrawings[idx], e.pageX, e.pageY);
     return;
   }
-  // Disabled auto-fit on double-click to prevent graph teleportation
-  // autoFitY = true;
-  // viewMn = null;
-  // viewMx = null;
-  // requestDraw();
 });
 
-// ═══ WebSocket connection to Node aggregator ══════════════════════════════════
+// тХРтХРтХР WebSocket connection to Node aggregator тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 let wsPingTimer = null;
 let wsReconnectTimer = null;
 let lastWsMsg = 0;
 
-// Watchdog: if no data for 4s while connected — force auto-reconnect instantly
+// Watchdog: if no data for 4s while connected тАФ force auto-reconnect instantly
 setInterval(() => {
   if (lastWsMsg > 0 && Date.now() - lastWsMsg > 4000) {
-    console.warn("[WS] Quiet for 4s — auto-reconnecting...");
-    $("cd-label").textContent = "Переподключение...";
+    console.warn("[WS] Quiet for 4s тАФ auto-reconnecting...");
+    $("cd-label").textContent = "Reconnecting...";
     if (ws) { ws.onclose = null; ws.onerror = null; try { ws.close(); } catch (_) { } }
     ws = null;
     wsReady = false;
@@ -3846,7 +3852,7 @@ function connectWS() {
   }
   if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
 
-  $("cd-label").textContent = "Подключение...";
+  $("cd-label").textContent = "Connecting...";
   ws = new WebSocket(wsUrl);
   ws.binaryType = "arraybuffer";
 
@@ -3855,7 +3861,7 @@ function connectWS() {
     console.log("[WS] Connected");
     $("cd-go").classList.remove("err");
     $("cd-go").classList.add("ok");
-    $("cd-label").textContent = "Live";
+    $("cd-label").textContent = "LIVE";
     hideLoading();
     fetchKlines(activeEx, activeSym, activeTf);
 
@@ -3869,7 +3875,7 @@ function connectWS() {
 
   ws.onmessage = (e) => {
     lastWsMsg = Date.now();
-    // ── Binary Protocol Handler (Ultra-Sync 3.0) ──
+    // тФАтФА Binary Protocol Handler (Ultra-Sync 3.0) тФАтФА
     if (e.data instanceof ArrayBuffer) {
       const floatData = new Float64Array(e.data);
       for (let i = 0; i < floatData.length; i += 11) {
@@ -3883,7 +3889,7 @@ function connectWS() {
 
         let c = coins.get(key);
         if (!c) {
-          // Coin not yet in map — create it from key
+          // Coin not yet in map тАФ create it from key
           processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, oi, trades);
           needRebuild = true;
           continue;
@@ -3895,6 +3901,14 @@ function connectWS() {
         c.funding = funding; c.nextFunding = nextFunding; c.oi = oi; c.trades = trades;
         dirty.add(key);
         if (c.p !== oldP) scheduleInterp(key);
+
+        if (key === `${activeEx}:${activeSym}` && candles.length > 0) {
+          const lastC = candles[candles.length - 1];
+          lastC.c = p;
+          if (p > lastC.h) lastC.h = p;
+          if (p < lastC.l) lastC.l = p;
+          chartNeedsDraw = true;
+        }
       }
       return;
     }
@@ -3909,13 +3923,13 @@ function connectWS() {
 
     if (msg.type === "ticker_map") {
       const prevSize = Object.keys(idToKey).length;
-      // Server sends {key→id}, we need {id→key} for binary protocol lookup
+      // Server sends {keyтЖТid}, we need {idтЖТkey} for binary protocol lookup
       for (const [key, id] of Object.entries(msg.data)) {
         idToKey[id] = key;
       }
       const newSize = Object.keys(idToKey).length;
       console.log(`[BINARY] Ticker map updated: ${newSize} entries (+${newSize - prevSize})`);
-      // If new keys arrived — request fresh snapshot so we get their current prices
+      // If new keys arrived тАФ request fresh snapshot so we get their current prices
       if (newSize > prevSize && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "get_snapshot" }));
       }
@@ -4002,6 +4016,10 @@ function connectWS() {
         }
 
         if (key === activeKey && candles.length > 0) {
+          const lastC = candles[candles.length - 1];
+          lastC.c = p;
+          if (p > lastC.h) lastC.h = p;
+          if (p < lastC.l) lastC.l = p;
           chartNeedsDraw = true;
         }
       }
@@ -4019,10 +4037,10 @@ function connectWS() {
     if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
     $("cd-go").classList.remove("ok");
     $("cd-go").classList.add("err");
-    $("cd-label").textContent = "Переподключение...";
-    // Reset idToKey — server may have restarted with new indices
+    $("cd-label").textContent = "Reconnecting...";
+    // Reset idToKey тАФ server may have restarted with new indices
     idToKey = {};
-    console.log("[WS] Closed, code:", e.code, "— reconnecting in 2s");
+    console.log("[WS] Closed, code:", e.code, "тАФ reconnecting in 2s");
     wsReconnectTimer = setTimeout(connectWS, 2000);
   };
   ws.onerror = (e) => {
@@ -4038,7 +4056,7 @@ function unfreezeAndResync() {
   const isHealthy = ws && ws.readyState === WebSocket.OPEN && (lastWsMsg > 0 && Date.now() - lastWsMsg < 4000);
 
   if (!isHealthy) {
-    console.log("[WS] Tab / Window active — socket quiet or closed, reconnecting...");
+    console.log("[WS] Tab / Window active тАФ socket quiet or closed, reconnecting...");
     connectWS();
   } else if (activeEx && activeSym && activeTf) {
     fetchKlines(activeEx, activeSym, activeTf);
@@ -4092,9 +4110,9 @@ function processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, 
   }
 }
 
-// ═══ Fallback removed — all data via server WS ════════════════════════════════
+// тХРтХРтХР Fallback removed тАФ all data via server WS тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 
-// ═══ Klines ═══════════════════════════════════════════════════════════════════
+// тХРтХРтХР Klines тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 const TFB = {
   "1m": "1m",
   "5m": "5m",
@@ -4220,7 +4238,7 @@ async function fetchKlines(ex, sym, tf) {
   ctx.fillStyle = "rgba(107,114,128,.4)";
   ctx.font = "12px Inter";
   ctx.textAlign = "center";
-  ctx.fillText("Загрузка " + sym + "...", chartW / 2, chartH / 2);
+  ctx.fillText("Loading " + sym + "...", chartW / 2, chartH / 2);
   ctx.textAlign = "left";
 
   try {
@@ -4285,18 +4303,48 @@ async function fetchKlines(ex, sym, tf) {
 
     } else {
       let data;
-      if (ex === "BN") {
-        const r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf]}&limit=300`);
+      if (ex === "BN" || ex === "AD") {
+        const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
+        const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=300`);
         data = await r.json();
-        if (Array.isArray(data)) candles = sanitizeCandles(data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })));
+        if (Array.isArray(data)) candles = sanitizeCandles(data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] })));
       } else if (ex === "BB") {
-        const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf]}&limit=300`);
+        const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=300`);
         data = await r.json();
-        if (data.result?.list) candles = sanitizeCandles(data.result.list.slice().reverse().map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })));
+        if (data.result?.list) candles = sanitizeCandles(data.result.list.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
       } else if (ex === "OX") {
-        const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TFOK[tf]}&limit=300`);
+        const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TFOK[tf] || "1H"}&limit=300`);
         data = await r.json();
-        if (data.data) candles = sanitizeCandles(data.data.slice().reverse().map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })));
+        if (data.data) candles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
+      } else if (ex === "BG") {
+        const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=300`);
+        data = await r.json();
+        if (data.data) candles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
+      } else if (ex === "GT") {
+        const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=300`);
+        data = await r.json();
+        if (Array.isArray(data)) candles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v })));
+      } else if (ex === "MX") {
+        const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${sym}?interval=Min60`);
+        data = await r.json();
+        if (data.data?.time) candles = sanitizeCandles(data.data.time.map((t, i) => ({ t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c: +data.data.close[i], v: +data.data.vol[i] })));
+      } else if (ex === "KC") {
+        const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=60`);
+        data = await r.json();
+        if (data.data) candles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })));
+      } else if (ex === "BX") {
+        const r = await fetch(`https://open-api-swap.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=1h&limit=300`);
+        data = await r.json();
+        if (data.data) candles = sanitizeCandles(data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
+      } else if (ex === "HT") {
+        const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=60min&size=300`);
+        data = await r.json();
+        if (data.data) candles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.vol })));
+      } else if (ex === "HL") {
+        const tfMs = 60000;
+        const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (300 * tfMs), endTime: Date.now() } }) });
+        data = await r.json();
+        if (Array.isArray(data)) candles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v })));
       }
       if (candles.length > 0) KLINES_CACHE.set(key, { ts: Date.now(), data: candles.slice(-1200) });
     }
@@ -4304,7 +4352,7 @@ async function fetchKlines(ex, sym, tf) {
     ctx.clearRect(0, 0, chartW, chartH);
     if (candles.length === 0) {
       ctx.fillStyle = "rgba(107,114,128,.4)";
-      ctx.fillText("Нет данных для " + sym, chartW / 2, chartH / 2);
+  ctx.fillText("Loading " + sym + "...", chartW / 2, chartH / 2);
     } else {
       updateOHLC();
       if (!chartW || !chartH) resizeChart();
@@ -4315,7 +4363,7 @@ async function fetchKlines(ex, sym, tf) {
     if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym) {
       ctx.clearRect(0, 0, chartW, chartH);
       ctx.fillStyle = "var(--rd)";
-      ctx.fillText("Ошибка загрузки: " + err.message, chartW / 2, chartH / 2);
+      ctx.fillText("Loading error: " + err.message, chartW / 2, chartH / 2);
     }
   }
   if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
@@ -4387,12 +4435,12 @@ function updateOHLC() {
   updateSymInfo();
 }
 
-// ═══ Render engine (rAF = paint only, logic runs in MessageChannel) ══════════
+// тХРтХРтХР Render engine (rAF = paint only, logic runs in MessageChannel) тХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 function startRender() {
   requestAnimationFrame(rafLoop);
 }
 
-// rAF loop: ONLY repaints the canvas — runs at monitor refresh rate (60/120/144hz)
+// rAF loop: ONLY repaints the canvas тАФ runs at monitor refresh rate (60/120/144hz)
 // All logic (interpolation, DOM updates) happens in the faster MessageChannel loop
 function rafLoop() {
   const now = performance.now();
@@ -4460,7 +4508,7 @@ function isStablecoinBase(c) {
 function rebuildList() {
   let list = Array.from(coins.values());
 
-  // ─── Filter: USDT Futures Only ──────────────────────────────────────────────
+  // тФАтФАтФА Filter: USDT Futures Only тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   list = list.filter(isUsdtFutures);
 
   if (listEx !== "ALL") list = list.filter((c) => c.ex === listEx);
@@ -4554,7 +4602,7 @@ function createRow(c) {
 }
 
 function fillRow(c, rr) {
-  // ── 24h change % with subtle flash ─────────────────────────────────────────
+  // тФАтФА 24h change % with subtle flash тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const isPos = c.chg >= 0;
   const chgStr = fC(c.chg);
   if (rr.cells.chg.textContent !== chgStr) {
@@ -4562,13 +4610,13 @@ function fillRow(c, rr) {
     rr.cells.chg.className = "cc " + (isPos ? "pos" : "neg");
   }
 
-  // ── Volume 24h ─────────────────────────────────────────────────────────────
+  // тФАтФА Volume 24h тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const volStr = fV(c.v);
   if (rr.cells.vol.textContent !== volStr) {
     rr.cells.vol.textContent = volStr;
   }
 
-  // ── OI ─────────────────────────────────────────────────────────────────────
+  // тФАтФА OI тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const oiPct = getOiPct(c);
   const oiStr = oiPct.toFixed(1) + "%";
   if (rr.cells.oi.textContent !== oiStr) {
@@ -4576,7 +4624,7 @@ function fillRow(c, rr) {
   }
   rr.cells.oi.className = "coi " + getOiTone(oiPct);
 
-  // ── NATR ────────────────────────────────────────────────────────────
+  // тФАтФА NATR тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let natr = 0;
   if (c.p > 0 && c.h && c.l && c.h >= c.l) {
     natr = ((c.h - c.l) / c.p) * 100;
@@ -4587,7 +4635,7 @@ function fillRow(c, rr) {
     rr.cells.trades.textContent = natrStr;
   }
 
-  // ── Funding ────────────────────────────────────────────────────────────────
+  // тФАтФА Funding тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const funding = c.funding || 0;
   const fundStr = (funding >= 0 ? "+" : "") + funding.toFixed(3) + "%";
   if (rr.cells.funding.textContent !== fundStr) {
@@ -4595,7 +4643,7 @@ function fillRow(c, rr) {
     rr.cells.funding.className = "cfunding " + (funding > 0 ? "pos" : funding < 0 ? "neg" : "");
   }
 
-  // ── Correlation ────────────────────────────────────────────────────────────
+  // тФАтФА Correlation тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   if (c.corr !== undefined) {
     const corrStr = String(c.corr);
     if (rr.cells.corr.textContent !== corrStr) {
@@ -4703,7 +4751,7 @@ function updateSymInfoInterp(c) {
   }
 }
 
-// ─── Drawing controls ────────────────────────────────────────────────────────
+// тФАтФАтФА Drawing controls тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 document.querySelectorAll(".dt-btn[data-tool]").forEach((btn) => {
   btn.onclick = () => {
     if (pendingToolClick) clearTimeout(pendingToolClick);
@@ -4724,7 +4772,7 @@ document.querySelectorAll(".dt-btn[data-tool]").forEach((btn) => {
 });
 $("clear-draw").onclick = () => {
   if (!chartDrawings.length) return;
-  if (confirm("Очистить все рисунки?")) {
+  if (confirm("╨Ю╤З╨╕╤Б╤В╨╕╤В╤М ╨▓╤Б╨╡ ╤А╨╕╤Б╤Г╨╜╨║╨╕?")) {
     chartDrawings = [];
     saveDrawings();
     requestAnimationFrame(drawChart);
@@ -4734,7 +4782,7 @@ const _magnetBtn = $("magnet-btn");
 if (_magnetBtn) _magnetBtn.onclick = toggleMagnet;
 applyToolButtonColors();
 
-// ── Density settings panel toggle ────────────────────────────────────────────
+// тФАтФА Density settings panel toggle тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const densitySettingsToggle = $("chart-density-settings-toggle");
 const densityPanel = $("chart-density-panel");
 const densityClose = $("chart-density-close");
@@ -4907,7 +4955,7 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
   };
   btn.onmouseleave = () => {
     if (indInfoBox) {
-      indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
+      indInfoBox.textContent = "╨Э╨░╨▓╨╡╨┤╨╕╤В╨╡ на ╨╕╨╜╨┤╨╕╨║╨░╤В╨╛╤А, ╤З╤В╨╛╨▒╤Л ╨┐╤А╨╛╤З╨╕╤В╨░╤В╤М его ╨╛╨┐╨╕╤Б╨░╨╜╨╕╨╡.";
     }
   };
 });
@@ -4966,14 +5014,14 @@ if (cDexBtn && cDexMenu) {
 function updateChartDexDropdownUI() {
   const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
   if (chartDensityExes.size === allExes.length) {
-    if (cDexName) cDexName.textContent = "Все биржи";
+    if (cDexName) cDexName.textContent = "╨Т╤Б╨╡ ╨▒╨╕╤А╨╢╨╕";
     if (cDexCbAll) cDexCbAll.checked = true;
     cDexCbs.forEach(cb => cb.checked = true);
   } else {
     if (chartDensityExes.size === 0) {
-      if (cDexName) cDexName.textContent = "Выберите биржу";
+      if (cDexName) cDexName.textContent = "╨Т╤Л╨▒╨╡╤А╨╕╤В╨╡ ╨▒╨╕╤А╨╢╤Г";
     } else {
-      if (cDexName) cDexName.textContent = `Выбрано: ${chartDensityExes.size}`;
+      if (cDexName) cDexName.textContent = `╨Т╤Л╨▒╤А╨░╨╜╨╛: ${chartDensityExes.size}`;
     }
     if (cDexCbAll) cDexCbAll.checked = false;
     cDexCbs.forEach(cb => cb.checked = chartDensityExes.has(cb.value));
@@ -5122,7 +5170,7 @@ if (settingsBtn && settingsOverlay && settingsClose) {
             <input type="color" style="display:none">
           </div>
           <div class="s-row" style="margin-top:8px; padding:0; border:none">
-            <span style="font-size:10px">Прозрачность</span>
+            <span style="font-size:10px">╨Я╤А╨╛╨╖╤А╨░╤З╨╜╨╛╤Б╤В╤М</span>
             <div class="opacity-control">
               <input type="range" class="p-opacity-slider" min="0" max="100" value="${initialOpacity}">
               <span class="p-opacity-val" style="font-size:10px; min-width:25px">${initialOpacity}%</span>
@@ -5355,7 +5403,7 @@ if (settingsBtn && settingsOverlay && settingsClose) {
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
       resetBtn.onclick = () => {
-        if (confirm("Вы уверены, что хотите сбросить все настройки к начальным?")) {
+        if (confirm("╨Т╤Л ╤Г╨▓╨╡╤А╨╡╨╜╤Л, ╤З╤В╨╛ ╤Е╨╛╤В╨╕╤В╨╡ ╤Б╨▒╤А╨╛╤Б╨╕╤В╤М ╨▓╤Б╨╡ ╨╜╨░╤Б╤В╤А╨╛╨╣╨║╨╕ ╨║ ╨╜╨░╤З╨░╨╗╤М╨╜╤Л╨╝?")) {
           // Clear settings but keep drawings
           const keysToKeep = [];
           for (let i = 0; i < localStorage.length; i++) {
@@ -5469,7 +5517,7 @@ function selectCoin(c) {
   activeSym = c.sym;
   offsetX = 0;
 
-  // ── High-Frequency Direct Feed ──
+  // тФАтФА High-Frequency Direct Feed тФАтФА
   updateActiveTradeStream(c.ex, c.sym);
 
   // Reset displayP to actual price so interpolator doesn't carry over
@@ -5492,7 +5540,7 @@ function hideLoading() {
   setTimeout(() => (el.style.display = "none"), 300);
 }
 
-// ═══ Exchange dropdown ════════════════════════════════════════════════════════
+// тХРтХРтХР Exchange dropdown тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 const excBtn = $("exc-btn"),
   excMenu = $("exc-menu");
 
@@ -5587,7 +5635,7 @@ function syncExcDropdown(ex) {
   }
 }
 
-// ═══ UI Events ════════════════════════════════════════════════════════════════
+// тХРтХРтХР UI Events тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 document.querySelectorAll(".tfb").forEach((b) => {
   b.addEventListener("click", () => {
     document.querySelectorAll(".tfb").forEach((x) => x.classList.remove("on"));
@@ -5650,7 +5698,7 @@ if (typeof ResizeObserver !== "undefined" && $("cwrap")) {
   } catch (_) {}
 }
 
-// ═══ Color Tagging & Filtering Logic ═════════════════════════════════════════
+// тХРтХРтХР Color Tagging & Filtering Logic тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 const tagMenu = $("tag-menu"),
   filterMenu = $("filter-menu"),
   drawColorMenu = $("draw-color-menu"),
@@ -5711,7 +5759,7 @@ function showFilterMenu(e) {
     const empty = document.createElement("div");
     empty.style.fontSize = "10px";
     empty.style.color = "var(--t3)";
-    empty.textContent = "Нет меток";
+    empty.textContent = "╨Э╨╡╤В ╨╝╨╡╤В╨╛╨║";
     grid.appendChild(empty);
   }
   closeMenus();
@@ -5792,7 +5840,7 @@ $("fib-master-color").onclick = (e) => {
   if (!editingFibDrawing) return;
   const rect = e.currentTarget.getBoundingClientRect();
   openDrawColorMenu({
-    title: "Основной цвет Fib",
+    title: "╨Ю╤Б╨╜╨╛╨▓╨╜╨╛╨╣ ╤Ж╨▓╨╡╤В Fib",
     currentColor: editingFibDrawing.color || getToolColor("fibgrid"),
     pageX: rect.right + 8,
     pageY: rect.top,
@@ -5827,7 +5875,7 @@ document.addEventListener("contextmenu", (e) => {
   if (!e.target.closest(".cr")) closeMenus();
 });
 
-// ═══ Density Map v2 — Bubble Map ═════════════════════════════════════════════
+// тХРтХРтХР Density Map v2 тАФ Bubble Map тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 let densityCanvas, densityCtx, densityW, densityH;
 let densityData = [];     // raw wall objects from server
 let densityBubbles = [];  // layout objects with {x,y,vx,vy,r,...}
@@ -5898,13 +5946,13 @@ class ChartInstance {
       <div class="cell-header">
         <div class="cell-header-left">
           <div class="cell-ex-icon" style="display:none"></div>
-          <span class="cell-sym" title="Кликните для смены тикера">...</span>
-          <span class="cell-tf" title="Таймфрейм">--</span>
+          <span class="cell-sym" title="╨Ъ╨╗╨╕╨║╨╜╨╕╤В╨╡ ╨┤╨╗╤П ╤Б╨╝╨╡╨╜╤Л ╤В╨╕╨║╨╡╤А╨░">...</span>
+          <span class="cell-tf" title="╨в╨░╨╣╨╝╤Д╤А╨╡╨╣╨╝">--</span>
           <span class="cell-chg">--</span>
         </div>
         <div class="cell-header-right">
           <span class="cell-price">--</span>
-          <div class="cell-fs-btn" title="Развернуть">
+          <div class="cell-fs-btn" title="╨а╨░╨╖╨▓╨╡╤А╨╜╤Г╤В╤М">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
@@ -5946,7 +5994,7 @@ class ChartInstance {
               if (isExpanded) {
                 this.el.classList.remove("expanded");
                 grid.classList.remove("has-expanded");
-                this.fsBtn.title = "Развернуть";
+                this.fsBtn.title = "╨а╨░╨╖╨▓╨╡╤А╨╜╤Г╤В╤М";
                 this.fsBtn.innerHTML = `
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                     <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -5958,7 +6006,7 @@ class ChartInstance {
                   cell.classList.remove("expanded");
                   const btn = cell.querySelector(".cell-fs-btn");
                   if (btn) {
-                    btn.title = "Развернуть";
+                    btn.title = "╨а╨░╨╖╨▓╨╡╤А╨╜╤Г╤В╤М";
                     btn.innerHTML = `
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                         <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -5968,7 +6016,7 @@ class ChartInstance {
                 });
                 this.el.classList.add("expanded");
                 grid.classList.add("has-expanded");
-                this.fsBtn.title = "Свернуть";
+                this.fsBtn.title = "╨б╨▓╨╡╤А╨╜╤Г╤В╤М";
                 this.fsBtn.innerHTML = `
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                     <path d="M4 12H1V9M1 12L6 7M12 4H15V7M15 4L10 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -6457,12 +6505,12 @@ class ChartInstance {
     const up = lastPrice >= lastCandle.o;
     const ly = clamp(toY(lastPrice), 10, ch - 10);
 
-    // ── Unmitigated Levels overlay ────────────────────────────────────────────
+    // тФАтФА Unmitigated Levels overlay тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
     if (activeView === "formations" && this.levels && this.levels.length > 0) {
       const getX = (idx) => (idx - viewStart) * candleWidth + candleWidth / 2;
       const N = this.candles.length;
 
-      // ── Pre-calculate and adjust Y label coordinates to prevent overlapping ────
+      // тФАтФА Pre-calculate and adjust Y label coordinates to prevent overlapping тФАтФАтФАтФА
       this.levels.forEach(setup => {
         if (setup.isTrendline) {
           const currentPriceAtLine = setup.p1.price + (setup.p2.price - setup.p1.price) * ((N - 1) - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
@@ -6553,14 +6601,14 @@ class ChartInstance {
           const y = toY(setup.price);
           if (y < 2 || y > ch - 2) return;
 
-          // ── Solid horizontal line: from first swing → right edge (PW) ──────────
+          // тФАтФА Solid horizontal line: from first swing тЖТ right edge (PW) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
           const x0 = Math.max(0, getX(setup.swingIdx));
           ctx.strokeStyle = lineColor;
           ctx.lineWidth = 1.5;
           ctx.setLineDash([]);
           ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(PW, y); ctx.stroke();
 
-          // ── Price label on the right ──────────────────────────────────────
+          // тФАтФА Price label on the right тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
           const labelH = 15, labelW = PR - 6;
           roundRect(ctx, PW + 3, setup.labelY - labelH / 2, labelW, labelH, 3);
           ctx.fillStyle = lineColor;
@@ -6570,7 +6618,7 @@ class ChartInstance {
           ctx.textAlign = 'center';
           ctx.fillText(fP(setup.price), PW + PR / 2, setup.labelY + 3);
 
-          // ── Draw circles: strictly MAX 2 points (1. Level Origin, 2. Single Retest Touch) ─
+          // тФАтФА Draw circles: strictly MAX 2 points (1. Level Origin, 2. Single Retest Touch) тФА
           const renderIndices = [];
           if (setup.swingIdx !== undefined) renderIndices.push(setup.swingIdx);
           if (setup.touchIdx !== undefined) renderIndices.push(setup.touchIdx);
@@ -6594,7 +6642,7 @@ class ChartInstance {
       ctx.textAlign = 'left';
     }
 
-    // ── Last price dashed line + label ─────────────────────────────────────────
+    // тФАтФА Last price dashed line + label тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
     ctx.setLineDash([3, 3]);
     ctx.strokeStyle = "rgba(255,255,255,0.15)";
     ctx.lineWidth = 1;
@@ -6614,7 +6662,7 @@ class ChartInstance {
     ctx.textAlign = "center";
     ctx.fillText(fP(lastPrice), PW + PR / 2, ly + 4);
 
-    // ── Draw Overlay Indicators on grid cell ──
+    // тФАтФА Draw Overlay Indicators on grid cell тФАтФА
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, PW, PH);
@@ -6760,7 +6808,7 @@ class ChartInstance {
     }
     ctx.restore();
 
-    // ── Draw Walls (Density) on Chart ──
+    // тФАтФА Draw Walls (Density) on Chart тФАтФА
     let gridBadges = [];
     if (chartDensityEnabled) {
       const ticker = coins.get(this.ex + ":" + this.sym);
@@ -6867,7 +6915,7 @@ class ChartInstance {
       }
     }
 
-    // ── Ruler tool drawing ──────────────────────────────────────────────────────
+    // тФАтФА Ruler tool drawing тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
     if (this.isRuler && this.rulerStart && this.rulerEnd && this.rulerStart.idx !== null && this.rulerEnd.idx !== null) {
       const getX = (idx) => (idx - s + futureGap) * candleWidth + candleWidth / 2;
       const xStart = getX(this.rulerStart.idx);
@@ -6943,7 +6991,7 @@ class ChartInstance {
       const pctSign = pct >= 0 ? "+" : "";
       const priceSign = deltaPrice >= 0 ? "+" : "";
       const text1 = `${pctSign}${pct.toFixed(2)}% (${priceSign}${fP(deltaPrice)})`;
-      const text2 = `${bars} свечей, ${timeStr}`;
+      const text2 = `${bars} ╤Б╨▓╨╡╤З╨╡╨╣, ${timeStr}`;
 
       ctx.font = "bold 9px Inter";
       const w1 = ctx.measureText(text1).width;
@@ -7143,7 +7191,7 @@ function initChartGrid() {
   const startIdx = gridPage * gridSize;
   const pageCoins = sortedCoins.slice(startIdx, startIdx + gridSize);
 
-  $("grid-page-label").textContent = `Стр. ${gridPage + 1}`;
+  $("grid-page-label").textContent = `╨б╤В╤А. ${gridPage + 1}`;
 
   for (let i = 0; i < gridSize; i++) {
     const inst = new ChartInstance(container, i);
@@ -7174,7 +7222,7 @@ function renderScreenerHeatmap() {
 }
 
 
-// ── Tab switching ─────────────────────────────────────────────────────────────
+// тФАтФА Tab switching тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 window.switchView = function switchView(view) {
   activeView = view;
   densityHover = -1; // Reset hover index when switching views
@@ -7188,10 +7236,10 @@ window.switchView = function switchView(view) {
   document.querySelectorAll("#nav .ntab").forEach(t => {
     const text = t.textContent.trim().toLowerCase();
     const isMatch =
-      (view === "screener" && (text.includes("скринер") || t.id === "tab-screener")) ||
-      (view === "map" && text.includes("карта")) ||
-      (view === "formations" && text.includes("формации")) ||
-      (view === "backtest" && text.includes("бэктест")) ||
+      (view === "screener" && (text.includes("╤Б╨║╤А╨╕╨╜╨╡╤А") || t.id === "tab-screener")) ||
+      (view === "map" && text.includes("╨║╨░╤А╤В╨░")) ||
+      (view === "formations" && text.includes("╤Д╨╛╤А╨╝╨░╤Ж╨╕╨╕")) ||
+      (view === "backtest" && text.includes("╨▒╤Н╨║╤В╨╡╤Б╤В")) ||
       (view === "journal" && (text.includes("дневник") || t.id === "tab-journal"));
     t.classList.toggle("on", isMatch);
     t.setAttribute("aria-selected", isMatch ? "true" : "false");
@@ -7262,13 +7310,13 @@ window.switchView = function switchView(view) {
 document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
   tab.addEventListener("click", (e) => {
     const text = tab.textContent.trim().toLowerCase();
-    if (text.includes("скринер") || idx === 0) {
+    if (text.includes("╤Б╨║╤А╨╕╨╜╨╡╤А") || idx === 0) {
       window.switchView("screener");
-    } else if (text.includes("карта") || idx === 1) {
+    } else if (text.includes("╨║╨░╤А╤В╨░") || idx === 1) {
       window.switchView("map");
-    } else if (text.includes("формации") || idx === 3) {
+    } else if (text.includes("╤Д╨╛╤А╨╝╨░╤Ж╨╕╨╕") || idx === 3) {
       window.switchView("formations");
-    } else if (text.includes("бэктест") || idx === 4) {
+    } else if (text.includes("╨▒╤Н╨║╤В╨╡╤Б╤В") || idx === 4) {
       window.switchView("backtest");
     } else if (text.includes("дневник") || tab.id === "tab-journal" || idx === 5) {
       window.switchView("journal");
@@ -7276,7 +7324,7 @@ document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
   });
 });
 
-// ═══ Density Map — Radar Visualization ════════════════════════════════════════
+// тХРтХРтХР Density Map тАФ Radar Visualization тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 
 function initDensityCanvas() {
   densityCanvas = $("density-canvas");
@@ -7321,7 +7369,7 @@ setInterval(() => {
   if (Date.now() - densityLastUpdate > 15000) fetchWalls();
 }, 12000);
 
-// ── Filter ────────────────────────────────────────────────────────────────────
+// тФАтФА Filter тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function getFilteredDensity() {
   return densityData.filter(d => {
     if (densityFilter !== "all" && d.side !== densityFilter) return false;
@@ -7339,13 +7387,13 @@ function getFilteredDensity() {
   });
 }
 
-// ── Layout: distribute badges radially by pct ─────────────────────────────────
+// тФАтФА Layout: distribute badges radially by pct тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function layoutDensityBadges() {
   const filtered = getFilteredDensity();
 
   // Update count badge
   const countEl = $("density-count");
-  if (countEl) countEl.textContent = filtered.length + " стен";
+  if (countEl) countEl.textContent = filtered.length + " ╤Б╤В╨╡╨╜";
 
   if (!densityW || !densityH) return;
   const cx = densityW / 2;
@@ -7366,7 +7414,7 @@ function layoutDensityBadges() {
   }
 }
 
-// ── Draw density radar map ────────────────────────────────────────────────────
+// тФАтФА Draw density radar map тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function drawDensityMap() {
   if (!densityCtx || !densityW || !densityH) return;
   const ctx = densityCtx;
@@ -7378,7 +7426,7 @@ function drawDensityMap() {
 
   ctx.clearRect(0, 0, densityW, densityH);
 
-  // ── Background gradient
+  // тФАтФА Background gradient
   const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.8);
   bg.addColorStop(0, "#0c0e1a");
   bg.addColorStop(0.55, "#080a12");
@@ -7386,7 +7434,7 @@ function drawDensityMap() {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, densityW, densityH);
 
-  // ── Dual ambient glow (bid teal + ask red)
+  // тФАтФА Dual ambient glow (bid teal + ask red)
   const gBid = ctx.createRadialGradient(cx - maxR * 0.25, cy, 0, cx, cy, maxR * 1.1);
   gBid.addColorStop(0, "rgba(22,199,132, 0.06)");
   gBid.addColorStop(1, "transparent");
@@ -7397,7 +7445,7 @@ function drawDensityMap() {
   gAsk.addColorStop(1, "transparent");
   ctx.fillStyle = gAsk; ctx.fillRect(0, 0, densityW, densityH);
 
-  // ── Radial spokes (24)
+  // тФАтФА Radial spokes (24)
   ctx.save();
   for (let a = 0; a < 24; a++) {
     const angle = (a / 24) * Math.PI * 2 - Math.PI / 2;
@@ -7411,7 +7459,7 @@ function drawDensityMap() {
   }
   ctx.restore();
 
-  // ── Concentric rings
+  // тФАтФА Concentric rings
   const rings = [
     { pct: 1, label: "1%" },
     { pct: 2, label: "2%" },
@@ -7436,7 +7484,7 @@ function drawDensityMap() {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // label ×4
+    // label ├Ч4
     ctx.font = `bold ${accent ? 13 : 11}px Inter`;
     ctx.fillStyle = accent ? "rgba(175,140,255, 0.85)" : "rgba(138,80,255, 0.55)";
     [[cx + r + 8, cy + 5, "left"], [cx - r - 8, cy + 5, "right"],
@@ -7446,13 +7494,13 @@ function drawDensityMap() {
   }
   ctx.restore();
 
-  // ── Outer ring decoration
+  // тФАтФА Outer ring decoration
   ctx.save();
   ctx.beginPath(); ctx.arc(cx, cy, maxR + 12, 0, Math.PI * 2);
   ctx.strokeStyle = "rgba(138,80,255, 0.08)"; ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
 
-  // ── Animated scan sweep
+  // тФАтФА Animated scan sweep
   const sweepAngle = ((t % 6000) / 6000) * Math.PI * 2 - Math.PI / 2;
   ctx.save();
   ctx.beginPath();
@@ -7473,7 +7521,7 @@ function drawDensityMap() {
   ctx.strokeStyle = "rgba(138,80,255, 0.35)"; ctx.lineWidth = 1.5; ctx.stroke();
   ctx.restore();
 
-  // ── Center pulsing dot
+  // тФАтФА Center pulsing dot
   const pulse = 0.5 + Math.sin(t / 700) * 0.3;
   ctx.save();
   // outer glow ring
@@ -7495,7 +7543,7 @@ function drawDensityMap() {
   ctx.fillText("PRICE", cx, cy + 22);
   ctx.restore();
 
-  // ── Draw badges
+  // тФАтФА Draw badges
   const filtered = getFilteredDensity();
   densityHover = -1;
   for (let i = 0; i < filtered.length; i++) {
@@ -7508,7 +7556,7 @@ function drawDensityMap() {
     drawDensityBubble(ctx, d, d.rx, d.ry, isHover);
   }
 
-  // ── Hover connector line
+  // тФАтФА Hover connector line
   if (densityHover >= 0) {
     const d = filtered[densityHover];
     const isBid = d.side === "bid";
@@ -7518,7 +7566,7 @@ function drawDensityMap() {
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(d.rx, d.ry); ctx.stroke();
     ctx.setLineDash([]); ctx.restore();
 
-    // ── Tooltip
+    // тФАтФА Tooltip
     // Math to get tip width
     const tipW = 230;
     const tipH = 125 + (d.count > 1 ? 20 : 0);
@@ -7533,10 +7581,10 @@ function drawDensityMap() {
     ctx.fillStyle = "rgba(10, 11, 16, 0.96)"; ctx.fill();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.05)"; ctx.lineWidth = 1; ctx.stroke();
 
-    // 1. Header (TRADOOR.S — СОПРОТИВЛЕНИЕ)
+    // 1. Header (TRADOOR.S тАФ ╨б╨Ю╨Я╨а╨Ю╨в╨Ш╨Т╨Ы╨Х╨Э╨Ш╨Х)
     const suffix = d.market === "spot" ? ".S" : ".F";
-    const headerTitle = `${d.base}${suffix} — `;
-    const headerType = isBid ? "ПОДДЕРЖКА" : "СОПРОТИВЛЕНИЕ";
+    const headerTitle = `${d.base}${suffix} тАФ `;
+    const headerType = isBid ? "╨Я╨Ю╨Ф╨Ф╨Х╨а╨Ц╨Ъ╨Р" : "╨б╨Ю╨Я╨а╨Ю╨в╨Ш╨Т╨Ы╨Х╨Э╨Ш╨Х";
     const headerTypeColor = isBid ? "#16c784" : "#ff4560";
 
     ctx.textBaseline = "top";
@@ -7572,19 +7620,19 @@ function drawDensityMap() {
       currY += 20;
     };
 
-    // 2. Рынок
-    const marketText = d.market === "spot" ? "СПОТ" : "ФЬЮЧЕРСЫ";
+    // 2. ╨а╤Л╨╜╨╛╨║
+    const marketText = d.market === "spot" ? "╨б╨Я╨Ю╨в" : "╨д╨м╨о╨з╨Х╨а╨б╨л";
     const marketColor = d.market === "spot" ? "#16c784" : "#eab308";
-    drawRow("РЫНОК", marketText, marketColor);
+    drawRow("╨а╨л╨Э╨Ю╨Ъ", marketText, marketColor);
 
-    // 3. Объем
+    // 3. ╨Ю╨▒╤К╨╡╨╝
     const volText = d.wallK >= 1000 ? (d.wallK / 1000).toFixed(1) + "M$" : d.wallK + "K$";
-    drawRow("ОБЪЕМ", volText);
+    drawRow("╨Ю╨С╨к╨Х╨Ь", volText);
 
-    // 4. Цена / Дист
+    // 4. ╨ж╨╡╨╜╨░ / ╨Ф╨╕╤Б╤В
     const fmtPrice = d.price < 1 ? +d.price.toPrecision(4) : +d.price.toFixed(4);
     const priceText = `${fmtPrice} (${d.pct.toFixed(2)}%)`;
-    drawRow("ЦЕНА / ДИСТ", priceText);
+    drawRow("╨ж╨Х╨Э╨Р / ╨Ф╨Ш╨б╨в", priceText);
 
     // Dotted separator
     currY += 4;
@@ -7597,18 +7645,18 @@ function drawDensityMap() {
     ctx.setLineDash([]);
     currY += 12;
 
-    // 5. Время жизни
+    // 5. ╨Т╤А╨╡╨╝╤П жизни
     let formatAge = "-";
     if (d.age) {
-      if (d.age < 60) formatAge = `${d.age}с`;
-      else if (d.age < 3600) formatAge = `${Math.floor(d.age / 60)}м`;
-      else formatAge = `${Math.floor(d.age / 3600)}ч ${Math.floor((d.age % 3600) / 60)}м`;
+      if (d.age < 60) formatAge = `${d.age}╤Б`;
+      else if (d.age < 3600) formatAge = `${Math.floor(d.age / 60)}╨╝`;
+      else formatAge = `${Math.floor(d.age / 3600)}╤З ${Math.floor((d.age % 3600) / 60)}╨╝`;
     }
-    drawRow("ВРЕМЯ ЖИЗНИ", formatAge, "#fbbf24");
+    drawRow("╨Т╨а╨Х╨Ь╨п ╨Ц╨Ш╨Ч╨Э╨Ш", formatAge, "#fbbf24");
 
     // 6. Cluster
     if (d.count > 1) {
-      drawRow("КЛАСТЕР", `${d.count} ур.`, "#a78bfa");
+      drawRow("╨Ъ╨Ы╨Р╨б╨в╨Х╨а", `${d.count} ╤Г╤А.`, "#a78bfa");
     }
 
     ctx.restore();
@@ -7617,11 +7665,11 @@ function drawDensityMap() {
   if (filtered.length === 0) {
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.font = "15px Inter"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("Сканирование стаканов...", cx, cy + 55);
+    ctx.fillText("╨б╨║╨░╨╜╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡ ╤Б╤В╨░╨║╨░╨╜╨╛╨▓...", cx, cy + 55);
   }
 }
 
-// ── Draw a single bubble badge ────────────────────────────────────────────────
+// тФАтФА Draw a single bubble badge тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function drawDensityBubble(ctx, d, x, y, isHover) {
   const isBid = d.side === "bid";
   const scoreFactor = Math.min(1. + (d.rtwi || 5) / 30, 2.2);
@@ -7707,7 +7755,7 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
 }
 
 
-// ── Animation loop ────────────────────────────────────────────────────────────
+// тФАтФА Animation loop тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function startDensityLoop() {
   if (densityAnimFrame) return;
   function loop() {
@@ -7718,7 +7766,7 @@ function startDensityLoop() {
   densityAnimFrame = requestAnimationFrame(loop);
 }
 
-// ── Mouse interactions ────────────────────────────────────────────────────────
+// тФАтФА Mouse interactions тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 document.addEventListener("mousemove", (e) => {
   if (activeView !== "map" || !densityCanvas) return;
   const rect = densityCanvas.getBoundingClientRect();
@@ -7763,7 +7811,7 @@ document.addEventListener("click", (e) => {
   }
 });
 
-// ── Density exchange filter dropdown ──────────────────────────────────────────
+// тФАтФА Density exchange filter dropdown тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const dexBtn = $("density-exc-btn");
 const dexMenu = $("density-exc-menu");
 const dexName = $("density-exc-name");
@@ -7787,14 +7835,14 @@ if (dexBtn && dexMenu) {
 function updateDexDropdownUI() {
   const allExes = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"];
   if (densityExFilter.size === allExes.length) {
-    if (dexName) dexName.textContent = "Все биржи";
+    if (dexName) dexName.textContent = "╨Т╤Б╨╡ ╨▒╨╕╤А╨╢╨╕";
     if (dexCbAll) dexCbAll.checked = true;
     dexCbs.forEach(cb => cb.checked = true);
   } else {
     if (densityExFilter.size === 0) {
-      if (dexName) dexName.textContent = "Выберите биржу";
+      if (dexName) dexName.textContent = "╨Т╤Л╨▒╨╡╤А╨╕╤В╨╡ ╨▒╨╕╤А╨╢╤Г";
     } else {
-      if (dexName) dexName.textContent = `Выбрано: ${densityExFilter.size}`;
+      if (dexName) dexName.textContent = `╨Т╤Л╨▒╤А╨░╨╜╨╛: ${densityExFilter.size}`;
     }
     if (dexCbAll) dexCbAll.checked = false;
     dexCbs.forEach(cb => cb.checked = densityExFilter.has(cb.value));
@@ -7820,7 +7868,7 @@ dexCbs.forEach(cb => {
   });
 });
 
-// ── Filter buttons ────────────────────────────────────────────────────────────
+// тФАтФА Filter buttons тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 document.querySelectorAll(".density-filter-btn[data-dtype]").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".density-filter-btn[data-dtype]").forEach(b => b.classList.remove("on"));
@@ -7848,7 +7896,7 @@ document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(btn => {
   });
 });
 
-// ── Sort buttons ──────────────────────────────────────────────────────────────
+// тФАтФА Sort buttons тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 document.querySelectorAll(".density-sort-btn[data-dsort]").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".density-sort-btn[data-dsort]").forEach(b => b.classList.remove("on"));
@@ -7858,7 +7906,7 @@ document.querySelectorAll(".density-sort-btn[data-dsort]").forEach(btn => {
   });
 });
 
-// ── Search input ──────────────────────────────────────────────────────────────
+// тФАтФА Search input тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const densitySearchInput = $("density-search-input");
 if (densitySearchInput) {
   densitySearchInput.addEventListener("input", (e) => {
@@ -7867,14 +7915,14 @@ if (densitySearchInput) {
   });
 }
 
-// ── Resize ────────────────────────────────────────────────────────────────────
+// тФАтФА Resize тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 window.addEventListener("resize", () => {
   if (activeView === "map") {
     resizeDensityCanvas();
   }
 });
 
-// ═══ Init ═════════════════════════════════════════════════════════════════════
+// тХРтХРтХР Init тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 (function init() {
   loadTags();
   loadDrawings();
@@ -7932,7 +7980,7 @@ window.addEventListener("resize", () => {
           if (!optionExists) {
             const opt = document.createElement("option");
             opt.value = gridSize;
-            opt.text = gridSize + " Графиков";
+            opt.text = gridSize + " ╨У╤А╨░╤Д╨╕╨║╨╛╨▓";
             sel.appendChild(opt);
           }
           sel.value = gridSize;
@@ -7953,9 +8001,9 @@ window.addEventListener("resize", () => {
     const valSpan = $("custom-grid-select-val");
     if (!valSpan) return;
 
-    let label = gridSize + " Графиков";
+    let label = gridSize + " ╨У╤А╨░╤Д╨╕╨║╨╛╨▓";
     if (gridSize === 2 || gridSize === 3 || gridSize === 4) {
-      label = gridSize + " Графика";
+      label = gridSize + " ╨У╤А╨░╤Д╨╕╨║╨░";
     }
     valSpan.textContent = label;
 
@@ -8177,7 +8225,7 @@ window.addEventListener("resize", () => {
   startRender();
   startMcLoop(); // start 240fps logic loop
   if (location.href.startsWith("file:")) {
-    $("cd-label").textContent = "Прямое подключение";
+    $("cd-label").textContent = "Reconnecting...";
     loadFallback();
   } else {
     connectWS();
@@ -8195,7 +8243,7 @@ window.addEventListener("resize", () => {
     needRebuild = true;
   }, 2000);
 
-  // ── Debug overlay (tap logo 5x to toggle) ──────────────────────────────────
+  // тФАтФА Debug overlay (tap logo 5x to toggle) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   (function () {
     const dbg = document.createElement("div");
     dbg.id = "dbg-overlay";
@@ -8241,19 +8289,19 @@ window.addEventListener("resize", () => {
     coinListEl.addEventListener("mouseleave", () => { isHoveringScreener = false; });
   }
 
-  // ─── Unmitigated Level Detector ──────────────────────────────────────────────
+  // тФАтФАтФА Unmitigated Level Detector тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   //
   // An "unmitigated" level is a swing high or low where:
   //   1. Price formed a clear local extreme (swing)
   //   2. Price DEPARTED quickly (strong move away)
   //   3. Price has NOT returned to that zone since
   //
-  // These are the "debts" the market owes — it WILL come back to cover them.
+  // These are the "debts" the market owes тАФ it WILL come back to cover them.
   //
   // Returns up to 3 setup objects:
   //   {
   //     price         : level price
-  //     direction     : 'up' | 'down'  — direction price must travel to mitigate
+  //     direction     : 'up' | 'down'  тАФ direction price must travel to mitigate
   //     swingIdx      : candle index where level was formed
   //     departureIdx  : candle where price made the decisive move away
   //     strength      : number for sorting
@@ -8265,7 +8313,7 @@ window.addEventListener("resize", () => {
 
     const N = candles.length;
 
-    // ── 1. ATR-14 ────────────────────────────────────────────────────────────
+    // тФАтФА 1. ATR-14 тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
     let atrSum = 0;
     for (let i = Math.max(1, N - 14); i < N; i++) {
       const c = candles[i], p = candles[i - 1];
@@ -8275,7 +8323,7 @@ window.addEventListener("resize", () => {
     const tol = atr * 0.4;   // within 40% ATR = "price visited this zone"
     const minDep = atr * 0.8; // departure must be at least 80% ATR in 3 bars
 
-    // ── 2. Swing Highs & Lows (window=3) ─────────────────────────────────────
+    // тФАтФА 2. Swing Highs & Lows (window=3) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
     const W = 3;
     const swings = [];
     for (let i = W; i < N - W; i++) {
@@ -8295,7 +8343,7 @@ window.addEventListener("resize", () => {
     for (const sw of swings) {
       const lvl = sw.price;
 
-      // ── 3. Departure: price must have moved away strongly after swing ─────
+      // тФАтФА 3. Departure: price must have moved away strongly after swing тФАтФАтФАтФАтФА
       // Check that within 5 bars after swing, price moved at least minDep away
       let departed = false;
       let departureIdx = sw.idx;
@@ -8310,7 +8358,7 @@ window.addEventListener("resize", () => {
       }
       if (!departed) continue;
 
-      // ── 4. UNMITIGATED: price must NOT have pierced the level ───────────
+      // тФАтФА 4. UNMITIGATED: price must NOT have pierced the level тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
       let mitigated = false;
       for (let i = sw.idx + 1; i < N; i++) {
         if (sw.type === 'high') {
@@ -8323,25 +8371,25 @@ window.addEventListener("resize", () => {
       }
       if (mitigated) continue;
 
-      // ── 5. Direction price needs to travel to mitigate ────────────────────
-      // Unmitigated HIGH above current price → price needs to go UP
-      // Unmitigated LOW below current price → price needs to go DOWN
+      // тФАтФА 5. Direction price needs to travel to mitigate тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+      // Unmitigated HIGH above current price тЖТ price needs to go UP
+      // Unmitigated LOW below current price тЖТ price needs to go DOWN
       let direction;
       if (sw.type === 'high' && lvl > lastPrice) {
         direction = 'up';   // price must rise to reach this unmitigated high
       } else if (sw.type === 'low' && lvl < lastPrice) {
         direction = 'down'; // price must fall to reach this unmitigated low
       } else {
-        // Level is on the wrong side — skip (e.g. unmitigated high already
-        // above where price is going, but price is above it — shouldn't happen
+        // Level is on the wrong side тАФ skip (e.g. unmitigated high already
+        // above where price is going, but price is above it тАФ shouldn't happen
         // given our mitigated check, but guard anyway)
         continue;
       }
 
-      // ── 6. Recency score ─────────────────────────────────────────────────
+      // тФАтФА 6. Recency score тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
       // Prefer more recent + farther swings (price owes more distance)
       const barsAgo = N - 1 - sw.idx;
-      // Skip if too old (> 200 bars) — irrelevant for current price action
+      // Skip if too old (> 200 bars) тАФ irrelevant for current price action
       if (barsAgo > 200) continue;
 
       const recency = 1 - barsAgo / 200;
@@ -8358,7 +8406,7 @@ window.addEventListener("resize", () => {
       });
     }
 
-    // ── 7. Deduplicate: keep strongest, show up to 8 unmitigated levels ──────
+    // тФАтФА 7. Deduplicate: keep strongest, show up to 8 unmitigated levels тФАтФАтФАтФАтФАтФА
     candidates.sort((a, b) => b.strength - a.strength);
     const kept = [];
     for (const c of candidates) {
@@ -8426,7 +8474,7 @@ window.addEventListener("resize", () => {
       let lastTouchIndex = cl.lastTouch;
 
       for (let i = firstIdx; i < N; i++) {
-        // High strictly above resistance level => ЗАКОЛ! Level is destroyed.
+        // High strictly above resistance level => ╨Ч╨Р╨Ъ╨Ю╨Ы! Level is destroyed.
         if (candles[i].h > cl.price) {
           active = false;
           break;
@@ -8489,7 +8537,7 @@ window.addEventListener("resize", () => {
       let lastTouchIndex = cl.lastTouch;
 
       for (let i = firstIdx; i < N; i++) {
-        // Low strictly below support level => ЗАКОЛ! Level is destroyed.
+        // Low strictly below support level => ╨Ч╨Р╨Ъ╨Ю╨Ы! Level is destroyed.
         if (candles[i].l < cl.price) {
           active = false;
           break;
@@ -8699,7 +8747,7 @@ window.addEventListener("resize", () => {
     const MAX_RETEST_AGE = 15;    // Retest touch MUST have occurred within the last 15 candles
     const candidates = [];
 
-    // ── 1. Resistance clusters (Bullish Retest: Price below -> Break UP -> Depart UP -> Retest from ABOVE) ──
+    // тФАтФА 1. Resistance clusters (Bullish Retest: Price below -> Break UP -> Depart UP -> Retest from ABOVE) тФАтФА
     const resClusters = [];
     for (const sw of highSwings) {
       let merged = false;
@@ -8760,7 +8808,7 @@ window.addEventListener("resize", () => {
           // Retest CANNOT happen less than 3 candles after breakout
           if (i < breakIdx + 3) continue;
 
-          // Touch from above — only valid IF price departed first
+          // Touch from above тАФ only valid IF price departed first
           if (departed && c.l <= cl.price * (1 + tol)) {
             if (c.l < cl.price * (1 - MAX_OVERSHOOT)) break; // Deep breach
             if (c.c < cl.price) break; // Retest candle must close ABOVE level
@@ -8802,7 +8850,7 @@ window.addEventListener("resize", () => {
       }
     }
 
-    // ── 2. Support clusters (Bearish Retest: Price above -> Break DOWN -> Depart DOWN -> Retest from BELOW) ──
+    // тФАтФА 2. Support clusters (Bearish Retest: Price above -> Break DOWN -> Depart DOWN -> Retest from BELOW) тФАтФА
     const supClusters = [];
     for (const sw of lowSwings) {
       let merged = false;
@@ -8863,7 +8911,7 @@ window.addEventListener("resize", () => {
           // Retest CANNOT happen less than 3 candles after breakout
           if (i < breakIdx + 3) continue;
 
-          // Touch from below — only valid IF price departed first
+          // Touch from below тАФ only valid IF price departed first
           if (departed && c.h >= cl.price * (1 - tol)) {
             if (c.h > cl.price * (1 + MAX_OVERSHOOT)) break; // Deep breach
             if (c.c > cl.price) break; // Retest candle must close BELOW level
@@ -8937,10 +8985,10 @@ window.addEventListener("resize", () => {
     const tol = 0.003; // wider clustering tolerance to build stronger levels
     const candidates = [];
     const MIN_TOUCHES = 2; // level must have at least 2 swing touches
-    const MIN_BREAKOUT_DIST = 0.015; // price must travel ≥1.5% beyond level to confirm breakout
+    const MIN_BREAKOUT_DIST = 0.015; // price must travel тЙе1.5% beyond level to confirm breakout
     const APPROACH_ZONE = 0.015; // price is "approaching" when within 1.5% of level
 
-    // ── Resistance clusters (broken upward → support retest from above) ──
+    // тФАтФА Resistance clusters (broken upward тЖТ support retest from above) тФАтФА
     const resClusters = [];
     for (const sw of highSwings) {
       let merged = false;
@@ -8974,7 +9022,7 @@ window.addEventListener("resize", () => {
       }
       if (breakIdx === -1) continue;
 
-      // Breakout must be PROVEN: price had to travel ≥1.5% above the level at some point
+      // Breakout must be PROVEN: price had to travel тЙе1.5% above the level at some point
       let maxAbove = 0;
       let peakIdx = breakIdx;
       for (let i = breakIdx; i < N; i++) {
@@ -9024,7 +9072,7 @@ window.addEventListener("resize", () => {
       });
     }
 
-    // ── Support clusters (broken downward → resistance retest from below) ──
+    // тФАтФА Support clusters (broken downward тЖТ resistance retest from below) тФАтФА
     const supClusters = [];
     for (const sw of lowSwings) {
       let merged = false;
@@ -9058,7 +9106,7 @@ window.addEventListener("resize", () => {
       }
       if (breakIdx === -1) continue;
 
-      // Breakout must be PROVEN: price had to travel ≥1.5% below the level
+      // Breakout must be PROVEN: price had to travel тЙе1.5% below the level
       let maxBelow = 0;
       let troughIdx = breakIdx;
       for (let i = breakIdx; i < N; i++) {
@@ -9140,7 +9188,7 @@ window.addEventListener("resize", () => {
     return window.detectChartLevelsAndTouches(candles) || [];
   };
 
-  // ─── Formations View Logic v2 (Simplified Multi-Charts) ───────────────────
+  // тФАтФАтФА Formations View Logic v2 (Simplified Multi-Charts) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let formationsCols = 2;
   let formationsTf = "4h";
   let activeFormation = 'cascades';
@@ -9182,9 +9230,9 @@ window.addEventListener("resize", () => {
 
   function syncFormationsGridSelect() {
     if (!fgGridBtn || !fgGridMenu || !fgGridVal) return;
-    let label = formationsCols + " Графиков";
-    if (formationsCols === 1) label = formationsCols + " График";
-    else if (formationsCols >= 2 && formationsCols <= 4) label = formationsCols + " Графика";
+    let label = formationsCols + " ╨У╤А╨░╤Д╨╕╨║╨╛╨▓";
+    if (formationsCols === 1) label = formationsCols + " ╨У╤А╨░╤Д╨╕╨║";
+    else if (formationsCols >= 2 && formationsCols <= 4) label = formationsCols + " ╨У╤А╨░╤Д╨╕╨║╨░";
 
     fgGridVal.textContent = label;
 
@@ -9245,19 +9293,19 @@ window.addEventListener("resize", () => {
 
     if (activeItems.length === otherItems.length) {
       allItem.classList.add("on");
-      fgExcName.textContent = "Все биржи";
+      fgExcName.textContent = "╨Т╤Б╨╡ ╨▒╨╕╤А╨╢╨╕";
       const ALL_EXC_IMG = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E";
       fgExcDot.style.background = `center/contain no-repeat url('${ALL_EXC_IMG}')`;
     } else {
       allItem.classList.remove("on");
       if (activeItems.length === 0) {
-        fgExcName.textContent = "Нет бирж";
+        fgExcName.textContent = "╨Э╨╡╤В ╨▒╨╕╤А╨╢";
         fgExcDot.style.background = "none";
       } else if (activeItems.length === 1) {
         fgExcName.textContent = activeItems[0].dataset.label;
         fgExcDot.style.background = `center/contain no-repeat url('${activeItems[0].dataset.img}')`;
       } else {
-        fgExcName.textContent = `Выбрано: ${activeItems.length}`;
+        fgExcName.textContent = `╨Т╤Л╨▒╤А╨░╨╜╨╛: ${activeItems.length}`;
         const ALL_EXC_IMG = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%2210%22 width=%225%22 height=%228%22 rx=%221.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%225%22 y=%226%22 width=%221%22 height=%2214%22 rx=%220.5%22 fill=%22%2326c97a%22/%3E%3Crect x=%229.5%22 y=%224%22 width=%225%22 height=%2212%22 rx=%221.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2211.5%22 y=%222%22 width=%221%22 height=%2218%22 rx=%220.5%22 fill=%22%23f59e0b%22/%3E%3Crect x=%2216%22 y=%2212%22 width=%225%22 height=%226%22 rx=%221.5%22 fill=%22%23ff4560%22/%3E%3Crect x=%2218%22 y=%228%22 width=%221%22 height=%2212%22 rx=%220.5%22 fill=%22%23ff4560%22/%3E%3C/svg%3E";
         fgExcDot.style.background = `center/contain no-repeat url('${ALL_EXC_IMG}')`;
       }
@@ -9322,13 +9370,13 @@ window.addEventListener("resize", () => {
   function syncFormationsSelect() {
     if (!fgSelectBtn || !fgSelectMenu || !fgSelectText) return;
     if (activeFormation === 'cascades') {
-      fgSelectText.textContent = "Каскады";
+      fgSelectText.textContent = "╨Ъ╨░╤Б╨║╨░╨┤╤Л";
     } else if (activeFormation === 'breakout') {
-      fgSelectText.textContent = "Гориз. уровень";
+      fgSelectText.textContent = "╨У╨╛╤А╨╕╨╖. ╤Г╤А╨╛╨▓╨╡╨╜╤М";
     } else if (activeFormation === 'trendline') {
-      fgSelectText.textContent = "Наклонный уровень";
+      fgSelectText.textContent = "╨Э╨░╨║╨╗╨╛╨╜╨╜╤Л╨╣ ╤Г╤А╨╛╨▓╨╡╨╜╤М";
     } else if (activeFormation === 'retest') {
-      fgSelectText.textContent = "Ретест уровня";
+      fgSelectText.textContent = "╨а╨╡╤В╨╡╤Б╤В ╤Г╤А╨╛╨▓╨╜╤П";
     }
 
     const approachingWrap = $("formations-approaching-wrap");
@@ -9359,26 +9407,26 @@ window.addEventListener("resize", () => {
     const items = menu.querySelectorAll(".custom-grid-select-item");
     if (items.length < 5) return;
     if (activeFormation === 'cascades') {
-      if (header) header.textContent = "Мин. уровней каскада";
-      items[0].textContent = "1+ уровень";
-      items[1].textContent = "2+ уровня";
-      items[2].textContent = "3+ уровня";
-      items[3].textContent = "4+ уровня";
-      items[4].textContent = "5+ уровней";
+      if (header) header.textContent = "╨Ь╨╕╨╜. ╤Г╤А╨╛╨▓╨╜╨╡╨╣ ╨║╨░╤Б╨║╨░╨┤╨░";
+      items[0].textContent = "1+ ╤Г╤А╨╛╨▓╨╡╨╜╤М";
+      items[1].textContent = "2+ ╤Г╤А╨╛╨▓╨╜╤П";
+      items[2].textContent = "3+ ╤Г╤А╨╛╨▓╨╜╤П";
+      items[3].textContent = "4+ ╤Г╤А╨╛╨▓╨╜╤П";
+      items[4].textContent = "5+ ╤Г╤А╨╛╨▓╨╜╨╡╨╣";
     } else if (activeFormation === 'breakout') {
-      if (header) header.textContent = "Мин. касаний уровня";
-      items[0].textContent = "1+ касание";
-      items[1].textContent = "2+ касания";
-      items[2].textContent = "3+ касания";
-      items[3].textContent = "4+ касания";
-      items[4].textContent = "5+ касаний";
+      if (header) header.textContent = "╨Ь╨╕╨╜. ╨║╨░╤Б╨░╨╜╨╕╨╣ ╤Г╤А╨╛╨▓╨╜╤П";
+      items[0].textContent = "1+ ╨║╨░╤Б╨░╨╜╨╕╨╡";
+      items[1].textContent = "2+ ╨║╨░╤Б╨░╨╜╨╕╤П";
+      items[2].textContent = "3+ ╨║╨░╤Б╨░╨╜╨╕╤П";
+      items[3].textContent = "4+ ╨║╨░╤Б╨░╨╜╨╕╤П";
+      items[4].textContent = "5+ ╨║╨░╤Б╨░╨╜╨╕╨╣";
     } else {
-      if (header) header.textContent = "Мин. касаний наклонной";
-      items[0].textContent = "1+ касание";
-      items[1].textContent = "2+ касания";
-      items[2].textContent = "3+ касания";
-      items[3].textContent = "4+ касания";
-      items[4].textContent = "5+ касаний";
+      if (header) header.textContent = "╨Ь╨╕╨╜. ╨║╨░╤Б╨░╨╜╨╕╨╣ наклонной";
+      items[0].textContent = "1+ ╨║╨░╤Б╨░╨╜╨╕╨╡";
+      items[1].textContent = "2+ ╨║╨░╤Б╨░╨╜╨╕╤П";
+      items[2].textContent = "3+ ╨║╨░╤Б╨░╨╜╨╕╤П";
+      items[3].textContent = "4+ ╨║╨░╤Б╨░╨╜╨╕╤П";
+      items[4].textContent = "5+ ╨║╨░╤Б╨░╨╜╨╕╨╣";
     }
   }
 
@@ -9483,7 +9531,7 @@ window.addEventListener("resize", () => {
     syncFormationsSettings();
   }
 
-  // ── Pagination state ─────────────────────────────────────────────────────
+  // тФАтФА Pagination state тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let formationsPage = 0;
   // Map of key => levels array for coins that have detected levels
   const formationsCoinsLevelsMap = new Map();
@@ -9519,7 +9567,7 @@ window.addEventListener("resize", () => {
 
   function startFormationsScan(checkedEx, tf) {
     const scanId = ++activeScanId;
-    scanProgressText = "Сканирование...";
+    scanProgressText = "╨б╨║╨░╨╜╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡...";
     formationsCoinsLevelsMap.clear();
     updateFormationsPagination();
 
@@ -9565,9 +9613,9 @@ window.addEventListener("resize", () => {
       const secTotal = Math.ceil((batchesRem * 200) / 1000);
       const min = Math.floor(secTotal / 60);
       const sec = secTotal % 60;
-      const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
+      const etaText = min > 0 ? `~${min}╨╝ ${sec}╤Б` : `~${sec}╤Б`;
 
-      scanProgressText = `Сканирование: ${index}/${total} (${etaText})`;
+      scanProgressText = `╨б╨║╨░╨╜╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡: ${index}/${total} (${etaText})`;
       updateFormationsPagination();
 
       const promises = batch.map(async (c) => {
@@ -9849,7 +9897,7 @@ window.addEventListener("resize", () => {
     chartInstances = [];
 
     if (formationsAllCoins.length === 0) {
-      grid.innerHTML = `<div class="formations-empty">${scanProgressText || "Инструменты не загружены."}</div>`;
+      grid.innerHTML = `<div class="formations-empty">${scanProgressText || "╨Ш╨╜╤Б╤В╤А╤Г╨╝╨╡╨╜╤В╤Л не ╨╖╨░╨│╤А╤Г╨╢╨╡╨╜╤Л."}</div>`;
       updateFormationsPagination();
       return;
     }

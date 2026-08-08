@@ -46,8 +46,25 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
   }
 
   function initStreams() {
+    // 0. Real-time instant price stream: !bookTicker sends best bid/ask for ALL symbols instantly (~10-50ms)
+    mkExWs("BN-BookTicker", "wss://fstream.binance.com/ws/!bookTicker", (raw) => {
+      try {
+        const d = JSON.parse(raw.toString());
+        if (!d.s) return;
+        const t = tickers.get("BN:" + d.s);
+        if (t) {
+          const bp = +d.b, ap = +d.a;
+          if (bp > 0 && ap > 0) {
+            const midP = (bp + ap) / 2;
+            t.p = midP;
+            if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;
+            dirtyKeys.add(t.key);
+          }
+        }
+      } catch (_) {}
+    });
+
     // 1. Price stream: !miniTicker@arr sends ALL symbols' last price in one batch (~1s)
-    // This replaces aggTrade per-symbol subscriptions (thousands of events → 1 event/sec)
     mkExWs("BN-MiniTicker", "wss://fstream.binance.com/market/ws/!miniTicker@arr", (raw) => {
       try {
         const batch = JSON.parse(raw.toString());

@@ -9,7 +9,7 @@ const { randomUUID } = require("crypto");
 
 const PORT = process.env.PORT || 3000;
 
-// ─── Persistent HTTPS agent ─────────────────────────────────────────────────
+// тФАтФАтФА Persistent HTTPS agent тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const httpsAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 500,
@@ -23,16 +23,16 @@ const patternDetector = require("./patternDetector");
 let currentWallsCache = [];
 let patternsCache = []; // Global in-memory patterns/signals cache
 
-// ─── In-memory store ────────────────────────────────────────────────────────
+// тФАтФАтФА In-memory store тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const tickers = new Map();
 const dirtyKeys = new Set();
 const clients = new Set();
 
-// ─── Kline streaming state ──────────────────────────────────────────────────
+// тФАтФАтФА Kline streaming state тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const klineSubs = new Map(); // "ex|sym|tf" => { ws, ex, sym, tf }
 const klineClients = new Set(); // clients subscribed to kline updates
 
-// ─── Monitoring ─────────────────────────────────────────────────────────────
+// тФАтФАтФА Monitoring тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exStatus = new Map();
 let statusBroadcastTimer = null;
 
@@ -78,7 +78,7 @@ function broadcastStatus() {
   }
 }
 
-// ─── Ultra-fast broadcast: push-based, batched, flat arrays ─────────────────
+// тФАтФАтФА Ultra-fast broadcast: push-based, batched, flat arrays тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const NUM_FIELDS = new Set(["p", "chg", "v", "h", "l", "o", "funding", "nextFunding", "oi", "trades"]);
 
 function numReplacer(key, value) {
@@ -192,7 +192,7 @@ setInterval(() => {
   }
 }, 50);
 
-// ─── Kline broadcast to clients ─────────────────────────────────────────────
+// тФАтФАтФА Kline broadcast to clients тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function normalizeTimestamp(t) {
   let ts = +t;
   if (!Number.isFinite(ts) || ts <= 0) return 0;
@@ -204,15 +204,41 @@ function normalizeTimestamp(t) {
 function broadcastKline(ex, sym, tf, candle) {
   const normT = normalizeTimestamp(candle.t);
   if (!normT) return;
-  const msg = JSON.stringify({ type: "kline", ex, sym, tf, data: [normT, +candle.o, +candle.h, +candle.l, +candle.c, +candle.v] });
+
+  // ── Update server-side klines cache in real-time ──────────────
+  const updateCacheForLite = (useLite) => {
+    const key = cacheKey(ex, sym, tf, useLite);
+    const cached = klinesCache.get(key);
+    if (cached && Array.isArray(cached.data) && cached.data.length >= 6) {
+      const flat = cached.data;
+      const lastT = flat[flat.length - 6];
+      if (lastT === normT) {
+        flat[flat.length - 5] = +candle.o;
+        flat[flat.length - 4] = +candle.h;
+        flat[flat.length - 3] = +candle.l;
+        flat[flat.length - 2] = +candle.c;
+        flat[flat.length - 1] = +candle.v;
+      } else if (normT > lastT) {
+        flat.push(normT, +candle.o, +candle.h, +candle.l, +candle.c, +candle.v);
+        if (flat.length > 7200) flat.splice(0, 6);
+      }
+      cached.at = Date.now();
+    }
+  };
+  updateCacheForLite(false);
+  updateCacheForLite(true);
+
+  const targetKey = `${ex}|${sym}|${tf}`;
+  let msg = null;
   for (const ws of klineClients) {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws.readyState === WebSocket.OPEN && ws._klineSubs && ws._klineSubs.has(targetKey)) {
+      if (!msg) msg = JSON.stringify({ type: "kline", ex, sym, tf, data: [normT, +candle.o, +candle.h, +candle.l, +candle.c, +candle.v] });
       try { ws.send(msg); } catch (_) {}
     }
   }
 }
 
-// ─── HTTP + WebSocket server ────────────────────────────────────────────────
+// тФАтФАтФА HTTP + WebSocket server тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const app = express();
 app.use(compression());
 const server = http.createServer(app);
@@ -226,6 +252,7 @@ const wss = new WebSocketServer({
 wss.on("connection", (ws) => {
   clients.add(ws);
   klineClients.add(ws);
+  ws._klineSubs = new Set();
   console.log(`[WS CLIENT] Connected. Total: ${clients.size}`);
   try {
     ws.send(JSON.stringify({ type: "ex_status", data: Object.fromEntries(exStatus) }));
@@ -272,6 +299,12 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     clients.delete(ws);
     klineClients.delete(ws);
+    if (ws._klineSubs) {
+      for (const subKey of ws._klineSubs) {
+        const [ex, sym, tf] = subKey.split("|");
+        unsubscribeKline(ws, ex, sym, tf);
+      }
+    }
     console.log(`[WS CLIENT] Disconnected. Total: ${clients.size}`);
   });
   ws.on("error", (err) => {
@@ -282,9 +315,9 @@ wss.on("connection", (ws) => {
   });
 });
 
-// ─── Kline subscription management ──────────────────────────────────────────
+// тФАтФАтФА Kline subscription management тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function subscribeKline(ws, ex, sym, tf) {
-  const key = `${ex}|${sym}|tf`;
+  if (ws) klineClients.add(ws);
   const subKey = `${ex}|${sym}|${tf}`;
   
   // Check if we already have a WS connection for this kline
@@ -563,7 +596,7 @@ function startKlinePolling(sub) {
   }, 5000);
 }
 
-// ─── Reconnecting WebSocket helper ──────────────────────────────────────────
+// тФАтФАтФА Reconnecting WebSocket helper тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function mkExWs(exId, url, onMsg, onOpen) {
   let ws, alive = true, retryMs = 1000, lastMsg = 0;
   let connectTime = 0; // track when connection was established
@@ -627,7 +660,7 @@ function mkExWs(exId, url, onMsg, onOpen) {
             console.warn(`[WS STORM] ${exId}: ${rapidFailCount} rapid disconnects, backing off ${(retryMs/1000).toFixed(0)}s`);
           }
         } else {
-          // Normal disconnect — reset rapid fail counter
+          // Normal disconnect тАФ reset rapid fail counter
           rapidFailCount = Math.max(0, rapidFailCount - 1);
           retryMs = Math.min(retryMs * 1.5, 30000);
         }
@@ -654,7 +687,7 @@ function mkExWs(exId, url, onMsg, onOpen) {
   };
 }
 
-// ─── Fetch helper ───────────────────────────────────────────────────────────
+// тФАтФАтФА Fetch helper тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body = null) {
   const useNativeFetch = typeof fetch === "function";
   const headers = {
@@ -668,7 +701,7 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      // native fetch (Node 18+) does NOT support `agent` — omit it
+      // native fetch (Node 18+) does NOT support `agent` тАФ omit it
       const options = { method, signal: ctrl.signal, headers };
       if (!useNativeFetch) options.agent = httpsAgent;
       if (body) options.body = typeof body === "string" ? body : JSON.stringify(body);
@@ -692,7 +725,7 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
   }
 }
 
-// ─── Klines REST helpers ────────────────────────────────────────────────────
+// тФАтФАтФА Klines REST helpers тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const TF_MAP = {
   BB: { "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" },
   OX: { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" },
@@ -755,6 +788,7 @@ function parseKlines(ex, data) {
       return { t: k.time || k.t || 0, o: k.open || k.o || 0, h: k.high || k.h || 0, l: k.low || k.l || 0, c: closeP, v: baseVol * closeP };
     });
     else if (ex === "HT") rawList = (data.data || []).map(k => ({ t: k.id, o: k.open, h: k.high, l: k.low, c: k.close, v: k.vol }));
+    else if (ex === "HL") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }));
 
     const cleaned = [];
     for (const k of rawList) {
@@ -793,26 +827,14 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
   
   if (lite) {
     try {
-      if (fetchEx === "BN" || fetchEx === "AD") {
-        const base = fetchEx === "BN" ? "fapi.binance.com" : "fapi.asterdex.com";
-        const url = `https://${base}/fapi/v1/klines?symbol=${fetchSym}&interval=${tf}&limit=${limit}`;
-        const data = await apiFetch(url, 4000, 0);
-        return Array.isArray(data) ? data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] })) : [];
-      } else if (ex === "BB") {
-        const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TF_MAP.BB[tf] || "60"}&limit=${limit}`;
-        const data = await apiFetch(url, 4000, 0);
-        return (data.result?.list || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
-      } else if (ex === "OX") {
-        const url = `https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TF_MAP.OX[tf] || "1H"}&limit=${limit}`;
-        const data = await apiFetch(url, 4000, 0);
-        return (data.data || []).map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] }));
-      } else if (ex === "HL") {
-        const data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (limit * tfMs), endTime: Date.now() } });
-        return (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }));
+      let data;
+      if (fetchEx === "HL") {
+        data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (limit * tfMs), endTime: Date.now() } });
+      } else {
+        const url = getKlinesUrl(ex, sym, tf, limit);
+        if (!url) return [];
+        data = await apiFetch(url, 4000, 0);
       }
-      const url = getKlinesUrl(ex, sym, tf, limit);
-      if (!url) return [];
-      const data = await apiFetch(url, 4000, 0);
       return parseKlines(ex, data);
     } catch (e) { return []; }
   }
@@ -971,7 +993,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
-// ─── Go Scanner Proxy ──────────────────────────────────────────────────────
+// тФАтФАтФА Go Scanner Proxy тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const GO_SCANNER_URL = "http://127.0.0.1:8082";
 
 app.get("/api/go-status", async (req, res) => {
@@ -999,7 +1021,7 @@ app.get("/api/go-klines", async (req, res) => {
       return res.status(r.status).json({ error: text });
     }
     const data = await r.json();
-    // Go returns [{t,o,h,l,c,v}] — convert to flat array for frontend compatibility
+    // Go returns [{t,o,h,l,c,v}] тАФ convert to flat array for frontend compatibility
     const flat = [];
     for (const c of data) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
     res.json(flat);
@@ -1007,7 +1029,7 @@ app.get("/api/go-klines", async (req, res) => {
     res.status(503).json({ error: "Go scanner offline: " + e.message });
   }
 });
-// ──────────────────────────────────────────────────────────────────────────
+// тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 
 function cacheKey(ex, sym, tf, lite) {
   return `${ex}|${sym}|${tf}|${lite ? "1" : "0"}`;
@@ -1023,8 +1045,8 @@ app.get("/api/klines", async (req, res) => {
   const now = Date.now();
   
   const cached = klinesCache.get(key);
-  // TTL: 10s for lite charts, 60s for full
-  const ttl = useLite ? 10000 : 60000;
+  // TTL: 30 minutes for server-side cache (kept fresh via WSS)
+  const ttl = 1800000;
   
   if (cached && now - cached.at < ttl) {
     return res.json(cached.data);
@@ -1051,7 +1073,7 @@ app.get("/api/klines", async (req, res) => {
   }
 });
 
-// ─── Blind backtest / bar replay ───────────────────────────────────────────
+// тФАтФАтФА Blind backtest / bar replay тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 app.get("/api/backtest/new", async (req, res) => {
   const allowedTf = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d"]);
   const tf = allowedTf.has(req.query.tf) ? req.query.tf : "5m";
@@ -1060,7 +1082,7 @@ app.get("/api/backtest/new", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
 
   if (universe.length < 20) {
-    return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
+    return res.status(503).json({ error: "╨а╤Л╨╜╨╛╨║ ╨╡╤Й╤С ╨╖╨░╨│╤А╤Г╨╢╨░╨╡╤В╤Б╤П. ╨Я╨╛╨▓╤В╨╛╤А╨╕╤В╨╡ ╤З╨╡╤А╨╡╨╖ ╨╜╨╡╤Б╨║╨╛╨╗╤М╨║╨╛ ╤Б╨╡╨║╤Г╨╜╨┤." });
   }
 
   const shuffled = universe.slice().sort(() => Math.random() - 0.5);
@@ -1134,12 +1156,12 @@ app.get("/api/backtest/new", async (req, res) => {
     }
   }
 
-  res.status(503).json({ error: lastError?.message || "Не удалось подобрать исторический участок" });
+  res.status(503).json({ error: lastError?.message || "╨Э╨╡ ╤Г╨┤╨░╨╗╨╛╤Б╤М ╨┐╨╛╨┤╨╛╨▒╤А╨░╤В╤М ╨╕╤Б╤В╨╛╤А╨╕╤З╨╡╤Б╨║╨╕╨╣ ╤Г╤З╨░╤Б╤В╨╛╨║" });
 });
 
 app.post("/api/backtest/:id/step", (req, res) => {
   const session = backtestSessions.get(req.params.id);
-  if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
+  if (!session) return res.status(404).json({ error: "╨б╨╡╤Б╤Б╨╕╤П ╨▒╤Н╨║╤В╨╡╤Б╤В╨░ ╤Г╤Б╤В╨░╤А╨╡╨╗╨░" });
   const requested = Math.max(1, Math.min(200, parseInt(req.query.count, 10) || 1));
   const from = session.revealed;
   const to = Math.min(session.future.length, from + requested);
@@ -1150,7 +1172,7 @@ app.post("/api/backtest/:id/step", (req, res) => {
 
 app.post("/api/backtest/:id/reveal", (req, res) => {
   const session = backtestSessions.get(req.params.id);
-  if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
+  if (!session) return res.status(404).json({ error: "╨б╨╡╤Б╤Б╨╕╤П ╨▒╤Н╨║╤В╨╡╤Б╤В╨░ ╤Г╤Б╤В╨░╤А╨╡╨╗╨░" });
   const rest = session.future.slice(session.revealed);
   session.revealed = session.future.length;
   res.setHeader("Cache-Control", "no-store");
@@ -1207,13 +1229,13 @@ app.get("/api/kucoin-token", async (req, res) => {
   else res.status(500).json({ error: "Failed to get token" });
 });
 
-// ─── Traders Journal API Sync ────────────────────────────────────────────────
+// тФАтФАтФА Traders Journal API Sync тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 app.post("/api/journal/sync", express.json(), async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   const { exchange, apiKey, apiSecret, passphrase } = req.body || {};
 
   if (!apiKey || !apiSecret) {
-    return res.status(400).json({ error: "Укажите API Key и API Secret" });
+    return res.status(400).json({ error: "╨г╨║╨░╨╢╨╕╤В╨╡ API Key ╨╕ API Secret" });
   }
 
   const crypto = require("crypto");
@@ -1261,8 +1283,8 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
           pnl: parseFloat((parseFloat(exec.execFee || 0) * -1 + (exec.side === "Sell" ? 25 : -15)).toFixed(2)),
           pnlPercent: parseFloat((exec.side === "Sell" ? 2.15 : -1.45).toFixed(2)),
           fee: parseFloat(exec.execFee || 0),
-          tags: ["Синхронизировано по API"],
-          note: `Ордер #${exec.orderId || ''} (${exec.execType || 'Trade'})`
+          tags: ["╨б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╨┐╨╛ API"],
+          note: `╨Ю╤А╨┤╨╡╤А #${exec.orderId || ''} (${exec.execType || 'Trade'})`
         };
       });
 
@@ -1296,7 +1318,7 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
           pnl: pnl,
           pnlPercent: parseFloat((pnl >= 0 ? 2.50 : -1.80).toFixed(2)),
           fee: 0.50,
-          tags: ["Синхронизировано по API"],
+          tags: ["╨б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╨┐╨╛ API"],
           note: `Binance Futures PnL #${inc.tranId || idx}`
         };
       });
@@ -1341,26 +1363,48 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
           pnl: parseFloat((parseFloat(exec.fee || 0) * -1).toFixed(2)),
           pnlPercent: 0,
           fee: Math.abs(parseFloat(exec.fee || 0)),
-          tags: ["Синхронизировано по API"],
+          tags: ["╨б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╨┐╨╛ API"],
           note: `OKX fill #${exec.fillId}`
         };
       });
 
     } else {
-      return res.status(400).json({ error: "Выбранная биржа не поддерживается или требует расширенную настройку API" });
+      return res.status(400).json({ error: "╨Т╤Л╨▒╤А╨░╨╜╨╜╨░╤П ╨▒╨╕╤А╨╢╨░ ╨╜╨╡ ╨┐╨╛╨┤╨┤╨╡╤А╨╢╨╕╨▓╨░╨╡╤В╤Б╤П ╨╕╨╗╨╕ ╤В╤А╨╡╨▒╤Г╨╡╤В ╤А╨░╤Б╤И╨╕╤А╨╡╨╜╨╜╤Г╤О ╨╜╨░╤Б╤В╤А╨╛╨╣╨║╤Г API" });
     }
 
     res.json({ success: true, count: trades.length, trades });
   } catch (err) {
-    console.error("[JOURNAL SYNC ERROR]", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
+// ─── High-Capacity Background Pre-Fetcher Engine (80-90% API Capacity) ───────
+setInterval(async () => {
+  if (tickers.size === 0) return;
+  const topTickers = Array.from(tickers.values())
+    .sort((a, b) => (b.v || 0) - (a.v || 0))
+    .slice(0, 25);
+
+  for (const t of topTickers) {
+    const key = cacheKey(t.ex, t.sym, "1m", false);
+    if (!klinesCache.has(key)) {
+      try {
+        const candles = await fetchFullHistory(t.ex, t.sym, "1m", false);
+        if (candles && candles.length) {
+          const flat = [];
+          for (const c of candles) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
+          klinesCache.set(key, { at: Date.now(), data: flat });
+        }
+      } catch (_) {}
+      await new Promise(r => setTimeout(r, 120));
+    }
+  }
+}, 10000).unref();
+
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0, etag: false }));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// ─── Exchange Modules ───────────────────────────────────────────────────────
+// тФАтФАтФА Exchange Modules тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exchanges = {
   BN: require("./exchanges/binance"),
   BB: require("./exchanges/bybit"),
@@ -1375,16 +1419,16 @@ const exchanges = {
   AD: require("./exchanges/asterdex"),
 };
 
-// ─── Start ──────────────────────────────────────────────────────────────────
+// тФАтФАтФА Start тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 server.listen(PORT, () => {
-  console.log(`\n╔════════════════════════════════════════════════════════╗`);
-  console.log(`║  CryptoScreen Pro  →  port ${PORT}                      ║`);
-  console.log(`║  Exchanges: ${Object.keys(exchanges).length} modules (parallel init)            ║`);
-  console.log(`║  Protocol: Flat Array (ultra-fast)                      ║`);
-  console.log(`║  Broadcast: 50ms (20fps, CPU-optimized)                 ║`);
-  console.log(`╚════════════════════════════════════════════════════════╝\n`);
+  console.log(`\nтХФтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХЧ`);
+  console.log(`тХС  CryptoScreen Pro  тЖТ  port ${PORT}                      тХС`);
+  console.log(`тХС  Exchanges: ${Object.keys(exchanges).length} modules (parallel init)            тХС`);
+  console.log(`тХС  Protocol: Flat Array (ultra-fast)                      тХС`);
+  console.log(`тХС  Broadcast: 50ms (20fps, CPU-optimized)                 тХС`);
+  console.log(`тХЪтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХЭ\n`);
   
-  // Parallel init — all exchanges start simultaneously
+  // Parallel init тАФ all exchanges start simultaneously
   for (const name in exchanges) {
     try {
       console.log(`[INIT] Starting exchange: ${name}`);
@@ -1407,7 +1451,7 @@ server.listen(PORT, () => {
     }
   });
 
-  // ─── Pattern Scanner Engine (24/7 Continuous Loop) ───────────────────────
+  // тФАтФАтФА Pattern Scanner Engine (24/7 Continuous Loop) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let isScanningPatterns = false;
   async function scanAllPatterns() {
     if (isScanningPatterns) return;

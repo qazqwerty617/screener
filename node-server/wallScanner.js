@@ -21,12 +21,12 @@
 
 // ═══ Configuration ═══════════════════════════════════════════════════════════
 
-const SCAN_GAP_MS = 20000;  // minimum gap between scan cycles (optimized from 13s)
-const API_TIMEOUT = 3500;   // per-request timeout
+const SCAN_GAP_MS = 2500;   // High-frequency scan cycle (2.5s)
+const API_TIMEOUT = 3000;   // per-request timeout
 const POOL_EX = 12;     // exchanges scanned in parallel
-const POOL_COIN = 8;    // coins per exchange in parallel
-const COIN_DELAY_MS = 200;   // delay between coin batches (avoid rate limits)
-const MAX_COINS_PER_EX = 85;  // Process top 85 coins max per exchange (futures + spot)
+const POOL_COIN = 16;   // coins per exchange in parallel
+const COIN_DELAY_MS = 30;   // ultra-fast delay between batches
+const MAX_COINS_PER_EX = 120; // Process top 120 coins max per exchange
 
 // ── Z-Score & Physics Constants ──
 const BIN_STEP_PCT = 0.001; // 0.1% price bins
