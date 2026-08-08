@@ -6405,6 +6405,7 @@ class ChartInstance {
     const changed = this.sym !== ticker.sym || this.ex !== ticker.ex;
     this.ex = ticker.ex;
     this.sym = ticker.sym;
+    this.key = `${this.ex}:${this.sym}`;
 
     const exIcons = { BN: "BN.svg", BB: "BB.svg", OX: "OK.svg", BG: "BG.svg", GT: "GT.svg", MX: "MX.svg", KC: "KC.svg", BX: "BX.svg", HT: "HX.svg", HL: "HL.svg", AD: "AS.svg" };
     if (exIcons[ticker.ex]) {
@@ -6416,14 +6417,38 @@ class ChartInstance {
 
     this.headerSym.textContent = ticker.sym;
     this.headerTf.textContent = this.tf;
-    this.headerPrice.textContent = fP(ticker.p);
-    const chg = ticker.chg || 0;
-    this.headerChg.textContent = fC(chg);
-    this.headerChg.className = "cell-chg " + (chg >= 0 ? "pos" : "neg");
+
+    const p = +ticker.p;
+    if (p > 0) {
+      this.headerPrice.textContent = fP(p);
+      const chg = ticker.chg || 0;
+      this.headerChg.textContent = fC(chg);
+      this.headerChg.className = "cell-chg " + (chg >= 0 ? "pos" : "neg");
+
+      // Update current live candle with real-time price tick
+      if (this.candles && this.candles.length > 0) {
+        const tfMs = TF_MS[this.tf] || 60000;
+        const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
+        let last = this.candles[this.candles.length - 1];
+
+        if (expectedStart > last.t) {
+          last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
+          this.candles.push(last);
+          if (this.candles.length > 1500) this.candles.shift();
+        } else {
+          last.c = p;
+          if (p > last.h) last.h = p;
+          if (p < last.l) last.l = p;
+        }
+      }
+    }
 
     if (changed) {
       this.offsetX = 0;
+      this.autoFitY = true;
       this.loadKlines();
+    } else {
+      this.draw();
     }
   }
 
