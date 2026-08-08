@@ -6597,6 +6597,7 @@ class ChartInstance {
     if (!vis.length) return;
 
     // Fast DOM text update for multichart (since binary protocol bypasses update())
+    const cData = coins.get(`${this.ex}:${this.sym}`);
     if (cData) {
       const dp = getDisplayP(cData);
 
