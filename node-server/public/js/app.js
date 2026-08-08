@@ -1293,63 +1293,6 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
       ctx.restore();
     }
   }
-
-  // 3. MAJOR BREAK OF STRUCTURE (BOS / CHoCH) - Deduplicated & Clean
-  if (chartActiveSmc.has("bos") && smcData.structureBreaks.length > 0) {
-    const cleanBreaks = [];
-    for (let i = smcData.structureBreaks.length - 1; i >= 0; i--) {
-      const b = smcData.structureBreaks[i];
-      const tooClose = cleanBreaks.some(cb => Math.abs(cb.breakIdx - b.breakIdx) < 12);
-      if (!tooClose) {
-        cleanBreaks.unshift(b);
-        if (cleanBreaks.length >= 3) break;
-      }
-    }
-
-    for (const sb of cleanBreaks) {
-      const x1 = getCandleX(sb.startIdx);
-      const x2 = getCandleX(sb.breakIdx);
-      const y = toY(sb.price);
-
-      if (y < TOP || y > TOP + PH) continue;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.strokeStyle = sb.isBull ? "#26c97a" : "#ff4560";
-      ctx.lineWidth = 1.2;
-      ctx.setLineDash([3, 3]);
-      ctx.moveTo(Math.max(0, x1), y);
-      ctx.lineTo(Math.min(PW, x2), y);
-      ctx.stroke();
-
-      drawSmcPill(sb.type, Math.min(PW - 30, Math.max(30, x2)), y, sb.isBull ? "#14532d" : "#7f1d1d", sb.isBull ? "#22c55e" : "#ef4444", sb.isBull ? "#4ade80" : "#fca5a5");
-      ctx.restore();
-    }
-  }
-
-  // 4. UNSWEPT EQUAL HIGHS / EQUAL LOWS (EQH / EQL LIQUIDITY POOLS)
-  if (chartActiveSmc.has("liq") && smcData.liquidityPools.length > 0) {
-    const activePools = smcData.liquidityPools.slice(-4);
-    for (const pool of activePools) {
-      const x1 = getCandleX(pool.idx1);
-      const x2 = PW;
-      const y = toY(pool.price);
-
-      if (y < TOP || y > TOP + PH) continue;
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.strokeStyle = pool.type === "EQH" ? "rgba(250, 204, 21, 0.75)" : "rgba(56, 189, 248, 0.75)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 2]);
-      ctx.moveTo(x1, y);
-      ctx.lineTo(x2, y);
-      ctx.stroke();
-
-      drawSmcPill(pool.type === "EQH" ? "EQH Liq 🠅" : "EQL Liq 🠗", PW - 70, y, pool.type === "EQH" ? "#713f12" : "#0c4a6e", pool.type === "EQH" ? "#eab308" : "#0284c7", pool.type === "EQH" ? "#fde047" : "#7dd3fc");
-      ctx.restore();
-    }
-  }
 }
 
 function getLiqMapData(candles) {
