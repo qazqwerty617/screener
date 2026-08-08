@@ -9752,6 +9752,25 @@ window.addEventListener("resize", () => {
     syncFormationsExchangeSelect();
   }
 
+  function preloadFormationsInBackground() {
+    const tf = typeof formationsTf !== 'undefined' ? formationsTf : '15m';
+    fetch(`/api/formations/map?tf=${tf}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(mapData => {
+        if (mapData && Object.keys(mapData).length > 0) {
+          for (const coinKey in mapData) {
+            formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
+          }
+          if (activeView === "formations") {
+            window.loadFormations();
+          }
+        }
+      })
+      .catch(() => {});
+  }
+  setTimeout(preloadFormationsInBackground, 800);
+  setInterval(preloadFormationsInBackground, 15000);
+
   // Formations custom settings menu select binding
   let formationsMinCascade = 2; // Default to 2+ levels
 
