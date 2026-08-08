@@ -1566,29 +1566,34 @@ server.listen(PORT, () => {
         patternsCache = patternsCache.slice(0, 3000);
       }
 
+      // Pre-assemble cached TF maps for 0ms endpoint response
+      for (const tf of timeframes) {
+        const out = {};
+        for (const [key, lvls] of serverFormationsMap.entries()) {
+          if (key.endsWith(`:${tf}`)) {
+            const parts = key.split(":");
+            out[`${parts[0]}:${parts[1]}`] = lvls;
+          }
+        }
+        cachedTfMaps[tf] = out;
+      }
+
       console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      // Endless 24/7 loop: schedule next scan 2 seconds after current finishes
       setTimeout(scanAllPatterns, 2000);
     }
   }
 
-  app.get("/api/formations/map", (req, res) => {
+  const cachedTfMaps = {};
+
+  app.get("/api/formations/map", compression(), (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.setHeader("Cache-Control", "public, max-age=5");
     const { tf = "15m" } = req.query;
-    const out = {};
-    for (const [key, lvls] of serverFormationsMap.entries()) {
-      if (key.endsWith(`:${tf}`)) {
-        const parts = key.split(":");
-        const coinKey = `${parts[0]}:${parts[1]}`;
-        out[coinKey] = lvls;
-      }
-    }
-    res.json(out);
+    res.json(cachedTfMaps[tf] || {});
   });
 
   // Initial trigger after 3 seconds
