@@ -1,4 +1,7 @@
 "use strict";
+process.on("uncaughtException", (err) => console.error("[SERVER EXCEPTION]", err ? err.message || err : err));
+process.on("unhandledRejection", (reason) => console.error("[SERVER REJECTION]", reason ? reason.message || reason : reason));
+
 const express = require("express");
 const http = require("http");
 const https = require("https");
@@ -1515,13 +1518,14 @@ server.listen(PORT, () => {
     try {
       const list = Array.from(tickers.values())
         .filter(t => t.v > 0)
-        .sort((a, b) => b.v - a.v); // Scan 100% of ALL active coins across all 11 exchanges
+        .sort((a, b) => b.v - a.v)
+        .slice(0, 300); // Scan top 300 active coins
 
       const timeframes = ["5m", "15m", "1h", "4h", "1d"];
       let newSignalsCount = 0;
 
-      // Process coins in parallel batches of 15 for maximum throughput
-      const BATCH_SIZE = 15;
+      // Safe concurrency batching
+      const BATCH_SIZE = 5;
       for (let i = 0; i < list.length; i += BATCH_SIZE) {
         const batch = list.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (t) => {
@@ -1531,14 +1535,15 @@ server.listen(PORT, () => {
           const sym = t.key.substring(colonIdx + 1);
           const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
 
-          await Promise.all(timeframes.map(async (tf) => {
+          for (const tf of timeframes) {
             try {
               const candles = await fetchFullHistory(ex, sym, tf, true);
-              patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-              if (!candles || candles.length < 30) return;
+              if (!candles || candles.length < 30) continue;
 
               const meta = { ex, sym, base, tf };
               const signals = patternDetector.scanCandles(meta, candles);
+
+              patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
               for (const sig of signals) {
                 patternsCache.push(sig);
                 newSignalsCount++;
@@ -1552,7 +1557,7 @@ server.listen(PORT, () => {
                 serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
               }
             } catch (e) {}
-          }));
+          }
         }));
       }
 
