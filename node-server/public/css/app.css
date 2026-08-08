@@ -4923,74 +4923,50 @@ body {
     letter-spacing: -0.5px;
 }
 
-/* Sleek compact professional drawings toggle button */
+/* Sleek ultra-compact 28px icon button for drawings toggle */
 .drawings-toggle-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 24px;
-    padding: 0 8px;
-    font-size: 11px;
-    font-weight: 500;
-    font-family: inherit;
-    color: #94a3b8;
-    background: #1e222d;
-    border: 1px solid #2a2e39;
-    border-radius: 5px;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: var(--bg3, #1e222d);
+    border: 1px solid var(--bd, #2a2e39);
+    border-radius: var(--radius, 6px);
+    color: var(--t3, #64748b);
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 0.15s ease;
     user-select: none;
+    flex-shrink: 0;
     outline: none;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .drawings-toggle-btn svg {
-    flex-shrink: 0;
-    opacity: 0.7;
-    transition: opacity 0.2s ease;
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    transition: stroke 0.15s ease, transform 0.15s ease;
 }
 
 .drawings-toggle-btn:hover {
-    color: #e2e8f0;
-    background: #2a2e39;
-    border-color: #363a45;
+    color: var(--t1, #f1f5f9);
+    background: var(--bgh, #2a2e39);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .drawings-toggle-btn:hover svg {
-    opacity: 1;
+    transform: scale(1.1);
 }
 
 .drawings-toggle-btn.on {
     color: #38bdf8;
-    background: rgba(56, 189, 248, 0.09);
-    border-color: rgba(56, 189, 248, 0.35);
-    box-shadow: 0 0 10px rgba(56, 189, 248, 0.12);
-}
-
-.drawings-toggle-btn.on svg {
-    opacity: 1;
-    stroke: #38bdf8;
+    background: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.4);
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
 }
 
 .drawings-toggle-btn.on:hover {
-    background: rgba(56, 189, 248, 0.16);
-    border-color: rgba(56, 189, 248, 0.5);
-}
-
-.drawings-toggle-btn .dt-badge {
-    font-size: 9px;
-    font-weight: 700;
-    padding: 1px 4px;
-    border-radius: 3px;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    background: rgba(255, 255, 255, 0.06);
-    color: #64748b;
-    transition: all 0.2s ease;
-    line-height: 1;
-}
-
-.drawings-toggle-btn.on .dt-badge {
-    background: rgba(56, 189, 248, 0.2);
-    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.22);
+    border-color: rgba(56, 189, 248, 0.6);
 }
