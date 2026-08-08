@@ -76,7 +76,21 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
     mkExWs("GT", "wss://fx-ws.gateio.ws/v4/ws/usdt", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (d.event === "update" && d.channel === "futures.tickers" && d.result) {
+        if (d.event === "update" && d.channel === "futures.book_ticker" && d.result) {
+          const tick = d.result;
+          const sym = tick.s;
+          if (!sym) return;
+          const t = tickers.get("GT:" + sym);
+          if (t) {
+            const bp = +tick.b, ap = +tick.a;
+            if (bp > 0 && ap > 0) {
+              const midP = (bp + ap) / 2;
+              t.p = midP;
+              if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;
+              dirtyKeys.add(t.key);
+            }
+          }
+        } else if (d.event === "update" && d.channel === "futures.tickers" && d.result) {
           const ticks = Array.isArray(d.result) ? d.result : [d.result];
           for (const tick of ticks) {
             const sym = tick.s || tick.contract;
@@ -84,29 +98,40 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const t = tickers.get("GT:" + sym);
             if (t) {
               if (tick.last) t.p = +tick.last;
-              if (tick.v) t.v = +tick.v; // GT uses 'v' for stats in some versions
               if (tick.volume_24h_quote) t.v = +tick.volume_24h_quote;
-              if (tick.h) t.h = +tick.h;
-              if (tick.l) t.l = +tick.l;
+              else if (tick.volume_24h_settle) t.v = +tick.volume_24h_settle;
+              if (tick.high_24h) t.h = +tick.high_24h;
+              if (tick.low_24h) t.l = +tick.low_24h;
               if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
               dirtyKeys.add(t.key);
             }
           }
-        } else if (d.event === "update" && d.channel === "futures.book_ticker" && d.result) {
-          // book_ticker disabled — using LTP only from futures.tickers
         }
       } catch (_) {}
     }, (ws) => {
-      // Subscribe all at once for simplicity, Gate supports many per connection
       const sub = (ch) => {
+        for (let i = 0; i < gtSyms.length; i += 500) {
+          const chunk = gtSyms.slice(i, i + 500);
           ws.send(JSON.stringify({
-            time: Math.floor(Date.now()/1000),
+            time: Math.floor(Date.now() / 1000),
             channel: ch,
             event: "subscribe",
-            payload: gtSyms
+            payload: chunk
           }));
+        }
       };
+      sub("futures.book_ticker");
       sub("futures.tickers");
+
+      const pinger = setInterval(() => {
+        if (ws.readyState === 1) {
+          try {
+            ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.ping" }));
+          } catch (_) {}
+        } else {
+          clearInterval(pinger);
+        }
+      }, 15000);
     });
   }
 
