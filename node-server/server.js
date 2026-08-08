@@ -1515,41 +1515,42 @@ server.listen(PORT, () => {
       const list = Array.from(tickers.values())
         .filter(t => t.v > 0)
         .sort((a, b) => b.v - a.v)
-        .slice(0, 100); // Scan top 100 coins
+        .slice(0, 300); // Scan top 300 active coins
 
       const timeframes = ["5m", "15m", "1h", "4h", "1d"];
       let newSignalsCount = 0;
 
-      for (const t of list) {
-        const colonIdx = t.key.indexOf(':');
-        if (colonIdx <= 0) continue;
-        const ex = t.key.substring(0, colonIdx);
-        const sym = t.key.substring(colonIdx + 1);
-        const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
+      // Process coins in parallel batches of 15 for 15x speedup
+      const BATCH_SIZE = 15;
+      for (let i = 0; i < list.length; i += BATCH_SIZE) {
+        const batch = list.slice(i, i + BATCH_SIZE);
+        await Promise.all(batch.map(async (t) => {
+          const colonIdx = t.key.indexOf(':');
+          if (colonIdx <= 0) return;
+          const ex = t.key.substring(0, colonIdx);
+          const sym = t.key.substring(colonIdx + 1);
+          const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
 
-        for (const tf of timeframes) {
-          try {
-            const candles = await fetchFullHistory(ex, sym, tf, true);
+          for (const tf of timeframes) {
+            try {
+              const candles = await fetchFullHistory(ex, sym, tf, true);
+              patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
+              if (!candles || candles.length < 30) continue;
 
-            // Always clear old signals for this coin+tf
-            patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-
-            if (!candles || candles.length < 30) { await new Promise(r => setTimeout(r, 40)); continue; }
-
-            const meta = { ex, sym, base, tf };
-            const signals = patternDetector.scanCandles(meta, candles);
-            for (const sig of signals) {
-              patternsCache.push(sig);
-              newSignalsCount++;
-            }
-          } catch (e) {}
-          await new Promise(r => setTimeout(r, 100));
-        }
+              const meta = { ex, sym, base, tf };
+              const signals = patternDetector.scanCandles(meta, candles);
+              for (const sig of signals) {
+                patternsCache.push(sig);
+                newSignalsCount++;
+              }
+            } catch (e) {}
+          }
+        }));
       }
 
       patternsCache.sort((a, b) => b.ts - a.ts);
-      if (patternsCache.length > 2000) {
-        patternsCache = patternsCache.slice(0, 2000);
+      if (patternsCache.length > 3000) {
+        patternsCache = patternsCache.slice(0, 3000);
       }
 
       console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Total cached: ${patternsCache.length}`);
@@ -1557,8 +1558,8 @@ server.listen(PORT, () => {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      // Endless 24/7 loop: schedule next scan 5 seconds after current finishes
-      setTimeout(scanAllPatterns, 30000);
+      // Endless 24/7 loop: schedule next scan 2 seconds after current finishes
+      setTimeout(scanAllPatterns, 2000);
     }
   }
 
