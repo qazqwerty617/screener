@@ -1010,9 +1010,10 @@ function getSmcData(candles) {
     if (c3.l > c1.h) {
       const gapSize = (c3.l - c1.h) / c1.h;
       if (gapSize >= 0.0015) {
+        const fillThreshold = c3.l - (c3.l - c1.h) * 0.3; // Filled/mitigated when price retraces 30% into FVG
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
-          if (candles[k].l <= c1.h) {
+          if (candles[k].l <= fillThreshold) {
             filled = true;
             break;
           }
@@ -1031,9 +1032,10 @@ function getSmcData(candles) {
     if (c3.h < c1.l) {
       const gapSize = (c1.l - c3.h) / c3.h;
       if (gapSize >= 0.0015) {
+        const fillThreshold = c3.h + (c1.l - c3.h) * 0.3; // Filled/mitigated when price retraces 30% into FVG
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
-          if (candles[k].h >= c1.l) {
+          if (candles[k].h >= fillThreshold) {
             filled = true;
             break;
           }
