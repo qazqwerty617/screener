@@ -37,13 +37,16 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         }
         mxSyms.push(d.symbol);
         const cs = detailMap.get(d.symbol) || 1;
-        tickers.set("MX:" + d.symbol, {
+        const tObj = {
           key: "MX:" + d.symbol, ex: "MX", sym: d.symbol, base: d.symbol.replace(/_USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changeRate * 100,
           v: +d.amount24, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
           oi,
           cs
-        });
+        };
+        tickers.set("MX:" + d.symbol, tObj);
+        const noUnder = d.symbol.replace("_", "");
+        if (noUnder !== d.symbol) tickers.set("MX:" + noUnder, tObj);
         added++;
       }
       console.log(`[MX] Loaded ${added} symbols`);
@@ -82,7 +85,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         }
       } catch (_) {}
     };
-    setInterval(poll, 3000);
+    setInterval(poll, 1000);
   }
 
   function connectWs() {
@@ -99,8 +102,8 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const t = tickers.get("MX:" + sym);
             if (!t) continue;
 
-            const bid = +(tick.maxBidPrice || 0);
-            const ask = +(tick.minAskPrice || 0);
+            const bid = +(tick.bid1 || 0);
+            const ask = +(tick.ask1 || 0);
             if (bid > 0 && ask > 0) {
               t.p = (bid + ask) / 2;
               t._wsMid = true;

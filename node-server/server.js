@@ -238,6 +238,31 @@ function broadcastKline(ex, sym, tf, candle) {
   }
 }
 
+function updateLiveTradeTick(ex, sym, tf, tradeTime, price, volume) {
+  const normT = normalizeTimestamp(tradeTime);
+  if (!normT || price <= 0) return;
+
+  const key = cacheKey(ex, sym, tf, false);
+  const cached = klinesCache.get(key);
+  if (cached && Array.isArray(cached.data) && cached.data.length >= 6) {
+    const flat = cached.data;
+    const lastT = flat[flat.length - 6];
+    let o = flat[flat.length - 5];
+    let h = flat[flat.length - 4];
+    let l = flat[flat.length - 3];
+    let c = flat[flat.length - 2];
+    let v = flat[flat.length - 1];
+
+    if (normT >= lastT) {
+      h = Math.max(h, price);
+      l = Math.min(l, price);
+      c = price;
+      v += (volume || 0);
+      broadcastKline(ex, sym, tf, { t: lastT, o, h, l, c, v });
+    }
+  }
+}
+
 // тФАтФАтФА HTTP + WebSocket server тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const app = express();
 app.use(compression());
@@ -435,19 +460,34 @@ function connectKlineWs(sub) {
     sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
     sub.ws.on("error", () => {});
   } else if (ex === "MX") {
+    const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
     const tfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
     sub.ws = new WebSocket("wss://contract.mexc.com/edge", { perMessageDeflate: false });
-    sub.ws.on("error", (e) => console.warn(`[KL ERROR] MX:${sym}`, e.message));
+    sub.ws.on("error", (e) => console.warn(`[KL ERROR] MX:${mxSym}`, e.message));
     sub.ws.on("open", () => {
-      sub.ws.send(JSON.stringify({ method: "sub.kline", param: { symbol: sym, interval: tfMap[tf] || "Hour4" } }));
-      sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ method: "ping" })); }, 20000);
+      sub.ws.send(JSON.stringify({ method: "sub.kline", param: { symbol: mxSym, interval: tfMap[tf] || "Hour4" } }));
+      sub.ws.send(JSON.stringify({ method: "sub.deal", param: { symbol: mxSym } }));
+      sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ method: "ping" })); }, 15000);
     });
     sub.ws.on("message", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (d.channel !== "push.kline" || !d.data) return;
-        const k = d.data;
-        broadcastKline(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.a || +k.q });
+        if (d.channel === "push.deal" && Array.isArray(d.data)) {
+          for (const deal of d.data) {
+            const tp = +deal.p;
+            const tv = +deal.v * tp;
+            const tt = +deal.t || Date.now();
+            if (tp > 0) {
+              const t = tickers.get("MX:" + mxSym);
+              if (t) { t.p = tp; dirtyKeys.add(t.key); }
+              updateLiveTradeTick(ex, sym, tf, tt, tp, tv);
+            }
+          }
+        }
+        if (d.channel === "push.kline" && d.data) {
+          const k = d.data;
+          broadcastKline(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.a || (+k.q * +k.c) });
+        }
       } catch (_) {}
     });
     sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
@@ -593,7 +633,7 @@ function startKlinePolling(sub) {
         broadcastKline(sub.ex, sub.sym, sub.tf, last);
       }
     } catch (_) {}
-  }, 5000);
+  }, 1000);
 }
 
 // тФАтФАтФА Reconnecting WebSocket helper тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -755,7 +795,8 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
     return `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${TF_MAP.GT[tf] || "1h"}&limit=${limit}` + (before ? `&to=${Math.floor(before / 1000)}` : "");
   }
   if (ex === "MX") {
-    return `https://contract.mexc.com/api/v1/contract/kline/${sym}?interval=${TF_MAP.MX[tf] || "Min60"}` + (before ? `&end=${Math.floor(before / 1000)}` : "");
+    const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
+    return `https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${TF_MAP.MX[tf] || "Min60"}` + (before ? `&end=${Math.floor(before / 1000)}` : "");
   }
   if (ex === "KC") {
     return `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${TF_MAP.KC[tf] || "60"}` + (before ? `&to=${before}` : "");
@@ -780,7 +821,11 @@ function parseKlines(ex, data) {
     else if (ex === "OX") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
     else if (ex === "BG") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
     else if (ex === "GT") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }));
-    else if (ex === "MX") rawList = (data.data?.time || []).map((t, i) => ({ t: t, o: data.data.open[i], h: data.data.high[i], l: data.data.low[i], c: data.data.close[i], v: data.data.vol[i] }));
+    else if (ex === "MX") rawList = (data.data?.time || []).map((t, i) => {
+      const c = +data.data.close[i];
+      const v = data.data.amount ? +data.data.amount[i] : (+data.data.vol[i] * c);
+      return { t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c, v };
+    });
     else if (ex === "KC") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[5] }));
     else if (ex === "BX") rawList = (data.data || []).map(k => {
       const closeP = +(k.close || k.c || 0);
@@ -831,9 +876,9 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
       if (fetchEx === "HL") {
         data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (limit * tfMs), endTime: Date.now() } });
       } else {
-        const url = getKlinesUrl(ex, sym, tf, limit);
+        const url = getKlinesUrl(ex, sym, tf, 300);
         if (!url) return [];
-        data = await apiFetch(url, 4000, 0);
+        data = await apiFetch(url, 3000, 0);
       }
       return parseKlines(ex, data);
     } catch (e) { return []; }
@@ -1038,15 +1083,16 @@ function cacheKey(ex, sym, tf, lite) {
 app.get("/api/klines", async (req, res) => {
   const { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0" } = req.query;
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "public, max-age=30");
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
   
   const useLite = lite === "1";
   const key = cacheKey(ex, sym, tf, useLite);
   const now = Date.now();
   
   const cached = klinesCache.get(key);
-  // TTL: 30 minutes for server-side cache (kept fresh via WSS)
-  const ttl = 1800000;
+  // TTL: 15 seconds for server-side cache so fresh exchange klines are fetched on timeframe change
+  const ttl = 15000;
   
   if (cached && now - cached.at < ttl) {
     return res.json(cached.data);
@@ -1082,7 +1128,7 @@ app.get("/api/backtest/new", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
 
   if (universe.length < 20) {
-    return res.status(503).json({ error: "╨а╤Л╨╜╨╛╨║ ╨╡╤Й╤С ╨╖╨░╨│╤А╤Г╨╢╨░╨╡╤В╤Б╤П. ╨Я╨╛╨▓╤В╨╛╤А╨╕╤В╨╡ ╤З╨╡╤А╨╡╨╖ ╨╜╨╡╤Б╨║╨╛╨╗╤М╨║╨╛ ╤Б╨╡╨║╤Г╨╜╨┤." });
+    return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
   }
 
   const shuffled = universe.slice().sort(() => Math.random() - 0.5);
@@ -1156,12 +1202,12 @@ app.get("/api/backtest/new", async (req, res) => {
     }
   }
 
-  res.status(503).json({ error: lastError?.message || "╨Э╨╡ ╤Г╨┤╨░╨╗╨╛╤Б╤М ╨┐╨╛╨┤╨╛╨▒╤А╨░╤В╤М ╨╕╤Б╤В╨╛╤А╨╕╤З╨╡╤Б╨║╨╕╨╣ ╤Г╤З╨░╤Б╤В╨╛╨║" });
+  res.status(503).json({ error: lastError?.message || "Не удалось подобрать исторический участок" });
 });
 
 app.post("/api/backtest/:id/step", (req, res) => {
   const session = backtestSessions.get(req.params.id);
-  if (!session) return res.status(404).json({ error: "╨б╨╡╤Б╤Б╨╕╤П ╨▒╤Н╨║╤В╨╡╤Б╤В╨░ ╤Г╤Б╤В╨░╤А╨╡╨╗╨░" });
+  if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
   const requested = Math.max(1, Math.min(200, parseInt(req.query.count, 10) || 1));
   const from = session.revealed;
   const to = Math.min(session.future.length, from + requested);
@@ -1172,7 +1218,7 @@ app.post("/api/backtest/:id/step", (req, res) => {
 
 app.post("/api/backtest/:id/reveal", (req, res) => {
   const session = backtestSessions.get(req.params.id);
-  if (!session) return res.status(404).json({ error: "╨б╨╡╤Б╤Б╨╕╤П ╨▒╤Н╨║╤В╨╡╤Б╤В╨░ ╤Г╤Б╤В╨░╤А╨╡╨╗╨░" });
+  if (!session) return res.status(404).json({ error: "Сессия бэктеста устарела" });
   const rest = session.future.slice(session.revealed);
   session.revealed = session.future.length;
   res.setHeader("Cache-Control", "no-store");
@@ -1235,7 +1281,7 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
   const { exchange, apiKey, apiSecret, passphrase } = req.body || {};
 
   if (!apiKey || !apiSecret) {
-    return res.status(400).json({ error: "╨г╨║╨░╨╢╨╕╤В╨╡ API Key ╨╕ API Secret" });
+    return res.status(400).json({ error: "Укажите API Key и API Secret" });
   }
 
   const crypto = require("crypto");
@@ -1283,8 +1329,8 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
           pnl: parseFloat((parseFloat(exec.execFee || 0) * -1 + (exec.side === "Sell" ? 25 : -15)).toFixed(2)),
           pnlPercent: parseFloat((exec.side === "Sell" ? 2.15 : -1.45).toFixed(2)),
           fee: parseFloat(exec.execFee || 0),
-          tags: ["╨б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╨┐╨╛ API"],
-          note: `╨Ю╤А╨┤╨╡╤А #${exec.orderId || ''} (${exec.execType || 'Trade'})`
+          tags: ["Синхронизировано по API"],
+          note: `Ордер #${exec.orderId || ''} (${exec.execType || 'Trade'})`
         };
       });
 
@@ -1318,7 +1364,7 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
           pnl: pnl,
           pnlPercent: parseFloat((pnl >= 0 ? 2.50 : -1.80).toFixed(2)),
           fee: 0.50,
-          tags: ["╨б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╨┐╨╛ API"],
+          tags: ["Синхронизировано по API"],
           note: `Binance Futures PnL #${inc.tranId || idx}`
         };
       });
@@ -1363,13 +1409,13 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
           pnl: parseFloat((parseFloat(exec.fee || 0) * -1).toFixed(2)),
           pnlPercent: 0,
           fee: Math.abs(parseFloat(exec.fee || 0)),
-          tags: ["╨б╨╕╨╜╤Е╤А╨╛╨╜╨╕╨╖╨╕╤А╨╛╨▓╨░╨╜╨╛ ╨┐╨╛ API"],
+          tags: ["Синхронизировано по API"],
           note: `OKX fill #${exec.fillId}`
         };
       });
 
     } else {
-      return res.status(400).json({ error: "╨Т╤Л╨▒╤А╨░╨╜╨╜╨░╤П ╨▒╨╕╤А╨╢╨░ ╨╜╨╡ ╨┐╨╛╨┤╨┤╨╡╤А╨╢╨╕╨▓╨░╨╡╤В╤Б╤П ╨╕╨╗╨╕ ╤В╤А╨╡╨▒╤Г╨╡╤В ╤А╨░╤Б╤И╨╕╤А╨╡╨╜╨╜╤Г╤О ╨╜╨░╤Б╤В╤А╨╛╨╣╨║╤Г API" });
+      return res.status(400).json({ error: "Выбранная биржа не поддерживается или требует расширенную настройку API" });
     }
 
     res.json({ success: true, count: trades.length, trades });

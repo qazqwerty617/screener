@@ -1771,7 +1771,7 @@
       link.href = canvas.toDataURL("image/png");
       link.click();
     };
-    logoImg.src = "/img/logo.png";
+    logoImg.src = "/img/logo.svg";
   }
 
   // ── API SYNC CALLER & AUTOMATIC BACKGROUND REFRESH ───────────────────────

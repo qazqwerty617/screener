@@ -13,24 +13,30 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   async function init() {
     try {
       if (updateExStatus) updateExStatus("BX", "connecting");
-      const [contractsResp, tickersResp, premiumResp] = await Promise.all([
+      const [contractsResp, tickersResp, premiumResp, spot24Resp] = await Promise.all([
         apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/contracts", 15000, 2),
         apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", 15000, 2),
         apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", 15000, 2),
+        apiFetch("https://open-api.bingx.com/openApi/spot/v1/ticker/24hr", 15000, 2).catch(() => null),
       ]);
       if (contractsResp?.code !== 0 || tickersResp?.code !== 0) throw new Error("BingX API error");
 
       const tickersBySymbol = new Map((tickersResp.data || []).filter(item => item && item.symbol).map(item => [item.symbol, item]));
       const fundingBySymbol = new Map((premiumResp.data || []).filter(item => item && item.symbol).map(item => [item.symbol, item]));
+      const spotOpenMap = new Map((spot24Resp?.data || []).filter(item => item && item.symbol).map(item => [item.symbol, +item.openPrice]));
+
       bxSyms = [];
       let added = 0;
       for (const contract of contractsResp.data || []) {
-        if (!contract?.symbol || !contract.symbol.endsWith("-USDT")) continue;
+        if (!contract?.symbol || !contract.symbol.endsWith("-USDT") || contract.symbol.startsWith("NC")) continue;
         const ticker = tickersBySymbol.get(contract.symbol);
         if (!ticker) continue;
         const fm = fundingBySymbol.get(contract.symbol);
         bxSyms.push(contract.symbol);
-        const p = +(ticker.lastPrice || 0), o = +(ticker.openPrice || 0), h = +(ticker.highPrice || 0), l = +(ticker.lowPrice || 0);
+        const p = +(ticker.lastPrice || 0);
+        const spotOpen = spotOpenMap.get(contract.symbol);
+        const o = spotOpen && spotOpen > 0 ? spotOpen : +(ticker.openPrice || 0);
+        const h = +(ticker.highPrice || 0), l = +(ticker.lowPrice || 0);
         tickers.set("BX:" + contract.symbol, {
           key: "BX:" + contract.symbol, ex: "BX", sym: contract.symbol, base: contract.symbol.replace(/-USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : +(ticker.priceChangePercent || 0),
@@ -62,29 +68,36 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             try { d = JSON.parse(zlib.gunzipSync(raw).toString()); } catch (__) { return; }
           }
           if (d.ping) { ws.send(JSON.stringify({ pong: d.ping })); return; }
-          if (d.data && (d.dataType?.includes("trade") || d.dataType?.includes("ticker"))) {
-             const ticks = Array.isArray(d.data) ? d.data : [d.data];
-             for (const tick of ticks) {
-               const sym = tick.s || tick.symbol;
-               if (!sym) continue;
-               const t = tickers.get("BX:" + sym);
-               if (t) {
-                 const lp = +(tick.p || tick.lastPrice || 0);
-                 if (lp > 0) t.p = lp;
-                 // NEVER use tick.q (single trade amount) for 24h volume.
-                 // Only update volume if it's explicitly a ticker pushing 24h volume.
-                 if (d.dataType?.includes("ticker") && (tick.quoteVolume || tick.v)) {
-                   t.v = +(tick.quoteVolume || tick.v);
-                 }
-                 if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
-                 dirtyKeys.add(t.key);
-               }
-             }
+          if (!d.data || !d.dataType) return;
+
+          const dataType = d.dataType;
+          const tick = d.data;
+          const sym = tick.s || tick.symbol || dataType.split("@")[0];
+          if (!sym) return;
+          const t = tickers.get("BX:" + sym);
+          if (!t) return;
+
+          if (dataType.includes("bookTicker")) {
+            const bp = +tick.b, ap = +tick.a;
+            if (bp > 0 && ap > 0) {
+              const midP = (bp + ap) / 2;
+              t.p = midP;
+              if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;
+              dirtyKeys.add(t.key);
+            }
+          } else if (dataType.includes("ticker")) {
+            if (tick.c) t.p = +tick.c;
+            if (tick.q) t.v = +tick.q;
+            if (tick.h) t.h = +tick.h;
+            if (tick.l) t.l = +tick.l;
+            if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+            dirtyKeys.add(t.key);
           }
         } catch (_) {}
       }, (ws) => {
         chunk.forEach(s => {
-          ws.send(JSON.stringify({ id: s, reqType: "sub", dataType: `${s}@trade` }));
+          ws.send(JSON.stringify({ id: `${s}-b`, reqType: "sub", dataType: `${s}@bookTicker` }));
+          ws.send(JSON.stringify({ id: `${s}-t`, reqType: "sub", dataType: `${s}@ticker` }));
         });
       });
     }
@@ -93,12 +106,14 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   function startRestPolling() {
     const poll = async () => {
       try {
-        const [tickersResp, premiumResp] = await Promise.all([
+        const [tickersResp, premiumResp, spot24Resp] = await Promise.all([
           apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", 10000, 0),
-          apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", 10000, 0)
+          apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", 10000, 0),
+          apiFetch("https://open-api.bingx.com/openApi/spot/v1/ticker/24hr", 10000, 0).catch(() => null),
         ]);
         
         const fundingMap = new Map((premiumResp?.data || []).map(item => [item.symbol, item]));
+        const spotOpenMap = new Map((spot24Resp?.data || []).map(item => [item.symbol, +item.openPrice]));
 
         if (tickersResp?.code !== 0 || !tickersResp.data) return;
         for (const tick of tickersResp.data) {
@@ -109,8 +124,10 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (tick.quoteVolume) t.v = +tick.quoteVolume;
           if (tick.highPrice) t.h = +tick.highPrice;
           if (tick.lowPrice) t.l = +tick.lowPrice;
-          if (tick.openPrice) t.o = +tick.openPrice;
           
+          const spotOpen = spotOpenMap.get(tick.symbol);
+          if (spotOpen && spotOpen > 0) t.o = spotOpen;
+
           const fm = fundingMap.get(tick.symbol);
           if (fm) {
             t.funding = +fm.lastFundingRate * 100;
