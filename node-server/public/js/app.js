@@ -9986,6 +9986,8 @@ window.addEventListener("resize", () => {
     }
 
     let processedCount = 0;
+    const scanStartTime = performance.now();
+
     async function nextBatch() {
       if (scanId !== activeScanId) return; // cancelled
       if (index >= total) {
@@ -10001,12 +10003,6 @@ window.addEventListener("resize", () => {
 
       const batch = eligibleCoins.slice(index, index + 30);
       index += batch.length;
-
-      const rem = total - processedCount;
-      const secTotal = Math.max(0, Math.ceil((rem * 2) / 1000));
-      const min = Math.floor(secTotal / 60);
-      const sec = secTotal % 60;
-      const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
 
       const promises = batch.map(async (c) => {
         const key = `${c.ex}|${c.sym}|${tf}`;
@@ -10084,6 +10080,15 @@ window.addEventListener("resize", () => {
         } finally {
           processedCount++;
           if (scanId === activeScanId) {
+            const elapsedMs = performance.now() - scanStartTime;
+            const msPerCoin = processedCount > 0 ? elapsedMs / processedCount : 10;
+            const remCoins = total - processedCount;
+            const remainingMs = remCoins * msPerCoin;
+            const secTotal = Math.ceil(remainingMs / 1000);
+            const min = Math.floor(secTotal / 60);
+            const sec = secTotal % 60;
+            const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
+
             scanProgressText = `Сканирование: ${processedCount}/${total} (${etaText})`;
             updateFormationsPagination();
           }
@@ -10295,7 +10300,7 @@ window.addEventListener("resize", () => {
     chartInstances = [];
 
     if (formationsAllCoins.length === 0) {
-      grid.innerHTML = `<div class="formations-empty">${scanProgressText || "Инструменты   загружены."}</div>`;
+      grid.innerHTML = `<div class="formations-empty">Загрузка формаций...</div>`;
       updateFormationsPagination();
       return;
     }
