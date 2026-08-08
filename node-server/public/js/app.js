@@ -1235,13 +1235,13 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
         ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(38, 201, 122, 0.75)";
         ctx.strokeRect(x1, yTop, boxW, h);
-        drawSmcPill(`OB (Bull) ⭐ ${ob.score}%`, x1 + 55, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
+        drawSmcPill("OB (Bull)", x1 + 35, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
       } else {
         ctx.fillStyle = "rgba(255, 69, 96, 0.14)";
         ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(255, 69, 96, 0.75)";
         ctx.strokeRect(x1, yTop, boxW, h);
-        drawSmcPill(`OB (Bear) ⭐ ${ob.score}%`, x1 + 55, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
+        drawSmcPill("OB (Bear)", x1 + 35, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
       }
       ctx.restore();
     }
