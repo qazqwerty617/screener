@@ -4960,13 +4960,15 @@ body {
 }
 
 .drawings-toggle-btn.on {
-    color: #38bdf8;
-    background: rgba(56, 189, 248, 0.12);
-    border-color: rgba(56, 189, 248, 0.4);
-    box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
+    color: #c084fc;
+    background: rgba(168, 85, 247, 0.18);
+    border-color: rgba(168, 85, 247, 0.6);
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.35);
 }
 
 .drawings-toggle-btn.on:hover {
-    background: rgba(56, 189, 248, 0.22);
-    border-color: rgba(56, 189, 248, 0.6);
+    color: #e9d5ff;
+    background: rgba(168, 85, 247, 0.28);
+    border-color: rgba(168, 85, 247, 0.8);
+    box-shadow: 0 0 14px rgba(168, 85, 247, 0.5);
 }
