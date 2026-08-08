@@ -1637,7 +1637,7 @@ function drawChart() {
       ctx.fillRect(fillX, fillY, fillW, fillH);
     }
 
-    if (cs.border.show) {
+    if (cs.border.show && candleW > 10) {
       const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
       const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
       const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
@@ -6735,7 +6735,7 @@ class ChartInstance {
         ctx.fillStyle = hexToRgba(cs.body[side], cs.body[side + "Op"]);
         ctx.fillRect(fillX, fillY, fillW, fillH);
       }
-      if (cs.border.show) {
+      if (cs.border.show && candleWidth > 10) {
         const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
         const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
         const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
