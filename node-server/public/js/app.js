@@ -1091,37 +1091,42 @@ function getSmcData(candles) {
   }
 
   // 4. Liquidity Pools
+  // 5. Liquidity Pools (Unswept EQH / EQL)
   const liquidityPools = [];
-  for (let i = Math.max(2, startVisIdx); i < numCandles - 2; i++) {
-    for (let j = i + 4; j < Math.min(numCandles - 1, i + 60); j++) {
-      if (Math.abs(candles[i].h - candles[j].h) / candles[i].h < 0.0012) {
+  const majorHighs = swings.filter(s => s.type === 'high');
+  const majorLows = swings.filter(s => s.type === 'low');
+
+  for (let i = 0; i < majorHighs.length; i++) {
+    for (let j = i + 1; j < majorHighs.length; j++) {
+      const h1 = majorHighs[i];
+      const h2 = majorHighs[j];
+      if (Math.abs(h1.price - h2.price) / h1.price <= 0.0015) {
+        const poolPrice = Math.max(h1.price, h2.price);
         let swept = false;
-        const poolPrice = Math.max(candles[i].h, candles[j].h);
-        for (let k = j + 1; k < numCandles; k++) {
-          if (candles[k].h > poolPrice * 1.0005) { swept = true; break; }
+        for (let k = h2.idx + 1; k < numCandles; k++) {
+          if (candles[k].h > poolPrice) { swept = true; break; }
         }
         if (!swept) {
-          liquidityPools.push({
-            type: "EQH",
-            idx1: i,
-            idx2: j,
-            price: poolPrice
-          });
+          liquidityPools.push({ type: "EQH", idx1: h1.idx, idx2: h2.idx, price: poolPrice });
+          break;
         }
       }
-      if (Math.abs(candles[i].l - candles[j].l) / candles[i].l < 0.0012) {
+    }
+  }
+
+  for (let i = 0; i < majorLows.length; i++) {
+    for (let j = i + 1; j < majorLows.length; j++) {
+      const l1 = majorLows[i];
+      const l2 = majorLows[j];
+      if (Math.abs(l1.price - l2.price) / l1.price <= 0.0015) {
+        const poolPrice = Math.min(l1.price, l2.price);
         let swept = false;
-        const poolPrice = Math.min(candles[i].l, candles[j].l);
-        for (let k = j + 1; k < numCandles; k++) {
-          if (candles[k].l < poolPrice * 0.9995) { swept = true; break; }
+        for (let k = l2.idx + 1; k < numCandles; k++) {
+          if (candles[k].l < poolPrice) { swept = true; break; }
         }
         if (!swept) {
-          liquidityPools.push({
-            type: "EQL",
-            idx1: i,
-            idx2: j,
-            price: poolPrice
-          });
+          liquidityPools.push({ type: "EQL", idx1: l1.idx, idx2: l2.idx, price: poolPrice });
+          break;
         }
       }
     }
@@ -1133,27 +1138,33 @@ function getSmcData(candles) {
 }
 
 function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
-  if (!candles || candles.length < 15 || !chartActiveSmc || chartActiveSmc.size === 0) return;
+  if (!candles || candles.length === 0 || !chartActiveSmc || chartActiveSmc.size === 0) return;
 
   const smcData = getSmcData(candles);
   if (!smcData) return;
 
-  const getCandleX = (idx) => (idx - viewStart) * candleW + candleW / 2;
   const lastPrice = candles[candles.length - 1].c;
 
-  const drawSmcPill = (text, x, y, bgCol, textCol, borderCol) => {
-    ctx.font = "bold 9px Inter";
-    const padX = 6;
-    const w = ctx.measureText(text).width + padX * 2;
-    const h = 16;
-    const bx = Math.max(4, Math.min(x, PW - w - 4));
-    const by = Math.max(TOP + 4, Math.min(y - h / 2, TOP + PH - h - 4));
+  const getCandleX = (idx) => {
+    return Math.round((idx - s + futureGap) * candleW + candleW / 2);
+  };
 
+  const drawSmcPill = (text, cx, cy, bg, border, textCol) => {
     ctx.save();
-    roundRect(ctx, bx, by, w, h, 4);
-    ctx.fillStyle = bgCol;
+    ctx.font = "bold 10px Inter, sans-serif";
+    const tw = ctx.measureText(text).width;
+    const paddingX = 7;
+    const paddingY = 3;
+    const w = tw + paddingX * 2;
+    const h = 18;
+    const bx = Math.max(5, Math.min(PW - w - 5, cx - w / 2));
+    const by = Math.max(TOP + 5, Math.min(TOP + PH - h - 5, cy - h / 2));
+
+    ctx.beginPath();
+    ctx.roundRect(bx, by, w, h, 4);
+    ctx.fillStyle = bg;
     ctx.fill();
-    ctx.strokeStyle = borderCol || bgCol;
+    ctx.strokeStyle = border;
     ctx.lineWidth = 1;
     ctx.stroke();
 
@@ -1166,35 +1177,26 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
   // 1. UNMITIGATED ORDER BLOCKS (OB)
   if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
-    const sortedOBs = smcData.orderBlocks
-      .map(ob => ({ ...ob, dist: Math.abs(lastPrice - (ob.high + ob.low) / 2) / lastPrice }))
-      .sort((a, b) => a.dist - b.dist)
-      .slice(0, 3);
-
-    for (const ob of sortedOBs) {
-      const x1 = Math.max(0, getCandleX(ob.startIdx));
-      const x2 = PW;
+    for (const ob of smcData.orderBlocks) {
+      const x1 = getCandleX(ob.startIdx);
+      const x2 = getCandleX(ob.endIdx);
       const yTop = toY(ob.high);
       const yBot = toY(ob.low);
       const h = Math.max(4, yBot - yTop);
-
-      if (yBot < TOP || yTop > TOP + PH) continue;
 
       ctx.save();
       if (ob.type === "bull") {
         ctx.fillStyle = "rgba(38, 201, 122, 0.12)";
         ctx.fillRect(x1, yTop, x2 - x1, h);
         ctx.strokeStyle = "rgba(38, 201, 122, 0.75)";
-        ctx.lineWidth = 1;
         ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("OB (Bull)", x1 + 10, yTop + h / 2, "#14532d", "#4ade80", "#22c55e");
+        drawSmcPill("OB", (x1 + x2) / 2, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
       } else {
         ctx.fillStyle = "rgba(255, 69, 96, 0.12)";
         ctx.fillRect(x1, yTop, x2 - x1, h);
         ctx.strokeStyle = "rgba(255, 69, 96, 0.75)";
-        ctx.lineWidth = 1;
         ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("OB (Bear)", x1 + 10, yTop + h / 2, "#7f1d1d", "#fca5a5", "#ef4444");
+        drawSmcPill("OB", (x1 + x2) / 2, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
       }
       ctx.restore();
     }
@@ -1202,43 +1204,34 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
   // 2. UNFILLED FAIR VALUE GAPS (FVG)
   if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
-    const sortedFVGs = smcData.fvgs
-      .map(fvg => ({ ...fvg, dist: Math.abs(lastPrice - (fvg.topPrice + fvg.botPrice) / 2) / lastPrice }))
-      .sort((a, b) => a.dist - b.dist)
-      .slice(0, 3);
-
-    for (const fvg of sortedFVGs) {
-      const x1 = Math.max(0, getCandleX(fvg.startIdx));
-      const x2 = PW;
+    for (const fvg of smcData.fvgs) {
+      const x1 = getCandleX(fvg.startIdx);
+      const x2 = getCandleX(fvg.endIdx);
       const yTop = toY(fvg.topPrice);
       const yBot = toY(fvg.botPrice);
       const h = Math.max(3, yBot - yTop);
-
-      if (yBot < TOP || yTop > TOP + PH) continue;
 
       ctx.save();
       if (fvg.type === "bull") {
         ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
         ctx.fillRect(x1, yTop, x2 - x1, h);
         ctx.strokeStyle = "rgba(6, 182, 212, 0.65)";
-        ctx.lineWidth = 1;
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("FVG (Bull)", x1 + 50, yTop + h / 2, "#164e63", "#67e8f9", "#06b6d4");
+        drawSmcPill("FVG", (x1 + x2) / 2, yTop + h / 2, "#164e63", "#06b6d4", "#67e8f9");
       } else {
         ctx.fillStyle = "rgba(168, 85, 247, 0.12)";
         ctx.fillRect(x1, yTop, x2 - x1, h);
         ctx.strokeStyle = "rgba(168, 85, 247, 0.65)";
-        ctx.lineWidth = 1;
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("FVG (Bear)", x1 + 50, yTop + h / 2, "#581c87", "#e9d5ff", "#a855f7");
+        drawSmcPill("FVG", (x1 + x2) / 2, yTop + h / 2, "#581c87", "#a855f7", "#e9d5ff");
       }
       ctx.restore();
     }
   }
 
-  // 3. BREAK OF STRUCTURE (BOS / CHoCH)
+  // 3. MAJOR BREAK OF STRUCTURE (BOS / CHoCH)
   if (chartActiveSmc.has("bos") && smcData.structureBreaks.length > 0) {
     const recentBreaks = smcData.structureBreaks.slice(-4);
     for (const sb of recentBreaks) {
@@ -1257,7 +1250,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
       ctx.lineTo(x2, y);
       ctx.stroke();
 
-      drawSmcPill(sb.type, (x1 + x2) / 2, y, sb.isBull ? "#14532d" : "#7f1d1d", sb.isBull ? "#4ade80" : "#fca5a5", sb.isBull ? "#22c55e" : "#ef4444");
+      drawSmcPill(sb.type, (x1 + x2) / 2, y, sb.isBull ? "#14532d" : "#7f1d1d", sb.isBull ? "#22c55e" : "#ef4444", sb.isBull ? "#4ade80" : "#fca5a5");
       ctx.restore();
     }
   }
@@ -1281,7 +1274,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
       ctx.lineTo(x2, y);
       ctx.stroke();
 
-      drawSmcPill(pool.type === "EQH" ? "EQH Liq 🠅" : "EQL Liq 🠗", PW - 70, y, pool.type === "EQH" ? "#713f12" : "#0c4a6e", pool.type === "EQH" ? "#fde047" : "#7dd3fc", pool.type === "EQH" ? "#eab308" : "#0284c7");
+      drawSmcPill(pool.type === "EQH" ? "EQH Liq 🠅" : "EQL Liq 🠗", PW - 70, y, pool.type === "EQH" ? "#713f12" : "#0c4a6e", pool.type === "EQH" ? "#eab308" : "#0284c7", pool.type === "EQH" ? "#fde047" : "#7dd3fc");
       ctx.restore();
     }
   }
