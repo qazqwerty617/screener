@@ -6277,6 +6277,7 @@ class ChartInstance {
 
       if (px >= PW) {
         this.isDragYScale = true;
+        this.isManualYScale = true;
         this.dragStartY = e.clientY;
         this.yScaleStartMn = this.viewMn !== null ? this.viewMn : (this.lastMn || 0);
         this.yScaleStartMx = this.viewMx !== null ? this.viewMx : (this.lastMx || 1);
@@ -6288,20 +6289,11 @@ class ChartInstance {
         this.isDrag = true;
         this.dragStart = e.clientX;
         this.dragOff = this.offsetX;
-
-        // Vertical drag initialization
-        if (this.viewMn !== null && this.viewMx !== null) {
-          this.isDragY = true;
-          this.dragStartY = e.clientY;
-          this.dragMnOff = this.viewMn;
-          this.dragMxOff = this.viewMx;
-          this.autoFitY = false;
-        }
-
         this.canvas.style.cursor = 'grabbing';
       } else if (e.button === 2) {
         if (this.viewMn !== null && this.viewMx !== null) {
           this.isDragY = true;
+          this.isManualYScale = true;
           this.dragStartY = e.clientY;
           this.autoFitY = false;
           this.dragMnOff = this.viewMn;
@@ -6470,6 +6462,7 @@ class ChartInstance {
     this.headerTf.textContent = this.tf;
     this.offsetX = 0;
     this.autoFitY = true;
+    this.isManualYScale = false;
     this.viewMn = null;
     this.viewMx = null;
     const key = `${this.ex}|${this.sym}|${this.tf}`;
@@ -6648,10 +6641,9 @@ class ChartInstance {
     autoMn = Math.max(0, autoMn - autoPad);
     autoMx += autoPad;
 
-    if (this.autoFitY || this.viewMn === null || this.viewMx === null) {
+    if (this.autoFitY || !this.isManualYScale || this.viewMn === null || this.viewMx === null) {
       this.viewMn = autoMn;
       this.viewMx = autoMx;
-      this.autoFitY = false;
     }
 
     const mn = this.viewMn,
