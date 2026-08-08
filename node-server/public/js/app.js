@@ -4197,6 +4197,15 @@ function sanitizeCandle(raw, prevClose = null) {
   if (![o, h, l, c].every(Number.isFinite)) return null;
   if (o <= 0 || h <= 0 || l <= 0 || c <= 0) return null;
 
+  // Connect Open price to previous Close for smooth continuous candle bodies (no floating step gaps)
+  if (prevClose !== null && Number.isFinite(prevClose) && prevClose > 0) {
+    // Only connect if the gap between prevClose and raw.o is within reasonable bound (not a major 10%+ session gap)
+    const gapRatio = Math.abs(raw.o - prevClose) / prevClose;
+    if (gapRatio < 0.05) {
+      o = prevClose;
+    }
+  }
+
   // Reject phantom future candles (> 1 hour in future)
   if (t > Date.now() + 3600000) return null;
 
