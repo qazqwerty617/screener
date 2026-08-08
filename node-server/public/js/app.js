@@ -4347,8 +4347,8 @@ async function fetchKlines(ex, sym, tf) {
     if (useProxy) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout for server proxy
-        const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=0`, { signal: controller.signal });
+        const timeoutId = setTimeout(() => controller.abort(), 1200); // 1.2s timeout for server proxy
+        const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`, { signal: controller.signal });
         clearTimeout(timeoutId);
         const dataLite = await rLite.json();
 
@@ -4365,7 +4365,6 @@ async function fetchKlines(ex, sym, tf) {
             }
             if (candles.length > 0) {
               loadedSuccess = true;
-              KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
               updateOHLC();
               if (!chartW || !chartH) resizeChart();
               chartNeedsDraw = true;
@@ -4380,14 +4379,13 @@ async function fetchKlines(ex, sym, tf) {
       const directCandles = await fetchDirectKlines(ex, sym, tf);
       if (fetchToken === klFetchToken && directCandles.length > 0) {
         candles = directCandles;
-        KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
         updateOHLC();
         if (!chartW || !chartH) resizeChart();
         chartNeedsDraw = true;
       }
     }
 
-    // 2. Fetch Full history (3000-5000 candles) in background
+    // 2. Fetch Full history (1500+ candles) seamlessly in background without blocking initial load
     setTimeout(() => {
       if (fetchToken !== klFetchToken) return;
       fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=0`)
@@ -4398,7 +4396,7 @@ async function fetchKlines(ex, sym, tf) {
             let centerTs = null;
             const curPW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
             const curN = Math.max(1, curPW / (candleW || 10));
-            if (candles.length > 0) {
+            if (candles.length > 0 && offsetX > 0) {
               const curViewStart = candles.length - curN - offsetX;
               centerTs = getTimeFromIdx(curViewStart + curN / 2);
             }
@@ -4413,7 +4411,10 @@ async function fetchKlines(ex, sym, tf) {
               candles = sanitizeCandles(dataFull);
             }
 
-            if (centerTs != null && candles.length > 0) {
+            if (offsetX === 0) {
+              offsetX = 0;
+              autoFitY = true;
+            } else if (centerTs != null && candles.length > 0) {
               const newCenterIdx = getIdxFromTime(centerTs, candles);
               const newViewStart = newCenterIdx - curN / 2;
               offsetX = getClampedOffsetX(candles.length - curN - newViewStart);
