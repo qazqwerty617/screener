@@ -1175,9 +1175,21 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
     ctx.restore();
   };
 
-  // 1. UNMITIGATED ORDER BLOCKS (OB)
+  // 1. UNMITIGATED ORDER BLOCKS (OB) - Filter to 2 closest Bull & 2 closest Bear
   if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
-    for (const ob of smcData.orderBlocks) {
+    const bullOBs = smcData.orderBlocks
+      .filter(ob => ob.type === "bull" && ob.high <= lastPrice)
+      .sort((a, b) => b.high - a.high)
+      .slice(0, 2);
+
+    const bearOBs = smcData.orderBlocks
+      .filter(ob => ob.type === "bear" && ob.low >= lastPrice)
+      .sort((a, b) => a.low - b.low)
+      .slice(0, 2);
+
+    const activeOBs = [...bullOBs, ...bearOBs];
+
+    for (const ob of activeOBs) {
       const rawX1 = getCandleX(ob.startIdx);
       const rawX2 = ob.endIdx ? getCandleX(ob.endIdx) : PW;
       const x1 = Math.max(0, rawX1);
@@ -1208,9 +1220,21 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
     }
   }
 
-  // 2. UNFILLED FAIR VALUE GAPS (FVG)
+  // 2. UNFILLED FAIR VALUE GAPS (FVG) - Filter to 2 closest Bull & 2 closest Bear
   if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
-    for (const fvg of smcData.fvgs) {
+    const bullFVGs = smcData.fvgs
+      .filter(fvg => fvg.type === "bull" && fvg.topPrice <= lastPrice)
+      .sort((a, b) => b.topPrice - a.topPrice)
+      .slice(0, 2);
+
+    const bearFVGs = smcData.fvgs
+      .filter(fvg => fvg.type === "bear" && fvg.botPrice >= lastPrice)
+      .sort((a, b) => a.botPrice - b.botPrice)
+      .slice(0, 2);
+
+    const activeFVGs = [...bullFVGs, ...bearFVGs];
+
+    for (const fvg of activeFVGs) {
       const rawX1 = getCandleX(fvg.startIdx);
       const rawX2 = fvg.endIdx ? getCandleX(fvg.endIdx) : PW;
       const x1 = Math.max(0, rawX1);
