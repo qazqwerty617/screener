@@ -6465,6 +6465,7 @@ class ChartInstance {
 
   async loadKlines() {
     if (!this.sym) return;
+    const myToken = (this._loadToken = (this._loadToken || 0) + 1);
     this.loadingKlines = true;
     this.headerTf.textContent = this.tf;
     this.offsetX = 0;
@@ -6496,9 +6497,12 @@ class ChartInstance {
     }
 
     try {
-      // 1. Lite fetch
+      // Instant lite fetch for ultra-fast response (<100ms for all grid cells)
       const rLite = await fetch(`/api/klines?ex=${this.ex}&sym=${this.sym}&tf=${this.tf}&lite=1`);
+      if (this._loadToken !== myToken) return;
       const dataLite = await rLite.json();
+      if (this._loadToken !== myToken) return;
+
       if (Array.isArray(dataLite) && dataLite.length > 0) {
         const flat = [];
         if (typeof dataLite[0] === 'number') {
@@ -6511,35 +6515,13 @@ class ChartInstance {
         }
         this.levels = window.detectChartLevelsFn(this.candles);
         if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
-        this.draw(true);
-      }
-
-      // 2. Full fetch
-      const rFull = await fetch(`/api/klines?ex=${this.ex}&sym=${this.sym}&tf=${this.tf}&lite=0`);
-      const dataFull = await rFull.json();
-      if (Array.isArray(dataFull) && dataFull.length > 0) {
-        const flat = [];
-        if (typeof dataFull[0] === 'number') {
-          for (let i = 0; i < dataFull.length; i += 6) {
-            flat.push({ t: dataFull[i], o: dataFull[i + 1], h: dataFull[i + 2], l: dataFull[i + 3], c: dataFull[i + 4], v: dataFull[i + 5] });
-          }
-          this.candles = sanitizeCandles(flat);
-        } else {
-          this.candles = sanitizeCandles(dataFull);
-        }
-
-        if (this.offsetX === 0 || this.offsetX < 10) {
-          this.offsetX = 0;
-          this.autoFitY = true;
-        }
-
-        this.levels = window.detectChartLevelsFn(this.candles);
-        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
-        KLINES_CACHE.set(key, { ts: Date.now(), data: dataFull });
+        KLINES_CACHE.set(key, { ts: Date.now(), data: dataLite });
         this.draw(true);
       }
     } catch (e) { } finally {
-      this.loadingKlines = false;
+      if (this._loadToken === myToken) {
+        this.loadingKlines = false;
+      }
     }
   }
 
