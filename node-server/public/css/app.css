@@ -4959,20 +4959,26 @@ body {
     transform: scale(1.1);
 }
 
+#btn-toggle-mc-drawings.on,
+#btn-toggle-formations-drawings.on,
 .drawings-toggle-btn.on {
     color: #c084fc !important;
-    background: rgba(168, 85, 247, 0.22) !important;
-    border: 1px solid rgba(168, 85, 247, 0.7) !important;
-    box-shadow: 0 0 12px rgba(168, 85, 247, 0.5) !important;
+    background: rgba(168, 85, 247, 0.25) !important;
+    border: 1px solid #a855f7 !important;
+    box-shadow: 0 0 14px rgba(168, 85, 247, 0.6) !important;
 }
 
+#btn-toggle-mc-drawings.on svg,
+#btn-toggle-formations-drawings.on svg,
 .drawings-toggle-btn.on svg {
     stroke: #c084fc !important;
 }
 
+#btn-toggle-mc-drawings.on:hover,
+#btn-toggle-formations-drawings.on:hover,
 .drawings-toggle-btn.on:hover {
     color: #e9d5ff !important;
-    background: rgba(168, 85, 247, 0.32) !important;
-    border-color: rgba(168, 85, 247, 0.9) !important;
-    box-shadow: 0 0 16px rgba(168, 85, 247, 0.65) !important;
+    background: rgba(168, 85, 247, 0.38) !important;
+    border-color: #c084fc !important;
+    box-shadow: 0 0 18px rgba(168, 85, 247, 0.8) !important;
 }
