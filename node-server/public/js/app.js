@@ -3338,8 +3338,12 @@ canvas.addEventListener("mousedown", (e) => {
         return;
       }
     }
-    // Pan
+    // Pan (2D free movement: horizontal & vertical)
     isDragX = true; dragStartX = e.clientX; dragOffX = offsetX;
+    if (viewMn != null && viewMx != null) {
+      isDragY = true; dragStartY = e.clientY; autoFitY = false;
+      dragMnOff = viewMn; dragMxOff = viewMx;
+    }
   }
 });
 
@@ -6294,6 +6298,14 @@ class ChartInstance {
         this.isDrag = true;
         this.dragStart = e.clientX;
         this.dragOff = this.offsetX;
+        if (this.viewMn !== null && this.viewMx !== null) {
+          this.isDragY = true;
+          this.isManualYScale = true;
+          this.dragStartY = e.clientY;
+          this.dragMnOff = this.viewMn;
+          this.dragMxOff = this.viewMx;
+          this.autoFitY = false;
+        }
         this.canvas.style.cursor = 'grabbing';
       } else if (e.button === 2) {
         if (this.viewMn !== null && this.viewMx !== null) {
