@@ -6465,6 +6465,7 @@ class ChartInstance {
 
   async loadKlines() {
     if (!this.sym) return;
+    this.loadingKlines = true;
     this.headerTf.textContent = this.tf;
     this.offsetX = 0;
     this.autoFitY = true;
@@ -6488,6 +6489,7 @@ class ChartInstance {
         this.candles = candList;
         this.levels = window.detectChartLevelsFn(this.candles);
         if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
+        this.loadingKlines = false;
         this.draw(true);
         return;
       }
@@ -6536,7 +6538,9 @@ class ChartInstance {
         KLINES_CACHE.set(key, { ts: Date.now(), data: dataFull });
         this.draw(true);
       }
-    } catch (e) { }
+    } catch (e) { } finally {
+      this.loadingKlines = false;
+    }
   }
 
   draw(force = false) {
@@ -6581,16 +6585,17 @@ class ChartInstance {
 
     const last = this.candles[this.candles.length - 1];
     const cData = coins.get(this.key || `${this.ex}:${this.sym}`);
-    if (cData && last) {
+    if (cData && last && !this.loadingKlines) {
       const liveP = getDisplayP(cData);
       if (liveP > 0) {
         const tfMs = TF_MS[this.tf] || 60000;
         const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
-        if (expectedStart > last.t) {
+        const timeDiff = expectedStart - last.t;
+        if (timeDiff > 0 && timeDiff <= tfMs * 2) {
           const newCandle = { t: expectedStart, o: last.c, h: Math.max(last.c, liveP), l: Math.min(last.c, liveP), c: liveP, v: 0 };
           this.candles.push(newCandle);
           if (this.candles.length > 1500) this.candles.shift();
-        } else {
+        } else if (timeDiff <= 0) {
           last.c = liveP;
           if (liveP > last.h) last.h = liveP;
           if (liveP < last.l) last.l = liveP;
