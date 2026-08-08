@@ -1178,25 +1178,31 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   // 1. UNMITIGATED ORDER BLOCKS (OB)
   if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
     for (const ob of smcData.orderBlocks) {
-      const x1 = getCandleX(ob.startIdx);
-      const x2 = getCandleX(ob.endIdx);
+      const rawX1 = getCandleX(ob.startIdx);
+      const rawX2 = ob.endIdx ? getCandleX(ob.endIdx) : PW;
+      const x1 = Math.max(0, rawX1);
+      const x2 = Math.min(PW, rawX2);
+      if (x2 <= 0 || x1 >= PW) continue;
+      const boxW = Math.max(15, x2 - x1);
       const yTop = toY(ob.high);
       const yBot = toY(ob.low);
       const h = Math.max(4, yBot - yTop);
 
+      if (yBot < TOP || yTop > TOP + PH) continue;
+
       ctx.save();
       if (ob.type === "bull") {
-        ctx.fillStyle = "rgba(38, 201, 122, 0.12)";
-        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.fillStyle = "rgba(38, 201, 122, 0.14)";
+        ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(38, 201, 122, 0.75)";
-        ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("OB", (x1 + x2) / 2, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
+        ctx.strokeRect(x1, yTop, boxW, h);
+        drawSmcPill("OB (Bull)", x1 + 35, yTop + h / 2, "#14532d", "#22c55e", "#4ade80");
       } else {
-        ctx.fillStyle = "rgba(255, 69, 96, 0.12)";
-        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.fillStyle = "rgba(255, 69, 96, 0.14)";
+        ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(255, 69, 96, 0.75)";
-        ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("OB", (x1 + x2) / 2, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
+        ctx.strokeRect(x1, yTop, boxW, h);
+        drawSmcPill("OB (Bear)", x1 + 35, yTop + h / 2, "#7f1d1d", "#ef4444", "#fca5a5");
       }
       ctx.restore();
     }
@@ -1205,36 +1211,51 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   // 2. UNFILLED FAIR VALUE GAPS (FVG)
   if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
     for (const fvg of smcData.fvgs) {
-      const x1 = getCandleX(fvg.startIdx);
-      const x2 = getCandleX(fvg.endIdx);
+      const rawX1 = getCandleX(fvg.startIdx);
+      const rawX2 = fvg.endIdx ? getCandleX(fvg.endIdx) : PW;
+      const x1 = Math.max(0, rawX1);
+      const x2 = Math.min(PW, rawX2);
+      if (x2 <= 0 || x1 >= PW) continue;
+      const boxW = Math.max(15, x2 - x1);
       const yTop = toY(fvg.topPrice);
       const yBot = toY(fvg.botPrice);
       const h = Math.max(3, yBot - yTop);
 
+      if (yBot < TOP || yTop > TOP + PH) continue;
+
       ctx.save();
       if (fvg.type === "bull") {
-        ctx.fillStyle = "rgba(6, 182, 212, 0.12)";
-        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.fillStyle = "rgba(6, 182, 212, 0.14)";
+        ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(6, 182, 212, 0.65)";
         ctx.setLineDash([4, 3]);
-        ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("FVG", (x1 + x2) / 2, yTop + h / 2, "#164e63", "#06b6d4", "#67e8f9");
+        ctx.strokeRect(x1, yTop, boxW, h);
+        drawSmcPill("FVG (Bull)", x1 + 45, yTop + h / 2, "#164e63", "#06b6d4", "#67e8f9");
       } else {
-        ctx.fillStyle = "rgba(168, 85, 247, 0.12)";
-        ctx.fillRect(x1, yTop, x2 - x1, h);
+        ctx.fillStyle = "rgba(168, 85, 247, 0.14)";
+        ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(168, 85, 247, 0.65)";
         ctx.setLineDash([4, 3]);
-        ctx.strokeRect(x1, yTop, x2 - x1, h);
-        drawSmcPill("FVG", (x1 + x2) / 2, yTop + h / 2, "#581c87", "#a855f7", "#e9d5ff");
+        ctx.strokeRect(x1, yTop, boxW, h);
+        drawSmcPill("FVG (Bear)", x1 + 45, yTop + h / 2, "#581c87", "#a855f7", "#e9d5ff");
       }
       ctx.restore();
     }
   }
 
-  // 3. MAJOR BREAK OF STRUCTURE (BOS / CHoCH)
+  // 3. MAJOR BREAK OF STRUCTURE (BOS / CHoCH) - Deduplicated & Clean
   if (chartActiveSmc.has("bos") && smcData.structureBreaks.length > 0) {
-    const recentBreaks = smcData.structureBreaks.slice(-4);
-    for (const sb of recentBreaks) {
+    const cleanBreaks = [];
+    for (let i = smcData.structureBreaks.length - 1; i >= 0; i--) {
+      const b = smcData.structureBreaks[i];
+      const tooClose = cleanBreaks.some(cb => Math.abs(cb.breakIdx - b.breakIdx) < 12);
+      if (!tooClose) {
+        cleanBreaks.unshift(b);
+        if (cleanBreaks.length >= 3) break;
+      }
+    }
+
+    for (const sb of cleanBreaks) {
       const x1 = getCandleX(sb.startIdx);
       const x2 = getCandleX(sb.breakIdx);
       const y = toY(sb.price);
@@ -1246,11 +1267,11 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
       ctx.strokeStyle = sb.isBull ? "#26c97a" : "#ff4560";
       ctx.lineWidth = 1.2;
       ctx.setLineDash([3, 3]);
-      ctx.moveTo(x1, y);
-      ctx.lineTo(x2, y);
+      ctx.moveTo(Math.max(0, x1), y);
+      ctx.lineTo(Math.min(PW, x2), y);
       ctx.stroke();
 
-      drawSmcPill(sb.type, (x1 + x2) / 2, y, sb.isBull ? "#14532d" : "#7f1d1d", sb.isBull ? "#22c55e" : "#ef4444", sb.isBull ? "#4ade80" : "#fca5a5");
+      drawSmcPill(sb.type, Math.min(PW - 30, Math.max(30, x2)), y, sb.isBull ? "#14532d" : "#7f1d1d", sb.isBull ? "#22c55e" : "#ef4444", sb.isBull ? "#4ade80" : "#fca5a5");
       ctx.restore();
     }
   }
