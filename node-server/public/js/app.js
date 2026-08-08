@@ -198,8 +198,8 @@ function getClampedOffsetX(val) {
   if (!Number.isFinite(val) || candles.length === 0) return 0;
   const PW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const visibleCount = PW / (candleW || 10);
-  const minX = -visibleCount * 5;
-  const maxX = candles.length + visibleCount * 5;
+  const minX = -Math.max(0, visibleCount - 2);
+  const maxX = Math.max(0, candles.length - 2);
   return Math.max(minX, Math.min(maxX, val));
 }
 let candleW = 10;
@@ -6348,9 +6348,9 @@ class ChartInstance {
         const w = this.canvas.clientWidth;
         const PR = 60;
         const PW = w - PR;
-        const n = PW / this.candleW;
-        const minOffsetX = -(n - 5);
-        this.offsetX = Math.max(minOffsetX, this.dragOff + dx / this.candleW);
+        const minOffsetX = -Math.max(0, n - 2);
+        const maxOffsetX = Math.max(0, this.candles.length - 2);
+        this.offsetX = Math.max(minOffsetX, Math.min(maxOffsetX, this.dragOff + dx / this.candleW));
         this.draw(true);
       }
 
