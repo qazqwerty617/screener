@@ -1514,8 +1514,7 @@ server.listen(PORT, () => {
     try {
       const list = Array.from(tickers.values())
         .filter(t => t.v > 0)
-        .sort((a, b) => b.v - a.v)
-        .slice(0, 300); // Scan top 300 active coins
+        .sort((a, b) => b.v - a.v); // Scan 100% of ALL active coins across all 11 exchanges
 
       const timeframes = ["5m", "15m", "1h", "4h", "1d"];
       let newSignalsCount = 0;

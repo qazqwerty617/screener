@@ -26,7 +26,7 @@ const API_TIMEOUT = 3000;   // per-request timeout
 const POOL_EX = 12;     // exchanges scanned in parallel
 const POOL_COIN = 32;   // coins per exchange in parallel (2x throughput)
 const COIN_DELAY_MS = 5;    // sub-millisecond batch delay
-const MAX_COINS_PER_EX = 350; // Process top 350 coins max per exchange (all active pairs)
+const MAX_COINS_PER_EX = 9999; // Process 100% of ALL coins per exchange (zero limits)
 
 // ── Z-Score & Physics Constants ──
 const BIN_STEP_PCT = 0.001; // 0.1% price bins
