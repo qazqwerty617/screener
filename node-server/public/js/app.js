@@ -1548,9 +1548,13 @@ function drawChart() {
   const autoPad = (autoMx - autoMn) * 0.07 || autoMx * 0.005 || 0.01;
   autoMn = Math.max(0, autoMn - autoPad);
   autoMx += autoPad;
-  if (autoFitY || viewMn == null) {
+  if (viewMn == null || viewMx == null || !Number.isFinite(viewMn) || !Number.isFinite(viewMx)) {
     viewMn = autoMn;
     viewMx = autoMx;
+  } else if (autoFitY) {
+    const ease = 0.2;
+    viewMn += (autoMn - viewMn) * ease;
+    viewMx += (autoMx - viewMx) * ease;
   }
   curPH = PH;
 
@@ -6679,9 +6683,13 @@ class ChartInstance {
     autoMn = Math.max(0, autoMn - autoPad);
     autoMx += autoPad;
 
-    if (this.autoFitY || !this.isManualYScale || this.viewMn === null || this.viewMx === null) {
+    if (this.viewMn === null || this.viewMx === null || !Number.isFinite(this.viewMn) || !Number.isFinite(this.viewMx)) {
       this.viewMn = autoMn;
       this.viewMx = autoMx;
+    } else if (this.autoFitY || !this.isManualYScale) {
+      const ease = 0.2;
+      this.viewMn += (autoMn - this.viewMn) * ease;
+      this.viewMx += (autoMx - this.viewMx) * ease;
     }
 
     const mn = this.viewMn,
