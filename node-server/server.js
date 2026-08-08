@@ -874,39 +874,46 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     try {
       let data;
       if (fetchEx === "HL") {
-        data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (limit * tfMs), endTime: Date.now() } });
+        data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (500 * tfMs), endTime: Date.now() } });
       } else {
-        const url = getKlinesUrl(ex, sym, tf, 300);
+        const url = getKlinesUrl(ex, sym, tf, 500);
         if (!url) return [];
-        data = await apiFetch(url, 3000, 0);
+        data = await apiFetch(url, 4000, 0);
       }
       return parseKlines(ex, data);
     } catch (e) { return []; }
   }
 
   let all = [];
-  let before = Date.now();
-  for (let p = 0; p < maxP; p++) {
+  const nowTs = Date.now();
+  if (maxP === 1) {
     try {
-      let data, batch;
+      const url = getKlinesUrl(fetchEx, fetchSym, tf, limit, nowTs);
+      if (url) {
+        const data = await apiFetch(url, 4000, 0);
+        all = parseKlines(fetchEx, data);
+      }
+    } catch (e) {}
+  } else {
+    const promises = [];
+    for (let p = 0; p < maxP; p++) {
+      const before = nowTs - (p * limit * tfMs);
       if (fetchEx === "HL") {
-        data = await apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } });
-        batch = (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }));
+        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }))).catch(() => []));
       } else {
         const url = getKlinesUrl(fetchEx, fetchSym, tf, limit, before);
-        if (!url) break;
-        data = await apiFetch(url, 5000, 0);
-        batch = parseKlines(fetchEx, data);
+        if (url) {
+          promises.push(apiFetch(url, 5000, 0).then(data => parseKlines(fetchEx, data)).catch(() => []));
+        }
       }
-      if (!batch || !batch.length) break;
-      batch.sort((a, b) => a.t - b.t);
-      all = [...batch, ...all];
-      before = batch[0].t;
-      if (batch.length < limit * 0.8) break;
-    } catch (e) { break; }
+    }
+    const results = await Promise.all(promises);
+    for (const batch of results) {
+      if (Array.isArray(batch)) all.push(...batch);
+    }
   }
   const seen = new Set();
-  return all.filter(c => { if (seen.has(c.t)) return false; seen.add(c.t); return true; }).sort((a,b) => a.t - b.t);
+  return all.filter(c => c && Number.isFinite(c.t) && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0 && (seen.has(c.t) ? false : seen.add(c.t))).sort((a,b) => a.t - b.t);
 }
 
 const klinesCache = new Map();

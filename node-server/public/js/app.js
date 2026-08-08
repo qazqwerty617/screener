@@ -428,7 +428,7 @@ let ws = null,
   wsReady = false;
 let chartNeedsDraw = false; // set true when live candle updated
 const MAX_DIRTY_ROWS_PER_TICK = 1000;
-const KLINES_CACHE_TTL_MS = 15000;
+const KLINES_CACHE_TTL_MS = 120000;
 const KLINES_CACHE = new Map();
 let klFetchToken = 0;
 
@@ -4360,7 +4360,7 @@ async function fetchKlines(ex, sym, tf) {
     if (useProxy) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1200); // 1.2s timeout for server proxy
+        const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s timeout for server proxy
         const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`, { signal: controller.signal });
         clearTimeout(timeoutId);
         const dataLite = await rLite.json();
