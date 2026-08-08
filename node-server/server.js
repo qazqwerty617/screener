@@ -1519,7 +1519,7 @@ server.listen(PORT, () => {
       const timeframes = ["5m", "15m", "1h", "4h", "1d"];
       let newSignalsCount = 0;
 
-      // Process coins in parallel batches of 15 for 15x speedup
+      // Process coins in parallel batches of 15 for maximum throughput
       const BATCH_SIZE = 15;
       for (let i = 0; i < list.length; i += BATCH_SIZE) {
         const batch = list.slice(i, i + BATCH_SIZE);
@@ -1530,11 +1530,11 @@ server.listen(PORT, () => {
           const sym = t.key.substring(colonIdx + 1);
           const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
 
-          for (const tf of timeframes) {
+          await Promise.all(timeframes.map(async (tf) => {
             try {
               const candles = await fetchFullHistory(ex, sym, tf, true);
               patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-              if (!candles || candles.length < 30) continue;
+              if (!candles || candles.length < 30) return;
 
               const meta = { ex, sym, base, tf };
               const signals = patternDetector.scanCandles(meta, candles);
@@ -1543,7 +1543,7 @@ server.listen(PORT, () => {
                 newSignalsCount++;
               }
             } catch (e) {}
-          }
+          }));
         }));
       }
 
