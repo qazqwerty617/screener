@@ -4716,6 +4716,201 @@ body {
 
 .j-pnl-card-header {
     display: flex;
+.j-chart-box canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* ── API Keys Settings Grid ── */
+.j-api-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+.j-api-card {
+    background: var(--bg2);
+    border: 1px solid var(--bd2);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.j-api-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.j-api-logo {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.j-api-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.j-api-status {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.j-api-status.connected { background: rgba(38, 201, 122, 0.2); color: #26c97a; }
+.j-api-status.disconnected { background: rgba(255, 255, 255, 0.05); color: var(--t2); }
+
+.j-api-input {
+    background: var(--bg3);
+    border: 1px solid var(--bd);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: #fff;
+    outline: none;
+    width: 100%;
+}
+
+.j-api-input:focus {
+    border-color: var(--ac);
+}
+
+/* ── Modals ── */
+.j-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.j-modal-content {
+    background: var(--bg2);
+    border: 1px solid var(--bd2);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+    padding: 20px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.j-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--bd);
+    padding-bottom: 10px;
+}
+
+.j-modal-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+}
+
+.j-modal-close {
+    background: transparent;
+    border: none;
+    color: var(--t2);
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.j-modal-close:hover { color: #fff; }
+
+.j-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.j-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.j-form-group.full {
+    grid-column: 1 / -1;
+}
+
+.j-form-group label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--t2);
+}
+
+.j-form-group input, .j-form-group select, .j-form-group textarea {
+    background: var(--bg3);
+    border: 1px solid var(--bd2);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #fff;
+    outline: none;
+}
+
+.j-form-group textarea {
+    resize: vertical;
+    min-height: 70px;
+}
+
+.j-modal-tag-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--bd);
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+/* ── PnL Card Generator ── */
+.j-pnl-card-preview {
+    background: linear-gradient(135deg, #13151e 0%, #1a1d2d 100%);
+    border: 1px solid var(--bd2);
+    border-radius: 16px;
+    padding: 24px;
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.j-pnl-card-preview::before {
+    content: "";
+    position: absolute;
+    top: -50px; right: -50px;
+    width: 150px; height: 150px;
+    background: var(--acglow);
+    filter: blur(50px);
+    border-radius: 50%;
+}
+
+.j-pnl-card-header {
+    display: flex;
     align-items: center;
     justify-content: space-between;
     margin-bottom: 16px;
@@ -4726,4 +4921,39 @@ body {
     font-weight: 900;
     margin: 10px 0;
     letter-spacing: -0.5px;
+}
+
+/* Sleek compact professional drawings toggle button */
+.drawings-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 24px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.drawings-toggle-btn:hover {
+    color: #f1f5f9;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.drawings-toggle-btn.on {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.1);
+    border-color: rgba(56, 189, 248, 0.25);
+}
+
+.drawings-toggle-btn.on:hover {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: rgba(56, 189, 248, 0.4);
 }

@@ -199,7 +199,7 @@ function getClampedOffsetX(val) {
   const PW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const visibleCount = PW / (candleW || 10);
   const minX = -visibleCount * 0.8;
-  const maxX = candles.length - 1;
+  const maxX = Math.max(0, candles.length - Math.min(visibleCount, candles.length) + 5);
   return Math.max(minX, Math.min(maxX, val));
 }
 let candleW = 10;
@@ -216,6 +216,7 @@ let quickMeasure = null;
 let editingFibDrawing = null;
 let brushLineWidth = 2;       // brush line width in pixels (1-10)
 let brushDrawThrottle = null;  // throttle for brush drawing requests
+let showMultichartDrawings = localStorage.getItem("show_multichart_drawings") !== "false";
 
 // тФАтФА Direct Trade WS (Zero-Lag Pricing) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 let activeTradeWs = null;
@@ -395,6 +396,9 @@ const saveDrawings = () => {
     "crypto_drawings_" + activeSym,
     JSON.stringify(chartDrawings),
   );
+  if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+    chartInstances.forEach(inst => { if (inst && inst.sym === activeSym) inst.draw(true); });
+  }
 };
 const saveToolColors = () => {
   localStorage.setItem("crypto_tool_colors", JSON.stringify(toolColors));
@@ -516,24 +520,26 @@ function processTickData(dt) {
     }
 
     const curLast = candles[candles.length - 1];
-    const liveP = getDisplayP(ac);
-    if (liveP > 0 && curLast) {
-      // Price scale sanity check: ensure liveP is on same price scale as curLast (ratio 0.4 to 2.5)
-      const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
-      if (ratio > 0.4 && ratio < 2.5) {
-        if (curLast.c !== liveP) {
-          curLast.c = liveP;
-          if (liveP > curLast.h) curLast.h = liveP;
-          if (liveP < curLast.l) curLast.l = liveP;
-          chartNeedsDraw = true;
-        }
+    if ((!klWs || klWs.readyState !== 1)) {
+      const liveP = getDisplayP(ac);
+      if (liveP > 0 && curLast) {
+        // Price scale sanity check: ensure liveP is on same price scale as curLast (ratio 0.4 to 2.5)
+        const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
+        if (ratio > 0.4 && ratio < 2.5) {
+          if (curLast.c !== liveP) {
+            curLast.c = liveP;
+            if (liveP > curLast.h) curLast.h = liveP;
+            if (liveP < curLast.l) last.l = liveP;
+            chartNeedsDraw = true;
+          }
 
-        const oc = document.getElementById("oc");
-        if (oc) {
-          const pStr = fP(liveP);
-          if (oc._lastPStr !== pStr) {
-            oc.textContent = pStr;
-            oc._lastPStr = pStr;
+          const oc = document.getElementById("oc");
+          if (oc) {
+            const pStr = fP(liveP);
+            if (oc._lastPStr !== pStr) {
+              oc.textContent = pStr;
+              oc._lastPStr = pStr;
+            }
           }
         }
       }
@@ -839,8 +845,10 @@ function calcRSI(data, period = 14) {
 function calcATR(data, period = 14) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = `atr_${period}`;
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   let atr = new Array(data.length).fill(0);
   if (data.length > 0) {
@@ -857,6 +865,8 @@ function calcATR(data, period = 14) {
     }
   }
   atr._len = data.length;
+  atr._lastC = lastC;
+  atr._lastT = lastT;
   data._cache[key] = atr;
   return atr;
 }
@@ -864,8 +874,10 @@ function calcATR(data, period = 14) {
 function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
   if (!data || data.length === 0) return { macd: [], signal: [], hist: [] };
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = `macd_${shortP}_${longP}_${signalP}`;
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   const emaS = calcEMA(data, shortP);
   const emaL = calcEMA(data, longP);
@@ -880,7 +892,7 @@ function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
   let hist = new Array(data.length).fill(0);
   for (let i = 0; i < data.length; i++) hist[i] = macd[i] - signal[i];
 
-  const res = { macd, signal, hist, _len: data.length };
+  const res = { macd, signal, hist, _len: data.length, _lastC: lastC, _lastT: lastT };
   data._cache[key] = res;
   return res;
 }
@@ -888,8 +900,10 @@ function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
 function calcCVD(data) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
+  const lastC = data[data.length - 1].c;
+  const lastT = data[data.length - 1].t;
   const key = "cvd";
-  if (data._cache[key] && data._cache[key]._len === data.length) return data._cache[key];
+  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   let cvd = new Array(data.length).fill(0);
   let sum = 0;
@@ -902,6 +916,8 @@ function calcCVD(data) {
     cvd[i] = sum;
   }
   cvd._len = data.length;
+  cvd._lastC = lastC;
+  cvd._lastT = lastT;
   data._cache[key] = cvd;
   return cvd;
 }
@@ -2529,10 +2545,8 @@ function drawChart() {
 
   const lc = candles[candles.length - 1];
   if (lc) {
-    // Use interpolated display price for active symbol so pill moves smoothly
-    const acTicker = coins.get(`${activeEx}:${activeSym}`);
-    const liveClose = acTicker && acTicker.displayP > 0 ? acTicker.displayP : lc.c;
-    const dispClose = liveClose > 0 ? liveClose : lc.c;
+    const liveClose = lc.c;
+    const dispClose = lc.c;
     const ly = toY(dispClose);
     const up = dispClose >= lc.o;
     const ly2 = clamp(ly, TOP + 10, TOP + PH - 10);
@@ -3658,7 +3672,7 @@ function showToast(msg) {
     `;
     document.body.appendChild(toast);
   }
-  toast.innerHTML = `<span style="color: #26c97a; font-size: 15px; font-weight: 800;">тЬУ</span> ${msg}`;
+  toast.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26c97a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><polyline points="20 6 9 17 4 12"></polyline></svg> ${msg}`;
   toast.style.opacity = "1";
   toast.style.transform = "translateX(-50%) translateY(0)";
 
@@ -4183,12 +4197,6 @@ function sanitizeCandle(raw, prevClose = null) {
   h = Math.max(h, o, l, c);
   l = Math.min(l, o, h, c);
 
-  if (prevClose && prevClose > 0) {
-    const hiRatio = h / prevClose;
-    const loRatio = l / prevClose;
-    // Reject extreme glitch spikes (> 8x or < 0.1x of previous candle close)
-    if (hiRatio > 8 || loRatio < 0.1) return null;
-  }
   return { t, o, h, l, c, v: Number.isFinite(v) && v >= 0 ? v : 0 };
 }
 
@@ -4254,19 +4262,22 @@ async function fetchDirectKlines(ex, sym, tf) {
         return { t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c, v };
       }));
     } else if (ex === "KC") {
-      const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=60`);
+      const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
+      const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${kcTfMap[tf] || 60}`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })));
     } else if (ex === "BX") {
-      const r = await fetch(`https://open-api-swap.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=1h&limit=300`);
+      const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
+      const r = await fetch(`https://open-api-swap.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=${bxTfMap[tf] || "1h"}&limit=300`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
-      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=60min&size=300`);
+      const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day" };
+      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${htTfMap[tf] || "60min"}&size=300`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.vol })));
     } else if (ex === "HL") {
-      const tfMs = 60000;
+      const tfMs = TF_MS[tf] || 60000;
       const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (300 * tfMs), endTime: Date.now() } }) });
       data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v })));
@@ -4430,7 +4441,7 @@ function appendCandle(k) {
 
   // Only accept updates that are NOT older than current last candle
   if (clean.t === last.t) {
-    last.o = clean.o;
+    if (last.o === undefined || last.o === null) last.o = clean.o;
     last.h = Math.max(last.h, clean.h); // Keep historical high/low for current candle
     last.l = Math.min(last.l, clean.l);
     last.c = clean.c;
@@ -4439,15 +4450,21 @@ function appendCandle(k) {
     // Check if there's a gap (more than one TF)
     const tfMs = TF_MS[activeTf] || 60000;
     if (clean.t - last.t > tfMs * 1.5) {
-      console.warn("Gap detected in live stream, fetching full history to patch:", clean.t - last.t);
-      if (!window.isFetchingGap) {
-        window.isFetchingGap = true;
-        setTimeout(() => {
-          fetchKlines(activeEx, activeSym, activeTf);
-          window.isFetchingGap = false;
-        }, 100);
+      if (clean.t - last.t < tfMs * 100) {
+        let fillT = last.t + tfMs;
+        while (fillT < clean.t) {
+          candles.push({ t: fillT, o: last.c, h: last.c, l: last.c, c: last.c, v: 0 });
+          fillT += tfMs;
+        }
+      } else {
+        if (!window.isFetchingGap) {
+          window.isFetchingGap = true;
+          setTimeout(() => {
+            fetchKlines(activeEx, activeSym, activeTf);
+            window.isFetchingGap = false;
+          }, 100);
+        }
       }
-      return;
     }
     candles.push(clean);
     if (candles.length > 1500) {
@@ -4488,11 +4505,20 @@ function connectKlWs(ex, sym, tf) {
               p = +d.p;
             }
             if (p > 0 && candles.length > 0) {
-              const last = candles[candles.length - 1];
-              last.c = p;
-              if (p > last.h) last.h = p;
-              if (p < last.l) last.l = p;
-              if (d.q) last.v += (+d.q || 0);
+              const tfMs = TF_MS[activeTf] || 60000;
+              const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
+              let last = candles[candles.length - 1];
+              if (expectedStart > last.t) {
+                last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
+                candles.push(last);
+                if (candles.length > 1500) candles.shift();
+                clearCandleCaches(candles);
+              } else {
+                last.c = p;
+                if (p > last.h) last.h = p;
+                if (p < last.l) last.l = p;
+              }
+              if (d.e === "aggTrade" && d.q) last.v += (+d.q || 0);
               chartNeedsDraw = true;
               updateOHLC();
             }
@@ -4523,10 +4549,19 @@ function connectKlWs(ex, sym, tf) {
               const tickData = Array.isArray(d.data) ? d.data[0] : d.data;
               const p = +(tickData.lastPrice || tickData.bid1Price || tickData.ask1Price || 0);
               if (p > 0 && candles.length > 0) {
-                const last = candles[candles.length - 1];
-                last.c = p;
-                if (p > last.h) last.h = p;
-                if (p < last.l) last.l = p;
+                const tfMs = TF_MS[activeTf] || 60000;
+                const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
+                let last = candles[candles.length - 1];
+                if (expectedStart > last.t) {
+                  last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
+                  candles.push(last);
+                  if (candles.length > 1500) candles.shift();
+                  clearCandleCaches(candles);
+                } else {
+                  last.c = p;
+                  if (p > last.h) last.h = p;
+                  if (p < last.l) last.l = p;
+                }
                 chartNeedsDraw = true;
                 updateOHLC();
               }
@@ -6370,7 +6405,7 @@ class ChartInstance {
     this.ex = ticker.ex;
     this.sym = ticker.sym;
 
-    const exIcons = { BN: "BN.png", BB: "BB.png", OX: "OK.png", BG: "BG.png", GT: "GT.png", MX: "MX.png", KC: "KC.png", BX: "BX.png", HT: "HX.png", HL: "HL.png", AD: "AS.png" };
+    const exIcons = { BN: "BN.svg", BB: "BB.svg", OX: "OK.svg", BG: "BG.svg", GT: "GT.svg", MX: "MX.svg", KC: "KC.svg", BX: "BX.svg", HT: "HX.svg", HL: "HL.svg", AD: "AS.svg" };
     if (exIcons[ticker.ex]) {
       this.headerExIcon.style.background = `center/contain no-repeat url('/img/${exIcons[ticker.ex]}')`;
       this.headerExIcon.style.display = "block";
@@ -6394,6 +6429,10 @@ class ChartInstance {
   async loadKlines() {
     if (!this.sym) return;
     this.headerTf.textContent = this.tf;
+    this.offsetX = 0;
+    this.autoFitY = true;
+    this.viewMn = null;
+    this.viewMx = null;
     const key = `${this.ex}|${this.sym}|${this.tf}`;
     const cached = KLINES_CACHE.get(key);
 
@@ -6511,17 +6550,7 @@ class ChartInstance {
     this.lastDrawTs = now;
     this.dirty = false;
 
-    // Apply smooth price to last candle
     const last = this.candles[this.candles.length - 1];
-    const cData = coins.get(`${this.ex}:${this.sym}`);
-    if (cData) {
-      const dp = getDisplayP(cData);
-      if (dp > 0) {
-        last.c = dp;
-        if (dp > last.h) last.h = dp;
-        if (dp < last.l) last.l = dp;
-      }
-    }
 
     const dpr = window.devicePixelRatio || 1;
     const cw = this.canvas.clientWidth;
@@ -7086,6 +7115,78 @@ class ChartInstance {
         ctx.fillText(fP(badge.price), badgeX + badgeW / 2, badge.y);
         ctx.restore();
       }
+    }
+
+    // Render user saved drawings on multichart / formation cells if enabled
+    if (showMultichartDrawings && this.sym) {
+      try {
+        const rawSaved = localStorage.getItem("crypto_drawings_" + this.sym);
+        if (rawSaved) {
+          const drawingsList = JSON.parse(rawSaved);
+          if (Array.isArray(drawingsList) && drawingsList.length > 0) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, 0, PW, ch);
+            ctx.clip();
+
+            const getX = (t) => {
+              if (t > 1000000000 && this.candles.length > 0) {
+                const idx = getIdxFromTime(t, this.candles);
+                return (idx - s + futureGap) * candleWidth + candleWidth / 2;
+              }
+              return (t - s + futureGap) * candleWidth + candleWidth / 2;
+            };
+
+            drawingsList.forEach((d) => {
+              if (!d || d.type === "ruler") return;
+              const x1 = getX(d.t1), y1 = toY(d.p1);
+              const x2 = getX(d.t2), y2 = toY(d.p2);
+              const baseCol = d.color || getToolColor(d.type) || "#facc15";
+
+              ctx.lineWidth = 1.6;
+              ctx.setLineDash([]);
+              ctx.strokeStyle = baseCol;
+
+              if (d.type === "line") {
+                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+              } else if (d.type === "ray") {
+                const dx = x2 - x1, dy = y2 - y1;
+                const mag = Math.sqrt(dx * dx + dy * dy);
+                if (mag >= 0.01) {
+                  const big = Math.max(PW, ch) * 4;
+                  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + (dx / mag) * big, y1 + (dy / mag) * big); ctx.stroke();
+                }
+              } else if (d.type === "h-ray") {
+                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(PW, y1); ctx.stroke();
+              } else if (d.type === "rect") {
+                const left = Math.min(x1, x2), top = Math.min(y1, y2);
+                const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
+                ctx.fillStyle = hexToRgba(baseCol, 15);
+                ctx.fillRect(left, top, width, height);
+                ctx.strokeRect(left, top, width, height);
+              } else if (d.type === "brush" && d.points && d.points.length > 1) {
+                ctx.beginPath(); ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = d.lineWidth || 2;
+                ctx.moveTo(getX(d.points[0].t), toY(d.points[0].p));
+                for (let k = 1; k < d.points.length; k++) {
+                  ctx.lineTo(getX(d.points[k].t), toY(d.points[k].p));
+                }
+                ctx.stroke();
+              } else if (d.type === "fibgrid") {
+                const fibs = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+                const left = Math.min(x1, x2), right = Math.max(x1, x2);
+                fibs.forEach((level) => {
+                  const y = y1 + (y2 - y1) * level;
+                  ctx.strokeStyle = hexToRgba(baseCol, level === 0.5 ? 90 : 60);
+                  ctx.lineWidth = level === 0.5 ? 1.5 : 1;
+                  ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+                });
+                ctx.strokeRect(left, Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+              }
+            });
+            ctx.restore();
+          }
+        }
+      } catch (_) {}
     }
 
     // тФАтФА Ruler tool drawing тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -8292,6 +8393,31 @@ window.addEventListener("resize", () => {
     gridPage++;
     initChartGrid();
   };
+  // Drawings toggle on Multichart / Formations
+  const updateDrawingsToggleBtns = () => {
+    ["btn-toggle-mc-drawings", "btn-toggle-formations-drawings"].forEach(id => {
+      const btn = $(id);
+      if (btn) {
+        btn.classList.toggle("on", showMultichartDrawings);
+        btn.textContent = showMultichartDrawings ? "✏️ Рисунки: Вкл" : "✏️ Рисунки: Выкл";
+      }
+    });
+  };
+
+  const toggleMcDrawings = () => {
+    showMultichartDrawings = !showMultichartDrawings;
+    localStorage.setItem("show_multichart_drawings", showMultichartDrawings);
+    updateDrawingsToggleBtns();
+    if (chartInstances && chartInstances.length > 0) {
+      chartInstances.forEach(inst => inst.draw(true));
+    }
+  };
+
+  const btnMcDrawings = $("btn-toggle-mc-drawings");
+  if (btnMcDrawings) btnMcDrawings.onclick = toggleMcDrawings;
+  const btnFormationsDrawings = $("btn-toggle-formations-drawings");
+  if (btnFormationsDrawings) btnFormationsDrawings.onclick = toggleMcDrawings;
+  updateDrawingsToggleBtns();
 
   // Heatmap sorting in Screener
   document.querySelectorAll(".sh-sort-btn").forEach(btn => {
