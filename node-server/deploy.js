@@ -12,6 +12,7 @@ const LOCAL_DIR = __dirname;
 
 const filesToUpload = [
   'server.js',
+  'serverLevels.js',
   'wallScanner.js',
   'patternDetector.js',
   'tph_service.js',
