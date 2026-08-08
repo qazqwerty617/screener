@@ -18,8 +18,9 @@ const httpsAgent = new https.Agent({
 });
 
 const compression = require('compression');
-const wallScanner = require("./wallScanner");
 const patternDetector = require("./patternDetector");
+const serverLevels = require("./serverLevels");
+const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
 let patternsCache = []; // Global in-memory patterns/signals cache
 
@@ -1542,6 +1543,14 @@ server.listen(PORT, () => {
                 patternsCache.push(sig);
                 newSignalsCount++;
               }
+
+              // 24/7 Server-side pre-computation of formations levels
+              const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
+              if (detectedLvls && detectedLvls.length > 0) {
+                serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedLvls);
+              } else {
+                serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
+              }
             } catch (e) {}
           }));
         }));
@@ -1552,7 +1561,7 @@ server.listen(PORT, () => {
         patternsCache = patternsCache.slice(0, 3000);
       }
 
-      console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Total cached: ${patternsCache.length}`);
+      console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
@@ -1561,6 +1570,21 @@ server.listen(PORT, () => {
       setTimeout(scanAllPatterns, 2000);
     }
   }
+
+  app.get("/api/formations/map", (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    const { tf = "15m" } = req.query;
+    const out = {};
+    for (const [key, lvls] of serverFormationsMap.entries()) {
+      if (key.endsWith(`:${tf}`)) {
+        const parts = key.split(":");
+        const coinKey = `${parts[0]}:${parts[1]}`;
+        out[coinKey] = lvls;
+      }
+    }
+    res.json(out);
+  });
 
   // Initial trigger after 3 seconds
   setTimeout(scanAllPatterns, 3000);

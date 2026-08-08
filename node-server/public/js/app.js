@@ -9958,11 +9958,28 @@ window.addEventListener("resize", () => {
     }
   }
 
-  function startFormationsScan(checkedEx, tf) {
+  async function startFormationsScan(checkedEx, tf) {
     const scanId = ++activeScanId;
-    scanProgressText = "Сканирование...";
+    scanProgressText = "Загрузка с сервера...";
     formationsCoinsLevelsMap.clear();
     updateFormationsPagination();
+
+    try {
+      const r = await fetch(`/api/formations/map?tf=${tf}`);
+      if (r.ok) {
+        const mapData = await r.json();
+        if (scanId !== activeScanId) return;
+        if (mapData && Object.keys(mapData).length > 0) {
+          for (const coinKey in mapData) {
+            formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
+          }
+          scanProgressText = "";
+          updateFormationsPagination();
+          window.loadFormations();
+          return;
+        }
+      }
+    } catch (_) {}
 
     const eligibleCoins = [];
     for (const ex of checkedEx) {
