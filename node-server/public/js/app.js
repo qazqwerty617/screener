@@ -637,10 +637,10 @@ const fT = (v) => {
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function getClampedOffsetX(val) {
-  if (!candles || !candles.length) return 0;
+  if (!candles || !candles.length) return -6;
   const PW = (chartW || 1000) - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const n = Math.max(1, PW / (candleW || 10));
-  const minOff = 2 - n;
+  const minOff = -(n - 5);
   const maxOff = Math.max(0, candles.length - 2);
   return Math.max(minOff, Math.min(maxOff, val));
 }
@@ -1565,7 +1565,7 @@ function drawChart() {
       autoMx = lc.h * 1.02;
     } else return;
   }
-  const autoPad = (autoMx - autoMn) * 0.07 || autoMx * 0.005 || 0.01;
+  const autoPad = (autoMx - autoMn) * 0.15 || autoMx * 0.01 || 0.01;
   autoMn = Math.max(0, autoMn - autoPad);
   autoMx += autoPad;
   if (viewMn == null || viewMx == null || !Number.isFinite(viewMn) || !Number.isFinite(viewMx)) {
@@ -4373,7 +4373,7 @@ async function fetchKlines(ex, sym, tf) {
     currentLoadedTf = tf;
   }
 
-  offsetX = 0;
+  offsetX = -6;
   chartNeedsDraw = false;
   viewMn = null;
   viewMx = null;
