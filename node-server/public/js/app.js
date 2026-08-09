@@ -4028,16 +4028,8 @@ function connectWS() {
         items.forEach(item => {
           const dot = item.querySelector('.exc-dot');
           if (dot) {
-            if (info.status === 'online') {
-              dot.style.boxShadow = "none";
-              dot.style.opacity = "1";
-            } else if (info.status === 'connecting') {
-              dot.style.boxShadow = "none";
-              dot.style.opacity = "0.7";
-            } else {
-              dot.style.boxShadow = "none";
-              dot.style.opacity = "0.4";
-            }
+            dot.style.boxShadow = "none";
+            dot.style.opacity = "1";
           }
         });
       });

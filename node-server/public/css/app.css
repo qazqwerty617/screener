@@ -437,6 +437,7 @@ button {
     height: 18px;
     border-radius: 2px;
     flex-shrink: 0;
+    opacity: 1 !important;
 }
 
 .exc-arrow {
@@ -489,7 +490,7 @@ button {
     padding: 9px 13px;
     font-size: 12px;
     font-weight: 500;
-    color: var(--t2);
+    color: var(--t1);
     cursor: pointer;
     transition: all 0.1s;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
@@ -514,9 +515,9 @@ button {
 }
 
 .exc-item.disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    pointer-events: none;
+    opacity: 1;
+    cursor: pointer;
+    pointer-events: auto;
 }
 
 .exc-soon {
