@@ -636,6 +636,12 @@ const fT = (v) => {
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
+function getClampedOffsetX(val) {
+  if (!candles || !candles.length) return 0;
+  const maxOff = Math.max(0, candles.length - 2);
+  return Math.max(0, Math.min(maxOff, val));
+}
+
 function getOiRawPct(c) {
   if (!c) return 0;
   if (Number.isFinite(c.oiPct)) return clamp(c.oiPct, 1, 100);
