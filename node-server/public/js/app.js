@@ -516,6 +516,7 @@ function processTickData(dt) {
       candles.push(newCandle);
       if (candles.length > 1500) candles.shift();
       clearCandleCaches(candles);
+      if (offsetX > 0) offsetX++;
       chartNeedsDraw = true;
     }
 
@@ -938,9 +939,8 @@ function calcCVD(data) {
 
 function getSmcData(candles) {
   if (!candles || candles.length < 20) return null;
-  const lastC = candles[candles.length - 1].c;
   const lastT = candles[candles.length - 1].t;
-  const key = `smc_${candles.length}_${lastT}_${lastC}`;
+  const key = `smc_${candles.length}_${lastT}`;
   if (candles._smcCache && candles._smcCache.key === key) {
     return candles._smcCache.data;
   }
@@ -2981,8 +2981,28 @@ function hitHandle(d, px, py) {
   return null;
 }
 
-// Hit-test: is (px,py) near the line/ray body?
+// Hit-test: is (px,py) near the line/ray/brush body?
 function hitBody(d, px, py) {
+  if (d.type === "brush" && d.points && d.points.length > 0) {
+    const getX = (t) => {
+      const idx = (t > 1000000000) ? getIdxFromTime(t) : t;
+      return (idx - chartState.viewStart) * candleW + candleW / 2;
+    };
+    const getY = (p) => chartState.TOP + ((chartState.mx - p) / chartState.pr) * chartState.PH;
+    
+    for (let i = 0; i < d.points.length - 1; i++) {
+      const p1 = d.points[i];
+      const p2 = d.points[i + 1];
+      const x1 = getX(p1.t);
+      const y1 = getY(p1.p);
+      const x2 = getX(p2.t);
+      const y2 = getY(p2.p);
+      if (pointLineDistance(px, py, x1, y1, x2, y2, true) < (d.lineWidth || 4) + 6) {
+        return true;
+      }
+    }
+    return false;
+  }
   const { x1, y1, x2, y2 } = getDrawingPoints(d);
   if (d.type === "line" || d.type === "ruler") {
     return pointLineDistance(px, py, x1, y1, x2, y2, true) < 7;
@@ -3665,6 +3685,16 @@ document.addEventListener("keydown", (e) => {
     saveDrawings();
     requestAnimationFrame(drawChart);
   }
+});
+
+// Preserve exact chart position & prevent jumps when Alt-tabbing back to window
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    requestDraw();
+  }
+});
+window.addEventListener("focus", () => {
+  requestDraw();
 });
 
 // тФАтФА TOAST NOTIFICATIONS & COPY COIN TO CLIPBOARD тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
