@@ -638,8 +638,11 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function getClampedOffsetX(val) {
   if (!candles || !candles.length) return 0;
+  const PW = (chartW || 1000) - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
+  const n = Math.max(1, PW / (candleW || 10));
+  const minOff = 2 - n;
   const maxOff = Math.max(0, candles.length - 2);
-  return Math.max(0, Math.min(maxOff, val));
+  return Math.max(minOff, Math.min(maxOff, val));
 }
 
 function getOiRawPct(c) {
