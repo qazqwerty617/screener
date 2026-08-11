@@ -11800,12 +11800,20 @@ function showToast({ title, message, type = "info", durationMs = 6000 }) {
 
 function sendTelegramAlert(message) {
   const activeUser = currentUser || window.currentUser;
-  const chatId = activeUser?.telegramChatId || localStorage.getItem("obsidian_tg_chat_id");
-  if (!chatId) return;
+  const chatId = activeUser?.telegramChatId || activeUser?.telegramId || localStorage.getItem("obsidian_tg_chat_id");
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
   fetch("/api/notifications/telegram", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chatId, message })
+    headers,
+    body: JSON.stringify({ chatId: chatId || undefined, message })
+  }).then(async r => {
+    const d = await r.json();
+    if (!r.ok || !d.success) {
+      console.warn("Telegram alert dispatch result:", d);
+    }
   }).catch(() => {});
 }
 
@@ -11990,6 +11998,7 @@ function initNotificationsUI() {
   $("btn-test-sound")?.addEventListener("click", () => {
     playAlertSound("chime");
     showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
+    sendTelegramAlert("🔔 <b>Obsidian Test Alert</b>\n\nТестовый сигнал из скринера получен успешно!");
   });
 }
 
