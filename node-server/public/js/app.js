@@ -11836,7 +11836,11 @@ function normExCode(e) {
 
 function normSymCode(s) {
   if (!s) return "";
-  return String(s).toUpperCase().replace(/[-_/.]/g, "");
+  let str = String(s).toUpperCase().trim();
+  str = str.replace(/\.F$|\.S$/i, "");
+  str = str.replace(/[-_/.]/g, "");
+  str = str.replace(/USDT$|PERP$/i, "");
+  return str;
 }
 
 function checkPriceAlerts(ex, sym, price, high = price, low = price) {
