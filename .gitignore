@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+.env
+.env.*
+!.env.example
 
 # Logs and temp files
 *.log
@@ -15,6 +18,15 @@ node-server/check_*.js
 node-server/diag*.js
 node-server/test_*.js
 node-server/test-*.js
+
+# Runtime identity/payment data (never commit production records)
+node-server/payments.json
+node-server/payment_invoices.json
+node-server/users.json
+node-server/sessions.json
+node-server/auth_logs.json
+node-server/users_database.csv
+node-server/data/
 
 # Go scanner binaries and data
 go-scanner/*.exe

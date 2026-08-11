@@ -4,11 +4,23 @@ const fs = require('fs');
 const path = require('path');
 
 const conn = new Client();
-const HOST = '169.58.138.33';
-const USER = 'root';
-const PASS = 'AQwaffwedcv';
-const REMOTE_DIR = '/root/nother/node-server';
+const HOST = String(process.env.DEPLOY_HOST || '').trim();
+const USER = String(process.env.DEPLOY_USER || '').trim();
+const SSH_KEY_PATH = String(process.env.DEPLOY_SSH_KEY_PATH || '').trim();
+const SSH_KEY_PASSPHRASE = String(process.env.DEPLOY_SSH_KEY_PASSPHRASE || '');
+const HOST_FINGERPRINT = String(process.env.DEPLOY_HOST_FINGERPRINT_SHA256 || '').trim();
+const REMOTE_DIR = String(process.env.DEPLOY_REMOTE_DIR || '').trim();
+const PM2_PROCESS = String(process.env.DEPLOY_PM2_PROCESS || 'server').trim();
 const LOCAL_DIR = __dirname;
+
+if (!HOST || !USER || !SSH_KEY_PATH || !HOST_FINGERPRINT || !REMOTE_DIR) {
+  throw new Error('Missing secure deployment configuration; see .env.example');
+}
+if (USER.toLowerCase() === 'root') throw new Error('Refusing SSH deployment as root');
+if (!/^\/[A-Za-z0-9._/-]+$/.test(REMOTE_DIR)) throw new Error('Unsafe DEPLOY_REMOTE_DIR');
+if (!/^[A-Za-z0-9._-]{1,64}$/.test(PM2_PROCESS)) throw new Error('Unsafe DEPLOY_PM2_PROCESS');
+if (!/^[A-Za-z0-9+/=:_-]{32,128}$/.test(HOST_FINGERPRINT)) throw new Error('Invalid host fingerprint');
+const privateKey = fs.readFileSync(SSH_KEY_PATH);
 
 const filesToUpload = [
   'server.js',
@@ -16,11 +28,14 @@ const filesToUpload = [
   'telegramBot.js',
   'adminBot.js',
   'excelExporter.js',
+  'paymentGateway.js',
+  'paymentRoutes.js',
   'serverLevels.js',
   'wallScanner.js',
   'patternDetector.js',
   'tph_service.js',
   'package.json',
+  'package-lock.json',
 ];
 
 function getFilesRecursively(dir, rootDir = LOCAL_DIR) {
@@ -91,13 +106,16 @@ conn.on('ready', () => {
   host: HOST,
   port: 22,
   username: USER,
-  password: PASS,
+  privateKey,
+  passphrase: SSH_KEY_PASSPHRASE || undefined,
+  hostHash: 'sha256',
+  hostVerifier: keyHash => keyHash === HOST_FINGERPRINT,
   readyTimeout: 30000,
 });
 
 function restartServer() {
   console.log('[DEPLOY] Restarting PM2 process on server...');
-  conn.exec(`cd ${REMOTE_DIR} && npm install --omit=dev && pm2 restart server && pm2 list`, (err, stream) => {
+  conn.exec(`cd ${REMOTE_DIR} && npm ci --omit=dev --ignore-scripts && pm2 restart ${PM2_PROCESS} --update-env && pm2 list`, (err, stream) => {
     if (err) throw err;
     let out = '';
     stream.on('close', (code) => {

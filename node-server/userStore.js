@@ -10,15 +10,32 @@ const USERS_FILE = path.join(__dirname, "users.json");
 const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const LOGS_FILE = path.join(__dirname, "auth_logs.json");
 
-// Helper for atomic file write
+const PASSWORD_ALGORITHM = "scrypt-v1";
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Atomic, crash-resistant file write. Callers can fail closed on false.
 function saveJSON(filePath, data) {
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  let fd;
   try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+    fd = fs.openSync(tempPath, "wx", 0o600);
+    fs.writeFileSync(fd, JSON.stringify(data, null, 2), "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tempPath, filePath);
+    try { fs.chmodSync(filePath, 0o600); } catch (_) {}
     if (filePath === USERS_FILE) {
       excelExporter.generateUsersExcel(data);
     }
+    return true;
   } catch (err) {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
+    try { fs.unlinkSync(tempPath); } catch (_) {}
     console.error(`[userStore] Error saving ${filePath}:`, err.message);
+    return false;
   }
 }
 
@@ -38,6 +55,34 @@ function loadJSON(filePath, fallback = {}) {
 let users = loadJSON(USERS_FILE, {}); // userId -> userObject
 let sessions = loadJSON(SESSIONS_FILE, {}); // token -> { userId, createdAt }
 let authLogs = loadJSON(LOGS_FILE, []); // Array of log objects
+
+// Migrate legacy plaintext session-token keys to SHA-256 keys and attach a
+// finite lifetime. This keeps a leaked sessions file from being directly usable.
+(function migrateLegacySessions() {
+  const now = Date.now();
+  let changed = false;
+  for (const [key, session] of Object.entries(sessions)) {
+    if (!session || typeof session !== "object") {
+      delete sessions[key];
+      changed = true;
+      continue;
+    }
+    const createdAt = Date.parse(session.createdAt || "");
+    const expiresAt = Number(session.expiresAt) || (createdAt + SESSION_TTL_MS);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+      delete sessions[key];
+      changed = true;
+      continue;
+    }
+    if (!Number.isFinite(Number(session.expiresAt))) {
+      const hashedKey = crypto.createHash("sha256").update(key).digest("hex");
+      delete sessions[key];
+      sessions[hashedKey] = { ...session, expiresAt };
+      changed = true;
+    }
+  }
+  if (changed) saveJSON(SESSIONS_FILE, sessions);
+})();
 
 function logAuthEvent(eventData) {
   const logEntry = {
@@ -60,33 +105,64 @@ function generateUserId() {
   return id;
 }
 
-// Secure password hashing
+// Memory-hard password hashing for new passwords. Legacy PBKDF2 hashes are
+// verified once and transparently upgraded after a successful login.
 function hashPassword(password, salt) {
-  if (!salt) salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
-  return { hash, salt };
+  const passwordText = String(password);
+  const saltBuffer = salt ? Buffer.from(salt, "hex") : crypto.randomBytes(16);
+  const hash = crypto.scryptSync(passwordText, saltBuffer, 64, {
+    N: 32768,
+    r: 8,
+    p: 1,
+    maxmem: 128 * 1024 * 1024
+  }).toString("hex");
+  return { hash, salt: saltBuffer.toString("hex"), algorithm: PASSWORD_ALGORITHM };
 }
 
-function verifyPassword(password, salt, storedHash) {
-  const { hash } = hashPassword(password, salt);
-  return hash === storedHash;
+function timingSafeHexEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  if (!/^[a-fA-F0-9]+$/.test(left) || !/^[a-fA-F0-9]+$/.test(right)) return false;
+  const leftBuffer = Buffer.from(left, "hex");
+  const rightBuffer = Buffer.from(right, "hex");
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function cleanPassword(p) {
-  return String(p || "").trim();
+function verifyPassword(password, user) {
+  if (!user || !user.salt || !user.passwordHash) return false;
+  if (user.passwordAlgorithm === PASSWORD_ALGORITHM) {
+    const { hash } = hashPassword(password, user.salt);
+    return timingSafeHexEqual(hash, user.passwordHash);
+  }
+  const legacyHash = crypto.pbkdf2Sync(String(password), user.salt, 10000, 64, "sha512").toString("hex");
+  return timingSafeHexEqual(legacyHash, user.passwordHash);
+}
+
+function cleanPassword(password) {
+  return String(password == null ? "" : password);
 }
 
 // Create session token
 function createSession(userId) {
-  const token = crypto.randomBytes(32).toString("hex");
-  sessions[token] = { userId, createdAt: new Date().toISOString() };
+  const now = Date.now();
+  for (const [key, session] of Object.entries(sessions)) {
+    const expiresAt = Number(session && session.expiresAt) || (Date.parse(session && session.createdAt || "") + SESSION_TTL_MS);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) delete sessions[key];
+  }
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  sessions[tokenHash] = {
+    userId,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: now + SESSION_TTL_MS
+  };
   saveJSON(SESSIONS_FILE, sessions);
   return token;
 }
 
 function sanitizeUser(user) {
   if (!user) return null;
-  const { passwordHash, salt, ...safe } = user;
+  const { passwordHash, salt, passwordAlgorithm, appliedPaymentIds, ...safe } = user;
   if (!safe.plan) safe.plan = "free";
   if (safe.plan === "pro") {
     if (!user.proExpiresAt) {
@@ -111,12 +187,15 @@ function registerUser({ username, email, password, ip = "" }) {
     throw new Error("Заполните все обязательные поля");
   }
 
-  const cleanEmail = email.trim().toLowerCase();
-  const cleanUsername = username.trim();
+  const cleanEmail = String(email).trim().toLowerCase();
+  const cleanUsername = String(username).trim();
+  const passwordText = cleanPassword(password);
 
-  if (cleanPassword(password).length < 8) {
-    throw new Error("Пароль должен содержать минимум 8 символов");
+  if (passwordText.length < 10 || passwordText.length > 1024) {
+    throw new Error("Пароль должен содержать от 10 до 1024 символов");
   }
+  if (cleanUsername.length < 2 || cleanUsername.length > 64) throw new Error("Некорректное имя пользователя");
+  if (cleanEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error("Некорректный Email");
 
   // Check uniqueness
   for (const u of Object.values(users)) {
@@ -126,7 +205,7 @@ function registerUser({ username, email, password, ip = "" }) {
   }
 
   const userId = generateUserId();
-  const { hash, salt } = hashPassword(password);
+  const { hash, salt, algorithm } = hashPassword(passwordText);
 
   const newUser = {
     id: userId,
@@ -134,6 +213,7 @@ function registerUser({ username, email, password, ip = "" }) {
     email: cleanEmail,
     passwordHash: hash,
     salt,
+    passwordAlgorithm: algorithm,
     authMethod: "login",
     role: "PRO Trader",
     plan: "free",
@@ -186,10 +266,20 @@ function loginUser({ emailOrUsername, password, ip = "" }) {
     throw new Error("Неверный логин или пароль");
   }
 
-  const isValid = verifyPassword(password, foundUser.salt, foundUser.passwordHash);
+  const passwordText = cleanPassword(password);
+  if (passwordText.length > 1024) throw new Error("Неверный логин или пароль");
+  const isValid = verifyPassword(passwordText, foundUser);
   if (!isValid) {
     logAuthEvent({ event: "LOGIN_FAILED", userId: foundUser.id, query, ip, reason: "Invalid password" });
     throw new Error("Неверный логин или пароль");
+  }
+
+  if (foundUser.passwordAlgorithm !== PASSWORD_ALGORITHM) {
+    const upgraded = hashPassword(passwordText);
+    foundUser.passwordHash = upgraded.hash;
+    foundUser.salt = upgraded.salt;
+    foundUser.passwordAlgorithm = upgraded.algorithm;
+    saveJSON(USERS_FILE, users);
   }
 
   logAuthEvent({ event: "LOGIN_SUCCESS", userId: foundUser.id, username: foundUser.username, ip });
@@ -278,9 +368,30 @@ function telegramAuth(tgData, chatId = null, ip = "") {
 
 // Validate session token
 function getUserByToken(token) {
-  if (!token || !sessions[token]) return null;
-  const { userId } = sessions[token];
-  return sanitizeUser(users[userId]);
+  if (typeof token !== "string" || token.length < 32 || token.length > 256) return null;
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  let sessionKey = tokenHash;
+  let session = sessions[tokenHash];
+  if (!session && sessions[token]) {
+    // One-time migration for sessions created by older builds.
+    session = sessions[token];
+    delete sessions[token];
+    sessions[tokenHash] = session;
+    sessionKey = tokenHash;
+    saveJSON(SESSIONS_FILE, sessions);
+  }
+  if (!session) return null;
+  const createdAt = Date.parse(session.createdAt || "");
+  const expiresAt = Number(session.expiresAt) || (createdAt + SESSION_TTL_MS);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    delete sessions[sessionKey];
+    saveJSON(SESSIONS_FILE, sessions);
+    return null;
+  }
+  const user = users[session.userId];
+  if (!user) return null;
+  if (user.blocked && (!user.blockExpiresAt || user.blockExpiresAt > Date.now())) return null;
+  return sanitizeUser(user);
 }
 
 // Update profile name
@@ -326,6 +437,8 @@ function getUserByTelegramId(tgId) {
 function getUserStats() {
   const all = Object.values(users);
   const total = all.length;
+  const proCount = all.filter(u => u.plan === "pro").length;
+  const freeCount = total - proCount;
   const telegramCount = all.filter(u => u.authMethod === "telegram" || u.telegramId).length;
   const loginCount = total - telegramCount;
   const activeSessions = Object.keys(sessions).length;
@@ -340,6 +453,8 @@ function getUserStats() {
 
   return {
     total,
+    proCount,
+    freeCount,
     telegramCount,
     loginCount,
     activeSessions,
@@ -385,6 +500,50 @@ function setUserPlan(userIdOrTgId, planName, days = 30) {
   return sanitizeUser(target);
 }
 
+// Apply a paid entitlement exactly once. The durable idempotency key prevents
+// duplicate subscription time when a webhook is retried or the process restarts.
+function grantPlanForPayment(userId, paymentKey, days) {
+  const target = users[userId];
+  const cleanKey = String(paymentKey || "");
+  const validDays = Number(days);
+  if (!target) return null;
+  if (!/^invoice:inv_[A-Za-z0-9_-]{32}$/.test(cleanKey)) throw new Error("Invalid payment idempotency key");
+  if (!Number.isInteger(validDays) || validDays < 1 || validDays > 9999) throw new Error("Invalid subscription duration");
+
+  if (!Array.isArray(target.appliedPaymentIds)) target.appliedPaymentIds = [];
+  if (target.appliedPaymentIds.includes(cleanKey)) {
+    return { user: sanitizeUser(target), applied: false };
+  }
+
+  const previous = {
+    plan: target.plan,
+    hadExpiry: Object.prototype.hasOwnProperty.call(target, "proExpiresAt"),
+    proExpiresAt: target.proExpiresAt,
+    appliedPaymentIds: [...target.appliedPaymentIds]
+  };
+
+  target.plan = "pro";
+  if (validDays >= 8000 || (previous.plan === "pro" && !previous.hadExpiry)) {
+    delete target.proExpiresAt;
+  } else {
+    const base = Number.isFinite(target.proExpiresAt) && target.proExpiresAt > Date.now()
+      ? target.proExpiresAt
+      : Date.now();
+    target.proExpiresAt = base + validDays * 24 * 60 * 60 * 1000;
+  }
+  target.appliedPaymentIds.push(cleanKey);
+
+  if (!saveJSON(USERS_FILE, users)) {
+    target.plan = previous.plan;
+    if (previous.hadExpiry) target.proExpiresAt = previous.proExpiresAt;
+    else delete target.proExpiresAt;
+    target.appliedPaymentIds = previous.appliedPaymentIds;
+    throw new Error("Failed to persist paid entitlement");
+  }
+  logAuthEvent({ event: "PAYMENT_PLAN_GRANT", userId: target.id, paymentKey: cleanKey, days: validDays });
+  return { user: sanitizeUser(target), applied: true };
+}
+
 function grantBulkProTime(days = 1, audience = "pro") {
   const validDays = Number.isInteger(+days) && +days > 0 ? +days : 1;
   const msToAdd = validDays * 24 * 60 * 60 * 1000;
@@ -416,10 +575,10 @@ function subtractProTime(userIdOrTgId, days = 1) {
   const msToSub = validDays * 24 * 60 * 60 * 1000;
 
   if (!target.proExpiresAt) {
-    target.proExpiresAt = Date.now() + (3650 - validDays) * 24 * 60 * 60 * 1000;
-  } else {
-    target.proExpiresAt = target.proExpiresAt - msToSub;
+    // Lifetime subscription: subtraction is ignored to protect lifetime status
+    return sanitizeUser(target);
   }
+  target.proExpiresAt = target.proExpiresAt - msToSub;
 
   if (target.proExpiresAt <= Date.now()) {
     target.plan = "free";
@@ -568,9 +727,12 @@ function revokeAllUserSessions(userId) {
 function resetUserPassword(userId, newPassword) {
   const target = users[userId] || findUser(userId);
   if (!target) return null;
-  const { hash, salt } = hashPassword(newPassword);
+  const passwordText = cleanPassword(newPassword);
+  if (passwordText.length < 10 || passwordText.length > 1024) throw new Error("Некорректная длина пароля");
+  const { hash, salt, algorithm } = hashPassword(passwordText);
   target.passwordHash = hash;
   target.salt = salt;
+  target.passwordAlgorithm = algorithm;
   saveJSON(USERS_FILE, users);
   revokeAllUserSessions(target.id);
   logAuthEvent({ event: "RESET_PASSWORD", userId: target.id });
@@ -604,6 +766,7 @@ module.exports = {
   linkTelegramBot,
   getUserStats,
   setUserPlan,
+  grantPlanForPayment,
   grantBulkProTime,
   subtractProTime,
   subtractBulkProTime,

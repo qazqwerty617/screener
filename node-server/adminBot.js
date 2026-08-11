@@ -4,13 +4,14 @@ const fs = require("fs");
 const path = require("path");
 const userStore = require("./userStore");
 
-const ADMIN_BOT_TOKEN = "8809831309:AAFfsYL5clUyNwFEVYkviDQhb821ajTjmG0";
-const ADMIN_CHAT_ID = "8482582995";
+const ADMIN_BOT_TOKEN = String(process.env.ADMIN_BOT_TOKEN || "").trim();
+const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || "").trim();
+const MAIN_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const TELEGRAM_API = `https://api.telegram.org/bot${ADMIN_BOT_TOKEN}`;
 
 // Files for persistent admin data
 const PROMOS_FILE = path.join(__dirname, "promos.json");
-const PAYMENTS_FILE = path.join(__dirname, "payments.json");
+const PAYMENTS_FILE = path.join(process.env.PAYMENT_DATA_DIR || __dirname, "payments.json");
 const SUPPORT_FILE = path.join(__dirname, "support.json");
 const SETTINGS_FILE = path.join(__dirname, "admin_settings.json");
 const AUDIT_FILE = path.join(__dirname, "admin_audit.json");
@@ -62,6 +63,7 @@ function logAdminAction(adminName, actionName, details = {}) {
 
 // Telegram API Helper
 async function apiCall(method, payload) {
+  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
   try {
     const res = await fetch(`${TELEGRAM_API}/${method}`, {
       method: "POST",
@@ -86,6 +88,7 @@ async function sendAdminMessage(text, replyMarkup = null) {
 }
 
 async function sendAdminDocument(filePath, filename, caption = "") {
+  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
   try {
     const fileBuffer = fs.readFileSync(filePath);
     const blob = new Blob([fileBuffer], { type: "text/csv" });
@@ -812,11 +815,34 @@ function buildSubscriptionsMenu() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleAdminMessageText(msg) {
-  const text = msg.text.trim();
-  const chatId = String(msg.chat.id);
+  const text = msg && msg.text ? msg.text.trim() : "";
+  const chatId = msg && msg.chat ? String(msg.chat.id) : "";
 
   if (chatId !== ADMIN_CHAT_ID) {
     sendAdminMessage("⛔ <b>Доступ запрещен.</b> Панель доступна только Администратору.");
+    return;
+  }
+
+  if (text.startsWith("/setwallet")) {
+    const paymentGateway = require("./paymentGateway");
+    const newWallet = text.replace("/setwallet", "").trim();
+    const success = paymentGateway.setMasterTronAddress(newWallet);
+    if (success) {
+      logAdminAction("Администратор #1", `Смена TRON кошелька на ${newWallet}`);
+      await sendAdminMessage(
+        `<b>✅ TRON Кошелёк успешно обновлён!</b>\n\n` +
+        `Новый адрес: <code>${newWallet}</code>\n\n` +
+        `Все новые счета на сайте будут создаваться для этого кошелька.`,
+        { inline_keyboard: [[{ text: "💳 Меню платежей", callback_data: "adm:payments:main" }]] }
+      );
+    } else {
+      await sendAdminMessage(
+        `<b>❌ Ошибка формата TRON кошелька!</b>\n\n` +
+        `Введённый адрес: <code>${newWallet}</code>\n` +
+        `Убедитесь, что адрес начинается на <b>T</b> и содержит 34 символа (TRC-20 Base58).\n\n` +
+        `<i>Пример:</i> <code>/setwallet TQn9Y2khEsLJW1ChVWFMSMeSTow5K47ZUS</code>`
+      );
+    }
     return;
   }
 
@@ -851,7 +877,8 @@ async function handleAdminMessageText(msg) {
       const userId = currentState.data.userId;
       const targetUser = userStore.findUser(userId);
       if (targetUser && targetUser.telegramChatId) {
-        const mainBotApi = `https://api.telegram.org/bot8856434726:AAHOO0OPlIQR82dHgqt13dAQviSYv0-4CDk/sendMessage`;
+        if (!MAIN_BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+        const mainBotApi = `https://api.telegram.org/bot${MAIN_BOT_TOKEN}/sendMessage`;
         await fetch(mainBotApi, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1504,7 +1531,8 @@ async function handleAdminCallbackQuery(query) {
         let success = 0;
         let failed = 0;
 
-        const mainBotApi = `https://api.telegram.org/bot8856434726:AAHOO0OPlIQR82dHgqt13dAQviSYv0-4CDk/sendMessage`;
+        if (!MAIN_BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+        const mainBotApi = `https://api.telegram.org/bot${MAIN_BOT_TOKEN}/sendMessage`;
 
         for (const u of recipients) {
           try {
@@ -1607,8 +1635,6 @@ async function handleAdminCallbackQuery(query) {
 }
 
 module.exports = {
-  ADMIN_BOT_TOKEN,
-  ADMIN_CHAT_ID,
   sendAdminMessage,
   handleAdminMessageText,
   handleAdminCallbackQuery

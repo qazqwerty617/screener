@@ -5803,3 +5803,385 @@ body {
 }
 
 .pro-modal-cancel-btn:hover { color: #fff; }
+
+/* OBSIDIAN MODAL BACKDROP & OVERLAY */
+.pro-modal-backdrop {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background: rgba(5, 3, 12, 0.85) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    z-index: 999999 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 20px !important;
+    box-sizing: border-box !important;
+}
+
+.pro-modal-content {
+    position: relative !important;
+    max-width: 580px !important;
+    width: 100% !important;
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+    background: #0f0b1a !important;
+    border: 1px solid rgba(168, 85, 247, 0.4) !important;
+    box-shadow: 0 25px 70px rgba(0, 0, 0, 0.9), 0 0 50px rgba(124, 58, 237, 0.3) !important;
+    border-radius: 20px !important;
+    padding: 28px !important;
+    color: #fff !important;
+    animation: modalPopIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+}
+
+@keyframes modalPopIn {
+    from {
+        opacity: 0;
+        transform: scale(0.92) translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.pro-modal-close {
+    position: absolute !important;
+    top: 18px !important;
+    right: 20px !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    color: #94a3b8 !important;
+    font-size: 20px !important;
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 50% !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: all 0.2s ease !important;
+    line-height: 1 !important;
+}
+
+.pro-modal-close:hover {
+    background: rgba(239, 68, 68, 0.2) !important;
+    color: #ef4444 !important;
+    border-color: rgba(239, 68, 68, 0.4) !important;
+}
+
+/* OBSIDIAN PRO PAY MODAL STYLES */
+.pay-modal-box {
+    max-width: 580px !important;
+    background: #0f0b1a !important;
+    border: 1px solid rgba(124, 58, 237, 0.4) !important;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(124, 58, 237, 0.25) !important;
+    border-radius: 20px !important;
+    padding: 28px !important;
+}
+
+.pay-modal-header {
+    text-align: center;
+    margin-bottom: 22px;
+}
+
+.pay-modal-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(236, 72, 153, 0.2));
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #c084fc;
+    letter-spacing: 0.8px;
+    margin-bottom: 8px;
+}
+
+.pay-modal-header h3 {
+    font-size: 22px;
+    font-weight: 800;
+    color: #fff;
+    margin: 0 0 6px 0;
+}
+
+.pay-modal-sub {
+    font-size: 13px;
+    color: #94a3b8;
+    margin: 0;
+}
+
+.pay-tariffs-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.pay-tariff-card {
+    position: relative;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1.5px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.pay-tariff-card:hover {
+    border-color: rgba(168, 85, 247, 0.5);
+    background: rgba(124, 58, 237, 0.08);
+}
+
+.pay-tariff-card.selected {
+    border-color: #a855f7 !important;
+    background: linear-gradient(135deg, rgba(124, 58, 237, 0.15), rgba(168, 85, 247, 0.08)) !important;
+    box-shadow: 0 0 15px rgba(168, 85, 247, 0.3) !important;
+}
+
+.pay-t-badge {
+    position: absolute;
+    top: -9px;
+    right: 10px;
+    background: #3b82f6;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+}
+
+.pay-t-badge.pop {
+    background: linear-gradient(135deg, #a855f7, #ec4899);
+}
+
+.pay-t-badge.gold {
+    background: linear-gradient(135deg, #f59e0b, #ef4444);
+}
+
+.pay-t-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.pay-t-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #e2e8f0;
+}
+
+.pay-t-price {
+    font-size: 18px;
+    font-weight: 900;
+    color: #26c97a;
+}
+
+.pay-t-desc {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.pay-method-selector {
+    margin-bottom: 20px;
+}
+
+.pay-method-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #cbd5e1;
+    margin-bottom: 8px;
+}
+
+.pay-methods-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.pay-method-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1.5px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px 14px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s ease;
+    width: 100%;
+}
+
+.pay-method-btn:hover {
+    border-color: rgba(168, 85, 247, 0.4);
+}
+
+.pay-method-btn.active {
+    border-color: #26c97a !important;
+    background: rgba(38, 201, 122, 0.08) !important;
+}
+
+.pay-method-icon {
+    font-size: 20px;
+}
+
+.pay-method-info strong {
+    display: block;
+    font-size: 13px;
+    color: #fff;
+}
+
+.pay-method-info span {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.pay-continue-btn {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(135deg, #8b5cf6, #d946ef);
+    border: none;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 20px rgba(217, 70, 239, 0.3);
+}
+
+.pay-continue-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 25px rgba(217, 70, 239, 0.5);
+}
+
+.pay-timer-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 12px;
+    color: #fbbf24;
+    margin-bottom: 16px;
+}
+
+.pay-amount-box, .pay-address-box {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 14px;
+}
+
+.pay-box-label {
+    display: block;
+    font-size: 11px;
+    color: #94a3b8;
+    margin-bottom: 6px;
+}
+
+.pay-amount-display, .pay-address-display {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.pay-amount-display strong {
+    font-size: 20px;
+    font-weight: 900;
+    color: #26c97a;
+}
+
+.pay-address-display code {
+    font-size: 13px;
+    color: #c084fc;
+    background: rgba(168, 85, 247, 0.15);
+    padding: 4px 8px;
+    border-radius: 6px;
+    word-break: break-all;
+}
+
+.pay-copy-icon-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.pay-copy-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.pay-box-sub-warn {
+    display: block;
+    font-size: 10px;
+    color: #ef4444;
+    margin-top: 6px;
+}
+
+.pay-status-checker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px;
+    background: rgba(124, 58, 237, 0.1);
+    border: 1px dashed rgba(168, 85, 247, 0.4);
+    border-radius: 10px;
+    font-size: 12px;
+    color: #d8b4fe;
+}
+
+.pay-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(168, 85, 247, 0.3);
+    border-top-color: #a855f7;
+    border-radius: 50%;
+    animation: paySpin 0.8s linear infinite;
+}
+
+@keyframes paySpin {
+    to { transform: rotate(360deg); }
+}
+
+.pay-cb-direct-btn {
+    display: block;
+    text-align: center;
+    padding: 14px;
+    background: linear-gradient(135deg, #0088cc, #229ed9);
+    border-radius: 12px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    box-shadow: 0 4px 15px rgba(0, 136, 204, 0.4);
+}
+
+.pay-back-btn {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 12px;
+    cursor: pointer;
+    margin-top: 10px;
+}
+
+.pay-back-btn:hover {
+    color: #fff;
+}

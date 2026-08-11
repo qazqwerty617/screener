@@ -8,7 +8,7 @@ const https = require("https");
 const path = require("path");
 const { WebSocketServer, WebSocket } = require("ws");
 const zlib = require("zlib");
-const { randomUUID } = require("crypto");
+const { randomUUID, timingSafeEqual } = require("crypto");
 
 const PORT = process.env.PORT || 3000;
 
@@ -269,11 +269,33 @@ function updateLiveTradeTick(ex, sym, tf, tradeTime, price, volume) {
 
 const userStore = require("./userStore");
 const telegramBot = require("./telegramBot");
+const paymentGateway = require("./paymentGateway");
+const { registerPaymentRoutes, createSlidingWindowLimiter } = require("./paymentRoutes");
 
 // ── HTTP + WebSocket server ──
 const app = express();
+app.disable("x-powered-by");
+const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10);
+if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 10) {
+  app.set("trust proxy", trustProxyHops);
+}
 app.use(compression());
-app.use(express.json());
+app.use(express.json({
+  limit: "128kb",
+  verify(req, _res, buffer) {
+    req.rawBody = Buffer.from(buffer);
+  }
+}));
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  if (process.env.NODE_ENV === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
 const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
@@ -1462,8 +1484,49 @@ setInterval(async () => {
   }
 }, 10000).unref();
 
+function constantTimeSecretEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function requireAdminApi(req, res, next) {
+  const configuredSecret = String(process.env.ADMIN_API_SECRET || "");
+  const suppliedSecret = String(req.headers["x-admin-secret"] || "");
+  if (configuredSecret.length < 32) {
+    return res.status(503).json({ error: "Admin API is not configured" });
+  }
+  if (!constantTimeSecretEqual(configuredSecret, suppliedSecret)) {
+    return res.status(403).json({ error: "Доступ запрещён" });
+  }
+  next();
+}
+
+const loginIpLimit = createSlidingWindowLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  key: req => req.ip
+});
+const loginIdentityLimit = createSlidingWindowLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: req => String(req.body && req.body.emailOrUsername || "").trim().toLowerCase()
+});
+const registrationLimit = createSlidingWindowLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 8,
+  key: req => req.ip
+});
+const telegramAuthLimit = createSlidingWindowLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  key: req => req.ip
+});
+
 // ── Authentication Endpoints ──
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", registrationLimit, (req, res) => {
   try {
     const result = userStore.registerUser({ ...(req.body || {}), ip: req.ip });
     res.json({ success: true, ...result });
@@ -1472,7 +1535,7 @@ app.post("/api/auth/register", (req, res) => {
   }
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", loginIpLimit, loginIdentityLimit, (req, res) => {
   try {
     const result = userStore.loginUser({ ...(req.body || {}), ip: req.ip });
     res.json({ success: true, ...result });
@@ -1481,20 +1544,24 @@ app.post("/api/auth/login", (req, res) => {
   }
 });
 
-app.post("/api/auth/telegram", (req, res) => {
+app.post("/api/auth/telegram", telegramAuthLimit, (req, res) => {
   try {
-    const result = userStore.telegramAuth(req.body || {}, null, req.ip);
+    const tgData = req.body || {};
+    if (!telegramBot.verifyTelegramAuth(tgData)) {
+      return res.status(400).json({ error: "Подпись Telegram не прошла проверку подлинности" });
+    }
+    const result = userStore.telegramAuth(tgData, null, req.ip);
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.get("/api/auth/logs", (req, res) => {
+app.get("/api/auth/logs", requireAdminApi, (req, res) => {
   res.json({ success: true, logs: userStore.getAuditLogs() });
 });
 
-app.post("/api/auth/telegram-verify", (req, res) => {
+app.post("/api/auth/telegram-verify", telegramAuthLimit, (req, res) => {
   try {
     const tgData = req.body || {};
     const isValid = telegramBot.verifyTelegramAuth(tgData);
@@ -1508,7 +1575,7 @@ app.post("/api/auth/telegram-verify", (req, res) => {
   }
 });
 
-app.post("/api/auth/telegram-start", (req, res) => {
+app.post("/api/auth/telegram-start", telegramAuthLimit, (req, res) => {
   try {
     const regToken = telegramBot.createRegToken();
     const botUrl = `https://t.me/${telegramBot.BOT_USERNAME}?start=${regToken}`;
@@ -1538,7 +1605,7 @@ app.post("/api/auth/telegram-link-token", (req, res) => {
 
 app.get("/api/auth/me", (req, res) => {
   const authHeader = req.headers.authorization || "";
-  const token = authHeader.replace(/^Bearer\s+/i, "").trim() || req.query.token;
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   const user = userStore.getUserByToken(token);
   if (!user) {
     return res.status(401).json({ error: "Неавторизован" });
@@ -1561,11 +1628,7 @@ app.post("/api/auth/update-profile", (req, res) => {
   }
 });
 
-app.post("/api/user/set-plan", (req, res) => {
-  const adminSecret = req.headers["x-admin-secret"];
-  if (adminSecret !== "obsidian_pro_admin_2026") {
-    return res.status(403).json({ error: "Доступ запрещен" });
-  }
+app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
   const { userId, plan } = req.body || {};
   if (!userId || !plan) {
     return res.status(400).json({ error: "Необходимы параметры userId и plan" });
@@ -1576,6 +1639,9 @@ app.post("/api/user/set-plan", (req, res) => {
   }
   res.json({ success: true, user: updated });
 });
+
+// Payment routes must be registered before the static catch-all route.
+registerPaymentRoutes(app, { userStore, paymentGateway });
 
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0, etag: false }));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
@@ -1697,8 +1763,6 @@ server.listen(PORT, () => {
       setTimeout(scanAllPatterns, 2000);
     }
   }
-
-  const cachedTfMaps = {};
 
   app.get("/api/formations/map", compression(), (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");

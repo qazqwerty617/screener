@@ -1,6 +1,6 @@
 "use strict";
 
-// тХРтХРтХР State тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
+// ── State ──
 window.DEBUG_LEVELS = false;
 const coins = new Map();
 const dirty = new Set();
@@ -8057,12 +8057,22 @@ function renderScreenerHeatmap() {
 
 
 // тФАтФА Tab switching тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+const featureTitles = {
+  map: "Карта ликвидаций & Heatmap",
+  formations: "Детектор формаций и Уровни",
+  backtest: "Бэктестинг стратегий",
+  journal: "Дневник трейдера"
+};
+
 window.switchView = function switchView(view) {
   if (view !== "screener") {
     const user = window.currentUser;
     const isPro = user && user.plan === "pro";
     if (!isPro) {
-      if (typeof window.openProModal === "function") window.openProModal();
+      const title = featureTitles[view] || view;
+      if (typeof window.openProModal === "function") {
+        window.openProModal(title);
+      }
       return;
     }
   }
@@ -10842,5 +10852,283 @@ window.addEventListener("resize", () => {
       chartInstances.forEach(inst => inst && inst.draw(true));
     });
   }
+
+// ── OBSIDIAN PRO MODALS & PAYMENT CONTROLLER ──
+let paySelectedPlan = "1m";
+let paySelectedMethod = "trc20";
+let currentPayInvoice = null;
+let payPollTimer = null;
+let payCountdownTimer = null;
+
+function openProfileModal() {
+  const token = localStorage.getItem("obsidian_auth_token");
+  if (!token) {
+    if (typeof openAuthModal === "function") openAuthModal();
+    return;
+  }
+  const modal = $("profile-modal");
+  if (modal) {
+    modal.style.display = "flex";
+    if (typeof renderProfile === "function") renderProfile();
+  }
+}
+
+function closeProfileModal() {
+  const modal = $("profile-modal");
+  if (modal) modal.style.display = "none";
+}
+
+function openProModal(featureName) {
+  closeProfileModal();
+  const proModal = $("proModal");
+  const proSub = document.querySelector(".pro-modal-subtitle");
+  if (proSub) {
+    if (featureName) {
+      proSub.textContent = `Функция «${featureName}» доступна исключительно в подписке PRO`;
+    } else {
+      proSub.textContent = "Доступно исключительно в подписке PRO";
+    }
+  }
+  if (proModal) proModal.style.display = "flex";
+}
+
+function closeProModal() {
+  const proModal = $("proModal");
+  if (proModal) proModal.style.display = "none";
+}
+
+function openPayModal() {
+  closeProModal();
+  const modal = $("obsidian-pay-modal");
+  if (modal) {
+    modal.style.display = "flex";
+    backToTariffs();
+    refreshAvailablePaymentMethods();
+  }
+}
+
+async function refreshAvailablePaymentMethods() {
+  const continueButton = $("pay-continue-btn");
+  try {
+    const response = await fetch("/api/pay/config", { cache: "no-store" });
+    const data = await response.json();
+    const methods = Array.isArray(data.methods) ? data.methods : [];
+    for (const method of ["trc20", "cryptobot"]) {
+      const button = $(method === "cryptobot" ? "pay-method-cb" : `pay-method-${method}`);
+      if (button) button.style.display = methods.includes(method) ? "" : "none";
+    }
+    if (!methods.includes(paySelectedMethod)) paySelectedMethod = methods[0] || "";
+    if (paySelectedMethod) selectPayMethod(paySelectedMethod);
+    if (continueButton) continueButton.disabled = methods.length === 0;
+  } catch (_) {
+    if (continueButton) continueButton.disabled = true;
+  }
+}
+
+function closePayModal() {
+  const modal = $("obsidian-pay-modal");
+  if (modal) modal.style.display = "none";
+  if (payPollTimer) clearInterval(payPollTimer);
+  if (payCountdownTimer) clearInterval(payCountdownTimer);
+}
+
+window.openProfileModal = openProfileModal;
+window.closeProfileModal = closeProfileModal;
+window.openProModal = openProModal;
+window.closeProModal = closeProModal;
+window.openPayModal = openPayModal;
+window.closePayModal = closePayModal;
+
+function selectPayTariff(planId) {
+  paySelectedPlan = planId;
+  document.querySelectorAll(".pay-tariff-card").forEach(el => {
+    if (el.dataset.plan === planId) el.classList.add("selected");
+    else el.classList.remove("selected");
+  });
+}
+
+function selectPayMethod(method) {
+  paySelectedMethod = method;
+  const methods = ["trc20", "cb"];
+  methods.forEach(m => {
+    const btn = $(`pay-method-${m}`);
+    if (btn) {
+      if (m === method || (m === "cb" && method === "cryptobot")) {
+        btn.classList.add("active");
+      } else {
+        btn.classList.remove("active");
+      }
+    }
+  });
+}
+
+function backToTariffs() {
+  const step1 = $("pay-step-tariffs");
+  const step2 = $("pay-step-invoice");
+  if (step1 && step2) {
+    step1.style.display = "block";
+    step2.style.display = "none";
+  }
+  if (payPollTimer) clearInterval(payPollTimer);
+  if (payCountdownTimer) clearInterval(payCountdownTimer);
+}
+
+async function startPayInvoice() {
+  const token = localStorage.getItem("obsidian_auth_token");
+  if (!token) {
+    if (typeof openAuthModal === "function") openAuthModal();
+    return;
+  }
+
+  const btn = $("pay-continue-btn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Создание счёта...";
+  }
+
+  try {
+    const res = await fetch("/api/pay/create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ planId: paySelectedPlan, method: paySelectedMethod })
+    });
+    const data = await res.json();
+
+    if (!data.ok || !data.invoice) {
+      alert("Ошибка создания счёта: " + (data.error || "Неизвестная ошибка"));
+      return;
+    }
+
+    currentPayInvoice = data.invoice;
+    renderPayInvoiceStep(currentPayInvoice);
+  } catch (err) {
+    alert("Ошибка соединения при создании счёта");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Продолжить к оплате →";
+    }
+  }
+}
+
+function renderPayInvoiceStep(inv) {
+  const step1 = $("pay-step-tariffs");
+  const step2 = $("pay-step-invoice");
+  if (step1 && step2) {
+    step1.style.display = "none";
+    step2.style.display = "block";
+  }
+
+  const amountDisplay = $("pay-display-amount");
+  const addressDisplay = $("pay-display-address");
+  const statusText = $("pay-status-text");
+  const cbBtnBox = $("pay-bot-btn-container");
+  const cbLink = $("pay-cryptobot-link");
+  const addressBox = $("pay-address-box");
+  const addressLabel = $("pay-address-label");
+
+  if (amountDisplay) amountDisplay.textContent = `$${inv.amountStr} USDT`;
+  if (addressDisplay) addressDisplay.textContent = inv.address || "";
+
+  const netTitles = {
+    trc20: "TRON (USDT TRC-20)",
+    cryptobot: "Telegram CryptoBot"
+  };
+
+  if (inv.method === "cryptobot" && inv.payUrl) {
+    if (cbBtnBox) cbBtnBox.style.display = "block";
+    if (cbLink) cbLink.href = inv.payUrl;
+    if (addressBox) addressBox.style.display = "none";
+    if (statusText) statusText.textContent = "Ожидание оплаты в Telegram CryptoBot...";
+  } else {
+    if (cbBtnBox) cbBtnBox.style.display = "none";
+    if (addressBox) addressBox.style.display = "block";
+    if (addressLabel) addressLabel.textContent = `Адрес кошелька ${netTitles[inv.method] || ""}:`;
+    if (statusText) statusText.textContent = `Проверяем зачисление в блокчейне ${netTitles[inv.method] || "крипто-сети"}...`;
+  }
+
+  startPayCountdown(inv.expiresAt);
+
+  if (payPollTimer) clearInterval(payPollTimer);
+  payPollTimer = setInterval(() => checkCurrentInvoiceStatus(inv.id), 3000);
+}
+
+function startPayCountdown(expiresAtMs) {
+  if (payCountdownTimer) clearInterval(payCountdownTimer);
+  const timerDisplay = $("pay-countdown-timer");
+
+  const update = () => {
+    const remaining = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+    const mins = Math.floor(remaining / 60);
+    const secs = remaining % 60;
+    if (timerDisplay) {
+      timerDisplay.textContent = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    }
+    if (remaining <= 0) {
+      clearInterval(payCountdownTimer);
+      if (payPollTimer) clearInterval(payPollTimer);
+      const statusText = $("pay-status-text");
+      if (statusText) statusText.textContent = "❌ Время ожидания счёта истекло. Пожалуйста, создайте новый счёт.";
+    }
+  };
+
+  update();
+  payCountdownTimer = setInterval(update, 1000);
+}
+
+async function checkCurrentInvoiceStatus(invoiceId) {
+  try {
+    const token = localStorage.getItem("obsidian_auth_token");
+    if (!token) return;
+    const res = await fetch(`/api/pay/status/${encodeURIComponent(invoiceId)}`, {
+      cache: "no-store",
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    const data = await res.json();
+
+    if (data.status === "success") {
+      if (payPollTimer) clearInterval(payPollTimer);
+      if (payCountdownTimer) clearInterval(payCountdownTimer);
+
+      const statusBanner = $("pay-status-banner");
+      if (statusBanner) {
+        statusBanner.style.background = "rgba(38, 201, 122, 0.15)";
+        statusBanner.style.borderColor = "#26c97a";
+        statusBanner.innerHTML = `<span style="font-size: 15px; font-weight: 700; color: #26c97a;">✅ Оплата успешно получена! Подписка PRO активирована.</span>`;
+      }
+
+      const token = localStorage.getItem("obsidian_auth_token");
+      if (token && typeof checkCurrentAuthSession === "function") {
+        checkCurrentAuthSession();
+      }
+
+      setTimeout(() => {
+        closePayModal();
+        alert("🎉 Поздравляем! Ваша подписка Obsidian PRO успешно активирована!");
+      }, 2500);
+    }
+  } catch (e) {}
+}
+
+function copyPayField(elementId) {
+  const el = $(elementId);
+  if (el) {
+    const textToCopy = el.textContent.trim().replace(/^\$/, "").replace(/\s*USDT$/i, "");
+    navigator.clipboard.writeText(textToCopy).then(() => {
+      alert("Скопировано: " + textToCopy);
+    }).catch(() => {
+      const input = document.createElement("input");
+      input.value = textToCopy;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand("copy");
+      document.body.removeChild(input);
+      alert("Скопировано: " + textToCopy);
+    });
+  }
+}
 
 })();

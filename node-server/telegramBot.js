@@ -3,8 +3,8 @@
 const crypto = require("crypto");
 const userStore = require("./userStore");
 
-const BOT_TOKEN = "8856434726:AAHOO0OPlIQR82dHgqt13dAQviSYv0-4CDk";
-const BOT_USERNAME = "ObsidianScreenerBot";
+const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "ObsidianScreenerBot").trim();
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // Map of one-time deep-link tokens -> userId
@@ -15,7 +15,10 @@ const regTokens = new Map();
 
 // Verify Telegram Widget Authorization payload cryptographically
 function verifyTelegramAuth(data) {
-  if (!data || !data.hash) return false;
+  if (!BOT_TOKEN || !data || typeof data.hash !== "string" || !/^[a-fA-F0-9]{64}$/.test(data.hash)) return false;
+  const authDate = Number(data.auth_date);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (!Number.isInteger(authDate) || authDate > nowSeconds + 60 || nowSeconds - authDate > 24 * 60 * 60) return false;
 
   const secretKey = crypto.createHash("sha256").update(BOT_TOKEN).digest();
   
@@ -28,12 +31,15 @@ function verifyTelegramAuth(data) {
   const checkString = checkArr.join("\n");
   
   const hmac = crypto.createHmac("sha256", secretKey).update(checkString).digest("hex");
-  return hmac === data.hash;
+  const expected = Buffer.from(hmac, "hex");
+  const supplied = Buffer.from(data.hash, "hex");
+  return expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
 }
 
 // Generate one-time deep link token for connecting Telegram bot to user account
 function createLinkToken(userId) {
-  const token = crypto.randomBytes(12).toString("hex");
+  if (!BOT_TOKEN) throw new Error("Telegram bot is not configured");
+  const token = crypto.randomBytes(24).toString("base64url");
   linkTokens.set(token, { userId, createdAt: Date.now() });
   setTimeout(() => linkTokens.delete(token), 15 * 60 * 1000).unref();
   return token;
@@ -41,7 +47,8 @@ function createLinkToken(userId) {
 
 // Generate registration/login start token
 function createRegToken() {
-  const token = "reg_" + crypto.randomBytes(10).toString("hex");
+  if (!BOT_TOKEN) throw new Error("Telegram bot is not configured");
+  const token = "reg_" + crypto.randomBytes(24).toString("base64url");
   regTokens.set(token, { status: "pending", token: null, user: null, createdAt: Date.now() });
   setTimeout(() => regTokens.delete(token), 10 * 60 * 1000).unref();
   return token;
@@ -51,11 +58,14 @@ function getRegTokenStatus(token) {
   if (!token || !regTokens.has(token)) {
     return { status: "expired" };
   }
-  return regTokens.get(token);
+  const result = regTokens.get(token);
+  if (result.status === "approved") regTokens.delete(token);
+  return result;
 }
 
 // Send message to Telegram Chat
 async function sendTelegramMessage(chatId, text) {
+  if (!BOT_TOKEN) return { ok: false, error: "TELEGRAM_BOT_DISABLED" };
   try {
     const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
@@ -181,23 +191,37 @@ function handleUpdate(update) {
   }
 }
 
-const ADMIN_BOT_TOKEN = "8809831309:AAFfsYL5clUyNwFEVYkviDQhb821ajTjmG0";
-const ADMIN_CHAT_ID = "8482582995";
+const ADMIN_BOT_TOKEN = String(process.env.ADMIN_BOT_TOKEN || "").trim();
+const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || "").trim();
 const ADMIN_TELEGRAM_API = `https://api.telegram.org/bot${ADMIN_BOT_TOKEN}`;
 
+let registrationCounter = 0;
+
 async function sendAdminNotification(user, details = {}) {
-  if (!user) return;
+  if (!user || !ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return;
+  registrationCounter++;
+
+  // Only send notification every 10 new user registrations
+  if (registrationCounter % 10 !== 0) {
+    return;
+  }
+
   try {
+    const stats = userStore.getUserStats();
     const method = details.authMethod || user.authMethod || "Логин / Пароль";
+
     const text =
-      `🚨 <b>Новая регистрация в Obsidian Pro!</b>\n\n` +
-      `<b>Индивидуальный ID:</b> <code>${user.id}</code>\n` +
-      `<b>Имя трейдера:</b> ${user.username || "—"}\n` +
-      `<b>Email / Аккаунт:</b> ${user.email || "—"}\n` +
-      `<b>Способ регистрации:</b> ${method}\n` +
-      (user.telegramId ? `<b>Telegram ID:</b> <code>${user.telegramId}</code>\n` : "") +
-      (details.ip ? `<b>IP-адрес:</b> <code>${details.ip}</code>\n` : "") +
-      `<b>Время:</b> ${new Date().toLocaleString("ru-RU")}`;
+      `🎉 <b>ОТЧЁТ: +10 НОВЫХ РЕГИСТРАЦИЙ!</b>\n\n` +
+      `<b>📊 ОБЩАЯ СТАТИСТИКА СКРИНЕРА:</b>\n` +
+      `• Всего пользователей: <b>${stats.total}</b>\n` +
+      `• 💎 PRO подписок: <b>${stats.proCount}</b>\n` +
+      `• ⚪ FREE аккаунтов: <b>${stats.freeCount}</b>\n` +
+      `• 🆕 Новых за 24 часа: <b>${stats.registered24h}</b>\n\n` +
+      `<b>👤 Трейдер #${registrationCounter} (10-й):</b>\n` +
+      `• ID: <code>${user.id}</code>\n` +
+      `• Имя: <b>${user.username || "—"}</b>\n` +
+      `• Способ: ${method}\n` +
+      `• Время: ${new Date().toLocaleString("ru-RU")}`;
 
     await fetch(`${ADMIN_TELEGRAM_API}/sendMessage`, {
       method: "POST",
@@ -263,16 +287,15 @@ async function sendAdminBotMessage(chatId, text) {
 }
 
 // Start polling unless disabled
-if (process.env.DISABLE_TELEGRAM_BOT !== "true") {
+if (process.env.DISABLE_TELEGRAM_BOT !== "true" && BOT_TOKEN) {
   pollUpdates();
-  pollAdminUpdates();
+  if (ADMIN_BOT_TOKEN && ADMIN_CHAT_ID) pollAdminUpdates();
   console.log(`[TELEGRAM BOT] Engine initialized for @${BOT_USERNAME} & @ObsidianAdminBot`);
 } else {
-  console.log(`[TELEGRAM BOT] Polling disabled on this instance (DISABLE_TELEGRAM_BOT=true)`);
+  console.log("[TELEGRAM BOT] Polling disabled or bot token is not configured");
 }
 
 module.exports = {
-  BOT_TOKEN,
   BOT_USERNAME,
   verifyTelegramAuth,
   createLinkToken,
