@@ -227,7 +227,7 @@ test("restart recovery verifies an expired-window invoice before expiring it", a
   const invoice = await beforeRestart.createInvoice("USR-RECOVERY", "1m", "trc20");
   const expectedMinor = beforeRestart._test.getInvoice(invoice.id).amountMinor;
 
-  now = createdAt + 25 * 60 * 1000;
+  now = createdAt + 55 * 60 * 1000;
   transaction = {
     transaction_id: "d".repeat(64),
     to: TEST_WALLET,
@@ -255,7 +255,7 @@ test("provider outage never converts an unverified invoice to expired", async t 
     notifyPayment: false
   });
   const invoice = await gateway.createInvoice("USR-OUTAGE", "1m", "trc20");
-  now = createdAt + 25 * 60 * 1000;
+  now = createdAt + 55 * 60 * 1000;
   await gateway._test.reconcileExpiredInvoices();
   assert.equal(gateway._test.getInvoice(invoice.id).status, "pending");
 });
