@@ -8240,13 +8240,14 @@ function renderScreenerHeatmap() {
 // тФАтФА Tab switching тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const featureTitles = {
   map: "Карта ликвидаций & Heatmap",
+  arbitrage: "Межбиржевой и Фандинг Арбитраж",
   formations: "Детектор формаций и Уровни",
   backtest: "Бэктестинг стратегий",
   journal: "Дневник трейдера"
 };
 
 window.switchView = function switchView(view) {
-  if (view !== "screener" && view !== "arbitrage") {
+  if (view !== "screener") {
     const user = window.currentUser;
     const isPro = user && user.plan === "pro";
     if (!isPro) {
