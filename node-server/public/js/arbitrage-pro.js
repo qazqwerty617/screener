@@ -2,7 +2,7 @@
 
 (function () {
   const $ = id => document.getElementById(id);
-  const pro = { row:null, isFunding:false, tf:'5m', mode:'best', depth:null, klines:null, depthLoading:false, requestId:0, initialized:false };
+  const pro = { row:null, isFunding:false, tf:'5m', mode:'best', depth:null, klines:null, depthLoading:false, requestId:0, initialized:false, unsubs:[], drawQueued:false };
 
   function pct(n,d=3){return `${Number(n)>=0?'+':''}${Number(n||0).toFixed(d)}%`;}
   function price(n){n=Number(n)||0;if(n>=1000)return n.toLocaleString('en-US',{maximumFractionDigits:2});if(n>=1)return n.toFixed(4).replace(/0+$/,'').replace(/\.$/,'');return n?n.toPrecision(6).replace(/0+$/,'').replace(/\.$/,''):'—';}
@@ -33,7 +33,8 @@
     loadCharts();if(!isFunding)loadDepth();
   }
 
-  function close(){pro.row=null;pro.depth=null;pro.klines=null;pro.requestId++;}
+  function closeStreams(){pro.unsubs.splice(0).forEach(fn=>{try{fn();}catch(_){}});}
+  function close(){closeStreams();pro.row=null;pro.depth=null;pro.klines=null;pro.requestId++;}
 
   async function loadDepth(){
     const r=pro.row;if(!r||pro.isFunding||pro.depthLoading)return;const requestId=pro.requestId;
@@ -54,9 +55,18 @@
   }
 
   function flatCandles(flat){const out=[];for(let i=0;Array.isArray(flat)&&i+5<flat.length;i+=6){const c={t:+flat[i],o:+flat[i+1],h:+flat[i+2],l:+flat[i+3],c:+flat[i+4],v:+flat[i+5]};if(c.t&&c.o>0&&c.h>0&&c.l>0&&c.c>0)out.push(c);}return out;}
+  function scheduleCharts(){if(pro.drawQueued)return;pro.drawQueued=true;requestAnimationFrame(()=>{pro.drawQueued=false;renderCharts();});}
+  function updateLeg(side,data,isTick){
+    const list=pro.klines?.[side];if(!list?.length||!Array.isArray(data))return;
+    if(!isTick){const c={t:+data[0],o:+data[1],h:+data[2],l:+data[3],c:+data[4],v:+data[5]};if(!(c.t&&c.o>0&&c.h>0&&c.l>0&&c.c>0))return;const last=list.at(-1);if(c.t===last.t)Object.assign(last,c);else if(c.t>last.t){list.push(c);if(list.length>500)list.shift();}}
+    else{const t=+data[0],p=+data[1],hi=+data[2]||p,lo=+data[3]||p;if(!(t>0&&p>0))return;const tfMs=({"1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000})[pro.tf]||300000;let last=list.at(-1);if(t>=last.t+tfMs){last={t:Math.floor(t/tfMs)*tfMs,o:+data[4]||p,h:hi,l:lo,c:p,v:0};list.push(last);if(list.length>500)list.shift();}else if(t>=last.t){last.c=p;last.h=Math.max(last.h,hi,p);last.l=Math.min(last.l,lo,p);}else return;}
+    $(side==='buy'?'arb-buy-chart-price':'arb-sell-chart-price').textContent=price(list.at(-1).c);scheduleCharts();
+  }
+  function subscribeCharts(l,tf){closeStreams();if(!window.MarketData?.subscribe)return;[['buy',l.buyEx,l.buySymbol],['sell',l.sellEx,l.sellSymbol]].forEach(([side,ex,sym])=>{pro.unsubs.push(window.MarketData.subscribe({ex,sym,tf,onKline:data=>updateLeg(side,data,false),onTick:data=>updateLeg(side,data,true)}));});}
   async function loadCharts(){
+    closeStreams();
     const r=pro.row;if(!r)return;const requestId=pro.requestId,tf=pro.tf,l=legs(r);$('arb-chart-empty').hidden=false;$('arb-chart-empty').textContent='Загружаем историю обеих бирж…';
-    try{const [br,sr]=await Promise.all([fetch(`/api/klines?ex=${encodeURIComponent(l.buyEx)}&sym=${encodeURIComponent(l.buySymbol)}&tf=${encodeURIComponent(tf)}&lite=1`,{cache:'no-store'}),fetch(`/api/klines?ex=${encodeURIComponent(l.sellEx)}&sym=${encodeURIComponent(l.sellSymbol)}&tf=${encodeURIComponent(tf)}&lite=1`,{cache:'no-store'})]);if(!br.ok||!sr.ok)throw new Error('klines');const [bf,sf]=await Promise.all([br.json(),sr.json()]);if(pro.requestId!==requestId||pro.tf!==tf)return;pro.klines={buy:flatCandles(bf),sell:flatCandles(sf)};$('arb-chart-empty').hidden=pro.klines.buy.length>1&&pro.klines.sell.length>1;renderCharts();}
+    try{const [br,sr]=await Promise.all([fetch(`/api/klines?ex=${encodeURIComponent(l.buyEx)}&sym=${encodeURIComponent(l.buySymbol)}&tf=${encodeURIComponent(tf)}&lite=1`,{cache:'no-store'}),fetch(`/api/klines?ex=${encodeURIComponent(l.sellEx)}&sym=${encodeURIComponent(l.sellSymbol)}&tf=${encodeURIComponent(tf)}&lite=1`,{cache:'no-store'})]);if(!br.ok||!sr.ok)throw new Error('klines');const [bf,sf]=await Promise.all([br.json(),sr.json()]);if(pro.requestId!==requestId||pro.tf!==tf)return;pro.klines={buy:flatCandles(bf),sell:flatCandles(sf)};$('arb-chart-empty').hidden=pro.klines.buy.length>1&&pro.klines.sell.length>1;subscribeCharts(l,tf);renderCharts();}
     catch(_){if(pro.requestId===requestId){$('arb-chart-empty').textContent='История одной из бирж временно недоступна';$('arb-chart-empty').hidden=false;}}
   }
 

@@ -26,6 +26,7 @@ const serverLevels = require("./serverLevels");
 const wallScanner = require("./wallScanner");
 const { createArbitrageEngine } = require("./arbitrageEngine");
 const { createDepthAnalyzer } = require("./depthAnalyzer");
+const marketDataCore = require("./marketDataCore");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
 let patternsCache = []; // Global in-memory patterns/signals cache
@@ -36,8 +37,11 @@ const dirtyKeys = new Set();
 const clients = new Set();
 
 // тФАтФАтФА Kline streaming state тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-const klineSubs = new Map(); // "ex|sym|tf" => { ws, ex, sym, tf }
+const klineSubs = new Map(); // "ex|sym|tf" => pooled upstream stream + subscribed browser clients
 const klineClients = new Set(); // clients subscribed to kline updates
+const pendingMarketTicks = new Map();
+const marketFeedStats = new Map();
+let marketSequence = 0;
 
 // тФАтФАтФА Monitoring тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exStatus = new Map();
@@ -203,16 +207,13 @@ setInterval(() => {
 
 // тФАтФАтФА Kline broadcast to clients тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function normalizeTimestamp(t) {
-  let ts = +t;
-  if (!Number.isFinite(ts) || ts <= 0) return 0;
-  if (ts > 1e14) ts = Math.floor(ts / 1e6); // nanoseconds to ms
-  if (ts < 1e11) ts = ts * 1000; // seconds to ms
-  return Math.floor(ts);
+  return marketDataCore.normalizeTimestamp(t);
 }
 
 function broadcastKline(ex, sym, tf, candle) {
-  const normT = normalizeTimestamp(candle.t);
-  if (!normT) return;
+  const clean = marketDataCore.normalizeCandle(candle);
+  if (!clean) return;
+  const normT = clean.t;
 
   // ── Update server-side klines cache in real-time ──────────────
   const updateCacheForLite = (useLite) => {
@@ -222,13 +223,13 @@ function broadcastKline(ex, sym, tf, candle) {
       const flat = cached.data;
       const lastT = flat[flat.length - 6];
       if (lastT === normT) {
-        flat[flat.length - 5] = +candle.o;
-        flat[flat.length - 4] = +candle.h;
-        flat[flat.length - 3] = +candle.l;
-        flat[flat.length - 2] = +candle.c;
-        flat[flat.length - 1] = +candle.v;
+        flat[flat.length - 5] = clean.o;
+        flat[flat.length - 4] = clean.h;
+        flat[flat.length - 3] = clean.l;
+        flat[flat.length - 2] = clean.c;
+        flat[flat.length - 1] = clean.v;
       } else if (normT > lastT) {
-        flat.push(normT, +candle.o, +candle.h, +candle.l, +candle.c, +candle.v);
+        flat.push(normT, clean.o, clean.h, clean.l, clean.c, clean.v);
         if (flat.length > 7200) flat.splice(0, 6);
       }
       cached.at = Date.now();
@@ -238,12 +239,70 @@ function broadcastKline(ex, sym, tf, candle) {
   updateCacheForLite(true);
 
   const targetKey = `${ex}|${sym}|${tf}`;
-  let msg = null;
-  for (const ws of klineClients) {
-    if (ws.readyState === WebSocket.OPEN && ws._klineSubs && ws._klineSubs.has(targetKey)) {
-      if (!msg) msg = JSON.stringify({ type: "kline", ex, sym, tf, data: [normT, +candle.o, +candle.h, +candle.l, +candle.c, +candle.v] });
-      try { ws.send(msg); } catch (_) {}
-    }
+  const sub = klineSubs.get(targetKey);
+  if (!sub) return;
+  sub.lastEventAt = Date.now();
+  const stat = marketFeedStats.get(ex) || { messages: 0, trades: 0, klines: 0, lastEventAt: 0, lastSourceAt: 0 };
+  stat.messages++;
+  stat.klines++;
+  stat.lastEventAt = Date.now();
+  stat.lastSourceAt = normT;
+  marketFeedStats.set(ex, stat);
+  const seq = ++marketSequence;
+  const msg = JSON.stringify({
+    type: "kline", ex, sym, tf,
+    data: [normT, clean.o, clean.h, clean.l, clean.c, clean.v, seq, Date.now()],
+  });
+  for (const ws of sub.clients) {
+    if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 1_000_000) continue;
+    try { ws.send(msg); } catch (_) {}
+  }
+}
+
+function publishMarketTrade(ex, sym, tf, eventTime, price, volume = 0) {
+  const targetKey = `${ex}|${sym}|${tf}`;
+  const sub = klineSubs.get(targetKey);
+  if (!sub || sub.clients.size === 0) return;
+  const t = normalizeTimestamp(eventTime) || Date.now();
+  const p = Number(price);
+  if (!Number.isFinite(p) || p <= 0) return;
+  sub.lastEventAt = Date.now();
+  sub.lastSourceAt = t;
+  const stat = marketFeedStats.get(ex) || { messages: 0, trades: 0, klines: 0, lastEventAt: 0, lastSourceAt: 0 };
+  stat.messages++;
+  stat.trades++;
+  stat.lastEventAt = Date.now();
+  stat.lastSourceAt = t;
+  marketFeedStats.set(ex, stat);
+
+  const existing = pendingMarketTicks.get(targetKey);
+  const merged = marketDataCore.mergeMarketTick(existing?.batch || null, { t, p, volume });
+  if (!merged) return;
+  if (existing) {
+    existing.batch = merged;
+    return;
+  }
+  const pending = { batch: merged, timer: null };
+  pendingMarketTicks.set(targetKey, pending);
+  pending.timer = setTimeout(() => flushMarketTick(targetKey), 16);
+  pending.timer.unref?.();
+}
+
+function flushMarketTick(targetKey) {
+  const pending = pendingMarketTicks.get(targetKey);
+  pendingMarketTicks.delete(targetKey);
+  const sub = klineSubs.get(targetKey);
+  if (!pending?.batch || !sub || sub.clients.size === 0) return;
+  const b = pending.batch;
+  const seq = ++marketSequence;
+  const serverTime = Date.now();
+  const msg = JSON.stringify({
+    type: "market_tick", ex: sub.ex, sym: sub.sym, tf: sub.tf,
+    data: [b.eventTime, b.last, b.high, b.low, b.first, b.firstTime, b.trades, seq, serverTime],
+  });
+  for (const ws of sub.clients) {
+    if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 1_000_000) continue;
+    try { ws.send(msg); } catch (_) {}
   }
 }
 
@@ -375,76 +434,190 @@ wss.on("connection", (ws) => {
   });
 });
 
+// Application heartbeat keeps browser watchdogs honest even when a market is quiet.
+const browserHeartbeat = setInterval(() => {
+  if (clients.size === 0) return;
+  const payload = JSON.stringify({ type: "heartbeat", serverTime: Date.now(), seq: ++marketSequence });
+  for (const ws of clients) {
+    if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 512_000) continue;
+    try { ws.send(payload); } catch (_) {}
+  }
+}, 1000);
+browserHeartbeat.unref?.();
+
 // тФАтФАтФА Kline subscription management тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function subscribeKline(ws, ex, sym, tf) {
-  if (ws) klineClients.add(ws);
+  if (!ws || !marketDataCore.validSubscription(ex, sym, tf)) return;
+  if (!tickers.has(`${ex}:${sym}`)) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "market_status", ex, sym, tf, status: "rejected", reason: "unknown_symbol" }));
+    }
+    return;
+  }
+  klineClients.add(ws);
   const subKey = `${ex}|${sym}|${tf}`;
-  
-  // Check if we already have a WS connection for this kline
+  ws._klineSubs.add(subKey);
+
   let sub = klineSubs.get(subKey);
   if (!sub) {
     sub = createKlineWs(ex, sym, tf);
     klineSubs.set(subKey, sub);
   }
+  if (sub.idleTimer) { clearTimeout(sub.idleTimer); sub.idleTimer = null; }
+  sub.clients.add(ws);
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: "market_status", ex, sym, tf,
+      status: sub.ws?.readyState === WebSocket.OPEN ? "live" : "connecting",
+    }));
+  }
 }
 
 function unsubscribeKline(ws, ex, sym, tf) {
   const subKey = `${ex}|${sym}|${tf}`;
-  // Simple: don't unsubscribe for now, connections are lightweight
+  if (ws?._klineSubs) ws._klineSubs.delete(subKey);
+  const sub = klineSubs.get(subKey);
+  if (!sub) return;
+  sub.clients.delete(ws);
+  if (sub.clients.size === 0 && !sub.idleTimer) {
+    sub.idleTimer = setTimeout(() => closeKlineSub(sub), 15_000);
+    sub.idleTimer.unref?.();
+  }
 }
 
 function createKlineWs(ex, sym, tf) {
-  const sub = { ex, sym, tf, ws: null, reconnectTimer: null, pingTimer: null };
+  const sub = {
+    key: `${ex}|${sym}|${tf}`,
+    ex, sym, tf,
+    ws: null,
+    extraWs: null,
+    clients: new Set(),
+    reconnectTimer: null,
+    pingTimer: null,
+    pollTimer: null,
+    idleTimer: null,
+    closing: false,
+    reconnects: 0,
+    lastEventAt: 0,
+    lastSourceAt: 0,
+  };
   connectKlineWs(sub);
   return sub;
 }
 
+function closeSocket(socket) {
+  if (!socket) return;
+  try { socket.removeAllListeners(); socket.terminate(); } catch (_) {}
+}
+
+function closeKlineSub(sub) {
+  if (!sub || sub.clients.size > 0) return;
+  sub.closing = true;
+  if (sub.reconnectTimer) clearTimeout(sub.reconnectTimer);
+  if (sub.pingTimer) clearInterval(sub.pingTimer);
+  if (sub.pollTimer) clearInterval(sub.pollTimer);
+  if (sub.idleTimer) clearTimeout(sub.idleTimer);
+  closeSocket(sub.ws);
+  closeSocket(sub.extraWs);
+  pendingMarketTicks.delete(sub.key);
+  if (klineSubs.get(sub.key) === sub) klineSubs.delete(sub.key);
+}
+
+function scheduleKlineReconnect(sub, delay = 1500) {
+  if (!sub || sub.closing || sub.clients.size === 0 || sub.reconnectTimer) return;
+  sub.reconnects++;
+  sub.reconnectTimer = setTimeout(() => {
+    sub.reconnectTimer = null;
+    if (!sub.closing && sub.clients.size > 0) connectKlineWs(sub);
+  }, Math.min(15_000, delay * Math.min(6, sub.reconnects)));
+  sub.reconnectTimer.unref?.();
+}
+
+function markMarketOpen(sub) {
+  sub.reconnects = 0;
+  for (const client of sub.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ type: "market_status", ex: sub.ex, sym: sub.sym, tf: sub.tf, status: "live" }));
+    }
+  }
+}
+
 function connectKlineWs(sub) {
+  sub.closing = false;
   if (sub.reconnectTimer) { clearTimeout(sub.reconnectTimer); sub.reconnectTimer = null; }
   if (sub.pingTimer) { clearInterval(sub.pingTimer); sub.pingTimer = null; }
-  if (sub.ws) { try { sub.ws.close(); } catch (_) {} sub.ws = null; }
+  if (sub.pollTimer) { clearInterval(sub.pollTimer); sub.pollTimer = null; }
+  closeSocket(sub.ws);
+  closeSocket(sub.extraWs);
+  sub.ws = null;
+  sub.extraWs = null;
 
   const { ex, sym, tf } = sub;
   
   if (ex === "BN") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     const bnTf = tfMap[tf] || tf;
-    sub.ws = new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${bnTf}`, { perMessageDeflate: false });
+    const stream = `${sym.toLowerCase()}@kline_${bnTf}/${sym.toLowerCase()}@aggTrade`;
+    sub.ws = new WebSocket(`wss://fstream.binance.com/stream?streams=${stream}`, { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] BN:${sym}`, e.message));
+    sub.ws.on("open", () => markMarketOpen(sub));
     sub.ws.on("message", (raw) => {
       try {
-        const d = JSON.parse(raw.toString());
-        if (!d.k) return;
-        const k = d.k;
-        broadcastKline(ex, sym, tf, { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
+        const envelope = JSON.parse(raw.toString());
+        const d = envelope.data || envelope;
+        if (d.e === "aggTrade") {
+          publishMarketTrade(ex, sym, tf, d.T || d.E, d.p, Number(d.q) * Number(d.p));
+        } else if (d.k) {
+          const k = d.k;
+          broadcastKline(ex, sym, tf, { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
+        }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => scheduleKlineReconnect(sub));
   } else if (ex === "BB") {
     const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" };
     sub.ws = new WebSocket("wss://stream.bybit.com/v5/public/linear", { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] BB:${sym}`, e.message));
     sub.ws.on("open", () => {
-      sub.ws.send(JSON.stringify({ op: "subscribe", args: [`kline.${tfMap[tf] || "60"}.${sym}`] }));
+      markMarketOpen(sub);
+      sub.ws.send(JSON.stringify({ op: "subscribe", args: [`kline.${tfMap[tf] || "60"}.${sym}`, `publicTrade.${sym}`] }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send('{"op":"ping"}'); }, 20000);
     });
     sub.ws.on("message", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (!d.topic?.startsWith("kline.") || !d.data?.length) return;
-        const k = d.data[0];
-        broadcastKline(ex, sym, tf, { t: k.start, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.turnover });
+        if (!d.data?.length) return;
+        if (d.topic?.startsWith("kline.")) {
+          const k = d.data[0];
+          broadcastKline(ex, sym, tf, { t: k.start, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.turnover });
+        } else if (d.topic?.startsWith("publicTrade.")) {
+          for (const trade of d.data) publishMarketTrade(ex, sym, tf, trade.T || d.ts, trade.p, Number(trade.v) * Number(trade.p));
+        }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub); });
     sub.ws.on("error", () => {});
   } else if (ex === "OX") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
     const ch = "candle" + (tfMap[tf] || "1H");
-    sub.ws = new WebSocket("wss://ws.okx.com:8443/ws/v5/public", { perMessageDeflate: false });
+    sub.ws = new WebSocket("wss://ws.okx.com:8443/ws/v5/business", { perMessageDeflate: false });
     sub.ws.on("open", () => {
+      markMarketOpen(sub);
       sub.ws.send(JSON.stringify({ op: "subscribe", args: [{ channel: ch, instId: sym }] }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send("ping"); }, 25000);
+
+      sub.extraWs = new WebSocket("wss://ws.okx.com:8443/ws/v5/public", { perMessageDeflate: false });
+      sub.extraWs.on("open", () => sub.extraWs.send(JSON.stringify({ op: "subscribe", args: [{ channel: "trades", instId: sym }] })));
+      sub.extraWs.on("message", (tradeRaw) => {
+        const tradeStr = tradeRaw.toString();
+        if (tradeStr === "pong") return;
+        try {
+          const message = JSON.parse(tradeStr);
+          if (message.arg?.channel !== "trades") return;
+          for (const trade of (message.data || [])) publishMarketTrade(ex, sym, tf, trade.ts, trade.px, Number(trade.sz) * Number(trade.px));
+        } catch (_) {}
+      });
+      sub.extraWs.on("error", () => {});
     });
     sub.ws.on("message", (raw) => {
       const str = raw.toString();
@@ -453,46 +626,58 @@ function connectKlineWs(sub) {
         const d = JSON.parse(str);
         if (!d.data || d.arg?.channel !== ch) return;
         const k = d.data[0];
-        broadcastKline(ex, sym, tf, { t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] });
+        broadcastKline(ex, sym, tf, { t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +(k[7] || k[6]) });
       } catch (_) {}
     });
-    sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => { clearInterval(sub.pingTimer); closeSocket(sub.extraWs); sub.extraWs = null; scheduleKlineReconnect(sub); });
     sub.ws.on("error", () => {});
   } else if (ex === "BG") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
     sub.ws = new WebSocket("wss://ws.bitget.com/v2/ws/public", { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] BG:${sym}`, e.message));
     sub.ws.on("open", () => {
-      sub.ws.send(JSON.stringify({ op: "subscribe", args: [{ instType: "USDT-FUTURES", channel: "candle" + (tfMap[tf] || "1H"), instId: sym }] }));
+      markMarketOpen(sub);
+      sub.ws.send(JSON.stringify({ op: "subscribe", args: [
+        { instType: "USDT-FUTURES", channel: "candle" + (tfMap[tf] || "1H"), instId: sym },
+        { instType: "USDT-FUTURES", channel: "trade", instId: sym },
+      ] }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send("ping"); }, 20000);
     });
     sub.ws.on("message", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (d.action !== "update" || d.arg?.channel !== "candle" + (tfMap[tf] || "1H")) return;
-        for (const k of (d.data || [])) {
-          broadcastKline(ex, sym, tf, { t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] });
+        if (!d.action || !d.arg?.channel) return;
+        if (d.arg.channel === "candle" + (tfMap[tf] || "1H")) {
+          for (const k of (d.data || [])) broadcastKline(ex, sym, tf, { t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] });
+        } else if (d.arg.channel === "trade") {
+          for (const trade of (d.data || [])) publishMarketTrade(ex, sym, tf, trade.ts, trade.price, Number(trade.size) * Number(trade.price));
         }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub); });
     sub.ws.on("error", () => {});
   } else if (ex === "GT") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     sub.ws = new WebSocket("wss://fx-ws.gateio.ws/v4/ws/usdt", { perMessageDeflate: false });
     sub.ws.on("open", () => {
-      sub.ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.candlesticks", event: "subscribe", payload: [sym], params: { interval: tfMap[tf] || "4h" } }));
+      markMarketOpen(sub);
+      sub.ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.candlesticks", event: "subscribe", payload: [tfMap[tf] || "4h", sym] }));
+      sub.ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.trades", event: "subscribe", payload: [sym] }));
     });
     sub.ws.on("message", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (d.channel !== "futures.candlesticks" || d.event !== "update") return;
-        for (const k of (d.result || [])) {
-          broadcastKline(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v });
+        if (d.event !== "update") return;
+        if (d.channel === "futures.candlesticks") {
+          const candles = Array.isArray(d.result) ? d.result : [d.result];
+          for (const k of candles) broadcastKline(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) });
+        } else if (d.channel === "futures.trades") {
+          const trades = Array.isArray(d.result) ? d.result : [d.result];
+          for (const trade of trades) publishMarketTrade(ex, sym, tf, trade.create_time_ms || trade.create_time, trade.price, Number(trade.size || trade.amount) * Number(trade.price));
         }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => scheduleKlineReconnect(sub));
     sub.ws.on("error", () => {});
   } else if (ex === "MX") {
     const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
@@ -500,6 +685,7 @@ function connectKlineWs(sub) {
     sub.ws = new WebSocket("wss://contract.mexc.com/edge", { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] MX:${mxSym}`, e.message));
     sub.ws.on("open", () => {
+      markMarketOpen(sub);
       sub.ws.send(JSON.stringify({ method: "sub.kline", param: { symbol: mxSym, interval: tfMap[tf] || "Hour4" } }));
       sub.ws.send(JSON.stringify({ method: "sub.deal", param: { symbol: mxSym } }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ method: "ping" })); }, 15000);
@@ -515,6 +701,7 @@ function connectKlineWs(sub) {
             if (tp > 0) {
               const t = tickers.get("MX:" + mxSym);
               if (t) { t.p = tp; dirtyKeys.add(t.key); }
+              publishMarketTrade(ex, sym, tf, tt, tp, tv);
               updateLiveTradeTick(ex, sym, tf, tt, tp, tv);
             }
           }
@@ -525,35 +712,47 @@ function connectKlineWs(sub) {
         }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub); });
     sub.ws.on("error", () => {});
   } else if (ex === "HL") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     sub.ws = new WebSocket("wss://api.hyperliquid.xyz/ws", { perMessageDeflate: false });
     sub.ws.on("open", () => {
+      markMarketOpen(sub);
       sub.ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "candle", coin: sym, interval: tfMap[tf] || "4h" } }));
+      sub.ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "trades", coin: sym } }));
     });
     sub.ws.on("message", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
-        if (d.channel !== "candle" || !d.data) return;
-        for (const k of d.data) {
-          broadcastKline(ex, sym, tf, { t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v });
+        if (!d.data) return;
+        if (d.channel === "candle") {
+          const candles = Array.isArray(d.data) ? d.data : [d.data];
+          for (const k of candles) broadcastKline(ex, sym, tf, { t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: Number(k.v) * Number(k.c) });
+        } else if (d.channel === "trades") {
+          for (const trade of d.data) publishMarketTrade(ex, sym, tf, trade.time, trade.px, Number(trade.sz) * Number(trade.px));
         }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => scheduleKlineReconnect(sub));
     sub.ws.on("error", () => {});
   } else if (ex === "AD") {
-    sub.ws = new WebSocket(`wss://fstream.asterdex.com/ws/${sym.toLowerCase()}@kline_${tf}`, { perMessageDeflate: false });
+    const stream = `${sym.toLowerCase()}@kline_${tf}/${sym.toLowerCase()}@aggTrade`;
+    sub.ws = new WebSocket(`wss://fstream.asterdex.com/stream?streams=${stream}`, { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] AD:${sym}`, e.message));
+    sub.ws.on("open", () => markMarketOpen(sub));
     sub.ws.on("message", (raw) => {
       try {
-        const k = JSON.parse(raw.toString()).k;
-        broadcastKline(ex, sym, tf, { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
+        const envelope = JSON.parse(raw.toString());
+        const d = envelope.data || envelope;
+        if (d.e === "aggTrade") publishMarketTrade(ex, sym, tf, d.T || d.E, d.p, Number(d.q) * Number(d.p));
+        else if (d.k) {
+          const k = d.k;
+          broadcastKline(ex, sym, tf, { t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q });
+        }
       } catch (_) {}
     });
-    sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 1500); });
+    sub.ws.on("close", () => scheduleKlineReconnect(sub));
     sub.ws.on("error", () => {});
   } else if (ex === "KC") {
     // KuCoin needs a token
@@ -563,7 +762,9 @@ function connectKlineWs(sub) {
       sub.ws = new WebSocket(url, { perMessageDeflate: false });
       sub.ws.on("error", (e) => console.warn(`[KL ERROR] KC:${sym}`, e.message));
       sub.ws.on("open", () => {
+        markMarketOpen(sub);
         sub.ws.send(JSON.stringify({ id: Date.now(), type: "subscribe", topic: `/contractMarket/kline:${sym}_${TF_MAP.KC[tf] || "60"}` }));
+        sub.ws.send(JSON.stringify({ id: Date.now() + 1, type: "subscribe", topic: `/contractMarket/execution:${sym}`, privateChannel: false, response: true }));
         sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ id: Date.now(), type: "ping" })); }, 20000);
       });
       sub.ws.on("message", (raw) => {
@@ -571,11 +772,14 @@ function connectKlineWs(sub) {
           const d = JSON.parse(raw.toString());
           if (d.subject === "kline.update") {
             const k = d.data;
-            broadcastKline(ex, sym, tf, { t: k.timestamp, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.vol });
+            broadcastKline(ex, sym, tf, { t: k.timestamp, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.amount || k.turnover || k.vol) });
+          } else if ((d.subject === "match" || d.subject === "match.update") && d.data) {
+            const trade = d.data;
+            publishMarketTrade(ex, sym, tf, trade.ts || trade.time || trade.timestamp, trade.price, Number(trade.size || trade.value || 0) * Number(trade.price));
           }
         } catch (_) {}
       });
-      sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 2000); });
+      sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub, 2000); });
     }).catch(() => startKlinePolling(sub));
   } else if (ex === "BX") {
     sub.ws = new WebSocket("wss://open-api-swap.bingx.com/swap-market", { perMessageDeflate: false });
@@ -584,8 +788,10 @@ function connectKlineWs(sub) {
       startKlinePolling(sub); 
     });
     sub.ws.on("open", () => {
+      markMarketOpen(sub);
       // BingX expects symbol WITH hyphen (e.g. BTC-USDT@kline_1m)
       sub.ws.send(JSON.stringify({ id: "id1", reqType: "sub", dataType: `${sym}@kline_${tf}` }));
+      sub.ws.send(JSON.stringify({ id: "id2", reqType: "sub", dataType: `${sym}@trade` }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ ping: Date.now() })); }, 20000);
     });
     sub.ws.on("message", (raw) => {
@@ -619,16 +825,24 @@ function connectKlineWs(sub) {
             if (candle.t) {
               broadcastKline(ex, sym, tf, candle);
             }
+          } else if (d.dataType?.includes("@trade") && d.data) {
+            const trades = Array.isArray(d.data) ? d.data : [d.data];
+            for (const trade of trades) {
+              const p = +(trade.p || trade.price || 0);
+              publishMarketTrade(ex, sym, tf, trade.T || trade.t || trade.time, p, +(trade.q || trade.v || trade.volume || 0) * p);
+            }
           }
         } catch (_) {}
       });
     });
-    sub.ws.on("close", () => { clearInterval(sub.pingTimer); sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 2000); });
+    sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub, 2000); });
   } else if (ex === "HT") {
     sub.ws = new WebSocket("wss://api.hbdm.vn/linear-swap-ws", { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] HT:${sym}`, e.message));
     sub.ws.on("open", () => {
+      markMarketOpen(sub);
       sub.ws.send(JSON.stringify({ sub: `market.${sym}.kline.${TF_MAP.HT[tf] || "60min"}`, id: "id1" }));
+      sub.ws.send(JSON.stringify({ sub: `market.${sym}.trade.detail`, id: "id2" }));
     });
     sub.ws.on("message", (raw) => {
       zlib.gunzip(raw, (err, buf) => {
@@ -636,14 +850,16 @@ function connectKlineWs(sub) {
         try {
           const d = JSON.parse(buf.toString());
           if (d.ping) return sub.ws.send(JSON.stringify({ pong: d.ping }));
-          if (d.tick) {
+          if (d.tick && d.ch?.includes(".kline.")) {
             const k = d.tick;
-            broadcastKline(ex, sym, tf, { t: k.id * 1000, o: k.open, h: k.high, l: k.low, c: k.close, v: k.vol });
+            broadcastKline(ex, sym, tf, { t: k.id * 1000, o: k.open, h: k.high, l: k.low, c: k.close, v: +(k.trade_turnover || k.amount || k.vol) });
+          } else if (d.tick && d.ch?.includes(".trade.detail")) {
+            for (const trade of (d.tick.data || [])) publishMarketTrade(ex, sym, tf, trade.ts, trade.price, Number(trade.amount) * Number(trade.price));
           }
         } catch (_) {}
       });
     });
-    sub.ws.on("close", () => { sub.reconnectTimer = setTimeout(() => connectKlineWs(sub), 2000); });
+    sub.ws.on("close", () => scheduleKlineReconnect(sub, 2000));
   } else {
     startKlinePolling(sub);
   }
@@ -657,6 +873,8 @@ async function getKuCoinToken() {
 }
 
 function startKlinePolling(sub) {
+  if (sub.pollTimer) clearInterval(sub.pollTimer);
+  markMarketOpen(sub);
   sub.pollTimer = setInterval(async () => {
     try {
       const url = getKlinesUrl(sub.ex, sub.sym, sub.tf, 3);
@@ -853,22 +1071,22 @@ function parseKlines(ex, data) {
     let rawList = [];
     if (ex === "BN" || ex === "AD") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[7] || k[5] }));
     else if (ex === "BB") rawList = (data.result?.list || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
-    else if (ex === "OX") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
+    else if (ex === "OX") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[7] || k[6] || k[5] }));
     else if (ex === "BG") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
-    else if (ex === "GT") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }));
+    else if (ex === "GT") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.a || k.v }));
     else if (ex === "MX") rawList = (data.data?.time || []).map((t, i) => {
       const c = +data.data.close[i];
       const v = data.data.amount ? +data.data.amount[i] : (+data.data.vol[i] * c);
       return { t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c, v };
     });
-    else if (ex === "KC") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[5] }));
+    else if (ex === "KC") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
     else if (ex === "BX") rawList = (data.data || []).map(k => {
       const closeP = +(k.close || k.c || 0);
       const baseVol = +(k.volume || k.v || 0);
       return { t: k.time || k.t || 0, o: k.open || k.o || 0, h: k.high || k.h || 0, l: k.low || k.l || 0, c: closeP, v: baseVol * closeP };
     });
-    else if (ex === "HT") rawList = (data.data || []).map(k => ({ t: k.id, o: k.open, h: k.high, l: k.low, c: k.close, v: k.vol }));
-    else if (ex === "HL") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.v }));
+    else if (ex === "HT") rawList = (data.data || []).map(k => ({ t: k.id, o: k.open, h: k.high, l: k.low, c: k.close, v: k.trade_turnover || k.amount || k.vol }));
+    else if (ex === "HL") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: Number(k.v) * Number(k.c) }));
 
     const cleaned = [];
     for (const k of rawList) {
@@ -934,7 +1152,7 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     for (let p = 0; p < maxP; p++) {
       const before = nowTs - (p * limit * tfMs);
       if (fetchEx === "HL") {
-        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v }))).catch(() => []));
+        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }))).catch(() => []));
       } else {
         const url = getKlinesUrl(fetchEx, fetchSym, tf, limit, before);
         if (url) {
@@ -1339,6 +1557,28 @@ app.get("/api/tickers", (req, res) => {
 });
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", tickers: tickers.size, clients: clients.size, dirty: dirtyKeys.size, exchanges: Object.fromEntries(exStatus) });
+});
+app.get("/api/market-data/health", (req, res) => {
+  const now = Date.now();
+  const subscriptions = Array.from(klineSubs.values()).map(sub => ({
+    ex: sub.ex,
+    sym: sub.sym,
+    tf: sub.tf,
+    clients: sub.clients.size,
+    connected: sub.ws?.readyState === WebSocket.OPEN,
+    eventAgeMs: sub.lastEventAt ? now - sub.lastEventAt : null,
+    sourceAgeMs: sub.lastSourceAt ? Math.max(0, now - sub.lastSourceAt) : null,
+    reconnects: sub.reconnects,
+  }));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    status: "ok",
+    serverTime: now,
+    browserClients: clients.size,
+    activeSubscriptions: subscriptions.length,
+    subscriptions,
+    exchanges: Object.fromEntries(marketFeedStats),
+  });
 });
 
 app.get("/api/patterns", (req, res) => {

@@ -431,6 +431,60 @@ const MAX_DIRTY_ROWS_PER_TICK = 1000;
 const KLINES_CACHE_TTL_MS = 120000;
 const KLINES_CACHE = new Map();
 let klFetchToken = 0;
+const marketListeners = new Map();
+let mainMarketUnsubscribe = null;
+let mainMarketKey = null;
+let lastMarketEventAt = 0;
+let lastLatencyPaintAt = 0;
+
+function marketKey(ex, sym, tf) { return `${ex}|${sym}|${tf}`; }
+
+function sendMarketSubscription(type, ex, sym, tf) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  try { ws.send(JSON.stringify({ type, ex, sym, tf })); } catch (_) {}
+}
+
+function subscribeMarketData({ ex, sym, tf, onKline, onTick, onStatus }) {
+  const key = marketKey(ex, sym, tf);
+  let listeners = marketListeners.get(key);
+  if (!listeners) {
+    listeners = new Set();
+    marketListeners.set(key, listeners);
+    sendMarketSubscription("subscribe_kline", ex, sym, tf);
+  }
+  const listener = { onKline, onTick, onStatus };
+  listeners.add(listener);
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    const current = marketListeners.get(key);
+    if (!current) return;
+    current.delete(listener);
+    if (current.size === 0) {
+      marketListeners.delete(key);
+      sendMarketSubscription("unsubscribe_kline", ex, sym, tf);
+    }
+  };
+}
+
+function dispatchMarketMessage(msg) {
+  const listeners = marketListeners.get(marketKey(msg.ex, msg.sym, msg.tf));
+  if (!listeners) return;
+  for (const listener of listeners) {
+    try {
+      if (msg.type === "kline") listener.onKline?.(msg.data, msg);
+      else if (msg.type === "market_tick") listener.onTick?.(msg.data, msg);
+      else if (msg.type === "market_status") listener.onStatus?.(msg.status, msg);
+    } catch (_) {}
+  }
+}
+
+function hasMainMarketStream() {
+  return mainMarketKey === marketKey(activeEx, activeSym, activeTf) && marketListeners.has(mainMarketKey);
+}
+
+window.MarketData = { subscribe: subscribeMarketData };
 
 // тХРтХРтХР 240fps Engine via MessageChannel тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 // MessageChannel posts fire faster than setTimeout(0) and are not throttled
@@ -504,7 +558,7 @@ function processTickData(dt) {
     const expectedCandleStart = Math.floor(now / tfMs) * tfMs;
 
     // Check if we passed a timeframe boundary and need to spawn a new candle instantly
-    if (expectedCandleStart > last.t) {
+    if (expectedCandleStart > last.t && !hasMainMarketStream()) {
       const newCandle = {
         t: expectedCandleStart,
         o: last.c,
@@ -521,7 +575,7 @@ function processTickData(dt) {
     }
 
     const curLast = candles[candles.length - 1];
-    if ((!klWs || klWs.readyState !== 1)) {
+    if (!hasMainMarketStream()) {
       const liveP = getDisplayP(ac);
       if (liveP > 0 && curLast) {
         // Price scale sanity check: ensure liveP is on same price scale as curLast (ratio 0.4 to 2.5)
@@ -4370,6 +4424,10 @@ function connectWS() {
     $("cd-go").classList.add("ok");
     $("cd-label").textContent = "LIVE";
     hideLoading();
+    for (const key of marketListeners.keys()) {
+      const [ex, sym, tf] = key.split("|");
+      sendMarketSubscription("subscribe_kline", ex, sym, tf);
+    }
     fetchKlines(activeEx, activeSym, activeTf);
 
     // Ping every 20s to keep connection alive through proxies/nginx
@@ -4409,7 +4467,7 @@ function connectWS() {
         dirty.add(key);
         if (c.p !== oldP) scheduleInterp(key);
 
-        if (key === `${activeEx}:${activeSym}` && candles.length > 0) {
+        if (key === `${activeEx}:${activeSym}` && candles.length > 0 && !hasMainMarketStream()) {
           const lastC = candles[candles.length - 1];
           lastC.c = p;
           if (p > lastC.h) lastC.h = p;
@@ -4425,6 +4483,12 @@ function connectWS() {
       msg = JSON.parse(e.data);
     } catch (err) {
       console.error("WS Parse error:", err);
+      return;
+    }
+
+    if (msg.type === "heartbeat") return;
+    if (msg.type === "kline" || msg.type === "market_tick" || msg.type === "market_status") {
+      dispatchMarketMessage(msg);
       return;
     }
 
@@ -4523,7 +4587,7 @@ function connectWS() {
           }
         }
 
-        if (key === activeKey && candles.length > 0 && (!klWs || klWs.readyState !== 1)) {
+        if (key === activeKey && candles.length > 0 && !hasMainMarketStream()) {
           const lastC = candles[candles.length - 1];
           lastC.c = p;
           if (p > lastC.h) lastC.h = p;
@@ -4532,11 +4596,6 @@ function connectWS() {
         }
       }
       if (addedNew) needRebuild = true;
-    } else if (msg.type === "kline") {
-      if (msg.ex === activeEx && msg.sym === activeSym && msg.tf === activeTf) {
-        const k = msg.data;
-        appendCandle({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[5] });
-      }
     }
   };
 
@@ -4660,8 +4719,9 @@ function sanitizeCandle(raw, prevClose = null) {
   let t = +raw.t;
   if (!Number.isFinite(t) || t <= 0) return null;
 
-  // Normalize timestamp: convert ns -> ms, sec -> ms
-  if (t > 1e14) t = Math.floor(t / 1e6);
+  // Normalize timestamp: nanoseconds/microseconds/seconds -> milliseconds.
+  if (t > 1e17) t = Math.floor(t / 1e6);
+  else if (t > 1e14) t = Math.floor(t / 1e3);
   if (t < 1e11) t = t * 1000;
   t = Math.floor(t);
 
@@ -4673,15 +4733,6 @@ function sanitizeCandle(raw, prevClose = null) {
 
   if (![o, h, l, c].every(Number.isFinite)) return null;
   if (o <= 0 || h <= 0 || l <= 0 || c <= 0) return null;
-
-  // Connect Open price to previous Close for smooth continuous candle bodies (no floating step gaps)
-  if (prevClose !== null && Number.isFinite(prevClose) && prevClose > 0) {
-    // Only connect if the gap between prevClose and raw.o is within reasonable bound (not a major 10%+ session gap)
-    const gapRatio = Math.abs(raw.o - prevClose) / prevClose;
-    if (gapRatio < 0.05) {
-      o = prevClose;
-    }
-  }
 
   // Reject phantom future candles (> 1 hour in future)
   if (t > Date.now() + 3600000) return null;
@@ -4734,7 +4785,7 @@ async function fetchDirectKlines(ex, sym, tf) {
     } else if (ex === "OX") {
       const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TFOK[tf] || "1H"}&limit=300`);
       data = await r.json();
-      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
+      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[6] || +k[5] })));
     } else if (ex === "BG") {
       const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=300`);
       data = await r.json();
@@ -4742,7 +4793,7 @@ async function fetchDirectKlines(ex, sym, tf) {
     } else if (ex === "GT") {
       const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=300`);
       data = await r.json();
-      if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v })));
+      if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
       const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
       const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
@@ -4757,7 +4808,7 @@ async function fetchDirectKlines(ex, sym, tf) {
       const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
       const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${kcTfMap[tf] || 60}`);
       data = await r.json();
-      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] })));
+      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "BX") {
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
       const r = await fetch(`https://open-api-swap.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=${bxTfMap[tf] || "1h"}&limit=300`);
@@ -4767,12 +4818,12 @@ async function fetchDirectKlines(ex, sym, tf) {
       const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day" };
       const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${htTfMap[tf] || "60min"}&size=300`);
       data = await r.json();
-      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.vol })));
+      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
     } else if (ex === "HL") {
       const tfMs = TF_MS[tf] || 60000;
       const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (300 * tfMs), endTime: Date.now() } }) });
       data = await r.json();
-      if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v })));
+      if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c })));
     }
     return resultCandles;
   } catch (e) {
@@ -4940,23 +4991,14 @@ function appendCandle(k) {
     last.c = clean.c;
     last.v = clean.v;
   } else if (clean.t > last.t) {
-    // Check if there's a gap (more than one TF)
+    // Never fabricate missing exchange candles. Re-fetch the authoritative range instead.
     const tfMs = TF_MS[activeTf] || 60000;
     if (clean.t - last.t > tfMs * 1.5) {
-      if (clean.t - last.t < tfMs * 100) {
-        let fillT = last.t + tfMs;
-        while (fillT < clean.t) {
-          candles.push({ t: fillT, o: last.c, h: last.c, l: last.c, c: last.c, v: 0 });
-          fillT += tfMs;
-        }
-      } else {
-        if (!window.isFetchingGap) {
-          window.isFetchingGap = true;
-          setTimeout(() => {
-            fetchKlines(activeEx, activeSym, activeTf);
-            window.isFetchingGap = false;
-          }, 100);
-        }
+      if (!window.isFetchingGap) {
+        window.isFetchingGap = true;
+        setTimeout(() => {
+          Promise.resolve(fetchKlines(activeEx, activeSym, activeTf)).finally(() => { window.isFetchingGap = false; });
+        }, 150);
       }
     }
     candles.push(clean);
@@ -4970,9 +5012,79 @@ function appendCandle(k) {
   updateOHLC();
 }
 
+function applyMainMarketTick(data) {
+  if (!Array.isArray(data) || candles.length === 0) return;
+  const eventTime = +data[0];
+  const price = +data[1];
+  const eventHigh = +data[2] || price;
+  const eventLow = +data[3] || price;
+  const firstPrice = +data[4] || price;
+  if (!(eventTime > 0) || !(price > 0)) return;
+  lastMarketEventAt = Date.now();
+
+  const tfMs = TF_MS[activeTf] || 60000;
+  let last = candles[candles.length - 1];
+  if (eventTime >= last.t + tfMs) {
+    const start = Math.floor(eventTime / tfMs) * tfMs;
+    last = { t: start, o: firstPrice, h: eventHigh, l: eventLow, c: price, v: 0 };
+    candles.push(last);
+    if (candles.length > 1500) candles.shift();
+    clearCandleCaches(candles);
+  } else if (eventTime >= last.t) {
+    last.c = price;
+    last.h = Math.max(last.h, eventHigh, price);
+    last.l = Math.min(last.l, eventLow, price);
+  } else {
+    return;
+  }
+
+  const ticker = coins.get(`${activeEx}:${activeSym}`);
+  if (ticker) {
+    ticker.prev = ticker.p;
+    ticker.p = price;
+    ticker.displayP = price;
+    dirty.add(ticker.key);
+  }
+  chartNeedsDraw = true;
+  updateOHLC();
+
+  const now = performance.now();
+  if (now - lastLatencyPaintAt > 500) {
+    lastLatencyPaintAt = now;
+    const sourceLag = Math.max(0, Math.min(99_999, Date.now() - eventTime));
+    const label = $("cd-label");
+    if (label) label.textContent = `LIVE · ${Math.round(sourceLag)}ms`;
+  }
+}
+
+function applyMainMarketStatus(status) {
+  const label = $("cd-label");
+  if (!label) return;
+  if (status === "live") label.textContent = "LIVE";
+  else if (status === "connecting") label.textContent = "MARKET SYNC";
+}
+
 function connectKlWs(ex, sym, tf) {
   if (klWs) { try { klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
+
+  // Production uses the pooled server relay: one normalized, recoverable stream for all 11 venues.
+  if (location.protocol !== "file:") {
+    const nextKey = marketKey(ex, sym, tf);
+    if (mainMarketKey === nextKey && mainMarketUnsubscribe) return;
+    if (mainMarketUnsubscribe) mainMarketUnsubscribe();
+    mainMarketKey = nextKey;
+    mainMarketUnsubscribe = subscribeMarketData({
+      ex, sym, tf,
+      onKline: data => {
+        lastMarketEventAt = Date.now();
+        appendCandle({ t: data[0], o: data[1], h: data[2], l: data[3], c: data[4], v: data[5] });
+      },
+      onTick: applyMainMarketTick,
+      onStatus: applyMainMarketStatus,
+    });
+    return;
+  }
 
   // Direct Browser WebSocket for Binance (combined real-time kline + aggTrade + bookTicker for Vataga-speed 5ms ticks)
   if (ex === "BN" || ex === "AD") {
@@ -6205,7 +6317,6 @@ function selectCoin(c) {
   offsetX = 0;
 
   // тФАтФА High-Frequency Direct Feed тФАтФА
-  updateActiveTradeStream(c.ex, c.sym);
 
   // Reset displayP to actual price so interpolator doesn't carry over
   const ticker = coins.get(c.key);
@@ -6893,6 +7004,63 @@ class ChartInstance {
     }
   }
 
+  subscribeLive() {
+    if (!this.ex || !this.sym || !this.tf || location.protocol === "file:") return;
+    const nextKey = marketKey(this.ex, this.sym, this.tf);
+    if (this._marketKey === nextKey && this._marketUnsub) return;
+    this._marketUnsub?.();
+    this._marketKey = nextKey;
+    this._marketUnsub = subscribeMarketData({
+      ex: this.ex,
+      sym: this.sym,
+      tf: this.tf,
+      onKline: data => this.applyOfficialKline(data),
+      onTick: data => this.applyOfficialTick(data),
+    });
+  }
+
+  applyOfficialKline(data) {
+    if (!Array.isArray(data)) return;
+    const clean = sanitizeCandle({ t: data[0], o: data[1], h: data[2], l: data[3], c: data[4], v: data[5] });
+    if (!clean || !this.candles.length) return;
+    const last = this.candles[this.candles.length - 1];
+    if (clean.t === last.t) Object.assign(last, clean);
+    else if (clean.t > last.t) {
+      this.candles.push(clean);
+      if (this.candles.length > 1500) this.candles.shift();
+    } else return;
+    this.headerPrice.textContent = fP(clean.c);
+    this.dirty = true;
+    this.draw();
+  }
+
+  applyOfficialTick(data) {
+    if (!Array.isArray(data) || !this.candles.length) return;
+    const t = +data[0], p = +data[1], hi = +data[2] || p, lo = +data[3] || p;
+    if (!(t > 0) || !(p > 0)) return;
+    const tfMs = TF_MS[this.tf] || 60000;
+    let last = this.candles[this.candles.length - 1];
+    if (t >= last.t + tfMs) {
+      last = { t: Math.floor(t / tfMs) * tfMs, o: +data[4] || p, h: hi, l: lo, c: p, v: 0 };
+      this.candles.push(last);
+      if (this.candles.length > 1500) this.candles.shift();
+    } else if (t >= last.t) {
+      last.c = p;
+      last.h = Math.max(last.h, hi, p);
+      last.l = Math.min(last.l, lo, p);
+    } else return;
+    this.headerPrice.textContent = fP(p);
+    this.dirty = true;
+    this.draw();
+  }
+
+  dispose() {
+    this._marketUnsub?.();
+    this._marketUnsub = null;
+    this._marketKey = null;
+    this._ro?.disconnect();
+  }
+
   update(ticker) {
     if (!ticker) return;
     this.dirty = true;
@@ -6920,7 +7088,7 @@ class ChartInstance {
       this.headerChg.className = "cell-chg " + (chg >= 0 ? "pos" : "neg");
 
       // Update current live candle with real-time price tick
-      if (this.candles && this.candles.length > 0) {
+      if (!this._marketUnsub && this.candles && this.candles.length > 0) {
         const tfMs = TF_MS[this.tf] || 60000;
         const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
         let last = this.candles[this.candles.length - 1];
@@ -6948,6 +7116,7 @@ class ChartInstance {
 
   async loadKlines() {
     if (!this.sym) return;
+    this.subscribeLive();
     const myToken = (this._loadToken = (this._loadToken || 0) + 1);
     this.loadingKlines = true;
     this.headerTf.textContent = this.tf;
@@ -7970,6 +8139,7 @@ document.addEventListener("mousedown", (e) => {
 function initChartGrid() {
   const container = $("chart-grid-container");
   if (!container) return;
+  chartInstances.forEach(inst => inst?.dispose?.());
   container.innerHTML = "";
   chartInstances = [];
 
@@ -10846,9 +11016,7 @@ window.addEventListener("resize", () => {
       return;
     }
 
-    chartInstances.forEach(inst => {
-      if (inst && inst._ro) inst._ro.disconnect();
-    });
+    chartInstances.forEach(inst => inst?.dispose?.());
     grid.innerHTML = "";
     chartInstances = [];
 
