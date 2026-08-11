@@ -340,6 +340,7 @@ const DEFAULT_TOOL_COLORS = {
   ray: "#facc15",
   line: "#facc15",
   "h-ray": "#a78bfa",
+  alert: "#2bd98a",
   rect: "#fb7185",
   ruler: "#facc15",
   fibgrid: "#8b5cf6",
@@ -2377,6 +2378,33 @@ function drawChart() {
       ctx.stroke();
       drawHandle(x1, y1, col, 4);
       drawPriceTagOnScale(d.p1, col, isHovered);
+    } else if (d.type === "alert") {
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = col || "#2bd98a";
+      ctx.lineWidth = isHovered ? 2.5 : 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y1);
+      ctx.lineTo(PW, y1);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      const pillW = 68, pillH = 18, pillX = Math.max(10, x1 - 34), pillY = y1 - pillH / 2;
+      roundRect(ctx, pillX, pillY, pillW, pillH, 9);
+      ctx.fillStyle = "#12141a";
+      ctx.fill();
+      ctx.strokeStyle = col || "#2bd98a";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      
+      ctx.fillStyle = col || "#2bd98a";
+      ctx.font = "bold 10px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("🔔 " + fP(d.p1), pillX + pillW / 2, y1);
+      ctx.restore();
+      
+      drawPriceTagOnScale(d.p1, col || "#2bd98a", isHovered);
     } else if (d.type === "rect") {
       const left = Math.min(x1, x2);
       const top = Math.min(y1, y2);
@@ -2987,7 +3015,7 @@ function getActiveFibLevelRows(d) {
 function normalizeDrawing(d) {
   if (!d) return d;
   if (!d.color && d.type) d.color = getToolColor(d.type);
-  if (d.type === "h-ray") {
+  if (d.type === "h-ray" || d.type === "alert") {
     d.p2 = d.p1;
     if (!(d.t2 > d.t1)) d.t2 = d.t1 + 0.25;
   }
@@ -3009,7 +3037,7 @@ function isDrawingValid(d) {
   const dp = Math.abs(d.p2 - d.p1);
   if (d.type === "rect" || d.type === "fibgrid") return dt > 0.2 && dp > 0;
   if (d.type === "ruler") return dp > 0;
-  if (d.type === "h-ray") return dt > 0.2;
+  if (d.type === "h-ray" || d.type === "alert") return true;
   return dt > 0.2 || dp > 0;
 }
 
@@ -3022,7 +3050,7 @@ function getDrawingPoints(d) {
   const x2 = (t2Idx - chartState.viewStart) * candleW + candleW / 2;
   const y2Raw = chartState.TOP + ((chartState.mx - d.p2) / chartState.pr) * chartState.PH;
 
-  return { x1, y1, x2, y2: d.type === "h-ray" ? y1 : y2Raw };
+  return { x1, y1, x2, y2: (d.type === "h-ray" || d.type === "alert") ? y1 : y2Raw };
 }
 
 function pointLineDistance(px, py, x1, y1, x2, y2, clampSeg = true) {
@@ -3040,7 +3068,7 @@ function pointLineDistance(px, py, x1, y1, x2, y2, clampSeg = true) {
 function hitHandle(d, px, py) {
   const { x1, y1, x2, y2 } = getDrawingPoints(d);
   if (Math.hypot(px - x1, py - y1) <= 9) return 'p1';
-  if (d.type !== 'h-ray' && Math.hypot(px - x2, py - y2) <= 9) return 'p2';
+  if (d.type !== 'h-ray' && d.type !== 'alert' && Math.hypot(px - x2, py - y2) <= 9) return 'p2';
   return null;
 }
 
@@ -3079,8 +3107,8 @@ function hitBody(d, px, py) {
     if (t < 0) return false;
     return pointLineDistance(px, py, x1, y1, x1 + dx * Math.max(1, t), y1 + dy * Math.max(1, t), false) < 7;
   }
-  if (d.type === "h-ray") {
-    if (px < x1 - 6) return false;
+  if (d.type === "h-ray" || d.type === "alert") {
+    if (d.type === "h-ray" && px < x1 - 6) return false;
     return Math.abs(py - y1) < 7;
   }
   if (d.type === "rect" || d.type === "fibgrid") {
@@ -3354,6 +3382,53 @@ canvas.addEventListener("mousedown", (e) => {
       };
       drawingPhase = 1;
       requestDraw();
+      return;
+    }
+
+    if (activeTool === 'alert') {
+      const roundedPrice = +p.toFixed(6);
+      const curCoin = typeof coins !== "undefined" ? coins.get(`${activeEx}:${activeSym}`) : null;
+      const currentPrice = curCoin ? curCoin.p : (candles.length ? candles[candles.length - 1].c : roundedPrice);
+      const dir = roundedPrice >= currentPrice ? "gte" : "lte";
+
+      tempDrawing = normalizeDrawing({
+        type: "alert",
+        t1: t,
+        p1: roundedPrice,
+        t2: t,
+        p2: roundedPrice,
+        color: getToolColor("alert"),
+      });
+
+      chartDrawings.push({ ...tempDrawing });
+      saveDrawings();
+
+      if (typeof priceAlerts !== "undefined") {
+        priceAlerts.push({
+          id: Date.now(),
+          ex: activeEx || "BN",
+          sym: activeSym || "BTCUSDT",
+          dir,
+          price: roundedPrice,
+          triggered: false,
+          drawingId: tempDrawing.t1
+        });
+        savePriceAlerts();
+      }
+
+      if (typeof playAlertSound === "function") playAlertSound("chime");
+      if (typeof showToast === "function") {
+        showToast({
+          title: "Ценовой алерт создан",
+          message: `${activeEx || 'BN'} · ${activeSym || 'BTCUSDT'} ${dir === 'gte' ? '≥' : '≤'} ${fP(roundedPrice)} USDT`,
+          type: "price_alert"
+        });
+      }
+
+      tempDrawing = null;
+      drawingPhase = 0;
+      setTool("none");
+      requestAnimationFrame(drawChart);
       return;
     }
 
@@ -3732,6 +3807,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
+  if (e.key === 'a' || e.key === 'A') setTool('alert');
   if (e.key === 'h' || e.key === 'H') setTool('h-ray');
   if (e.key === 'l' || e.key === 'L') setTool('line');
   if (e.key === 'x' || e.key === 'X') setTool('rect');
@@ -3739,11 +3815,18 @@ document.addEventListener("keydown", (e) => {
   if (e.key === 'f' || e.key === 'F') setTool('fibgrid');
   if (e.key === 'm' || e.key === 'M') toggleMagnet();
   if ((e.key === 'Delete' || e.key === 'Backspace') && drawingPhase === 0) {
+    let removedDrawing = null;
     if (hoverDrawingIdx >= 0) {
-      chartDrawings.splice(hoverDrawingIdx, 1);
+      removedDrawing = chartDrawings.splice(hoverDrawingIdx, 1)[0];
       hoverDrawingIdx = -1;
     } else if (chartDrawings.length) {
-      chartDrawings.pop();
+      removedDrawing = chartDrawings.pop();
+    }
+    if (removedDrawing && removedDrawing.type === "alert") {
+      if (typeof priceAlerts !== "undefined") {
+        priceAlerts = priceAlerts.filter(a => a.drawingId !== removedDrawing.t1 && a.price !== removedDrawing.p1);
+        if (typeof savePriceAlerts === "function") savePriceAlerts();
+      }
     }
     saveDrawings();
     requestAnimationFrame(drawChart);
