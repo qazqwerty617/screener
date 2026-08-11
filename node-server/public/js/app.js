@@ -3997,12 +3997,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const tgBotStatusText = $("tg-bot-status-text");
   const tgBotLinkBtn = $("tg-bot-link-btn");
 
-  function renderProfile(user) {
-    if (!user && (currentUser || window.currentUser)) {
-      user = currentUser || window.currentUser;
+  function openAuthModal() {
+    if (authModal) {
+      showAuthError("");
+      authModal.style.display = "flex";
     }
+  }
+  window.openAuthModal = openAuthModal;
+
+  function renderProfile(user) {
     currentUser = user;
     window.currentUser = user;
+    if (authCloseBtn) authCloseBtn.style.display = "block";
+
     if (user) {
       const name = user.username || "Трейдер";
       const id = user.id || "USR-000000";
@@ -4065,20 +4072,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (profileAvatar && user.avatar) {
         profileAvatar.innerHTML = `<img src="${user.avatar}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
       }
-      if (authCloseBtn) authCloseBtn.style.display = "block";
-    } else {
-      if (authCloseBtn) authCloseBtn.style.display = "none";
-      if (authModal) {
-        showAuthError("");
-        authModal.style.display = "flex";
-      }
     }
   }
 
   // Telegram Bot Link Handler
   if (tgBotLinkBtn) {
     tgBotLinkBtn.onclick = async () => {
-      if (!authToken) return;
+      if (!authToken) {
+        openAuthModal();
+        return;
+      }
       try {
         const r = await fetch("/api/auth/telegram-link-token", {
           method: "POST",
@@ -4088,7 +4091,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.success && data.botUrl) {
           window.open(data.botUrl, "_blank");
           if (typeof showToast === "function") {
-            showToast("Нажмите START в Telegram-боте для активации уведомлений", "info");
+            showToast({ title: "Telegram", message: "Нажмите START в Telegram-боте для активации уведомлений", type: "info" });
           }
           let polls = 0;
           const pollTimer = setInterval(async () => {
@@ -4098,13 +4101,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (currentUser && currentUser.telegramLinked) {
               clearInterval(pollTimer);
               if (typeof showToast === "function") {
-                showToast("✅ Telegram-бот успешно подключен!", "success");
+                showToast({ title: "Telegram", message: "✅ Telegram-бот успешно подключен!", type: "success" });
               }
             }
           }, 3000);
         }
       } catch (err) {
-        if (typeof showToast === "function") showToast("Ошибка получения ссылки бота", "error");
+        if (typeof showToast === "function") showToast({ title: "Ошибка", message: "Ошибка получения ссылки бота", type: "error" });
       }
     };
   }
@@ -4125,7 +4128,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderProfile(data.user);
       if (authModal) authModal.style.display = "none";
       if (typeof showToast === "function") {
-        showToast(`Telegram вход выполнен! Ваш ID: ${data.user.id}`, "success");
+        showToast({ title: "Авторизация", message: `Telegram вход выполнен! Ваш ID: ${data.user.id}`, type: "success" });
       }
     } catch (err) {
       showAuthError(err.message);
@@ -4133,28 +4136,36 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   async function checkAuthSession() {
+    authToken = localStorage.getItem("obsidian_auth_token") || "";
     if (!authToken) {
-      renderProfile(null);
+      currentUser = null;
+      window.currentUser = null;
       return;
     }
     try {
       const r = await fetch("/api/auth/me", {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      const data = await r.json();
-      if (data.success && data.user) {
-        renderProfile(data.user);
-      } else {
+      if (r.ok) {
+        const data = await r.json();
+        if (data.success && data.user) {
+          renderProfile(data.user);
+          return;
+        }
+      }
+      if (r.status === 401) {
         authToken = "";
         localStorage.removeItem("obsidian_auth_token");
-        renderProfile(null);
+        currentUser = null;
+        window.currentUser = null;
       }
     } catch (_) {
-      renderProfile(null);
+      // Network hiccup — retain local token
     }
   }
 
   window.renderProfile = renderProfile;
+  window.checkAuthSession = checkAuthSession;
   checkAuthSession();
 
   if (profileBtn) {
@@ -4164,10 +4175,7 @@ document.addEventListener("DOMContentLoaded", () => {
         renderProfile(activeUser);
         if (profileModal) profileModal.style.display = "flex";
       } else {
-        if (authModal) {
-          showAuthError("");
-          authModal.style.display = "flex";
-        }
+        openAuthModal();
       }
     };
   }
@@ -4177,7 +4185,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (authCloseBtn && authModal) {
     authCloseBtn.onclick = () => {
-      if (currentUser) authModal.style.display = "none";
+      authModal.style.display = "none";
     };
   }
 
@@ -4188,7 +4196,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (authModal) {
     authModal.onclick = (e) => {
-      if (e.target === authModal && currentUser) authModal.style.display = "none";
+      if (e.target === authModal) authModal.style.display = "none";
     };
   }
 
