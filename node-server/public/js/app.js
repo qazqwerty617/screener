@@ -326,6 +326,7 @@ function updateActiveTradeStream(ex, sym) {
           if (c) {
             c.p = p;
             dirty.add(c.key);
+            checkPriceAlerts(ex, sym, p);
           }
         }
       } catch (_) { }
@@ -512,6 +513,7 @@ function processTickData(dt) {
       const c = coins.get(key);
       if (!c) { keysToRemove.push(key); continue; }
       if (!c.displayP) { c.displayP = c.p; keysToRemove.push(key); continue; }
+      checkPriceAlerts(c.ex, c.sym, c.p);
 
       const diff = c.p - c.displayP;
       const absDiff = Math.abs(diff);
@@ -4553,7 +4555,10 @@ function connectWS() {
         c.p = p; c.chg = chg; c.v = v; c.h = h; c.l = l; c.o = o;
         c.funding = funding; c.nextFunding = nextFunding; c.oi = oi; c.trades = trades;
         dirty.add(key);
-        if (c.p !== oldP) scheduleInterp(key);
+        if (c.p !== oldP) {
+          scheduleInterp(key);
+          checkPriceAlerts(c.ex, c.sym, p);
+        }
 
         if (key === `${activeEx}:${activeSym}` && candles.length > 0 && !hasMainMarketStream()) {
           const lastC = candles[candles.length - 1];
@@ -4670,7 +4675,10 @@ function connectWS() {
           if (nextFunding !== undefined) c.nextFunding = nextFunding;
           if (oi !== undefined) c.oi = oi;
           if (trades !== undefined) c.trades = trades;
-          if (c.p !== oldP) scheduleInterp(key);
+          if (c.p !== oldP) {
+            scheduleInterp(key);
+            checkPriceAlerts(c.ex, c.sym, p);
+          }
         } else {
           processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, oi, trades);
           addedNew = true;
@@ -11751,18 +11759,42 @@ function sendTelegramAlert(message) {
   }).catch(() => {});
 }
 
+function normExCode(e) {
+  if (!e) return "";
+  const s = String(e).toUpperCase().trim();
+  if (s === "BINANCE" || s === "BN") return "BN";
+  if (s === "BYBIT" || s === "BB") return "BB";
+  if (s === "OKX" || s === "OK" || s === "OX") return "OK";
+  if (s === "MEXC" || s === "MX") return "MX";
+  if (s === "GATE" || s === "GATE.IO" || s === "GT") return "GT";
+  if (s === "BITGET" || s === "BG") return "BG";
+  if (s === "BINGX" || s === "BX") return "BX";
+  if (s === "KUCOIN" || s === "KC") return "KC";
+  if (s === "HTX" || s === "HUOBI" || s === "HT") return "HT";
+  if (s === "HYPERLIQUID" || s === "HL") return "HL";
+  if (s === "ASTERDEX" || s === "AD") return "AD";
+  return s;
+}
+
+function normSymCode(s) {
+  if (!s) return "";
+  return String(s).toUpperCase().replace(/[-_/.]/g, "");
+}
+
 function checkPriceAlerts(ex, sym, price) {
-  if (!priceAlerts.length || !price || price <= 0) return;
-  const targetSym = sym.toUpperCase();
-  const targetEx = (ex || "").toUpperCase();
+  if (!priceAlerts || !priceAlerts.length || !price || price <= 0) return;
+  const targetSym = normSymCode(sym);
+  const targetEx = normExCode(ex);
   
-  for (const alert of priceAlerts) {
-    if (alert.triggered) continue;
-    const alertSym = (alert.sym || "").toUpperCase();
-    const alertEx = (alert.ex || "").toUpperCase();
+  for (let i = 0; i < priceAlerts.length; i++) {
+    const alert = priceAlerts[i];
+    if (!alert || alert.triggered) continue;
     
-    if (alertSym !== targetSym) continue;
-    if (alertEx && alertEx !== targetEx && alertEx !== "BN" && alertEx !== "BB" && alertEx !== "OK" && alertEx !== "MX" && alertEx !== "GT") continue;
+    const alertSym = normSymCode(alert.sym);
+    const alertEx = normExCode(alert.ex);
+    
+    if (alertSym !== targetSym && !targetSym.includes(alertSym) && !alertSym.includes(targetSym)) continue;
+    if (alertEx && targetEx && alertEx !== targetEx) continue;
     
     let isHit = false;
     if (alert.dir === "gte" && price >= alert.price) isHit = true;
@@ -11772,12 +11804,16 @@ function checkPriceAlerts(ex, sym, price) {
       alert.triggered = true;
       savePriceAlerts();
       
-      const title = `Достигнут уровень цены!`;
-      const body = `<b>${alert.ex} · ${alert.sym}</b> цена достигла <b>${price.toLocaleString()} USDT</b> (Задан уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${alert.price.toLocaleString()})`;
+      const alertExName = alert.ex || targetEx || "BN";
+      const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
+      const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
       
-      playAlertSound("chime");
-      showToast({ title, message: body, type: "price_alert" });
-      sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alert.ex} · <b>${alert.sym}</b> достигла цены <b>${price.toLocaleString()} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${alert.price.toLocaleString()})`);
+      const title = `Достигнут уровень цены!`;
+      const body = `<b>${alertExName} · ${alert.sym}</b> цена достигла <b>${formattedPrice} USDT</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`;
+      
+      if (typeof playAlertSound === "function") playAlertSound("chime");
+      if (typeof showToast === "function") showToast({ title, message: body, type: "price_alert" });
+      sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alertExName} · <b>${alert.sym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`);
     }
   }
 }
