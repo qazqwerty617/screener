@@ -1,6 +1,6 @@
 {
-  "name": "Obsidian Pro",
-  "short_name": "Obsidian Pro",
+  "name": "Obsidian Screener",
+  "short_name": "Obsidian Screener",
   "description": "Профессиональный скринер криптовалютных фьючерсов в реальном времени",
   "start_url": "/",
   "display": "standalone",
