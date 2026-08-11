@@ -3412,6 +3412,7 @@ canvas.addEventListener("mousedown", (e) => {
           sym: activeSym || "BTCUSDT",
           dir,
           price: roundedPrice,
+          createdPrice: currentPrice,
           triggered: false,
           drawingId: tempDrawing.t1
         });
@@ -5126,6 +5127,9 @@ function appendCandle(k) {
   }
   chartNeedsDraw = true;
   updateOHLC();
+  if (clean && clean.c > 0) {
+    checkPriceAlerts(activeEx, activeSym, clean.c, clean.h, clean.l);
+  }
 }
 
 function applyMainMarketTick(data) {
@@ -5163,6 +5167,7 @@ function applyMainMarketTick(data) {
   }
   chartNeedsDraw = true;
   updateOHLC();
+  checkPriceAlerts(activeEx, activeSym, price, eventHigh, eventLow);
 
   const now = performance.now();
   if (now - lastLatencyPaintAt > 500) {
@@ -5195,6 +5200,7 @@ function connectKlWs(ex, sym, tf) {
       onKline: data => {
         lastMarketEventAt = Date.now();
         appendCandle({ t: data[0], o: data[1], h: data[2], l: data[3], c: data[4], v: data[5] });
+        checkPriceAlerts(ex, sym, data[4], data[2], data[3]);
       },
       onTick: applyMainMarketTick,
       onStatus: applyMainMarketStatus,
@@ -5246,6 +5252,7 @@ function connectKlWs(ex, sym, tf) {
               if (d.e === "aggTrade" && d.q) last.v += (+d.q || 0);
               chartNeedsDraw = true;
               updateOHLC();
+              checkPriceAlerts(ex, sym, p);
             }
           }
         } catch (_) {}
@@ -11810,10 +11817,13 @@ function normSymCode(s) {
   return String(s).toUpperCase().replace(/[-_/.]/g, "");
 }
 
-function checkPriceAlerts(ex, sym, price) {
+function checkPriceAlerts(ex, sym, price, high = price, low = price) {
   if (!priceAlerts || !priceAlerts.length || !price || price <= 0) return;
   const targetSym = normSymCode(sym);
   const targetEx = normExCode(ex);
+  
+  const hVal = high > 0 ? high : price;
+  const lVal = low > 0 ? low : price;
   
   for (let i = 0; i < priceAlerts.length; i++) {
     const alert = priceAlerts[i];
@@ -11827,19 +11837,19 @@ function checkPriceAlerts(ex, sym, price) {
     
     let isHit = false;
 
-    // 1. Standard direction checks
-    if (alert.dir === "gte" && price >= alert.price) isHit = true;
-    if (alert.dir === "lte" && price <= alert.price) isHit = true;
+    // 1. Standard direction checks (including candle high/low range)
+    if (alert.dir === "gte" && hVal >= alert.price) isHit = true;
+    if (alert.dir === "lte" && lVal <= alert.price) isHit = true;
 
     // 2. Initial price relative crossing check
     if (!isHit && alert.createdPrice && alert.createdPrice > 0) {
-      if (alert.createdPrice < alert.price && price >= alert.price) isHit = true;
-      if (alert.createdPrice > alert.price && price <= alert.price) isHit = true;
+      if (alert.createdPrice < alert.price && hVal >= alert.price) isHit = true;
+      if (alert.createdPrice > alert.price && lVal <= alert.price) isHit = true;
     }
 
     // 3. Proximity check (within 0.1% tolerance)
     if (!isHit) {
-      const relDiff = Math.abs(price - alert.price) / alert.price;
+      const relDiff = Math.min(Math.abs(price - alert.price), Math.abs(hVal - alert.price), Math.abs(lVal - alert.price)) / alert.price;
       if (relDiff <= 0.001) isHit = true;
     }
     
