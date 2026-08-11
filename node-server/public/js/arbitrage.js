@@ -11,7 +11,8 @@
   const state = {
     active: false, initialized: false, loading: false, mode: "spreads", data: null,
     selectedExchanges: new Set(Object.keys(EX)), favorites: new Set(JSON.parse(localStorage.getItem("arbFavorites") || "[]")),
-    trail: new Map(), timer: null, detailKey: null,
+    trail: new Map(), timer: null, detailKey: null, detailRow: null, detailTf: "5m",
+    detailKlines: null, depth: null, depthLoading: false, spreadMode: "best",
   };
 
   function esc(value) {
@@ -171,11 +172,12 @@
     const urls = isFunding ? [[r.longUrl,`Открыть LONG · ${r.longName}`],[r.shortUrl,`Открыть SHORT · ${r.shortName}`]] : [[r.buyUrl,`Купить · ${r.buyName}`],[r.sellUrl,`Продать · ${r.sellName}`]];
     $("arb-detail-actions").innerHTML = urls.map(([url,label]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>`).join("");
     $("arb-drawer-backdrop").hidden=false; $("arb-drawer").classList.add("open"); $("arb-drawer").setAttribute("aria-hidden","false");
-    try { const res=await fetch(`/api/arbitrage/history?key=${encodeURIComponent(key)}`,{cache:"no-store"}); const data=await res.json(); const values=(data.points||[]).map(x=>x[1]); $("arb-chart-empty").hidden=values.length>=2; const c=$("arb-detail-canvas"), dpr=Math.min(2,devicePixelRatio||1); c.width=Math.max(400,c.clientWidth*dpr); c.height=170*dpr; drawLine(c,values,true); } catch (_) {}
+    if (window.ArbitragePro) window.ArbitragePro.open(r, isFunding);
+    if (!window.ArbitragePro) try { const res=await fetch(`/api/arbitrage/history?key=${encodeURIComponent(key)}`,{cache:"no-store"}); const data=await res.json(); const values=(data.points||[]).map(x=>x[1]); $("arb-chart-empty").hidden=values.length>=2; const c=$("arb-detail-canvas"), dpr=Math.min(2,devicePixelRatio||1); c.width=Math.max(400,c.clientWidth*dpr); c.height=170*dpr; drawLine(c,values,true); } catch (_) {}
   }
   function detailLeg(label,name,value,kind){return `<article class="arb-detail-leg ${kind}"><span>${esc(label)}</span><strong>${esc(name)}</strong><b>${esc(value)}</b></article>`;}
   function breakdown(rows){return rows.map(([a,b])=>`<div><span>${esc(a)}</span><b>${esc(b)}</b></div>`).join("");}
-  function closeDetail(){state.detailKey=null;$("arb-drawer").classList.remove("open");$("arb-drawer").setAttribute("aria-hidden","true");setTimeout(()=>$("arb-drawer-backdrop").hidden=true,250);}
+  function closeDetail(){state.detailKey=null;if(window.ArbitragePro)window.ArbitragePro.close();$("arb-drawer").classList.remove("open");$("arb-drawer").setAttribute("aria-hidden","true");setTimeout(()=>$("arb-drawer-backdrop").hidden=true,250);}
 
   function activate() {
     init(); state.active = true; fetchData(true);

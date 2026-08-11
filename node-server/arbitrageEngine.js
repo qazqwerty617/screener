@@ -131,6 +131,7 @@ function buildRows(tickers, now = Date.now()) {
           gross: round(gross, 4), fees: round(fee, 4), net: round(net, 4),
           liquidity: round(liquidity, 2), openInterest: round(Math.min(buy.oi || 0, sell.oi || 0), 2),
           buyFunding: round(buy.funding, 6), sellFunding: round(sell.funding, 6),
+          buyInterval: buy.interval, sellInterval: sell.interval,
           ageMs: freshness, quality, score: round(score, 1),
           buyUrl: tradeUrl(buy.ex, buy.sym), sellUrl: tradeUrl(sell.ex, sell.sym),
         });
@@ -148,7 +149,9 @@ function buildRows(tickers, now = Date.now()) {
           funding.push({
             key: routeKey("funding", base, long.ex, short.ex), base, symbol: `${base}/USDT`,
             longEx: long.ex, longName: EXCHANGES[long.ex].name, longSymbol: long.sym, longFunding: round(long.funding, 6), longInterval: long.interval,
+            longPrice: round(long.mid, 10),
             shortEx: short.ex, shortName: EXCHANGES[short.ex].name, shortSymbol: short.sym, shortFunding: round(short.funding, 6), shortInterval: short.interval,
+            shortPrice: round(short.mid, 10),
             hourly: round(hourlyEdge, 6), daily: round(daily, 4), monthly: round(daily * 30, 3), apr: round(daily * 365, 2),
             basis: round(basis, 4), liquidity: round(fundingLiquidity, 2),
             openInterest: round(Math.min(long.oi || 0, short.oi || 0), 2),
@@ -204,7 +207,12 @@ function createArbitrageEngine(tickers, exStatus) {
     if (typeof timer.unref === "function") timer.unref();
   }
 
-  return { start, refresh, getSnapshot, getHistory: key => history.get(String(key || "")) || [] };
+  function getOpportunity(key) {
+    const wanted = String(key || "");
+    return snapshot.spreads.find(row => row.key === wanted) || snapshot.funding.find(row => row.key === wanted) || null;
+  }
+
+  return { start, refresh, getSnapshot, getOpportunity, getHistory: key => history.get(String(key || "")) || [] };
 }
 
 module.exports = { EXCHANGES, canonicalBase, buildRows, createArbitrageEngine };

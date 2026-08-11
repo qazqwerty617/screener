@@ -26,6 +26,7 @@
         rel="stylesheet" />
     <link rel="stylesheet" href="/css/app.css?v=1001" />
     <link rel="stylesheet" href="/css/arbitrage.css?v=1" />
+    <link rel="stylesheet" href="/css/arbitrage-pro.css?v=1" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -996,8 +997,24 @@
         <aside class="arb-drawer" id="arb-drawer" aria-hidden="true">
             <header><div><span id="arb-detail-kind">СПРЕД</span><h2 id="arb-detail-title">—</h2></div><button id="arb-detail-close">×</button></header>
             <div class="arb-detail-score"><div><span>EDGE SCORE</span><strong id="arb-detail-score">—</strong></div><p id="arb-detail-summary">—</p></div>
-            <section class="arb-detail-chart"><div><strong>Спред в реальном времени</strong><span id="arb-detail-range">последние 30 минут</span></div><canvas id="arb-detail-canvas"></canvas><div class="arb-chart-empty" id="arb-chart-empty">Накапливаем историю…</div></section>
+            <section class="arb-execution" id="arb-execution">
+                <div class="arb-execution-head"><div><strong>Симулятор исполнения</strong><span>Расчёт по реальной глубине стаканов</span></div><b id="arb-depth-state">ЗАГРУЗКА</b></div>
+                <div class="arb-volume-input"><span>$</span><input id="arb-notional" type="number" min="10" max="1000000" step="10" value="500"><em>USDT</em></div>
+                <div class="arb-volume-presets"><button data-arb-size="100">$100</button><button class="on" data-arb-size="500">$500</button><button data-arb-size="1000">$1K</button><button data-arb-size="5000">$5K</button><button data-arb-size="10000">$10K</button></div>
+                <div class="arb-safe-volume"><div><span>Рекомендуемый максимум</span><strong id="arb-safe-volume">—</strong></div><div><span>Допустимое проскальзывание</span><select id="arb-impact-limit"><option value="0.05">0.05%</option><option value="0.1" selected>0.10%</option><option value="0.25">0.25%</option><option value="0.5">0.50%</option><option value="1">1.00%</option></select></div></div>
+                <div class="arb-depth-meter"><span id="arb-depth-fill"></span><i id="arb-depth-marker"></i></div>
+                <div class="arb-depth-grid"><div><span>Средний BUY</span><strong id="arb-depth-buy">—</strong><small id="arb-depth-buy-impact">—</small></div><div><span>Средний SELL</span><strong id="arb-depth-sell">—</strong><small id="arb-depth-sell-impact">—</small></div><div><span>Чистый спред</span><strong id="arb-depth-net">—</strong><small>после комиссий</small></div><div><span>+ фандинг / сутки</span><strong id="arb-depth-funded">—</strong><small id="arb-depth-pnl">—</small></div></div>
+            </section>
+            <section class="arb-detail-chart">
+                <div class="arb-chart-toolbar"><strong>Исторический спред</strong><div class="arb-chart-modes"><button class="on" data-spread-mode="best">Лучшая цена</button><button data-spread-mode="volume">На мой объём</button></div><div class="arb-chart-tfs"><button data-arb-tf="1m">1м</button><button class="on" data-arb-tf="5m">5м</button><button data-arb-tf="15m">15м</button><button data-arb-tf="1h">1ч</button><button data-arb-tf="4h">4ч</button></div></div>
+                <div class="arb-chart-legend"><span><i class="net"></i>Чистый спред <b id="arb-chart-current">—</b></span><span><i class="funding"></i>Funding/day <b id="arb-chart-funding">—</b></span></div>
+                <canvas id="arb-detail-canvas"></canvas><div class="arb-chart-empty" id="arb-chart-empty">Загружаем историю обеих бирж…</div>
+            </section>
             <section class="arb-leg-grid" id="arb-detail-legs"></section>
+            <section class="arb-token-charts">
+                <article><header><div><span>LONG · ПОКУПКА</span><strong id="arb-buy-chart-title">—</strong></div><b id="arb-buy-chart-price">—</b></header><canvas id="arb-buy-chart"></canvas></article>
+                <article><header><div><span>SHORT · ПРОДАЖА</span><strong id="arb-sell-chart-title">—</strong></div><b id="arb-sell-chart-price">—</b></header><canvas id="arb-sell-chart"></canvas></article>
+            </section>
             <section class="arb-breakdown" id="arb-detail-breakdown"></section>
             <div class="arb-warning"><b>Контроль риска</b><p>Фандинг может измениться до выплаты. Проверяйте объём стакана, проскальзывание, лимиты позиции и синхронно открывайте обе ноги.</p></div>
             <div class="arb-detail-actions" id="arb-detail-actions"></div>
@@ -2274,6 +2291,7 @@
 
     <script src="/js/app.js?v=1009"></script>
     <script src="/js/arbitrage.js?v=1"></script>
+    <script src="/js/arbitrage-pro.js?v=1"></script>
     <script src="/js/backtest.js?v=999"></script>
     <script src="/js/journal.js?v=999"></script>
 </body>

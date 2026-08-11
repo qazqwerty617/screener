@@ -25,6 +25,7 @@ const patternDetector = require("./patternDetector");
 const serverLevels = require("./serverLevels");
 const wallScanner = require("./wallScanner");
 const { createArbitrageEngine } = require("./arbitrageEngine");
+const { createDepthAnalyzer } = require("./depthAnalyzer");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
 let patternsCache = []; // Global in-memory patterns/signals cache
@@ -41,6 +42,7 @@ const klineClients = new Set(); // clients subscribed to kline updates
 // тФАтФАтФА Monitoring тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exStatus = new Map();
 const arbitrageEngine = createArbitrageEngine(tickers, exStatus);
+let depthAnalyzer = null;
 let statusBroadcastTimer = null;
 
 function updateExStatus(id, status, error = null) {
@@ -1309,6 +1311,22 @@ app.get("/api/arbitrage/history", (req, res) => {
   }
   res.setHeader("Cache-Control", "no-store");
   res.json({ key, points: arbitrageEngine.getHistory(key) });
+});
+
+app.get("/api/arbitrage/depth", async (req, res) => {
+  const key = String(req.query.key || "").slice(0, 160);
+  if (!/^spread:[A-Z0-9]{1,32}:[A-Z]{2}:[A-Z]{2}$/.test(key)) {
+    return res.status(400).json({ error: "Invalid spread route key" });
+  }
+  const notional = Math.max(10, Math.min(1_000_000, Number(req.query.notional) || 500));
+  try {
+    if (!depthAnalyzer) depthAnalyzer = createDepthAnalyzer(apiFetch, tickers, arbitrageEngine);
+    const result = await depthAnalyzer.analyze(key, notional);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+  } catch (error) {
+    res.status(502).json({ error: "Order book unavailable", detail: String(error?.message || error).slice(0, 160) });
+  }
 });
 
 app.get("/api/tickers", (req, res) => {
