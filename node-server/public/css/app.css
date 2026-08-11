@@ -6241,3 +6241,125 @@ body {
     background: rgba(239, 68, 68, 0.25);
     border-color: rgba(239, 68, 68, 0.5);
 }
+
+/* ══ Toast Container & Floating Alerts ══ */
+.toast-container {
+    position: fixed;
+    bottom: 24px;
+    left: 24px;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 10px;
+    max-width: 380px;
+    pointer-events: none;
+}
+
+.toast-card {
+    pointer-events: auto;
+    background: rgba(18, 20, 26, 0.95);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 15px rgba(139, 92, 246, 0.2);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--t1);
+    font-size: 13px;
+    animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    position: relative;
+    overflow: hidden;
+}
+
+.toast-card.toast-price_alert {
+    border-color: rgba(43, 217, 138, 0.5);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 15px rgba(43, 217, 138, 0.2);
+}
+
+.toast-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 700;
+    font-size: 13px;
+    color: #fff;
+}
+
+.toast-header span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.toast-close {
+    background: transparent;
+    border: none;
+    color: var(--t3);
+    font-size: 16px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 2px;
+}
+.toast-close:hover { color: #fff; }
+
+.toast-body {
+    font-size: 12px;
+    color: var(--t2);
+    line-height: 1.4;
+}
+
+.toast-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: var(--ac);
+    width: 100%;
+    animation: toastProgress 5s linear forwards;
+}
+
+.toast-card.toast-price_alert .toast-progress {
+    background: #2bd98a;
+}
+
+@keyframes toastSlideIn {
+    from { opacity: 0; transform: translateY(20px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes toastProgress {
+    from { width: 100%; }
+    to { width: 0%; }
+}
+
+/* ══ Price Alerts Settings List ══ */
+.price-alert-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--bg2);
+    border: 1px solid var(--b1);
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.price-alert-item strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+.price-alert-item .alert-del-btn {
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 11px;
+}
+.price-alert-item .alert-del-btn:hover {
+    background: rgba(239, 68, 68, 0.3);
+}

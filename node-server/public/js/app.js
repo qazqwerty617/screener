@@ -11584,4 +11584,205 @@ function copyPayField(elementId) {
   }
 }
 
+// ── NOTIFICATIONS & PRICE ALERTS ENGINE ──
+let priceAlerts = [];
+let audioCtx = null;
+
+function loadPriceAlerts() {
+  try {
+    const raw = localStorage.getItem("obsidian_price_alerts");
+    priceAlerts = raw ? JSON.parse(raw) : [];
+  } catch (_) { priceAlerts = []; }
+  renderPriceAlertsList();
+}
+
+function savePriceAlerts() {
+  try {
+    localStorage.setItem("obsidian_price_alerts", JSON.stringify(priceAlerts));
+  } catch (_) {}
+  renderPriceAlertsList();
+}
+
+function playAlertSound(kind = "chime") {
+  const enabled = $("set-sound-enabled") ? $("set-sound-enabled").checked : true;
+  if (!enabled) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.type = "sine";
+    if (kind === "chime") {
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.15);
+    } else {
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.setValueAtTime(800, now + 0.1);
+    }
+    
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+    
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    osc.start(now);
+    osc.stop(now + 0.4);
+  } catch (_) {}
+}
+
+function showToast({ title, message, type = "info", durationMs = 5000 }) {
+  const enabled = $("set-toast-enabled") ? $("set-toast-enabled").checked : true;
+  if (!enabled) return;
+  
+  const container = $("toast-container");
+  if (!container) return;
+  
+  const card = document.createElement("div");
+  card.className = `toast-card toast-${type}`;
+  card.innerHTML = `
+    <div class="toast-header">
+      <span>🔔 ${title}</span>
+      <button class="toast-close" onclick="this.closest('.toast-card').remove()">×</button>
+    </div>
+    <div class="toast-body">${message}</div>
+    <div class="toast-progress"></div>
+  `;
+  
+  container.appendChild(card);
+  
+  setTimeout(() => {
+    if (card.parentNode) card.remove();
+  }, durationMs);
+}
+
+function sendTelegramAlert(message) {
+  const chatId = $("set-tg-chat-id")?.value?.trim() || localStorage.getItem("obsidian_tg_chat_id");
+  if (!chatId) return;
+  fetch("/api/notifications/telegram", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId, message })
+  }).catch(() => {});
+}
+
+function checkPriceAlerts(ex, sym, price) {
+  if (!priceAlerts.length || !price || price <= 0) return;
+  const targetSym = sym.toUpperCase();
+  const targetEx = (ex || "").toUpperCase();
+  
+  for (const alert of priceAlerts) {
+    if (alert.triggered) continue;
+    const alertSym = (alert.sym || "").toUpperCase();
+    const alertEx = (alert.ex || "").toUpperCase();
+    
+    if (alertSym !== targetSym) continue;
+    if (alertEx && alertEx !== targetEx && alertEx !== "BN" && alertEx !== "BB" && alertEx !== "OK" && alertEx !== "MX" && alertEx !== "GT") continue;
+    
+    let isHit = false;
+    if (alert.dir === "gte" && price >= alert.price) isHit = true;
+    if (alert.dir === "lte" && price <= alert.price) isHit = true;
+    
+    if (isHit) {
+      alert.triggered = true;
+      savePriceAlerts();
+      
+      const title = `Достигнут уровень цены!`;
+      const body = `<b>${alert.ex} · ${alert.sym}</b> цена достигла <b>${price.toLocaleString()} USDT</b> (Задан уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${alert.price.toLocaleString()})`;
+      
+      playAlertSound("chime");
+      showToast({ title, message: body, type: "price_alert" });
+      sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alert.ex} · <b>${alert.sym}</b> достигла цены <b>${price.toLocaleString()} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${alert.price.toLocaleString()})`);
+    }
+  }
+}
+
+function renderPriceAlertsList() {
+  const listEl = $("price-alerts-list");
+  if (!listEl) return;
+  
+  if (!priceAlerts.length) {
+    listEl.innerHTML = `<div style="color: var(--t3); font-size: 12px; text-align: center; padding: 12px 0;">Нет активных ценовых алертов</div>`;
+    return;
+  }
+  
+  listEl.innerHTML = priceAlerts.map((a, i) => `
+    <div class="price-alert-item" style="${a.triggered ? 'opacity: 0.5;' : ''}">
+      <div>
+        <strong>${a.ex} · ${a.sym}</strong> 
+        <span style="color: var(--t2); font-size: 11px;">${a.dir === 'gte' ? '≥' : '≤'} ${a.price.toLocaleString()} USDT</span>
+        ${a.triggered ? '<span style="color: #2bd98a; font-size: 10px; margin-left: 6px;">[Сработано]</span>' : ''}
+      </div>
+      <button class="alert-del-btn" onclick="deletePriceAlert(${i})">Удалить</button>
+    </div>
+  `).join("");
+}
+
+function deletePriceAlert(index) {
+  priceAlerts.splice(index, 1);
+  savePriceAlerts();
+}
+window.deletePriceAlert = deletePriceAlert;
+
+function initNotificationsUI() {
+  loadPriceAlerts();
+  
+  const savedTg = localStorage.getItem("obsidian_tg_chat_id");
+  if (savedTg && $("set-tg-chat-id")) $("set-tg-chat-id").value = savedTg;
+  
+  $("set-tg-chat-id")?.addEventListener("input", (e) => {
+    localStorage.setItem("obsidian_tg_chat_id", e.target.value.trim());
+  });
+  
+  $("btn-test-sound")?.addEventListener("click", () => {
+    playAlertSound("chime");
+    showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
+  });
+  
+  $("btn-test-tg")?.addEventListener("click", () => {
+    const chatId = $("set-tg-chat-id")?.value?.trim();
+    if (!chatId) return alert("Введите ваш Telegram Chat ID!");
+    localStorage.setItem("obsidian_tg_chat_id", chatId);
+    fetch("/api/notifications/telegram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, message: "💎 <b>Obsidian Screener</b>\n\nТестовое уведомление успешно доставлено в Telegram!" })
+    }).then(r => r.json()).then(data => {
+      if (data.success) alert("✅ Тестовое сообщение отправлено в Telegram!");
+      else alert("❌ Ошибка отправки: " + (data.error || "Не удалось доставить"));
+    }).catch(e => alert("❌ Ошибка соединения: " + e.message));
+  });
+  
+  $("btn-add-price-alert")?.addEventListener("click", () => {
+    const ex = $("alert-ex-select")?.value || "BN";
+    const sym = ($("alert-sym-input")?.value || "").trim().toUpperCase();
+    const dir = $("alert-dir-select")?.value || "gte";
+    const priceVal = Number($("alert-price-input")?.value);
+    
+    if (!sym) return alert("Введите тикер монеты (напр. BTCUSDT)");
+    if (!priceVal || priceVal <= 0) return alert("Укажите правильную целевую цену!");
+    
+    priceAlerts.push({ id: Date.now(), ex, sym, dir, price: priceVal, triggered: false });
+    savePriceAlerts();
+    
+    if ($("alert-sym-input")) $("alert-sym-input").value = "";
+    if ($("alert-price-input")) $("alert-price-input").value = "";
+    showToast({ title: "Алерт создан", message: `Следим за ${ex} · ${sym} (${dir === 'gte' ? '≥' : '≤'} ${priceVal})`, type: "price_alert" });
+  });
+}
+
+// Global hook for price checking
+window.checkPriceAlerts = checkPriceAlerts;
+window.showToast = showToast;
+window.playAlertSound = playAlertSound;
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initNotificationsUI);
+} else {
+  initNotificationsUI();
+}
+
 })();

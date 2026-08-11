@@ -1902,8 +1902,61 @@
                         </div>
                     </div>
                     <div class="settings-pane" id="tab-notifications">
-                        <h2>Уведомления</h2>
-                        <p style="color: var(--t2); font-size: 12px;">Здесь будут настройки звуков и алертов...</p>
+                        <h2>Уведомления и Алерты</h2>
+
+                        <!-- 1. Sound & Toast Controls -->
+                        <div class="settings-group">
+                            <label>Настройки оповещений</label>
+                            <div class="s-row">
+                                <span>Звуковые сигналы (Beep / Chime)</span>
+                                <label class="switch"><input type="checkbox" id="set-sound-enabled" checked><span class="slider"></span></label>
+                            </div>
+                            <div class="s-row">
+                                <span>Всплывающие карточки (Toast 5 сек)</span>
+                                <label class="switch"><input type="checkbox" id="set-toast-enabled" checked><span class="slider"></span></label>
+                            </div>
+                            <div class="s-row" style="margin-top: 8px;">
+                                <span>Тест звука</span>
+                                <button type="button" class="btn-test-sound" id="btn-test-sound" style="padding: 6px 12px; font-size: 12px; background: var(--bg3); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; cursor: pointer;">🔊 Проверить сигнал</button>
+                            </div>
+                        </div>
+
+                        <!-- 2. Telegram Integration -->
+                        <div class="settings-group">
+                            <label>Интеграция с Telegram</label>
+                            <div class="s-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                                <div style="display: flex; gap: 8px;">
+                                    <input type="text" id="set-tg-chat-id" placeholder="Ваш Telegram Chat ID (напр. 12345678)" style="flex: 1; padding: 8px; background: var(--bg2); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; font-size: 13px;" />
+                                    <button type="button" id="btn-test-tg" style="padding: 8px 14px; background: #2aabee; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px;">Тест в TG</button>
+                                </div>
+                                <span style="font-size: 11px; color: var(--t2);">Запустите <a href="https://t.me/userinfobot" target="_blank" style="color: #2aabee; text-decoration: underline;">@userinfobot</a> в Telegram чтобы узнать ваш Chat ID, затем включите нашего бота <a href="https://t.me/ObsidianScreenerBot" target="_blank" style="color: #2aabee; text-decoration: underline;">@ObsidianScreenerBot</a>.</span>
+                            </div>
+                        </div>
+
+                        <!-- 3. Price Level Alerts -->
+                        <div class="settings-group">
+                            <label>Ценовые Алерты (Price Level Alerts)</label>
+                            <div class="alert-form-grid" style="display: grid; grid-template-columns: 1fr 1fr 90px 1fr 90px; gap: 6px; margin-bottom: 10px;">
+                                <select id="alert-ex-select" class="density-select" style="padding: 6px; font-size: 12px;">
+                                    <option value="BN">Binance</option>
+                                    <option value="BB">Bybit</option>
+                                    <option value="OK">OKX</option>
+                                    <option value="MX">MEXC</option>
+                                    <option value="GT">Gate.io</option>
+                                </select>
+                                <input type="text" id="alert-sym-input" placeholder="BTCUSDT" style="padding: 6px; background: var(--bg2); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; font-size: 12px; text-transform: uppercase;" />
+                                <select id="alert-dir-select" class="density-select" style="padding: 6px; font-size: 12px;">
+                                    <option value="gte">&gt;= (Выше)</option>
+                                    <option value="lte">&lt;= (Ниже)</option>
+                                </select>
+                                <input type="number" step="any" id="alert-price-input" placeholder="Цена (напр. 95000)" style="padding: 6px; background: var(--bg2); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; font-size: 12px;" />
+                                <button type="button" id="btn-add-price-alert" style="padding: 6px; background: var(--ac); color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px;">+ Добавить</button>
+                            </div>
+
+                            <div id="price-alerts-list" class="price-alerts-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow-y: auto;">
+                                <div style="color: var(--t3); font-size: 12px; text-align: center; padding: 12px 0;">Нет активных ценовых алертов</div>
+                            </div>
+                        </div>
                     </div>
                     <div class="settings-pane" id="tab-trading">
                         <h2>Трейдинг</h2>
@@ -2323,6 +2376,8 @@
             </div>
         </div>
     </div>
+
+    <div id="toast-container" class="toast-container"></div>
 
     <script src="/js/app.js?v=1012"></script>
     <script src="/js/arbitrage.js?v=1"></script>

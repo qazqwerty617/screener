@@ -2095,6 +2095,52 @@ server.listen(PORT, () => {
     res.json(cachedTfMaps[tf] || {});
   });
 
+  app.post("/api/notifications/telegram", express.json(), (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    const { chatId, message, botToken } = req.body || {};
+    const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
+    if (!chatId || !message) return res.status(400).json({ error: "chatId and message are required" });
+    if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
+
+    const postData = JSON.stringify({
+      chat_id: chatId,
+      text: message,
+      parse_mode: "HTML"
+    });
+
+    const options = {
+      hostname: "api.telegram.org",
+      port: 443,
+      path: `/bot${token}/sendMessage`,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData)
+      }
+    };
+
+    const reqTg = https.request(options, (resTg) => {
+      let body = "";
+      resTg.on("data", (chunk) => body += chunk);
+      resTg.on("end", () => {
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed.ok) return res.json({ success: true, messageId: parsed.result?.message_id });
+          return res.status(400).json({ error: parsed.description || "Telegram API error" });
+        } catch (_) {
+          return res.status(500).json({ error: "Failed to parse Telegram response" });
+        }
+      });
+    });
+
+    reqTg.on("error", (err) => {
+      return res.status(500).json({ error: err.message || "Network error" });
+    });
+
+    reqTg.write(postData);
+    reqTg.end();
+  });
+
   // Initial trigger after 3 seconds
   setTimeout(scanAllPatterns, 3000);
   
