@@ -64,11 +64,11 @@
                 <div class="ntab on" role="tab" aria-selected="true" onclick="switchView('screener')">
                     Скринер
                 </div>
-                <div class="ntab" role="tab" onclick="switchView('map')">Карта</div>
+                <div class="ntab" role="tab" data-pro-feature="Карта ликвидаций & Heatmap" onclick="switchView('map')">Карта</div>
                 <div class="ntab" role="tab">Арбитраж</div>
-                <div class="ntab" role="tab" onclick="switchView('formations')">Формации</div>
-                <div class="ntab" role="tab" onclick="switchView('backtest')">Бэктесты</div>
-                <div class="ntab" role="tab" id="tab-journal" onclick="switchView('journal')">Дневник</div>
+                <div class="ntab" role="tab" data-pro-feature="Детектор формаций и уровней" onclick="switchView('formations')">Формации</div>
+                <div class="ntab" role="tab" data-pro-feature="Бэктестинг стратегий" onclick="switchView('backtest')">Бэктесты</div>
+                <div class="ntab" role="tab" id="tab-journal" data-pro-feature="Дневник трейдера" onclick="switchView('journal')">Дневник</div>
             </div>
             <div class="nright">
                 <div style="display: flex; align-items: center; gap: 4px">
@@ -1986,7 +1986,7 @@
                         <div style="font-size: 11.5px; color: #c084fc; font-weight: 500; line-height: 1.35;">чтобы разблокировать все функции скринера</div>
                     </div>
                 </div>
-                <button type="button" class="pro-upgrade-btn" onclick="document.getElementById('profile-modal').style.display='none'; openPayModal();" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%); color: #ffffff; font-weight: 700; font-size: 12.5px; padding: 10px 18px; border-radius: 8px; white-space: nowrap; border: 1px solid rgba(255, 255, 255, 0.25); box-shadow: 0 4px 18px rgba(139, 92, 246, 0.5); cursor: pointer; flex-shrink: 0; text-decoration: none;">
+                <button type="button" id="profile-upgrade-btn" class="pro-upgrade-btn" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%); color: #ffffff; font-weight: 700; font-size: 12.5px; padding: 10px 18px; border-radius: 8px; white-space: nowrap; border: 1px solid rgba(255, 255, 255, 0.25); box-shadow: 0 4px 18px rgba(139, 92, 246, 0.5); cursor: pointer; flex-shrink: 0; text-decoration: none;">
                     <span>Перейти на PRO</span>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -1995,7 +1995,7 @@
                 </button>
             </div>
             <div class="profile-actions">
-                <button class="profile-act-btn" onclick="switchView('journal'); document.getElementById('profile-modal').style.display='none';">
+                <button class="profile-act-btn" data-pro-feature="Дневник трейдера" onclick="switchView('journal'); document.getElementById('profile-modal').style.display='none';">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
                         <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
@@ -2075,7 +2075,7 @@
                 </div>
             </div>
             <div class="pro-modal-actions">
-                <button class="pro-modal-buy-btn" onclick="closeProModal(); openPayModal();">
+                <button type="button" id="pro-modal-buy-btn" class="pro-modal-buy-btn">
                     🚀 Получить PRO доступ
                 </button>
                 <button class="pro-modal-cancel-btn" onclick="closeProModal();">Позже</button>
@@ -2203,7 +2203,7 @@
         </div>
     </div>
 
-    <script src="/js/app.js?v=999"></script>
+    <script src="/js/app.js?v=1006"></script>
     <script src="/js/backtest.js?v=999"></script>
     <script src="/js/journal.js?v=999"></script>
 </body>

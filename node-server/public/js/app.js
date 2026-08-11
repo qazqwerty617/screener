@@ -3859,15 +3859,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const tgBotStatusText = $("tg-bot-status-text");
   const tgBotLinkBtn = $("tg-bot-link-btn");
 
-  window.openProModal = function() {
-    const modal = $("proModal");
-    if (modal) modal.style.display = "flex";
-  };
-  window.closeProModal = function() {
-    const modal = $("proModal");
-    if (modal) modal.style.display = "none";
-  };
-
   function renderProfile(user) {
     currentUser = user;
     window.currentUser = user;
@@ -8777,6 +8768,28 @@ window.addEventListener("resize", () => {
 
 // тХРтХРтХР Init тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 (function init() {
+  // Subscription controls are critical navigation. Initialize them before
+  // optional chart modules so an unrelated widget cannot disable upgrades.
+  let paySelectedPlan = "1m";
+  let paySelectedMethod = "trc20";
+  let currentPayInvoice = null;
+  let payPollTimer = null;
+  let payCountdownTimer = null;
+
+  window.openProfileModal = openProfileModal;
+  window.closeProfileModal = closeProfileModal;
+  window.openProModal = openProModal;
+  window.closeProModal = closeProModal;
+  window.openPayModal = openPayModal;
+  window.closePayModal = closePayModal;
+  window.selectPayTariff = selectPayTariff;
+  window.selectPayMethod = selectPayMethod;
+  window.backToTariffs = backToTariffs;
+  window.startPayInvoice = startPayInvoice;
+  window.copyPayField = copyPayField;
+  bindProAccessControls();
+  bindProFeatureGate();
+
   loadTags();
   loadDrawings();
   fetchWalls();
@@ -10854,11 +10867,6 @@ window.addEventListener("resize", () => {
   }
 
 // ── OBSIDIAN PRO MODALS & PAYMENT CONTROLLER ──
-let paySelectedPlan = "1m";
-let paySelectedMethod = "trc20";
-let currentPayInvoice = null;
-let payPollTimer = null;
-let payCountdownTimer = null;
 
 function openProfileModal() {
   const token = localStorage.getItem("obsidian_auth_token");
@@ -10932,12 +10940,66 @@ function closePayModal() {
   if (payCountdownTimer) clearInterval(payCountdownTimer);
 }
 
-window.openProfileModal = openProfileModal;
-window.closeProfileModal = closeProfileModal;
-window.openProModal = openProModal;
-window.closeProModal = closeProModal;
-window.openPayModal = openPayModal;
-window.closePayModal = closePayModal;
+// Keep subscription actions out of inline HTML handlers. Besides being easier
+// to maintain, this keeps the upgrade flow working under a strict CSP.
+function bindProAccessControls() {
+  const profileUpgradeButton = $("profile-upgrade-btn");
+  const proModalBuyButton = $("pro-modal-buy-btn");
+  const proModal = $("proModal");
+
+  if (profileUpgradeButton && !profileUpgradeButton.dataset.bound) {
+    profileUpgradeButton.dataset.bound = "true";
+    profileUpgradeButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeProfileModal();
+      openPayModal();
+    });
+  }
+
+  if (proModalBuyButton && !proModalBuyButton.dataset.bound) {
+    proModalBuyButton.dataset.bound = "true";
+    proModalBuyButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openPayModal();
+    });
+  }
+
+  if (proModal && !proModal.dataset.bound) {
+    proModal.dataset.bound = "true";
+    proModal.addEventListener("click", (event) => {
+      if (event.target === proModal) closeProModal();
+    });
+  }
+}
+
+// One gate for every PRO-only entry point. Capture phase guarantees that a
+// FREE click cannot fall through to a feature-specific handler and fail silently.
+function bindProFeatureGate() {
+  if (document.documentElement.dataset.proFeatureGateBound) return;
+  document.documentElement.dataset.proFeatureGateBound = "true";
+
+  document.querySelectorAll("[data-pro-feature]").forEach((proTarget) => {
+    proTarget.dataset.proGateBound = "true";
+    proTarget.addEventListener("click", (event) => {
+      const isPro = window.currentUser && window.currentUser.plan === "pro";
+      if (isPro) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      openProModal(proTarget.dataset.proFeature || "Эта функция");
+    }, true);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const payModal = $("obsidian-pay-modal");
+    const proModal = $("proModal");
+    if (payModal && payModal.style.display !== "none") closePayModal();
+    else if (proModal && proModal.style.display !== "none") closeProModal();
+  });
+}
 
 function selectPayTariff(planId) {
   paySelectedPlan = planId;
