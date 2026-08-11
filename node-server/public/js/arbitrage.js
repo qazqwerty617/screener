@@ -68,7 +68,7 @@
 
   function debounce(fn, wait) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); }; }
   function reset() {
-    $("arb-search").value = ""; $("arb-min-net").value = "0"; $("arb-min-volume").value = "0";
+    $("arb-search").value = ""; $("arb-min-net").value = "0"; $("arb-min-volume").value = "100000";
     $("arb-bbo-only").checked = false; $("arb-favorites-only").checked = false; $("arb-sort").value = "net";
     state.selectedExchanges = new Set(Object.keys(EX)); document.querySelectorAll(".arb-exchange").forEach(x => x.classList.remove("off")); fetchData(true);
   }

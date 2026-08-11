@@ -17,7 +17,9 @@ const EXCHANGES = Object.freeze({
 const ALIASES = Object.freeze({ XBT: "BTC", XDG: "DOGE" });
 
 function canonicalBase(ticker) {
-  let raw = String(ticker?.base || ticker?.sym || "").toUpperCase().trim();
+  const symbol = String(ticker?.sym || "").toUpperCase().trim();
+  if (/(?:USDT|USDC|USD)[_-]SPOT$/.test(symbol)) return "";
+  let raw = String(ticker?.base || symbol).toUpperCase().trim();
   raw = raw
     .replace(/^K?1000000(?=[A-Z])/, "1000000")
     .replace(/[-_.]?(USDTM|USDT|USDC|BUSD|USD)(?:[-_.]?(SWAP|PERP|PERPETUAL))?$/i, "")

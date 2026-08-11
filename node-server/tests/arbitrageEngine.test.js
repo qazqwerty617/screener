@@ -9,6 +9,7 @@ test("normalizes exchange-specific perpetual symbols", () => {
   assert.equal(canonicalBase({ sym: "ETH_USDT" }), "ETH");
   assert.equal(canonicalBase({ sym: "XBTUSDTM" }), "BTC");
   assert.equal(canonicalBase({ base: "1000PEPE" }), "1000PEPE");
+  assert.equal(canonicalBase({ sym: "BTCUSDT_SPOT", base: "BTC" }), "");
 });
 
 test("uses executable ask and bid and subtracts both taker fees", () => {
