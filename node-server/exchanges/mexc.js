@@ -105,11 +105,12 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const bid = +(tick.bid1 || 0);
             const ask = +(tick.ask1 || 0);
             if (bid > 0 && ask > 0) {
+              t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
               t.p = (bid + ask) / 2;
               t._wsMid = true;
             } else {
               const lp = +(tick.lastPrice || 0);
-              if (lp > 0) t.p = lp;
+              if (lp > 0) { t.p = lp; t.quoteTs = Date.now(); }
             }
 
             if (tick.amount24) t.v = +tick.amount24;

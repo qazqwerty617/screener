@@ -8056,7 +8056,7 @@ const featureTitles = {
 };
 
 window.switchView = function switchView(view) {
-  if (view !== "screener") {
+  if (view !== "screener" && view !== "arbitrage") {
     const user = window.currentUser;
     const isPro = user && user.plan === "pro";
     if (!isPro) {
@@ -8075,6 +8075,7 @@ window.switchView = function switchView(view) {
   const formationsEl = document.getElementById("formations-view");
   const backtestEl = document.getElementById("backtest-view");
   const journalEl = document.getElementById("journal-view");
+  const arbitrageEl = document.getElementById("arbitrage-view");
 
   // Highlight active navbar tab
   document.querySelectorAll("#nav .ntab").forEach(t => {
@@ -8082,6 +8083,7 @@ window.switchView = function switchView(view) {
     const isMatch =
       (view === "screener" && (text.includes("скринер") || t.id === "tab-screener")) ||
       (view === "map" && text.includes("карта")) ||
+      (view === "arbitrage" && (text.includes("арбитраж") || t.id === "tab-arbitrage")) ||
       (view === "formations" && text.includes("формации")) ||
       (view === "backtest" && text.includes("бэктест")) ||
       (view === "journal" && (text.includes("дневник") || t.id === "tab-journal"));
@@ -8095,6 +8097,7 @@ window.switchView = function switchView(view) {
     if (formationsEl) formationsEl.style.display = "none";
     if (backtestEl) backtestEl.style.display = "none";
     if (journalEl) journalEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
     if (densityAnimFrame) { cancelAnimationFrame(densityAnimFrame); densityAnimFrame = null; }
     document.querySelectorAll(".vt-btn").forEach(btn => {
       btn.onclick = () => toggleScreenerView(btn.dataset.view);
@@ -8117,6 +8120,7 @@ window.switchView = function switchView(view) {
     if (formationsEl) formationsEl.style.display = "none";
     if (backtestEl) backtestEl.style.display = "none";
     if (journalEl) journalEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
     initDensityCanvas();
     fetchWalls();
     startDensityLoop();
@@ -8132,12 +8136,14 @@ window.switchView = function switchView(view) {
     }
     if (backtestEl) backtestEl.style.display = "none";
     if (journalEl) journalEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
   } else if (view === "backtest") {
     if (mainEl) mainEl.style.display = "none";
     if (densityEl) densityEl.style.display = "none";
     if (formationsEl) formationsEl.style.display = "none";
     if (backtestEl) backtestEl.style.display = "flex";
     if (journalEl) journalEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
     if (window.CryptoBacktest) window.CryptoBacktest.activate();
   } else if (view === "journal") {
     if (mainEl) mainEl.style.display = "none";
@@ -8148,6 +8154,15 @@ window.switchView = function switchView(view) {
     if (window.CryptoJournal && typeof window.CryptoJournal.activate === "function") {
       window.CryptoJournal.activate();
     }
+    if (arbitrageEl) arbitrageEl.style.display = "none";
+  } else if (view === "arbitrage") {
+    if (mainEl) mainEl.style.display = "none";
+    if (densityEl) densityEl.style.display = "none";
+    if (formationsEl) formationsEl.style.display = "none";
+    if (backtestEl) backtestEl.style.display = "none";
+    if (journalEl) journalEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "block";
+    if (window.CryptoArbitrage) window.CryptoArbitrage.activate();
   }
 };
 
@@ -8158,6 +8173,8 @@ document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
       window.switchView("screener");
     } else if (text.includes("карта") || idx === 1) {
       window.switchView("map");
+    } else if (text.includes("арбитраж") || tab.id === "tab-arbitrage" || idx === 2) {
+      window.switchView("arbitrage");
     } else if (text.includes("формации") || idx === 3) {
       window.switchView("formations");
     } else if (text.includes("бэктест") || idx === 4) {

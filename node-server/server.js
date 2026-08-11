@@ -24,6 +24,7 @@ const compression = require('compression');
 const patternDetector = require("./patternDetector");
 const serverLevels = require("./serverLevels");
 const wallScanner = require("./wallScanner");
+const { createArbitrageEngine } = require("./arbitrageEngine");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
 let patternsCache = []; // Global in-memory patterns/signals cache
@@ -39,6 +40,7 @@ const klineClients = new Set(); // clients subscribed to kline updates
 
 // тФАтФАтФА Monitoring тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exStatus = new Map();
+const arbitrageEngine = createArbitrageEngine(tickers, exStatus);
 let statusBroadcastTimer = null;
 
 function updateExStatus(id, status, error = null) {
@@ -1270,6 +1272,45 @@ app.get("/api/walls", (req, res) => {
   res.json(currentWallsCache);
 });
 
+app.get("/api/arbitrage/snapshot", (req, res) => {
+  const full = arbitrageEngine.getSnapshot();
+  const search = String(req.query.search || "").trim().toUpperCase().slice(0, 24);
+  const minNet = Math.max(-1, Math.min(20, Number(req.query.minNet) || 0));
+  const minVolume = Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0));
+  const exchanges = new Set(String(req.query.exchanges || "").split(",").filter(Boolean).slice(0, 11));
+  const limit = Math.max(25, Math.min(500, parseInt(req.query.limit, 10) || 250));
+  const includesExchange = row => !exchanges.size ||
+    exchanges.has(row.buyEx) || exchanges.has(row.sellEx) || exchanges.has(row.longEx) || exchanges.has(row.shortEx);
+  const matches = row => (!search || row.base.includes(search) || row.symbol.includes(search)) &&
+    row.liquidity >= minVolume && includesExchange(row);
+  const spreads = full.spreads.filter(row => matches(row) && row.net >= minNet).slice(0, limit);
+  const funding = full.funding.filter(row => matches(row) && row.daily >= minNet).slice(0, limit);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    generatedAt: full.generatedAt,
+    exchangeCount: full.exchangeCount,
+    exchanges: full.exchanges,
+    marketCount: full.groups,
+    totals: { spreads: full.spreads.length, funding: full.funding.length },
+    spreads,
+    funding,
+    methodology: {
+      spread: "buy ask -> sell bid -> taker fees",
+      funding: "hour-normalized funding differential; APR is an estimate, not a guarantee",
+      quoteQuality: "bbo means executable best bid/ask; indicative uses the latest midpoint",
+    },
+  });
+});
+
+app.get("/api/arbitrage/history", (req, res) => {
+  const key = String(req.query.key || "").slice(0, 160);
+  if (!/^(spread|funding):[A-Z0-9]{1,32}:[A-Z]{2}:[A-Z]{2}$/.test(key)) {
+    return res.status(400).json({ error: "Invalid route key" });
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ key, points: arbitrageEngine.getHistory(key) });
+});
+
 app.get("/api/tickers", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "private, max-age=1");
@@ -1678,6 +1719,8 @@ server.listen(PORT, () => {
   console.log(`тХС  Broadcast: 50ms (20fps, CPU-optimized)                 тХС`);
   console.log(`тХЪтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХЭ\n`);
   
+  arbitrageEngine.start();
+
   // Parallel init тАФ all exchanges start simultaneously
   for (const name in exchanges) {
     try {

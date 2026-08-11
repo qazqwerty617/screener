@@ -23,6 +23,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : 0,
           v: +d.usdtVolume, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
           oi: +d.openInterest * p || 0,
+          bid: +d.bidPr || 0, ask: +d.askPr || 0, quoteTs: Date.now(), fundingInterval: 8,
         });
         added++;
       }
@@ -64,6 +65,9 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
               const t = tickers.get("BG:" + tick.instId);
               if (!t) continue;
               if (tick.lastPr) t.p = +tick.lastPr; // LTP Anchor
+              if (+tick.bidPr > 0) t.bid = +tick.bidPr;
+              if (+tick.askPr > 0) t.ask = +tick.askPr;
+              if (tick.lastPr || tick.bidPr || tick.askPr) t.quoteTs = Date.now();
               if (tick.usdtVolume) t.v = +tick.usdtVolume; // USDT Turnover
               if (tick.high24h) t.h = +tick.high24h;
               if (tick.low24h) t.l = +tick.low24h;

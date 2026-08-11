@@ -33,6 +33,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
           key: "BN:" + d.symbol, ex: "BN", sym: d.symbol, base: d.symbol.replace(/USDT$/, ""),
           p, chg: (() => { const v = parseFloat(d.priceChangePercent); return (!isNaN(v) && v !== 0) ? v : (o > 0 && p > 0 ? ((p - o) / o) * 100 : 0); })(),
           v: +d.quoteVolume, h, l, o, funding: prem.r, nextFunding: prem.T, trades: +d.count || 0,
+          bid: +d.bidPrice || 0, ask: +d.askPrice || 0, quoteTs: Date.now(), fundingInterval: 8,
         });
         added++;
       }
@@ -55,6 +56,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
         if (t) {
           const bp = +d.b, ap = +d.a;
           if (bp > 0 && ap > 0) {
+            t.bid = bp; t.ask = ap; t.quoteTs = Date.now();
             const midP = (bp + ap) / 2;
             t.p = midP;
             if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;

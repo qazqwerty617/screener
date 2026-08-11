@@ -80,6 +80,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (dataType.includes("bookTicker")) {
             const bp = +tick.b, ap = +tick.a;
             if (bp > 0 && ap > 0) {
+              t.bid = bp; t.ask = ap; t.quoteTs = Date.now();
               const midP = (bp + ap) / 2;
               t.p = midP;
               if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;

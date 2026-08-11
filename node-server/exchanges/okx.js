@@ -39,6 +39,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           tickers.set("OX:" + s.instId, {
             key: "OX:" + s.instId, ex: "OX", sym: s.instId, base: s.ctValCcy,
             p: 0, chg: 0, v: 0, h: 0, l: 0, o: 0, funding: 0, nextFunding: 0,
+            bid: 0, ask: 0, quoteTs: Date.now(), fundingInterval: 8,
             cs: +s.ctVal || 1
           });
         }
@@ -53,6 +54,9 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (!t) continue;
           const p = +tick.last;
           if (p > 0) t.p = p;
+          if (+tick.bidPx > 0) t.bid = +tick.bidPx;
+          if (+tick.askPx > 0) t.ask = +tick.askPx;
+          if (p > 0 || tick.bidPx || tick.askPx) t.quoteTs = Date.now();
           if (tick.open24h) t.o = +tick.open24h;
           if (tick.high24h) t.h = +tick.high24h;
           if (tick.low24h) t.l = +tick.low24h;
@@ -125,6 +129,9 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
               t.v = +tick.vol24h * ctVal * (t.p || +tick.last || 1);
             }
             if (tick.last) { const p = +tick.last; if (p > 0) t.p = p; }
+            if (+tick.bidPx > 0) t.bid = +tick.bidPx;
+            if (+tick.askPx > 0) t.ask = +tick.askPx;
+            if (tick.last || tick.bidPx || tick.askPx) t.quoteTs = Date.now();
             if (tick.high24h) t.h = +tick.high24h;
             if (tick.low24h) t.l = +tick.low24h;
             if (tick.open24h) t.o = +tick.open24h;

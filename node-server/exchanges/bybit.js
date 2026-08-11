@@ -30,6 +30,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           p, chg: (() => { const v = parseFloat(d.price24hPcnt); return (!isNaN(v) && v !== 0) ? v * 100 : (o > 0 && p > 0 ? ((p - o) / o) * 100 : 0); })(),
           v: +d.turnover24h, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
           oi: +d.openInterest * (+d.lastPrice) || 0,
+          bid: +d.bid1Price || 0, ask: +d.ask1Price || 0, quoteTs: Date.now(), fundingInterval: +d.fundingIntervalHour || 8,
         });
         added++;
       }
@@ -55,6 +56,10 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const t = tickers.get("BB:" + d.symbol);
             if (t) {
               if (d.lastPrice) t.p = +d.lastPrice; // LTP
+              if (+d.bid1Price > 0) t.bid = +d.bid1Price;
+              if (+d.ask1Price > 0) t.ask = +d.ask1Price;
+              if (d.bid1Price || d.ask1Price || d.lastPrice) t.quoteTs = Date.now();
+              if (+d.fundingIntervalHour > 0) t.fundingInterval = +d.fundingIntervalHour;
               if (d.turnover24h) t.v = +d.turnover24h; // USDT Turnover
               else if (d.volume24h) t.v = +d.volume24h * t.p;
               if (d.highPrice24h) t.h = +d.highPrice24h;

@@ -79,6 +79,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
               const bid = +(tick.bestBidPrice || 0);
               const ask = +(tick.bestAskPrice || 0);
               if (bid > 0 && ask > 0) {
+                t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
                 t.p = (bid + ask) / 2;
               } else {
                 const lp = +(tick.price || 0);
@@ -102,6 +103,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
               const bid = +(tick.bestBidPrice || 0);
               const ask = +(tick.bestAskPrice || 0);
               if (bid > 0 && ask > 0) {
+                t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
                 t.p = (bid + ask) / 2;
               } else {
                 const lp = +(tick.price || tick.lastTradePrice || 0);
