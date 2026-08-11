@@ -4520,9 +4520,21 @@ function connectWS() {
       return;
     }
     if (msg.type === "walls") {
+      let incomingWalls = null;
+      let meta = msg.meta || null;
       if (Array.isArray(msg.data)) {
-        densityData = msg.data;
-        densityLastUpdate = Date.now();
+        incomingWalls = msg.data;
+      } else if (msg.data && Array.isArray(msg.data.walls)) {
+        incomingWalls = msg.data.walls;
+        meta = msg.data;
+      }
+
+      if (incomingWalls) {
+        if (incomingWalls.length > 0 || !densityData.length || (meta && !meta.partial)) {
+          densityData = incomingWalls;
+        }
+        densityLastUpdate = (meta && meta.updatedAt) || Date.now();
+        if (typeof updateDensityStatusUI === "function") updateDensityStatusUI(meta);
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
@@ -4532,7 +4544,7 @@ function connectWS() {
               if (inst && inst.key) {
                 const c = coins.get(inst.key);
                 if (c && c.p > 0) inst.update(c);
-              } else {
+              } else if (inst && typeof inst.draw === "function") {
                 inst.draw();
               }
             });
@@ -8383,20 +8395,46 @@ function resizeDensityCanvas() {
   layoutDensityBadges();
 }
 
+function updateDensityStatusUI(meta) {
+  const statusEl = $("density-status");
+  if (!statusEl) return;
+  if (meta && typeof meta.exchangesReady === "number" && typeof meta.exchangesTotal === "number") {
+    statusEl.textContent = `Биржи: ${meta.exchangesReady}/${meta.exchangesTotal}`;
+    statusEl.style.color = meta.partial ? "#f59e0b" : "#10b981";
+  } else {
+    statusEl.textContent = "Обновлено";
+    statusEl.style.color = "#10b981";
+  }
+}
+
 async function fetchWalls() {
   try {
-    const res = await fetch("/api/walls");
+    const res = await fetch("/api/walls?format=full");
     if (res.ok) {
       const data = await res.json();
+      let incomingWalls = null;
+      let meta = null;
       if (Array.isArray(data)) {
-        densityData = data;
-        densityLastUpdate = Date.now();
+        incomingWalls = data;
+      } else if (data && Array.isArray(data.walls)) {
+        incomingWalls = data.walls;
+        meta = data;
+      }
+
+      if (incomingWalls) {
+        if (incomingWalls.length > 0 || !densityData.length || (meta && !meta.partial)) {
+          densityData = incomingWalls;
+        }
+        densityLastUpdate = (meta && meta.updatedAt) || Date.now();
+        updateDensityStatusUI(meta);
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
           requestAnimationFrame(drawChart);
           if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
-            chartInstances.forEach(inst => inst.draw());
+            chartInstances.forEach(inst => {
+              if (inst && typeof inst.draw === "function") inst.draw();
+            });
           }
         }
       }
@@ -8929,6 +8967,7 @@ document.querySelectorAll(".density-filter-btn[data-dtype]").forEach(btn => {
     document.querySelectorAll(".density-filter-btn[data-dtype]").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     densityFilter = btn.dataset.dtype;
+    saveDensityFilters();
     layoutDensityBadges();
   });
 });
@@ -8938,6 +8977,7 @@ document.querySelectorAll(".density-filter-btn[data-dmarket]").forEach(btn => {
     document.querySelectorAll(".density-filter-btn[data-dmarket]").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     densityMarket = btn.dataset.dmarket;
+    saveDensityFilters();
     layoutDensityBadges();
   });
 });
@@ -8947,26 +8987,31 @@ document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(btn => {
     document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     densitySize = btn.dataset.dsize;
+    saveDensityFilters();
     layoutDensityBadges();
   });
 });
 
-// тФАтФА Sort buttons тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 document.querySelectorAll(".density-sort-btn[data-dsort]").forEach(btn => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".density-sort-btn[data-dsort]").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     densitySort = btn.dataset.dsort;
+    saveDensityFilters();
     layoutDensityBadges();
   });
 });
 
-// тФАтФА Search input тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+let densitySearchDebounce = null;
 const densitySearchInput = $("density-search-input");
 if (densitySearchInput) {
   densitySearchInput.addEventListener("input", (e) => {
-    densitySearch = e.target.value.trim();
-    layoutDensityBadges();
+    clearTimeout(densitySearchDebounce);
+    densitySearchDebounce = setTimeout(() => {
+      densitySearch = e.target.value.trim();
+      saveDensityFilters();
+      layoutDensityBadges();
+    }, 180);
   });
 }
 
@@ -8974,23 +9019,116 @@ const densityMinUsdInput = $("density-min-usd");
 const densityMaxDistanceInput = $("density-max-distance");
 const densityMinAgeInput = $("density-min-age");
 const densitySortInput = $("density-sort");
+const densityResetBtn = $("density-reset-btn");
 
 if (densityMinUsdInput) densityMinUsdInput.addEventListener("change", e => {
   densityMinUsd = Math.max(0, Number(e.target.value) || 0);
+  saveDensityFilters();
   layoutDensityBadges();
 });
 if (densityMaxDistanceInput) densityMaxDistanceInput.addEventListener("change", e => {
   densityMaxDistance = Math.max(0.05, Number(e.target.value) || 5);
+  saveDensityFilters();
   layoutDensityBadges();
 });
 if (densityMinAgeInput) densityMinAgeInput.addEventListener("change", e => {
   densityMinAge = Math.max(0, Number(e.target.value) || 0);
+  saveDensityFilters();
   layoutDensityBadges();
 });
 if (densitySortInput) densitySortInput.addEventListener("change", e => {
   densitySort = e.target.value || "score";
+  saveDensityFilters();
   layoutDensityBadges();
 });
+if (densityResetBtn) densityResetBtn.addEventListener("click", () => {
+  resetDensityFilters();
+});
+
+function saveDensityFilters() {
+  try {
+    const payload = {
+      densityFilter,
+      densityMarket,
+      densitySize,
+      densitySort,
+      densitySearch,
+      densityMinUsd,
+      densityMaxDistance,
+      densityMinAge,
+      densityExFilter: Array.from(densityExFilter)
+    };
+    localStorage.setItem("density_filters_v1", JSON.stringify(payload));
+  } catch (_) {}
+}
+
+function loadDensityFilters() {
+  try {
+    const raw = localStorage.getItem("density_filters_v1");
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.densityFilter === "string") densityFilter = parsed.densityFilter;
+      if (typeof parsed.densityMarket === "string") densityMarket = parsed.densityMarket;
+      if (typeof parsed.densitySize === "string") densitySize = parsed.densitySize;
+      if (typeof parsed.densitySort === "string") densitySort = parsed.densitySort;
+      if (typeof parsed.densitySearch === "string") densitySearch = parsed.densitySearch;
+      if (typeof parsed.densityMinUsd === "number") densityMinUsd = parsed.densityMinUsd;
+      if (typeof parsed.densityMaxDistance === "number") densityMaxDistance = parsed.densityMaxDistance;
+      if (typeof parsed.densityMinAge === "number") densityMinAge = parsed.densityMinAge;
+      if (Array.isArray(parsed.densityExFilter)) densityExFilter = new Set(parsed.densityExFilter);
+
+      syncDensityFilterUI();
+    }
+  } catch (_) {}
+}
+
+function syncDensityFilterUI() {
+  document.querySelectorAll(".density-filter-btn[data-dtype]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.dtype === densityFilter);
+  });
+  document.querySelectorAll(".density-filter-btn[data-dmarket]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.dmarket === densityMarket);
+  });
+  document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.dsize === densitySize);
+  });
+  document.querySelectorAll(".density-sort-btn[data-dsort]").forEach(btn => {
+    btn.classList.toggle("on", btn.dataset.dsort === densitySort);
+  });
+
+  const searchInp = $("density-search-input");
+  if (searchInp) searchInp.value = densitySearch;
+
+  const minUsdInp = $("density-min-usd");
+  if (minUsdInp) minUsdInp.value = String(densityMinUsd);
+
+  const maxDistInp = $("density-max-distance");
+  if (maxDistInp) maxDistInp.value = String(densityMaxDistance);
+
+  const minAgeInp = $("density-min-age");
+  if (minAgeInp) minAgeInp.value = String(densityMinAge);
+
+  const sortInp = $("density-sort");
+  if (sortInp) sortInp.value = densitySort;
+
+  if (typeof updateDexDropdownUI === "function") updateDexDropdownUI();
+}
+
+function resetDensityFilters() {
+  densityFilter = "all";
+  densityMarket = "all";
+  densitySize = "all";
+  densitySort = "score";
+  densitySearch = "";
+  densityMinUsd = 100000;
+  densityMaxDistance = 3;
+  densityMinAge = 0;
+  densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
+  syncDensityFilterUI();
+  saveDensityFilters();
+  layoutDensityBadges();
+}
 
 // тФАтФА Resize тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 window.addEventListener("resize", () => {
@@ -9025,6 +9163,7 @@ window.addEventListener("resize", () => {
 
   loadTags();
   loadDrawings();
+  loadDensityFilters();
   fetchWalls();
 
   // Safety timeout: hide loading after 8s if still visible

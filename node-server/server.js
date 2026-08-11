@@ -29,6 +29,7 @@ const { createDepthAnalyzer } = require("./depthAnalyzer");
 const marketDataCore = require("./marketDataCore");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
+let currentWallsMeta = { walls: [], updatedAt: 0, partial: false, exchangesReady: 0, exchangesTotal: 11, exchangeStatuses: {} };
 let patternsCache = []; // Global in-memory patterns/signals cache
 
 // тФАтФАтФА In-memory store тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -1489,7 +1490,18 @@ app.get("/api/walls", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
-  res.json(currentWallsCache);
+  if (req.query.format === "full" || req.query.format === "object") {
+    res.json(currentWallsMeta);
+  } else {
+    res.json(currentWallsCache);
+  }
+});
+
+app.get("/api/walls/status", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "private, max-age=1");
+  res.setHeader("Content-Type", "application/json");
+  res.json(currentWallsMeta);
 });
 
 app.get("/api/arbitrage/snapshot", (req, res) => {
@@ -1992,9 +2004,12 @@ server.listen(PORT, () => {
   }
   
   // Start Wall Scanner Engine
-  wallScanner.startScanning(tickers, apiFetch, (walls) => {
+  wallScanner.startScanning(tickers, apiFetch, (payload) => {
+    const walls = Array.isArray(payload) ? payload : (payload.walls || []);
+    const meta = Array.isArray(payload) ? { walls, updatedAt: Date.now() } : payload;
     currentWallsCache = walls;
-    const msg = JSON.stringify({ type: "walls", data: walls });
+    currentWallsMeta = meta;
+    const msg = JSON.stringify({ type: "walls", data: walls, meta });
     for (const ws of clients) {
       if (ws.readyState === WebSocket.OPEN) {
         try { ws.send(msg); } catch (e) {}
