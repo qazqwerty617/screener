@@ -5985,6 +5985,13 @@ const settingsClose = $("settings-close");
 
 if (settingsBtn && settingsOverlay) {
   const openSettings = () => {
+    const isPro = window.currentUser && window.currentUser.plan === "pro";
+    if (!isPro) {
+      if (typeof openProModal === "function") {
+        openProModal("Настройки оформления и интерфейса");
+      }
+      return;
+    }
     settingsOverlay.style.display = "flex";
     settingsOverlay.classList.add("open");
   };
