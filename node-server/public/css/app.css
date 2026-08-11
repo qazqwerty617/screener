@@ -3190,6 +3190,31 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     gap: 2px;
 }
 
+.density-quick-filters {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.density-select {
+    height: 26px;
+    max-width: 132px;
+    padding: 0 24px 0 8px;
+    border: 1px solid var(--bd);
+    border-radius: 5px;
+    color: var(--t2);
+    background: #11141c;
+    font: 500 10px var(--font);
+    outline: none;
+    cursor: pointer;
+}
+
+.density-select:hover,
+.density-select:focus {
+    color: var(--t1);
+    border-color: var(--ac);
+}
+
 .density-filter-btn,
 .density-sort-btn {
     padding: 4px 10px;

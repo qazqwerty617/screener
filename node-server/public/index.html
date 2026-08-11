@@ -24,7 +24,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/css/app.css?v=1001" />
+    <link rel="stylesheet" href="/css/app.css?v=1002" />
     <link rel="stylesheet" href="/css/arbitrage.css?v=1" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=1" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
@@ -720,6 +720,31 @@
                     <button class="density-filter-btn" data-dsize="small">Мелкие</button>
                     <button class="density-filter-btn" data-dsize="medium">Средние</button>
                     <button class="density-filter-btn" data-dsize="large">Крупные</button>
+                </div>
+
+                <div class="density-quick-filters" aria-label="Фильтры плотностей">
+                    <select id="density-min-usd" class="density-select" title="Минимальная сумма стены">
+                        <option value="0">Сумма: любая</option>
+                        <option value="100000" selected>от $100K</option>
+                        <option value="500000">от $500K</option>
+                        <option value="1000000">от $1M</option>
+                    </select>
+                    <select id="density-max-distance" class="density-select" title="Максимальное расстояние от текущей цены">
+                        <option value="1">до 1%</option>
+                        <option value="3" selected>до 3%</option>
+                        <option value="5">до 5%</option>
+                    </select>
+                    <select id="density-min-age" class="density-select" title="Минимальное время жизни стены">
+                        <option value="0" selected>Возраст: любой</option>
+                        <option value="30">от 30 сек</option>
+                        <option value="120">от 2 мин</option>
+                    </select>
+                    <select id="density-sort" class="density-select" title="Сортировка">
+                        <option value="score" selected>Сначала сильные</option>
+                        <option value="size">Сначала крупные</option>
+                        <option value="dist">Сначала близкие</option>
+                        <option value="age">Сначала старые</option>
+                    </select>
                 </div>
 
 
@@ -2289,7 +2314,7 @@
         </div>
     </div>
 
-    <script src="/js/app.js?v=1011"></script>
+    <script src="/js/app.js?v=1012"></script>
     <script src="/js/arbitrage.js?v=1"></script>
     <script src="/js/arbitrage-pro.js?v=2"></script>
     <script src="/js/backtest.js?v=999"></script>

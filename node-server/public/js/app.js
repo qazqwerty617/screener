@@ -6686,7 +6686,11 @@ let densityMarket = "all";
 let densitySize = "all";
 let densitySort = "score"; // "score" | "size" | "dist"
 let densitySearch = "";
+let densityMinUsd = 100000;
+let densityMaxDistance = 3;
+let densityMinAge = 0;
 let densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
+let densityVisibleData = [];
 let densityHover = -1;
 let densityMouseX = -1, densityMouseY = -1;
 let densityAnimFrame = null;
@@ -8384,8 +8388,9 @@ async function fetchWalls() {
     const res = await fetch("/api/walls");
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
+      if (Array.isArray(data)) {
         densityData = data;
+        densityLastUpdate = Date.now();
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
@@ -8414,6 +8419,9 @@ function getFilteredDensity() {
       if (sizeType !== densitySize) return false;
     }
     if (!densityExFilter.has(d.ex)) return false;
+    if ((Number(d.S) || 0) < densityMinUsd) return false;
+    if ((Number(d.pct) || 0) > densityMaxDistance) return false;
+    if ((Number(d.age) || 0) < densityMinAge) return false;
     if (densitySearch) {
       const q = densitySearch.toLowerCase();
       if (!d.base.toLowerCase().includes(q) && !d.sym.toLowerCase().includes(q)) return false;
@@ -8425,10 +8433,20 @@ function getFilteredDensity() {
 // тФАтФА Layout: distribute badges radially by pct тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function layoutDensityBadges() {
   const filtered = getFilteredDensity();
+  const sorters = {
+    score: (a, b) => (b.rtwi || 0) - (a.rtwi || 0) || (b.S || 0) - (a.S || 0),
+    size: (a, b) => (b.S || 0) - (a.S || 0),
+    dist: (a, b) => (a.pct || 0) - (b.pct || 0),
+    age: (a, b) => (b.age || 0) - (a.age || 0),
+  };
+  filtered.sort(sorters[densitySort] || sorters.score);
+  densityVisibleData = filtered.slice(0, 240);
 
   // Update count badge
   const countEl = $("density-count");
-  if (countEl) countEl.textContent = filtered.length + " стен";
+  if (countEl) countEl.textContent = filtered.length > densityVisibleData.length
+    ? `${densityVisibleData.length} / ${filtered.length} стен`
+    : `${filtered.length} стен`;
 
   if (!densityW || !densityH) return;
   const cx = densityW / 2;
@@ -8436,10 +8454,8 @@ function layoutDensityBadges() {
   const maxRadius = Math.min(cx, cy) - 60;
   const minRadius = 50;
 
-  filtered.sort((a, b) => a.pct - b.pct);
-
-  for (let i = 0; i < filtered.length; i++) {
-    const d = filtered[i];
+  for (let i = 0; i < densityVisibleData.length; i++) {
+    const d = densityVisibleData[i];
     const norm = Math.max(0, Math.min(1, (d.pct - 0.3) / 5.7));
     const r = minRadius + norm * (maxRadius - minRadius);
     const step = 2.399963;
@@ -8579,7 +8595,7 @@ function drawDensityMap() {
   ctx.restore();
 
   // тФАтФА Draw badges
-  const filtered = getFilteredDensity();
+  const filtered = densityVisibleData;
   densityHover = -1;
   for (let i = 0; i < filtered.length; i++) {
     const d = filtered[i];
@@ -8793,9 +8809,13 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
 // тФАтФА Animation loop тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function startDensityLoop() {
   if (densityAnimFrame) return;
-  function loop() {
+  let lastFrame = 0;
+  function loop(ts) {
     if (activeView !== "map") { densityAnimFrame = null; return; }
-    drawDensityMap();
+    if (!document.hidden && ts - lastFrame >= 33) {
+      lastFrame = ts;
+      drawDensityMap();
+    }
     densityAnimFrame = requestAnimationFrame(loop);
   }
   densityAnimFrame = requestAnimationFrame(loop);
@@ -8821,7 +8841,7 @@ document.addEventListener("click", (e) => {
   if (activeView !== "map" || densityHover < 0) return;
   if (e.target !== densityCanvas) return; // Only switch view when clicking directly on the density canvas
 
-  const filtered = getFilteredDensity();
+  const filtered = densityVisibleData;
   const d = filtered[densityHover];
   if (d) {
     const coinKey = d.ex + ":" + d.sym;
@@ -8949,6 +8969,28 @@ if (densitySearchInput) {
     layoutDensityBadges();
   });
 }
+
+const densityMinUsdInput = $("density-min-usd");
+const densityMaxDistanceInput = $("density-max-distance");
+const densityMinAgeInput = $("density-min-age");
+const densitySortInput = $("density-sort");
+
+if (densityMinUsdInput) densityMinUsdInput.addEventListener("change", e => {
+  densityMinUsd = Math.max(0, Number(e.target.value) || 0);
+  layoutDensityBadges();
+});
+if (densityMaxDistanceInput) densityMaxDistanceInput.addEventListener("change", e => {
+  densityMaxDistance = Math.max(0.05, Number(e.target.value) || 5);
+  layoutDensityBadges();
+});
+if (densityMinAgeInput) densityMinAgeInput.addEventListener("change", e => {
+  densityMinAge = Math.max(0, Number(e.target.value) || 0);
+  layoutDensityBadges();
+});
+if (densitySortInput) densitySortInput.addEventListener("change", e => {
+  densitySort = e.target.value || "score";
+  layoutDensityBadges();
+});
 
 // тФАтФА Resize тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 window.addEventListener("resize", () => {
