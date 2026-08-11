@@ -6325,7 +6325,13 @@ if (settingsBtn && settingsOverlay) {
           const keysToKeep = [];
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key.startsWith("crypto_drawings_")) {
+            if (
+              key.startsWith("crypto_drawings_") ||
+              key.startsWith("obsidian_auth_") ||
+              key.startsWith("obsidian_tg_") ||
+              key === "crypto_tags" ||
+              key === "crypto_tool_colors"
+            ) {
               keysToKeep.push({ key, val: localStorage.getItem(key) });
             }
           }
