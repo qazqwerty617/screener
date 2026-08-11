@@ -76,7 +76,7 @@
         const offset = pro.depth.netPct - r.net;
         spread += offset;
       }
-      pro.livePoints.push([Date.now(), spread]);
+      pro.livePoints.push({ t: Date.now(), buyP: bPrice, sellP: sPrice, spread: spread });
       if (pro.livePoints.length > 300) pro.livePoints.shift();
       if (pro.tf === 'live') scheduleCharts();
     }
@@ -96,6 +96,9 @@
     $('arb-buy-chart-price').textContent = price(l.buyPrice); $('arb-sell-chart-price').textContent = price(l.sellPrice);
     $('arb-chart-current').textContent = pct(isFunding ? row.basis : row.net); $('arb-chart-funding').textContent = pct(fundingDaily(row), 4);
     $('arb-chart-empty').textContent = 'Загружаем данные обеих бирж…'; $('arb-chart-empty').hidden = false;
+
+    if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = l.buyName;
+    if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = l.sellName;
 
     const titleEl = $('arb-chart-title');
     if (titleEl) titleEl.textContent = pro.tf === 'live' ? 'Спред в реальном времени (Live ⚡)' : 'Исторический спред';
@@ -201,7 +204,8 @@
         const sm = new Map(pro.klines.sell.map(c => [c.t, c]));
         const seeded = pro.klines.buy.map(b => {
           const s = sm.get(b.t);
-          return s && b.c > 0 ? [b.t, ((s.c - b.c) / b.c) * 100 - (pro.isFunding ? 0 : r.fees)] : null;
+          if (!s || b.c <= 0 || s.c <= 0) return null;
+          return { t: b.t, buyP: b.c, sellP: s.c, spread: ((s.c - b.c) / b.c) * 100 - (pro.isFunding ? 0 : r.fees) };
         }).filter(Boolean);
         pro.livePoints = seeded.slice(-180);
       }
@@ -226,14 +230,16 @@
       const sm = new Map(k.sell.map(c => [c.t, c]));
       points = k.buy.map(b => {
         const s = sm.get(b.t);
-        return s && b.c > 0 ? [b.t, ((s.c - b.c) / b.c) * 100 - (pro.isFunding ? 0 : r.fees)] : null;
+        if (!s || b.c <= 0 || s.c <= 0) return null;
+        let spread = ((s.c - b.c) / b.c) * 100 - (pro.isFunding ? 0 : r.fees);
+        if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
+          const offset = pro.depth.netPct - r.net;
+          spread += offset;
+        }
+        return { t: b.t, buyP: b.c, sellP: s.c, spread: spread };
       }).filter(Boolean);
-      if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
-        const offset = pro.depth.netPct - r.net;
-        points = points.map(p => [p[0], p[1] + offset]);
-      }
     }
-    drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live');
+    drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live', r);
     drawCandles($('arb-buy-chart'), k.buy, '#2bd98a');
     drawCandles($('arb-sell-chart'), k.sell, '#ef647a');
   }
@@ -244,15 +250,28 @@
     return { ctx: canvas.getContext('2d'), w: canvas.width, h: canvas.height, dpr };
   }
 
-  function drawSpread(canvas, points, funding, isLive = false) {
+  function drawSpread(canvas, points, funding, isLive = false, row = null) {
     const { ctx, w, h, dpr } = fit(canvas, 220); ctx.clearRect(0, 0, w, h);
-    if (points.length < 2) return;
+    if (!points || points.length < 2) return;
     points = points.slice(-180);
-    const vals = points.map(p => p[1]), mn = Math.min(...vals, 0), mx = Math.max(...vals, 0), range = mx - mn || .01,
-      pad = { l: 42 * dpr, r: 16 * dpr, t: 15 * dpr, b: 24 * dpr },
-      x = i => pad.l + i * (w - pad.l - pad.r) / (points.length - 1),
-      y = v => pad.t + (mx - v) * (h - pad.t - pad.b) / range;
 
+    const firstBuy = points[0].buyP || 1;
+    const firstSell = points[0].sellP || 1;
+
+    const buyPct = points.map(p => ((p.buyP - firstBuy) / firstBuy) * 100);
+    const sellPct = points.map(p => ((p.sellP - firstSell) / firstSell) * 100);
+    const spreadPct = points.map(p => p.spread);
+
+    const allVals = [...buyPct, ...sellPct, ...spreadPct, 0];
+    const mn = Math.min(...allVals);
+    const mx = Math.max(...allVals);
+    const range = (mx - mn) || 0.01;
+
+    const pad = { l: 48 * dpr, r: 16 * dpr, t: 18 * dpr, b: 24 * dpr };
+    const x = i => pad.l + i * (w - pad.l - pad.r) / (points.length - 1);
+    const y = v => pad.t + (mx - v) * (h - pad.t - pad.b) / range;
+
+    // Grid & Axis
     ctx.font = `${8 * dpr}px Inter`; ctx.strokeStyle = '#202632'; ctx.fillStyle = '#697382'; ctx.lineWidth = dpr;
     for (let i = 0; i < 5; i++) {
       const v = mx - range * i / 4, yy = y(v);
@@ -262,43 +281,63 @@
     const zy = y(0); ctx.strokeStyle = '#586171'; ctx.setLineDash([4 * dpr, 4 * dpr]);
     ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(w - pad.r, zy); ctx.stroke(); ctx.setLineDash([]);
 
-    const grad = ctx.createLinearGradient(pad.l, 0, w - pad.r, 0);
-    grad.addColorStop(0, '#8b5cf6'); grad.addColorStop(1, '#2bd98a');
-
+    // 1. Buy Exchange Price % Curve (Green)
     ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(i), y(p[1])) : ctx.moveTo(x(i), y(p[1])));
-    ctx.strokeStyle = grad; ctx.lineWidth = 2 * dpr; ctx.stroke();
+    points.forEach((_, i) => i ? ctx.lineTo(x(i), y(buyPct[i])) : ctx.moveTo(x(i), y(buyPct[i])));
+    ctx.strokeStyle = '#2bd98a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
 
+    // 2. Sell Exchange Price % Curve (Red)
+    ctx.beginPath();
+    points.forEach((_, i) => i ? ctx.lineTo(x(i), y(sellPct[i])) : ctx.moveTo(x(i), y(sellPct[i])));
+    ctx.strokeStyle = '#ef647a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
+
+    // 3. Spread Curve (Gray / Light Purple)
+    ctx.beginPath();
+    points.forEach((_, i) => i ? ctx.lineTo(x(i), y(spreadPct[i])) : ctx.moveTo(x(i), y(spreadPct[i])));
+    ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 2.4 * dpr; ctx.stroke();
+
+    // Fill under spread curve
     ctx.lineTo(x(points.length - 1), h - pad.b);
     ctx.lineTo(x(0), h - pad.b);
     ctx.closePath();
     const fill = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
-    fill.addColorStop(0, 'rgba(139,92,246,.2)'); fill.addColorStop(1, 'rgba(43,217,138,0)');
+    fill.addColorStop(0, 'rgba(203, 213, 225, 0.15)'); fill.addColorStop(1, 'rgba(203, 213, 225, 0)');
     ctx.fillStyle = fill; ctx.fill();
 
     // Time labels on X axis
     ctx.fillStyle = '#677181';
     const timeFmt = isLive ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
     [0, Math.floor(points.length / 2), points.length - 1].forEach(i => {
-      ctx.fillText(new Date(points[i][0]).toLocaleTimeString('ru-RU', timeFmt), x(i) - 18 * dpr, h - 6 * dpr);
+      ctx.fillText(new Date(points[i].t).toLocaleTimeString('ru-RU', timeFmt), x(i) - 18 * dpr, h - 6 * dpr);
     });
 
-    // Pulse live dot indicator on the latest point
+    // Pulse live dot indicators on latest points
     if (isLive) {
-      const lastX = x(points.length - 1);
-      const lastY = y(vals.at(-1));
-      ctx.beginPath();
-      ctx.arc(lastX, lastY, 7 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(43, 217, 138, 0.35)';
-      ctx.fill();
+      const lastIdx = points.length - 1;
+      const lastX = x(lastIdx);
 
-      ctx.beginPath();
-      ctx.arc(lastX, lastY, 3.5 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = '#2bd98a';
-      ctx.fill();
+      // Buy tip dot
+      ctx.beginPath(); ctx.arc(lastX, y(buyPct[lastIdx]), 3 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = '#2bd98a'; ctx.fill();
+
+      // Sell tip dot
+      ctx.beginPath(); ctx.arc(lastX, y(sellPct[lastIdx]), 3 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ef647a'; ctx.fill();
+
+      // Spread tip dot
+      ctx.beginPath(); ctx.arc(lastX, y(spreadPct[lastIdx]), 6 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(203, 213, 225, 0.35)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(lastX, y(spreadPct[lastIdx]), 3 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = '#cbd5e1'; ctx.fill();
     }
 
-    $('arb-chart-current').textContent = (isLive ? 'LIVE ⚡ ' : '') + pct(vals.at(-1));
+    // Legend updates
+    const l = row ? legs(row) : null;
+    if (l) {
+      if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = `${l.buyName} (${pct(buyPct.at(-1), 2)})`;
+      if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = `${l.sellName} (${pct(sellPct.at(-1), 2)})`;
+    }
+    $('arb-chart-current').textContent = (isLive ? 'LIVE ⚡ ' : '') + pct(spreadPct.at(-1));
     $('arb-chart-funding').textContent = pct(funding, 4);
   }
 
