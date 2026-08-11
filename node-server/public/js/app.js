@@ -11035,7 +11035,7 @@ function backToTariffs() {
   if (payCountdownTimer) clearInterval(payCountdownTimer);
 }
 
-async function startPayInvoice() {
+async function startPayInvoice(replaceActive = false) {
   const token = localStorage.getItem("obsidian_auth_token");
   if (!token) {
     if (typeof openAuthModal === "function") openAuthModal();
@@ -11055,11 +11055,18 @@ async function startPayInvoice() {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${token}`
       },
-      body: JSON.stringify({ planId: paySelectedPlan, method: paySelectedMethod })
+      body: JSON.stringify({ planId: paySelectedPlan, method: paySelectedMethod, replaceActive })
     });
     const data = await res.json();
 
     if (!data.ok || !data.invoice) {
+      if (data.code === "ACTIVE_INVOICE_EXISTS" && !replaceActive) {
+        const confirmed = window.confirm(
+          "У вас уже есть неоплаченный счёт. Отменить его и создать новый выбранным способом?\n\nНе подтверждайте отмену, если вы уже отправили оплату по предыдущему счёту."
+        );
+        if (confirmed) return await startPayInvoice(true);
+        return;
+      }
       alert("Ошибка создания счёта: " + (data.error || "Неизвестная ошибка"));
       return;
     }

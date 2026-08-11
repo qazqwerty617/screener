@@ -88,10 +88,11 @@ function registerPaymentRoutes(app, { userStore, paymentGateway }) {
       const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
       const planId = typeof body.planId === "string" ? body.planId : "";
       const method = typeof body.method === "string" ? body.method : "";
+      const replaceActive = body.replaceActive === true;
       if (planId.length > 32 || method.length > 32) {
         return res.status(400).json({ error: "Некорректные параметры счёта.", code: "INVALID_INPUT" });
       }
-      const invoice = await paymentGateway.createInvoice(req.authUser.id, planId, method);
+      const invoice = await paymentGateway.createInvoice(req.authUser.id, planId, method, { replaceActive });
       res.status(201).json({ ok: true, invoice });
     } catch (error) {
       sendError(res, error);

@@ -111,6 +111,25 @@ test("TRC20 invoices are private, persistent, unpredictable and owner-bound", as
   assert.equal(restored.id, invoice.id);
 });
 
+test("an owner can explicitly replace an unpaid active invoice", async t => {
+  const gateway = createPaymentGateway({
+    dataDir: createTempDir(t),
+    env: { PAYMENT_TRC20_WALLET: TEST_WALLET },
+    userStore: createUserStore(),
+    fetchImpl: async () => jsonResponse({ data: [] }),
+    startCleanupTimer: false,
+    notifyPayment: false
+  });
+
+  const first = await gateway.createInvoice("USR-A", "1m", "trc20");
+  const replacement = await gateway.createInvoice("USR-A", "3m", "trc20", { replaceActive: true });
+
+  assert.notEqual(replacement.id, first.id);
+  assert.equal(replacement.planId, "3m");
+  assert.equal(gateway._test.getInvoice(first.id).status, "cancelled");
+  assert.equal(gateway._test.getInvoice(replacement.id).status, "pending");
+});
+
 test("TRC20 grants only for confirmed exact USDT contract transfer in the invoice window", async t => {
   const store = createUserStore();
   let requestUrl = "";

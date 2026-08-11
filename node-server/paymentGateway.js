@@ -296,7 +296,7 @@ function createPaymentGateway(options = {}) {
     return data.result;
   }
 
-  async function createInvoice(userId, planId = "1m", method = "trc20") {
+  async function createInvoice(userId, planId = "1m", method = "trc20", options = {}) {
     cleanupExpiredInvoices();
     const user = gatewayUserStore.findUser(userId);
     if (!user || user.id !== userId) {
@@ -313,11 +313,41 @@ function createPaymentGateway(options = {}) {
     const existing = existingId ? invoices.get(existingId) : null;
     if (existing && ["pending", "processing"].includes(existing.status) && existing.expiresAt > clock()) {
       if (existing.planId === planId && existing.method === method) return presentInvoice(existing);
-      throw new PaymentError(
-        "ACTIVE_INVOICE_EXISTS",
-        "У вас уже есть активный счёт. Дождитесь его истечения перед сменой тарифа или способа оплаты.",
-        409
-      );
+      if (options.replaceActive !== true) {
+        throw new PaymentError(
+          "ACTIVE_INVOICE_EXISTS",
+          "У вас уже есть активный счёт. Подтвердите его отмену, чтобы сменить тариф или способ оплаты.",
+          409
+        );
+      }
+
+      // Check the provider/blockchain immediately before cancellation so a
+      // confirmed payment can never be discarded by switching methods.
+      try { await verifyInvoice(existing, true); } catch (error) {
+        if (error instanceof PaymentError && error.code === "PROVIDER_UNAVAILABLE") throw error;
+        throw error;
+      }
+      if (existing.status === "success") {
+        throw new PaymentError("INVOICE_ALREADY_PAID", "Предыдущий счёт уже оплачен.", 409);
+      }
+      if (existing.status === "processing") {
+        throw new PaymentError("INVOICE_PROCESSING", "Предыдущий платёж уже обрабатывается.", 409);
+      }
+      if (existing.method === "cryptobot" && existing.cryptoPayInvoiceId) {
+        try {
+          await cryptoPayRequest("deleteInvoice", { invoice_id: Number(existing.cryptoPayInvoiceId) });
+        } catch (_) {
+          throw new PaymentError(
+            "PROVIDER_UNAVAILABLE",
+            "Не удалось безопасно отменить предыдущий счёт Crypto Pay. Повторите попытку позже.",
+            502
+          );
+        }
+      }
+      existing.status = "cancelled";
+      existing.updatedAt = new Date(clock()).toISOString();
+      releaseInvoiceReservation(existing);
+      persistInvoices();
     }
 
     const tariff = TARIF_PRICES[planId];
