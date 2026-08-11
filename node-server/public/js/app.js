@@ -5871,16 +5871,23 @@ const settingsBtn = $("settings-btn");
 const settingsOverlay = $("settings-overlay");
 const settingsClose = $("settings-close");
 
-if (settingsBtn && settingsOverlay && settingsClose) {
-  settingsBtn.onclick = () => {
+if (settingsBtn && settingsOverlay) {
+  const openSettings = () => {
+    settingsOverlay.style.display = "flex";
     settingsOverlay.classList.add("open");
   };
-  settingsClose.onclick = () => {
+  const closeSettings = () => {
+    settingsOverlay.style.display = "none";
     settingsOverlay.classList.remove("open");
   };
+
+  settingsBtn.onclick = openSettings;
+  if (settingsClose) settingsClose.onclick = closeSettings;
   settingsOverlay.onclick = (e) => {
-    if (e.target === settingsOverlay) settingsOverlay.classList.remove("open");
+    if (e.target === settingsOverlay) closeSettings();
   };
+  window.openSettingsModal = openSettings;
+  window.closeSettingsModal = closeSettings;
 
   // Tabs switching
   document.querySelectorAll(".settings-tab").forEach(tab => {
