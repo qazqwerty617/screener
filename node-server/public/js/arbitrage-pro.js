@@ -239,9 +239,16 @@
         return { t: b.t, buyP: b.c, sellP: s.c, spread: spread };
       }).filter(Boolean);
     }
+
     drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live', r);
-    drawCandles($('arb-buy-chart'), k.buy, '#2bd98a');
-    drawCandles($('arb-sell-chart'), k.sell, '#ef647a');
+
+    if (pro.tf === 'live' && pro.livePoints.length > 1) {
+      drawLiveLegChart($('arb-buy-chart'), pro.livePoints.map(p => ({ t: p.t, c: p.buyP })), '#2bd98a');
+      drawLiveLegChart($('arb-sell-chart'), pro.livePoints.map(p => ({ t: p.t, c: p.sellP })), '#ef647a');
+    } else {
+      drawCandles($('arb-buy-chart'), k.buy, '#2bd98a');
+      drawCandles($('arb-sell-chart'), k.sell, '#ef647a');
+    }
   }
 
   function fit(canvas, height) {
@@ -250,6 +257,7 @@
     return { ctx: canvas.getContext('2d'), w: canvas.width, h: canvas.height, dpr };
   }
 
+  // Multi-curve dual Y-axis chart rendering
   function drawSpread(canvas, points, funding, isLive = false, row = null) {
     const { ctx, w, h, dpr } = fit(canvas, 220); ctx.clearRect(0, 0, w, h);
     if (!points || points.length < 2) return;
@@ -260,48 +268,69 @@
 
     const buyPct = points.map(p => ((p.buyP - firstBuy) / firstBuy) * 100);
     const sellPct = points.map(p => ((p.sellP - firstSell) / firstSell) * 100);
-    const spreadPct = points.map(p => p.spread);
+    const spreadVal = points.map(p => p.spread);
 
-    const allVals = [...buyPct, ...sellPct, ...spreadPct, 0];
-    const mn = Math.min(...allVals);
-    const mx = Math.max(...allVals);
-    const range = (mx - mn) || 0.01;
+    // Price scale (Left Y-Axis)
+    const priceVals = [...buyPct, ...sellPct];
+    const pMn = Math.min(...priceVals, 0);
+    const pMx = Math.max(...priceVals, 0);
+    const pRange = (pMx - pMn) || 0.01;
 
-    const pad = { l: 48 * dpr, r: 16 * dpr, t: 18 * dpr, b: 24 * dpr };
+    // Spread scale (Right Y-Axis) - dedicated full height scaling for spread!
+    const sMn = Math.min(...spreadVal);
+    const sMx = Math.max(...spreadVal);
+    const sRange = (sMx - sMn) || 0.01;
+
+    const pad = { l: 48 * dpr, r: 48 * dpr, t: 18 * dpr, b: 24 * dpr };
     const x = i => pad.l + i * (w - pad.l - pad.r) / (points.length - 1);
-    const y = v => pad.t + (mx - v) * (h - pad.t - pad.b) / range;
 
-    // Grid & Axis
-    ctx.font = `${8 * dpr}px Inter`; ctx.strokeStyle = '#202632'; ctx.fillStyle = '#697382'; ctx.lineWidth = dpr;
+    const yPrice = v => pad.t + (pMx - v) * (h - pad.t - pad.b) / pRange;
+    const ySpread = v => pad.t + (sMx - v) * (h - pad.t - pad.b) / sRange;
+
+    // Grid lines & Y-Axis
+    ctx.font = `${8 * dpr}px Inter`; ctx.strokeStyle = '#1e2430'; ctx.lineWidth = dpr;
+
+    // Left Y Axis (Price % change)
+    ctx.fillStyle = '#697382'; ctx.textAlign = 'left';
     for (let i = 0; i < 5; i++) {
-      const v = mx - range * i / 4, yy = y(v);
+      const v = pMx - pRange * i / 4, yy = yPrice(v);
       ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
       ctx.fillText(`${v.toFixed(2)}%`, 3 * dpr, yy + 3 * dpr);
     }
-    const zy = y(0); ctx.strokeStyle = '#586171'; ctx.setLineDash([4 * dpr, 4 * dpr]);
+
+    // Right Y Axis (Spread %) - Purple high contrast axis labels!
+    ctx.fillStyle = '#a78bfa'; ctx.textAlign = 'right';
+    for (let i = 0; i < 5; i++) {
+      const v = sMx - sRange * i / 4, yy = ySpread(v);
+      ctx.fillText(`${v.toFixed(2)}%`, w - 3 * dpr, yy + 3 * dpr);
+    }
+    ctx.textAlign = 'left';
+
+    // Zero dashed line for price %
+    const zy = yPrice(0); ctx.strokeStyle = '#3b4354'; ctx.setLineDash([4 * dpr, 4 * dpr]);
     ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(w - pad.r, zy); ctx.stroke(); ctx.setLineDash([]);
 
     // 1. Buy Exchange Price % Curve (Green)
     ctx.beginPath();
-    points.forEach((_, i) => i ? ctx.lineTo(x(i), y(buyPct[i])) : ctx.moveTo(x(i), y(buyPct[i])));
+    points.forEach((_, i) => i ? ctx.lineTo(x(i), yPrice(buyPct[i])) : ctx.moveTo(x(i), yPrice(buyPct[i])));
     ctx.strokeStyle = '#2bd98a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
 
     // 2. Sell Exchange Price % Curve (Red)
     ctx.beginPath();
-    points.forEach((_, i) => i ? ctx.lineTo(x(i), y(sellPct[i])) : ctx.moveTo(x(i), y(sellPct[i])));
+    points.forEach((_, i) => i ? ctx.lineTo(x(i), yPrice(sellPct[i])) : ctx.moveTo(x(i), yPrice(sellPct[i])));
     ctx.strokeStyle = '#ef647a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
 
-    // 3. Spread Curve (Gray / Light Purple)
+    // 3. Spread Curve (Bright Purple/White) with full height dynamic scaling!
     ctx.beginPath();
-    points.forEach((_, i) => i ? ctx.lineTo(x(i), y(spreadPct[i])) : ctx.moveTo(x(i), y(spreadPct[i])));
-    ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 2.4 * dpr; ctx.stroke();
+    points.forEach((_, i) => i ? ctx.lineTo(x(i), ySpread(spreadVal[i])) : ctx.moveTo(x(i), ySpread(spreadVal[i])));
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2.4 * dpr; ctx.stroke();
 
-    // Fill under spread curve
+    // Gradient fill under spread curve
     ctx.lineTo(x(points.length - 1), h - pad.b);
     ctx.lineTo(x(0), h - pad.b);
     ctx.closePath();
     const fill = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
-    fill.addColorStop(0, 'rgba(203, 213, 225, 0.15)'); fill.addColorStop(1, 'rgba(203, 213, 225, 0)');
+    fill.addColorStop(0, 'rgba(167, 139, 250, 0.22)'); fill.addColorStop(1, 'rgba(167, 139, 250, 0)');
     ctx.fillStyle = fill; ctx.fill();
 
     // Time labels on X axis
@@ -317,18 +346,18 @@
       const lastX = x(lastIdx);
 
       // Buy tip dot
-      ctx.beginPath(); ctx.arc(lastX, y(buyPct[lastIdx]), 3 * dpr, 0, 2 * Math.PI);
+      ctx.beginPath(); ctx.arc(lastX, yPrice(buyPct[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
       ctx.fillStyle = '#2bd98a'; ctx.fill();
 
       // Sell tip dot
-      ctx.beginPath(); ctx.arc(lastX, y(sellPct[lastIdx]), 3 * dpr, 0, 2 * Math.PI);
+      ctx.beginPath(); ctx.arc(lastX, yPrice(sellPct[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
       ctx.fillStyle = '#ef647a'; ctx.fill();
 
       // Spread tip dot
-      ctx.beginPath(); ctx.arc(lastX, y(spreadPct[lastIdx]), 6 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(203, 213, 225, 0.35)'; ctx.fill();
-      ctx.beginPath(); ctx.arc(lastX, y(spreadPct[lastIdx]), 3 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = '#cbd5e1'; ctx.fill();
+      ctx.beginPath(); ctx.arc(lastX, ySpread(spreadVal[lastIdx]), 6.5 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = 'rgba(226, 232, 240, 0.4)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(lastX, ySpread(spreadVal[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
+      ctx.fillStyle = '#e2e8f0'; ctx.fill();
     }
 
     // Legend updates
@@ -337,8 +366,41 @@
       if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = `${l.buyName} (${pct(buyPct.at(-1), 2)})`;
       if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = `${l.sellName} (${pct(sellPct.at(-1), 2)})`;
     }
-    $('arb-chart-current').textContent = (isLive ? 'LIVE ⚡ ' : '') + pct(spreadPct.at(-1));
+    $('arb-chart-current').textContent = (isLive ? 'LIVE ⚡ ' : '') + pct(spreadVal.at(-1));
     $('arb-chart-funding').textContent = pct(funding, 4);
+  }
+
+  function drawLiveLegChart(canvas, ticks, accent) {
+    const { ctx, w, h, dpr } = fit(canvas, 130); ctx.clearRect(0, 0, w, h);
+    const list = ticks.slice(-100); if (list.length < 2) return;
+    const vals = list.map(c => c.c);
+    const mn = Math.min(...vals), mx = Math.max(...vals), range = (mx - mn) || (mn * 0.001) || 1;
+    const pad = 10 * dpr;
+    const x = i => pad + i * (w - pad * 2) / (list.length - 1);
+    const y = v => pad + (mx - v) * (h - pad * 2) / range;
+
+    ctx.strokeStyle = '#1d2330'; ctx.lineWidth = dpr;
+    for (let i = 1; i < 4; i++) { const yy = h * i / 4; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke(); }
+
+    ctx.beginPath();
+    list.forEach((c, i) => i ? ctx.lineTo(x(i), y(c.c)) : ctx.moveTo(x(i), y(c.c)));
+    ctx.strokeStyle = accent; ctx.lineWidth = 2 * dpr; ctx.stroke();
+
+    ctx.lineTo(x(list.length - 1), h - pad);
+    ctx.lineTo(x(0), h - pad);
+    ctx.closePath();
+    const fill = ctx.createLinearGradient(0, pad, 0, h - pad);
+    fill.addColorStop(0, accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.22)' : 'rgba(239, 100, 122, 0.22)');
+    fill.addColorStop(1, 'transparent');
+    ctx.fillStyle = fill; ctx.fill();
+
+    // Pulsing tip dot
+    const lastX = x(list.length - 1);
+    const lastY = y(vals.at(-1));
+    ctx.beginPath(); ctx.arc(lastX, lastY, 6 * dpr, 0, 2 * Math.PI);
+    ctx.fillStyle = accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.35)' : 'rgba(239, 100, 122, 0.35)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(lastX, lastY, 3 * dpr, 0, 2 * Math.PI);
+    ctx.fillStyle = accent; ctx.fill();
   }
 
   function drawCandles(canvas, candles, accent) {
@@ -346,7 +408,7 @@
     const list = candles.slice(-70); if (list.length < 2) return;
     const mn = Math.min(...list.map(c => c.l)), mx = Math.max(...list.map(c => c.h)), range = mx - mn || 1, pad = 8 * dpr,
       cw = (w - pad * 2) / list.length, y = v => pad + (mx - v) * (h - pad * 2) / range;
-    ctx.strokeStyle = '#1d2330';
+    ctx.strokeStyle = '#1d2330'; ctx.lineWidth = dpr;
     for (let i = 1; i < 4; i++) { const yy = h * i / 4; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke(); }
     list.forEach((c, i) => {
       const xx = pad + i * cw + cw / 2, up = c.c >= c.o, col = up ? '#2bd98a' : '#ef647a';
