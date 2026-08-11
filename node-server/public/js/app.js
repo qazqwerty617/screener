@@ -11691,7 +11691,19 @@ function copyPayField(elementId) {
 // ── NOTIFICATIONS & PRICE ALERTS ENGINE ──
 let priceAlerts = [];
 let audioCtx = null;
-const _alertFiredAt = new Map(); // throttle: alertId → timestamp of last fire
+
+function unlockAudioContext() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (_) {}
+  }
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume().catch(() => {});
+  }
+}
+window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
+window.addEventListener("keydown", unlockAudioContext, { passive: true });
 
 function renderPriceAlertsList() {
   // UI grid was removed; this is intentionally a no-op.
@@ -11701,19 +11713,23 @@ function loadPriceAlerts() {
   try {
     const raw = localStorage.getItem("obsidian_price_alerts");
     priceAlerts = raw ? JSON.parse(raw) : [];
+    // Filter out old triggered alerts on load
+    priceAlerts = priceAlerts.filter(a => !a.triggered);
   } catch (_) { priceAlerts = []; }
 }
 
 function savePriceAlerts() {
   try {
-    localStorage.setItem("obsidian_price_alerts", JSON.stringify(priceAlerts));
+    // Save only active alerts
+    const active = priceAlerts.filter(a => !a.triggered);
+    localStorage.setItem("obsidian_price_alerts", JSON.stringify(active));
   } catch (_) {}
 }
 
 function playAlertSound(kind = "chime") {
   try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === "suspended") audioCtx.resume();
+    unlockAudioContext();
+    if (!audioCtx) return;
     
     const now = audioCtx.currentTime;
     const osc = audioCtx.createOscillator();
@@ -11728,18 +11744,18 @@ function playAlertSound(kind = "chime") {
       osc.frequency.setValueAtTime(800, now + 0.1);
     }
     
-    gain.gain.setValueAtTime(0.3, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+    gain.gain.setValueAtTime(0.4, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
     
     osc.connect(gain);
     gain.connect(audioCtx.destination);
     
     osc.start(now);
-    osc.stop(now + 0.4);
+    osc.stop(now + 0.5);
   } catch (_) {}
 }
 
-function showToast({ title, message, type = "info", durationMs = 5000 }) {
+function showToast({ title, message, type = "info", durationMs = 6000 }) {
   const container = $("toast-container");
   if (!container) return;
   
@@ -11810,27 +11826,76 @@ function checkPriceAlerts(ex, sym, price) {
     if (alertEx && targetEx && alertEx !== targetEx) continue;
     
     let isHit = false;
+
+    // 1. Standard direction checks
     if (alert.dir === "gte" && price >= alert.price) isHit = true;
     if (alert.dir === "lte" && price <= alert.price) isHit = true;
+
+    // 2. Initial price relative crossing check
+    if (!isHit && alert.createdPrice && alert.createdPrice > 0) {
+      if (alert.createdPrice < alert.price && price >= alert.price) isHit = true;
+      if (alert.createdPrice > alert.price && price <= alert.price) isHit = true;
+    }
+
+    // 3. Proximity check (within 0.1% tolerance)
+    if (!isHit) {
+      const relDiff = Math.abs(price - alert.price) / alert.price;
+      if (relDiff <= 0.001) isHit = true;
+    }
     
     if (isHit) {
-      // Mark triggered FIRST so we don't fire again on next tick
       alert.triggered = true;
       
+      // Remove alert drawing from chartDrawings for active symbol
+      if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings)) {
+        const initialLen = chartDrawings.length;
+        chartDrawings = chartDrawings.filter(d => {
+          if (d.type === "alert") {
+            if (alert.drawingId && d.t1 === alert.drawingId) return false;
+            if (Math.abs(d.p1 - alert.price) / (alert.price || 1) < 0.0008) return false;
+          }
+          return true;
+        });
+        if (chartDrawings.length !== initialLen && typeof saveDrawings === "function") {
+          saveDrawings();
+        }
+      }
+
+      // Remove alert drawing from stored drawings for the alert's symbol
+      try {
+        const drawKey = "crypto_drawings_" + alert.sym;
+        const rawDraw = localStorage.getItem(drawKey);
+        if (rawDraw) {
+          let arr = JSON.parse(rawDraw);
+          arr = arr.filter(d => {
+            if (d.type === "alert") {
+              if (alert.drawingId && d.t1 === alert.drawingId) return false;
+              if (Math.abs(d.p1 - alert.price) / (alert.price || 1) < 0.0008) return false;
+            }
+            return true;
+          });
+          localStorage.setItem(drawKey, JSON.stringify(arr));
+        }
+      } catch (_) {}
+
+      // Re-render chart to immediately erase the line/bell
+      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+      if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+        chartInstances.forEach(inst => { if (inst && inst.draw) inst.draw(true); });
+      }
+
       const alertExName = alert.ex || targetEx || "BN";
       const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
       const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
       
-      const title = `Достигнут уровень цены!`;
+      const title = `🔔 Достигнут уровень цены!`;
       const body = `<b>${alertExName} · ${alert.sym}</b> цена достигла <b>${formattedPrice} USDT</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`;
       
-      // Fire notifications BEFORE save — so save errors can't suppress them
       try { playAlertSound("chime"); } catch (_) {}
       try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
       try { sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alertExName} · <b>${alert.sym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`); } catch (_) {}
       
-      // Persist the triggered state
-      try { savePriceAlerts(); } catch (_) {}
+      savePriceAlerts();
     }
   }
 }
