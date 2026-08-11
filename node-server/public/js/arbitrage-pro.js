@@ -56,18 +56,20 @@
     }));
   }
 
-  function recordLiveTick() {
+  function recordLivePoint(t, bPrice, sPrice) {
     const r = pro.row; if (!r) return;
     const l = legs(r);
     const coins = window.coins;
-    let bPrice = pro.lastBuyPrice || l.buyPrice;
-    let sPrice = pro.lastSellPrice || l.sellPrice;
 
-    if (coins) {
-      const bCoin = coins.get(`${l.buyEx}:${l.buySymbol}`);
-      if (bCoin && bCoin.p > 0) bPrice = bCoin.p;
-      const sCoin = coins.get(`${l.sellEx}:${l.sellSymbol}`);
-      if (sCoin && sCoin.p > 0) sPrice = sCoin.p;
+    if (!bPrice || !sPrice) {
+      bPrice = pro.lastBuyPrice || l.buyPrice;
+      sPrice = pro.lastSellPrice || l.sellPrice;
+      if (coins) {
+        const bCoin = coins.get(`${l.buyEx}:${l.buySymbol}`);
+        if (bCoin && bCoin.p > 0) bPrice = bCoin.p;
+        const sCoin = coins.get(`${l.sellEx}:${l.sellSymbol}`);
+        if (sCoin && sCoin.p > 0) sPrice = sCoin.p;
+      }
     }
 
     if (bPrice > 0 && sPrice > 0) {
@@ -76,9 +78,13 @@
         const offset = pro.depth.netPct - r.net;
         spread += offset;
       }
-      pro.livePoints.push({ t: Date.now(), buyP: bPrice, sellP: sPrice, spread: spread });
-      if (pro.livePoints.length > 300) pro.livePoints.shift();
-      if (pro.tf === 'live') scheduleCharts();
+      const last = pro.livePoints.at(-1);
+      // Avoid pushing duplicate points unless price moved or 5 seconds passed
+      if (!last || last.buyP !== bPrice || last.sellP !== sPrice || (t - last.t >= 5000)) {
+        pro.livePoints.push({ t, buyP: bPrice, sellP: sPrice, spread: spread });
+        if (pro.livePoints.length > 500) pro.livePoints.shift();
+        if (pro.tf === 'live') scheduleCharts();
+      }
     }
   }
 
@@ -86,7 +92,7 @@
     init(); pro.row = row; pro.isFunding = isFunding; pro.depth = null; pro.klines = null; pro.mode = 'best'; pro.requestId++;
     pro.livePoints = []; pro.lastBuyPrice = 0; pro.lastSellPrice = 0;
     if (pro.liveTimer) clearInterval(pro.liveTimer);
-    pro.liveTimer = setInterval(recordLiveTick, 1000);
+    pro.liveTimer = setInterval(() => recordLivePoint(Date.now()), 1000);
 
     $('arb-drawer').scrollTop = 0;
     $('arb-execution').style.display = isFunding ? 'none' : 'block';
@@ -160,6 +166,8 @@
       if (side === 'buy') pro.lastBuyPrice = p;
       if (side === 'sell') pro.lastSellPrice = p;
 
+      recordLivePoint(t, pro.lastBuyPrice, pro.lastSellPrice);
+
       const tfMs = ({ "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 })[pro.tf] || 300000;
       let last = list.at(-1);
       if (t >= last.t + tfMs) {
@@ -175,7 +183,7 @@
 
   function subscribeCharts(l, tf) {
     closeStreams();
-    if (pro.row) pro.liveTimer = setInterval(recordLiveTick, 1000);
+    if (pro.row) pro.liveTimer = setInterval(() => recordLivePoint(Date.now()), 1000);
     if (!window.MarketData?.subscribe) return;
     const subTf = tf === 'live' ? '1m' : tf;
     [['buy', l.buyEx, l.buySymbol], ['sell', l.sellEx, l.sellSymbol]].forEach(([side, ex, sym]) => {
@@ -257,7 +265,7 @@
     return { ctx: canvas.getContext('2d'), w: canvas.width, h: canvas.height, dpr };
   }
 
-  // Multi-curve dual Y-axis chart rendering
+  // Multi-curve dual Y-axis chart rendering with time-proportional X axis
   function drawSpread(canvas, points, funding, isLive = false, row = null) {
     const { ctx, w, h, dpr } = fit(canvas, 220); ctx.clearRect(0, 0, w, h);
     if (!points || points.length < 2) return;
@@ -282,7 +290,12 @@
     const sRange = (sMx - sMn) || 0.01;
 
     const pad = { l: 48 * dpr, r: 48 * dpr, t: 18 * dpr, b: 24 * dpr };
-    const x = i => pad.l + i * (w - pad.l - pad.r) / (points.length - 1);
+
+    // Time-proportional X axis mapping
+    const tMin = points[0].t;
+    const tMax = isLive ? Math.max(Date.now(), points.at(-1).t) : points.at(-1).t;
+    const tRange = Math.max(5000, tMax - tMin);
+    const x = time => pad.l + (time - tMin) * (w - pad.l - pad.r) / tRange;
 
     const yPrice = v => pad.t + (pMx - v) * (h - pad.t - pad.b) / pRange;
     const ySpread = v => pad.t + (sMx - v) * (h - pad.t - pad.b) / sRange;
@@ -312,22 +325,26 @@
 
     // 1. Buy Exchange Price % Curve (Green)
     ctx.beginPath();
-    points.forEach((_, i) => i ? ctx.lineTo(x(i), yPrice(buyPct[i])) : ctx.moveTo(x(i), yPrice(buyPct[i])));
+    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(buyPct[i])) : ctx.moveTo(x(p.t), yPrice(buyPct[i])));
+    if (isLive) ctx.lineTo(x(tMax), yPrice(buyPct.at(-1)));
     ctx.strokeStyle = '#2bd98a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
 
     // 2. Sell Exchange Price % Curve (Red)
     ctx.beginPath();
-    points.forEach((_, i) => i ? ctx.lineTo(x(i), yPrice(sellPct[i])) : ctx.moveTo(x(i), yPrice(sellPct[i])));
+    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(sellPct[i])) : ctx.moveTo(x(p.t), yPrice(sellPct[i])));
+    if (isLive) ctx.lineTo(x(tMax), yPrice(sellPct.at(-1)));
     ctx.strokeStyle = '#ef647a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
 
-    // 3. Spread Curve (Bright Purple/White) with full height dynamic scaling!
+    // 3. Spread Curve (Bright Purple/White)
     ctx.beginPath();
-    points.forEach((_, i) => i ? ctx.lineTo(x(i), ySpread(spreadVal[i])) : ctx.moveTo(x(i), ySpread(spreadVal[i])));
+    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), ySpread(spreadVal[i])) : ctx.moveTo(x(p.p.t || p.t), ySpread(spreadVal[i])));
+    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), ySpread(spreadVal[i])) : ctx.moveTo(x(p.t), ySpread(spreadVal[i])));
+    if (isLive) ctx.lineTo(x(tMax), ySpread(spreadVal.at(-1)));
     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2.4 * dpr; ctx.stroke();
 
     // Gradient fill under spread curve
-    ctx.lineTo(x(points.length - 1), h - pad.b);
-    ctx.lineTo(x(0), h - pad.b);
+    ctx.lineTo(x(isLive ? tMax : points.at(-1).t), h - pad.b);
+    ctx.lineTo(x(tMin), h - pad.b);
     ctx.closePath();
     const fill = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
     fill.addColorStop(0, 'rgba(167, 139, 250, 0.22)'); fill.addColorStop(1, 'rgba(167, 139, 250, 0)');
@@ -336,14 +353,16 @@
     // Time labels on X axis
     ctx.fillStyle = '#677181';
     const timeFmt = isLive ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
-    [0, Math.floor(points.length / 2), points.length - 1].forEach(i => {
-      ctx.fillText(new Date(points[i].t).toLocaleTimeString('ru-RU', timeFmt), x(i) - 18 * dpr, h - 6 * dpr);
+    const tMid = tMin + tRange / 2;
+    [tMin, tMid, tMax].forEach((tVal, idx) => {
+      const px = pad.l + (idx / 2) * (w - pad.l - pad.r);
+      ctx.fillText(new Date(tVal).toLocaleTimeString('ru-RU', timeFmt), px - 18 * dpr, h - 6 * dpr);
     });
 
-    // Pulse live dot indicators on latest points
+    // Pulse live dot indicators on latest points at right edge (tMax)
     if (isLive) {
       const lastIdx = points.length - 1;
-      const lastX = x(lastIdx);
+      const lastX = x(tMax);
 
       // Buy tip dot
       ctx.beginPath(); ctx.arc(lastX, yPrice(buyPct[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
@@ -376,26 +395,31 @@
     const vals = list.map(c => c.c);
     const mn = Math.min(...vals), mx = Math.max(...vals), range = (mx - mn) || (mn * 0.001) || 1;
     const pad = 10 * dpr;
-    const x = i => pad + i * (w - pad * 2) / (list.length - 1);
+
+    const tMin = list[0].t;
+    const tMax = Math.max(Date.now(), list.at(-1).t);
+    const tRange = Math.max(5000, tMax - tMin);
+    const x = time => pad + (time - tMin) * (w - pad * 2) / tRange;
     const y = v => pad + (mx - v) * (h - pad * 2) / range;
 
     ctx.strokeStyle = '#1d2330'; ctx.lineWidth = dpr;
     for (let i = 1; i < 4; i++) { const yy = h * i / 4; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke(); }
 
     ctx.beginPath();
-    list.forEach((c, i) => i ? ctx.lineTo(x(i), y(c.c)) : ctx.moveTo(x(i), y(c.c)));
+    list.forEach((c, i) => i ? ctx.lineTo(x(c.t), y(c.c)) : ctx.moveTo(x(c.t), y(c.c)));
+    ctx.lineTo(x(tMax), y(vals.at(-1)));
     ctx.strokeStyle = accent; ctx.lineWidth = 2 * dpr; ctx.stroke();
 
-    ctx.lineTo(x(list.length - 1), h - pad);
-    ctx.lineTo(x(0), h - pad);
+    ctx.lineTo(x(tMax), h - pad);
+    ctx.lineTo(x(tMin), h - pad);
     ctx.closePath();
     const fill = ctx.createLinearGradient(0, pad, 0, h - pad);
     fill.addColorStop(0, accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.22)' : 'rgba(239, 100, 122, 0.22)');
     fill.addColorStop(1, 'transparent');
     ctx.fillStyle = fill; ctx.fill();
 
-    // Pulsing tip dot
-    const lastX = x(list.length - 1);
+    // Pulsing tip dot at tMax
+    const lastX = x(tMax);
     const lastY = y(vals.at(-1));
     ctx.beginPath(); ctx.arc(lastX, lastY, 6 * dpr, 0, 2 * Math.PI);
     ctx.fillStyle = accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.35)' : 'rgba(239, 100, 122, 0.35)'; ctx.fill();
