@@ -256,7 +256,7 @@ function updateActiveTradeStream(ex, sym) {
     }
 
     let url = "";
-    if (ex === "BN") url = `wss://fstream.binance.com/ws/${sym.toLowerCase()}@aggTrade`;
+    if (ex === "BN") url = `wss://fstream.binance.com/market/ws/${sym.toLowerCase()}@aggTrade`;
     else if (ex === "AD") url = `wss://fstream.asterdex.com/ws/${sym.toLowerCase()}@aggTrade`;
     else if (ex === "BB") url = `wss://stream.bybit.com/v5/public/linear`;
     else if (ex === "OX") url = `wss://ws.okx.com:8443/ws/v5/public`;
@@ -5086,14 +5086,18 @@ function connectKlWs(ex, sym, tf) {
     return;
   }
 
-  // Direct Browser WebSocket for Binance (combined real-time kline + aggTrade + bookTicker for Vataga-speed 5ms ticks)
+  // Direct browser fallback. Production charts use the normalized server market-data relay above.
   if (ex === "BN" || ex === "AD") {
     const domain = ex === "BN" ? "fstream.binance.com" : "fstream.asterdex.com";
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     const bnTf = tfMap[tf] || tf;
     const sLower = sym.toLowerCase();
     try {
-      klWs = new WebSocket(`wss://${domain}/stream?streams=${sLower}@kline_${bnTf}/${sLower}@aggTrade/${sLower}@bookTicker`);
+      const streamPath = ex === "BN" ? "market/stream" : "stream";
+      const streams = ex === "BN"
+        ? `${sLower}@kline_${bnTf}/${sLower}@aggTrade`
+        : `${sLower}@kline_${bnTf}/${sLower}@aggTrade/${sLower}@bookTicker`;
+      klWs = new WebSocket(`wss://${domain}/${streamPath}?streams=${streams}`);
       klWs.onmessage = (e) => {
         try {
           const res = JSON.parse(e.data);

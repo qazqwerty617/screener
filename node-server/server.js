@@ -558,7 +558,7 @@ function connectKlineWs(sub) {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     const bnTf = tfMap[tf] || tf;
     const stream = `${sym.toLowerCase()}@kline_${bnTf}/${sym.toLowerCase()}@aggTrade`;
-    sub.ws = new WebSocket(`wss://fstream.binance.com/stream?streams=${stream}`, { perMessageDeflate: false });
+    sub.ws = new WebSocket(`wss://fstream.binance.com/market/stream?streams=${stream}`, { perMessageDeflate: false });
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] BN:${sym}`, e.message));
     sub.ws.on("open", () => markMarketOpen(sub));
     sub.ws.on("message", (raw) => {

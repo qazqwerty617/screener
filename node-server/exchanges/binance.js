@@ -48,7 +48,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
 
   function initStreams() {
     // 0. Real-time instant price stream: !bookTicker sends best bid/ask for ALL symbols instantly (~10-50ms)
-    mkExWs("BN-BookTicker", "wss://fstream.binance.com/ws/!bookTicker", (raw) => {
+    mkExWs("BN-BookTicker", "wss://fstream.binance.com/public/ws/!bookTicker", (raw) => {
       try {
         const d = JSON.parse(raw.toString());
         if (!d.s) return;
