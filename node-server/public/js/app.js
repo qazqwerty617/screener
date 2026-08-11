@@ -11683,25 +11683,26 @@ function copyPayField(elementId) {
 // ── NOTIFICATIONS & PRICE ALERTS ENGINE ──
 let priceAlerts = [];
 let audioCtx = null;
+const _alertFiredAt = new Map(); // throttle: alertId → timestamp of last fire
+
+function renderPriceAlertsList() {
+  // UI grid was removed; this is intentionally a no-op.
+}
 
 function loadPriceAlerts() {
   try {
     const raw = localStorage.getItem("obsidian_price_alerts");
     priceAlerts = raw ? JSON.parse(raw) : [];
   } catch (_) { priceAlerts = []; }
-  renderPriceAlertsList();
 }
 
 function savePriceAlerts() {
   try {
     localStorage.setItem("obsidian_price_alerts", JSON.stringify(priceAlerts));
   } catch (_) {}
-  renderPriceAlertsList();
 }
 
 function playAlertSound(kind = "chime") {
-  const enabled = $("set-sound-enabled") ? $("set-sound-enabled").checked : true;
-  if (!enabled) return;
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") audioCtx.resume();
@@ -11731,9 +11732,6 @@ function playAlertSound(kind = "chime") {
 }
 
 function showToast({ title, message, type = "info", durationMs = 5000 }) {
-  const enabled = $("set-toast-enabled") ? $("set-toast-enabled").checked : true;
-  if (!enabled) return;
-  
   const container = $("toast-container");
   if (!container) return;
   
@@ -11808,8 +11806,8 @@ function checkPriceAlerts(ex, sym, price) {
     if (alert.dir === "lte" && price <= alert.price) isHit = true;
     
     if (isHit) {
+      // Mark triggered FIRST so we don't fire again on next tick
       alert.triggered = true;
-      savePriceAlerts();
       
       const alertExName = alert.ex || targetEx || "BN";
       const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
@@ -11818,9 +11816,13 @@ function checkPriceAlerts(ex, sym, price) {
       const title = `Достигнут уровень цены!`;
       const body = `<b>${alertExName} · ${alert.sym}</b> цена достигла <b>${formattedPrice} USDT</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`;
       
-      if (typeof playAlertSound === "function") playAlertSound("chime");
-      if (typeof showToast === "function") showToast({ title, message: body, type: "price_alert" });
-      sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alertExName} · <b>${alert.sym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`);
+      // Fire notifications BEFORE save — so save errors can't suppress them
+      try { playAlertSound("chime"); } catch (_) {}
+      try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
+      try { sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alertExName} · <b>${alert.sym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`); } catch (_) {}
+      
+      // Persist the triggered state
+      try { savePriceAlerts(); } catch (_) {}
     }
   }
 }
@@ -11861,9 +11863,7 @@ function initNotificationsUI() {
       }
 
       window.open(data.botUrl, "_blank");
-      if (typeof showToast === "function") {
-        showToast("Перейдите в Telegram и нажмите START для подтверждения включения уведомлений", "info");
-      }
+      showToast({ title: "Telegram", message: "Перейдите в Telegram и нажмите START для подтверждения включения уведомлений", type: "info" });
 
       const token = data.regToken || data.linkToken;
       if (token && data.regToken) {
@@ -11880,9 +11880,7 @@ function initNotificationsUI() {
               if (pollData.token) localStorage.setItem("obsidian_auth_token", authToken);
               if (typeof renderProfile === "function") renderProfile(pollData.user);
               updateTgSettingsUI();
-              if (typeof showToast === "function") {
-                showToast("Telegram успешно подключен!", "success");
-              }
+              showToast({ title: "Telegram", message: "Telegram успешно подключен!", type: "success" });
             }
           } catch (_) {}
         }, 1500);
