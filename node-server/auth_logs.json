@@ -1,0 +1,22 @@
+[
+  {
+    "id": "381c1361c7e04a1f",
+    "timestamp": "2026-08-11T17:06:31.514Z",
+    "event": "TOGGLE_TAG",
+    "userId": "USR-284895",
+    "tag": "⭐ VIP",
+    "tags": [
+      "⭐ VIP"
+    ]
+  },
+  {
+    "id": "08b78c8e81dc8350",
+    "timestamp": "2026-08-11T16:11:46.422Z",
+    "event": "REGISTER_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "chatId": "8482582995",
+    "ip": ""
+  }
+]

@@ -3818,6 +3818,435 @@ document.addEventListener("DOMContentLoaded", () => {
       if (e.target === modal) modal.style.display = "none";
     };
   }
+
+  // ── Authentication & Profile System ──
+  let currentUser = null;
+  let authToken = localStorage.getItem("obsidian_auth_token") || "";
+
+  const profileBtn = $("profile-btn");
+  const profileModal = $("profile-modal");
+  const profileCloseBtn = $("profile-modal-close");
+  const authModal = $("auth-modal");
+  const authCloseBtn = $("auth-modal-close");
+
+  const authTabLogin = $("auth-tab-login");
+  const authTabRegister = $("auth-tab-register");
+  const authLoginForm = $("auth-login-form");
+  const authRegisterForm = $("auth-register-form");
+  const authErrorMsg = $("auth-error-msg");
+  const authLogoutBtn = $("auth-logout-btn");
+  const telegramAuthBtn = $("telegram-auth-btn");
+
+  const profileNameDisplay = $("profile-name-display");
+  const profileUseridDisplay = $("profile-userid-display");
+  const profileEmailDisplay = $("profile-email-display");
+  const profileStatId = $("profile-stat-id");
+  const profileStatMethod = $("profile-stat-method");
+  const profileNameInput = $("profile-name-input");
+  const profileSaveBtn = $("profile-save-btn");
+  const profileAvatar = $("profile-avatar");
+
+  function showAuthError(msg) {
+    if (!authErrorMsg) return;
+    if (msg) {
+      authErrorMsg.textContent = msg;
+      authErrorMsg.style.display = "block";
+    } else {
+      authErrorMsg.style.display = "none";
+    }
+  }
+
+  const tgBotStatusText = $("tg-bot-status-text");
+  const tgBotLinkBtn = $("tg-bot-link-btn");
+
+  window.openProModal = function() {
+    const modal = $("proModal");
+    if (modal) modal.style.display = "flex";
+  };
+  window.closeProModal = function() {
+    const modal = $("proModal");
+    if (modal) modal.style.display = "none";
+  };
+
+  function renderProfile(user) {
+    currentUser = user;
+    window.currentUser = user;
+    if (user) {
+      const name = user.username || "Трейдер";
+      const id = user.id || "USR-000000";
+      const email = user.email || "—";
+      const method = user.authMethod === "telegram" ? "Telegram" : "Логин / Пароль";
+      const isPro = user.plan === "pro";
+
+      if (profileNameDisplay) profileNameDisplay.textContent = name;
+      if (profileUseridDisplay) profileUseridDisplay.textContent = `ID: ${id}`;
+      if (profileEmailDisplay) profileEmailDisplay.textContent = email;
+      if (profileStatId) profileStatId.textContent = id;
+      if (profileStatMethod) profileStatMethod.textContent = method;
+      if (profileNameInput) profileNameInput.value = name;
+
+      const profileStatDays = $("profile-stat-days");
+      if (profileStatDays) {
+        if (isPro) {
+          const days = user.proDaysLeft;
+          if (days === "∞" || days === null || days === undefined || days >= 8000 || String(days).includes("∞")) {
+            profileStatDays.textContent = "∞ (Бессрочно)";
+            profileStatDays.style.color = "#26c97a";
+          } else {
+            profileStatDays.textContent = `${days} дн.`;
+            profileStatDays.style.color = "#26c97a";
+          }
+        } else {
+          profileStatDays.textContent = "∞ (Бессрочно)";
+          profileStatDays.style.color = "#94a3b8";
+        }
+      }
+
+      const profileStatPlan = $("profile-stat-plan");
+      const profileRoleBadge = $("profile-role-badge");
+      const profileUpgradeBanner = $("profile-plan-upgrade-banner");
+
+      if (profileStatPlan) {
+        profileStatPlan.textContent = isPro ? "PRO (Активна)" : "FREE Plan";
+        profileStatPlan.style.color = isPro ? "#26c97a" : "#94a3b8";
+      }
+      if (profileRoleBadge) {
+        profileRoleBadge.textContent = isPro ? "PRO" : "FREE";
+        profileRoleBadge.className = isPro ? "profile-badge-pro" : "profile-badge-free";
+      }
+      if (profileUpgradeBanner) {
+        profileUpgradeBanner.style.display = isPro ? "none" : "flex";
+      }
+
+      if (tgBotStatusText) {
+        if (user.telegramLinked) {
+          tgBotStatusText.textContent = "✅ Подключен (@ObsidianScreenerBot)";
+          tgBotStatusText.classList.add("connected");
+          if (tgBotLinkBtn) tgBotLinkBtn.style.display = "none";
+        } else {
+          tgBotStatusText.textContent = "Не подключен";
+          tgBotStatusText.classList.remove("connected");
+          if (tgBotLinkBtn) tgBotLinkBtn.style.display = "inline-block";
+        }
+      }
+
+      if (profileAvatar && user.avatar) {
+        profileAvatar.innerHTML = `<img src="${user.avatar}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
+      }
+      if (authCloseBtn) authCloseBtn.style.display = "block";
+    } else {
+      if (authCloseBtn) authCloseBtn.style.display = "none";
+      if (authModal) {
+        showAuthError("");
+        authModal.style.display = "flex";
+      }
+    }
+  }
+
+  // Telegram Bot Link Handler
+  if (tgBotLinkBtn) {
+    tgBotLinkBtn.onclick = async () => {
+      if (!authToken) return;
+      try {
+        const r = await fetch("/api/auth/telegram-link-token", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+        const data = await r.json();
+        if (data.success && data.botUrl) {
+          window.open(data.botUrl, "_blank");
+          if (typeof showToast === "function") {
+            showToast("Нажмите START в Telegram-боте для активации уведомлений", "info");
+          }
+          let polls = 0;
+          const pollTimer = setInterval(async () => {
+            polls++;
+            if (polls > 40) clearInterval(pollTimer);
+            await checkAuthSession();
+            if (currentUser && currentUser.telegramLinked) {
+              clearInterval(pollTimer);
+              if (typeof showToast === "function") {
+                showToast("✅ Telegram-бот успешно подключен!", "success");
+              }
+            }
+          }, 3000);
+        }
+      } catch (err) {
+        if (typeof showToast === "function") showToast("Ошибка получения ссылки бота", "error");
+      }
+    };
+  }
+
+  window.onTelegramAuth = async function(tgUser) {
+    try {
+      const r = await fetch("/api/auth/telegram-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tgUser)
+      });
+      const data = await r.json();
+      if (!r.ok || !data.success) {
+        throw new Error(data.error || "Ошибка проверки авторизации Telegram");
+      }
+      authToken = data.token;
+      localStorage.setItem("obsidian_auth_token", authToken);
+      renderProfile(data.user);
+      if (authModal) authModal.style.display = "none";
+      if (typeof showToast === "function") {
+        showToast(`Telegram вход выполнен! Ваш ID: ${data.user.id}`, "success");
+      }
+    } catch (err) {
+      showAuthError(err.message);
+    }
+  };
+
+  async function checkAuthSession() {
+    if (!authToken) {
+      renderProfile(null);
+      return;
+    }
+    try {
+      const r = await fetch("/api/auth/me", {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await r.json();
+      if (data.success && data.user) {
+        renderProfile(data.user);
+      } else {
+        authToken = "";
+        localStorage.removeItem("obsidian_auth_token");
+        renderProfile(null);
+      }
+    } catch (_) {
+      renderProfile(null);
+    }
+  }
+
+  checkAuthSession();
+
+  if (profileBtn) {
+    profileBtn.onclick = () => {
+      if (currentUser) {
+        if (profileModal) profileModal.style.display = "flex";
+      } else {
+        if (authModal) {
+          showAuthError("");
+          authModal.style.display = "flex";
+        }
+      }
+    };
+  }
+
+  if (profileCloseBtn && profileModal) {
+    profileCloseBtn.onclick = () => { profileModal.style.display = "none"; };
+  }
+  if (authCloseBtn && authModal) {
+    authCloseBtn.onclick = () => {
+      if (currentUser) authModal.style.display = "none";
+    };
+  }
+
+  if (profileModal) {
+    profileModal.onclick = (e) => {
+      if (e.target === profileModal) profileModal.style.display = "none";
+    };
+  }
+  if (authModal) {
+    authModal.onclick = (e) => {
+      if (e.target === authModal && currentUser) authModal.style.display = "none";
+    };
+  }
+
+  // Copy User ID handlers
+  if (profileUseridDisplay) {
+    profileUseridDisplay.title = "Нажмите, чтобы скопировать ID";
+    profileUseridDisplay.onclick = () => {
+      if (currentUser && currentUser.id && typeof copyCoinNameToClipboard === "function") {
+        copyCoinNameToClipboard(currentUser.id);
+      }
+    };
+  }
+  if (profileStatId) {
+    profileStatId.style.cursor = "pointer";
+    profileStatId.title = "Нажмите, чтобы скопировать ID";
+    profileStatId.onclick = () => {
+      if (currentUser && currentUser.id && typeof copyCoinNameToClipboard === "function") {
+        copyCoinNameToClipboard(currentUser.id);
+      }
+    };
+  }
+
+  // Auth Tabs Toggle
+  if (authTabLogin && authTabRegister && authLoginForm && authRegisterForm) {
+    authTabLogin.onclick = () => {
+      authTabLogin.classList.add("active");
+      authTabRegister.classList.remove("active");
+      authLoginForm.style.display = "flex";
+      authRegisterForm.style.display = "none";
+      showAuthError("");
+    };
+    authTabRegister.onclick = () => {
+      authTabRegister.classList.add("active");
+      authTabLogin.classList.remove("active");
+      authRegisterForm.style.display = "flex";
+      authLoginForm.style.display = "none";
+      showAuthError("");
+    };
+  }
+
+  // Login Form Handler
+  if (authLoginForm) {
+    authLoginForm.onsubmit = async (e) => {
+      e.preventDefault();
+      showAuthError("");
+      const emailOrUsername = ($("login-email")?.value || "").trim();
+      const password = $("login-password")?.value || "";
+
+      try {
+        const r = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ emailOrUsername, password })
+        });
+        const data = await r.json();
+        if (!r.ok || !data.success) {
+          throw new Error(data.error || "Ошибка авторизации");
+        }
+        authToken = data.token;
+        localStorage.setItem("obsidian_auth_token", authToken);
+        renderProfile(data.user);
+        if (authModal) authModal.style.display = "none";
+        if (typeof showToast === "function") {
+          showToast(`Добро пожаловать, ${data.user.username}! (ID: ${data.user.id})`, "success");
+        }
+      } catch (err) {
+        showAuthError(err.message);
+      }
+    };
+  }
+
+  // Register Form Handler
+  if (authRegisterForm) {
+    authRegisterForm.onsubmit = async (e) => {
+      e.preventDefault();
+      showAuthError("");
+      const username = ($("reg-username")?.value || "").trim();
+      const email = ($("reg-email")?.value || "").trim();
+      const password = $("reg-password")?.value || "";
+
+      if (password.length < 8) {
+        showAuthError("Пароль должен содержать минимум 8 символов");
+        return;
+      }
+
+      try {
+        const r = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, email, password })
+        });
+        const data = await r.json();
+        if (!r.ok || !data.success) {
+          throw new Error(data.error || "Ошибка регистрации");
+        }
+        authToken = data.token;
+        localStorage.setItem("obsidian_auth_token", authToken);
+        renderProfile(data.user);
+        if (authModal) authModal.style.display = "none";
+        if (typeof showToast === "function") {
+          showToast(`Аккаунт создан! Ваш ID: ${data.user.id}`, "success");
+        }
+      } catch (err) {
+        showAuthError(err.message);
+      }
+    };
+  }
+
+  // Telegram Auth Handler via Bot
+  if (telegramAuthBtn) {
+    telegramAuthBtn.onclick = async () => {
+      showAuthError("");
+      try {
+        const r = await fetch("/api/auth/telegram-start", { method: "POST" });
+        const data = await r.json();
+        if (!r.ok || !data.success || !data.botUrl) {
+          throw new Error(data.error || "Не удалось запустить авторизацию Telegram");
+        }
+
+        // Open Telegram Bot link
+        window.open(data.botUrl, "_blank");
+
+        if (typeof showToast === "function") {
+          showToast("Перейдите в Telegram и нажмите START для завершения входа", "info");
+        }
+
+        // Poll for authorization approval
+        const regToken = data.regToken;
+        let pollCount = 0;
+        const pollInterval = setInterval(async () => {
+          pollCount++;
+          if (pollCount > 80) { // 2 minutes max
+            clearInterval(pollInterval);
+          }
+          try {
+            const pollRes = await fetch(`/api/auth/telegram-poll?token=${regToken}`);
+            const pollData = await pollRes.json();
+            if (pollData.status === "approved" && pollData.token && pollData.user) {
+              clearInterval(pollInterval);
+              authToken = pollData.token;
+              localStorage.setItem("obsidian_auth_token", authToken);
+              renderProfile(pollData.user);
+              if (authModal) authModal.style.display = "none";
+              if (typeof showToast === "function") {
+                showToast(`Вход через Telegram выполнен! Ваш ID: ${pollData.user.id}`, "success");
+              }
+            }
+          } catch (_) {}
+        }, 1500);
+
+      } catch (err) {
+        showAuthError(err.message);
+      }
+    };
+  }
+
+  // Save Profile Name Handler
+  if (profileSaveBtn && profileNameInput) {
+    profileSaveBtn.onclick = async () => {
+      const newName = profileNameInput.value.trim();
+      if (!newName) return;
+      if (authToken) {
+        try {
+          const r = await fetch("/api/auth/update-profile", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ username: newName })
+          });
+          const data = await r.json();
+          if (data.success && data.user) {
+            renderProfile(data.user);
+            if (typeof showToast === "function") showToast("Имя профиля обновлено", "success");
+          }
+        } catch (_) {}
+      } else if (profileNameDisplay) {
+        profileNameDisplay.textContent = newName;
+      }
+    };
+  }
+
+  // Logout Handler
+  if (authLogoutBtn) {
+    authLogoutBtn.onclick = () => {
+      authToken = "";
+      localStorage.removeItem("obsidian_auth_token");
+      if (profileModal) profileModal.style.display = "none";
+      renderProfile(null);
+      if (typeof showToast === "function") showToast("Вы вышли из аккаунта", "info");
+    };
+  }
 });
 
 function setTool(tool) {
@@ -7629,6 +8058,15 @@ function renderScreenerHeatmap() {
 
 // тФАтФА Tab switching тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 window.switchView = function switchView(view) {
+  if (view !== "screener") {
+    const user = window.currentUser;
+    const isPro = user && user.plan === "pro";
+    if (!isPro) {
+      if (typeof window.openProModal === "function") window.openProModal();
+      return;
+    }
+  }
+
   activeView = view;
   densityHover = -1; // Reset hover index when switching views
   const mainEl = document.getElementById("main");

@@ -267,9 +267,13 @@ function updateLiveTradeTick(ex, sym, tf, tradeTime, price, volume) {
   }
 }
 
-// тФАтФАтФА HTTP + WebSocket server тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+const userStore = require("./userStore");
+const telegramBot = require("./telegramBot");
+
+// ── HTTP + WebSocket server ──
 const app = express();
 app.use(compression());
+app.use(express.json());
 const server = http.createServer(app);
 const wss = new WebSocketServer({
   server,
@@ -1457,6 +1461,121 @@ setInterval(async () => {
     }
   }
 }, 10000).unref();
+
+// ── Authentication Endpoints ──
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const result = userStore.registerUser({ ...(req.body || {}), ip: req.ip });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const result = userStore.loginUser({ ...(req.body || {}), ip: req.ip });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/telegram", (req, res) => {
+  try {
+    const result = userStore.telegramAuth(req.body || {}, null, req.ip);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/auth/logs", (req, res) => {
+  res.json({ success: true, logs: userStore.getAuditLogs() });
+});
+
+app.post("/api/auth/telegram-verify", (req, res) => {
+  try {
+    const tgData = req.body || {};
+    const isValid = telegramBot.verifyTelegramAuth(tgData);
+    if (!isValid) {
+      return res.status(400).json({ error: "Подпись Telegram не прошла проверку подлинности" });
+    }
+    const result = userStore.telegramAuth(tgData);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/telegram-start", (req, res) => {
+  try {
+    const regToken = telegramBot.createRegToken();
+    const botUrl = `https://t.me/${telegramBot.BOT_USERNAME}?start=${regToken}`;
+    res.json({ success: true, regToken, botUrl, botUsername: telegramBot.BOT_USERNAME });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get("/api/auth/telegram-poll", (req, res) => {
+  const token = req.query.token;
+  const statusInfo = telegramBot.getRegTokenStatus(token);
+  res.json(statusInfo);
+});
+
+app.post("/api/auth/telegram-link-token", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  const linkToken = telegramBot.createLinkToken(user.id);
+  const botUrl = `https://t.me/${telegramBot.BOT_USERNAME}?start=${linkToken}`;
+  res.json({ success: true, linkToken, botUrl, botUsername: telegramBot.BOT_USERNAME });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim() || req.query.token;
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  res.json({ success: true, user });
+});
+
+app.post("/api/auth/update-profile", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  try {
+    const updated = userStore.updateProfile(user.id, req.body || {});
+    res.json({ success: true, user: updated });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post("/api/user/set-plan", (req, res) => {
+  const adminSecret = req.headers["x-admin-secret"];
+  if (adminSecret !== "obsidian_pro_admin_2026") {
+    return res.status(403).json({ error: "Доступ запрещен" });
+  }
+  const { userId, plan } = req.body || {};
+  if (!userId || !plan) {
+    return res.status(400).json({ error: "Необходимы параметры userId и plan" });
+  }
+  const updated = userStore.setUserPlan(userId, plan);
+  if (!updated) {
+    return res.status(404).json({ error: "Пользователь не найден" });
+  }
+  res.json({ success: true, user: updated });
+});
 
 app.use(express.static(path.join(__dirname, "public"), { maxAge: 0, etag: false }));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));

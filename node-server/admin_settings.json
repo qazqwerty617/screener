@@ -1,0 +1,8 @@
+{
+  "sysAlerts": false,
+  "payAlerts": true,
+  "regAlerts": true,
+  "suppAlerts": true,
+  "dailyReport": true,
+  "tz": "MSK (UTC+3)"
+}

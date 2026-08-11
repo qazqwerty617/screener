@@ -1,0 +1,5078 @@
+[
+  {
+    "sampleIndex": 1,
+    "timestamp": "2026-08-07T16:17:00.052Z",
+    "uptimeSeconds": 60,
+    "memory": {
+      "rssMB": 192.83,
+      "heapUsedMB": 43.41,
+      "heapTotalMB": 151.82,
+      "externalMB": 9.17,
+      "arrayBuffersMB": 5.44
+    },
+    "cpu": {
+      "userUs": 28329000,
+      "systemUs": 6610000,
+      "usagePercent": 58.14
+    },
+    "eventLoopLagMs": {
+      "p95": 2.71,
+      "p99": 3.77,
+      "p99_9": 3.77,
+      "max": 4.59
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 2,
+    "timestamp": "2026-08-07T16:18:00.052Z",
+    "uptimeSeconds": 120,
+    "memory": {
+      "rssMB": 207.13,
+      "heapUsedMB": 36.79,
+      "heapTotalMB": 152.45,
+      "externalMB": 8.25,
+      "arrayBuffersMB": 4.51
+    },
+    "cpu": {
+      "userUs": 51125000,
+      "systemUs": 11656000,
+      "usagePercent": 52.28
+    },
+    "eventLoopLagMs": {
+      "p95": 2.37,
+      "p99": 3.47,
+      "p99_9": 3.77,
+      "max": 4.59
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 3,
+    "timestamp": "2026-08-07T16:19:00.052Z",
+    "uptimeSeconds": 180,
+    "memory": {
+      "rssMB": 208.41,
+      "heapUsedMB": 27.31,
+      "heapTotalMB": 152.82,
+      "externalMB": 5.96,
+      "arrayBuffersMB": 2.16
+    },
+    "cpu": {
+      "userUs": 71969000,
+      "systemUs": 16656000,
+      "usagePercent": 49.21
+    },
+    "eventLoopLagMs": {
+      "p95": 2.45,
+      "p99": 3.77,
+      "p99_9": 4.59,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 4,
+    "timestamp": "2026-08-07T16:20:00.052Z",
+    "uptimeSeconds": 240,
+    "memory": {
+      "rssMB": 211.81,
+      "heapUsedMB": 44.64,
+      "heapTotalMB": 153.32,
+      "externalMB": 9.55,
+      "arrayBuffersMB": 5.75
+    },
+    "cpu": {
+      "userUs": 94469000,
+      "systemUs": 21281000,
+      "usagePercent": 48.21
+    },
+    "eventLoopLagMs": {
+      "p95": 2.37,
+      "p99": 4.25,
+      "p99_9": 4.73,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 5,
+    "timestamp": "2026-08-07T16:21:00.053Z",
+    "uptimeSeconds": 300,
+    "memory": {
+      "rssMB": 222.68,
+      "heapUsedMB": 21.51,
+      "heapTotalMB": 153.57,
+      "externalMB": 4.82,
+      "arrayBuffersMB": 1.02
+    },
+    "cpu": {
+      "userUs": 120875000,
+      "systemUs": 25891000,
+      "usagePercent": 48.91
+    },
+    "eventLoopLagMs": {
+      "p95": 2.33,
+      "p99": 4.25,
+      "p99_9": 4.73,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 6,
+    "timestamp": "2026-08-07T16:22:00.058Z",
+    "uptimeSeconds": 360,
+    "memory": {
+      "rssMB": 224.95,
+      "heapUsedMB": 34.19,
+      "heapTotalMB": 153.07,
+      "externalMB": 6.96,
+      "arrayBuffersMB": 3.16
+    },
+    "cpu": {
+      "userUs": 143094000,
+      "systemUs": 31031000,
+      "usagePercent": 48.35
+    },
+    "eventLoopLagMs": {
+      "p95": 2.12,
+      "p99": 4.05,
+      "p99_9": 4.73,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 7,
+    "timestamp": "2026-08-07T16:23:00.064Z",
+    "uptimeSeconds": 420,
+    "memory": {
+      "rssMB": 225.54,
+      "heapUsedMB": 43.76,
+      "heapTotalMB": 153.98,
+      "externalMB": 9.64,
+      "arrayBuffersMB": 5.84
+    },
+    "cpu": {
+      "userUs": 166125000,
+      "systemUs": 35750000,
+      "usagePercent": 48.05
+    },
+    "eventLoopLagMs": {
+      "p95": 2.12,
+      "p99": 3.77,
+      "p99_9": 4.73,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 8,
+    "timestamp": "2026-08-07T16:24:00.069Z",
+    "uptimeSeconds": 480,
+    "memory": {
+      "rssMB": 227.46,
+      "heapUsedMB": 26.85,
+      "heapTotalMB": 154.48,
+      "externalMB": 5.62,
+      "arrayBuffersMB": 1.83
+    },
+    "cpu": {
+      "userUs": 191094000,
+      "systemUs": 40688000,
+      "usagePercent": 48.28
+    },
+    "eventLoopLagMs": {
+      "p95": 2.06,
+      "p99": 4.05,
+      "p99_9": 6.09,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 32
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 9,
+    "timestamp": "2026-08-07T16:25:00.075Z",
+    "uptimeSeconds": 540,
+    "memory": {
+      "rssMB": 230.56,
+      "heapUsedMB": 55.54,
+      "heapTotalMB": 154.61,
+      "externalMB": 12.08,
+      "arrayBuffersMB": 8.28
+    },
+    "cpu": {
+      "userUs": 215063000,
+      "systemUs": 46078000,
+      "usagePercent": 48.35
+    },
+    "eventLoopLagMs": {
+      "p95": 1.83,
+      "p99": 3.77,
+      "p99_9": 6.09,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 31
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 10,
+    "timestamp": "2026-08-07T16:26:00.079Z",
+    "uptimeSeconds": 600,
+    "memory": {
+      "rssMB": 250.7,
+      "heapUsedMB": 69.57,
+      "heapTotalMB": 159.73,
+      "externalMB": 25.73,
+      "arrayBuffersMB": 16.84
+    },
+    "cpu": {
+      "userUs": 238454000,
+      "systemUs": 51578000,
+      "usagePercent": 48.33
+    },
+    "eventLoopLagMs": {
+      "p95": 1.83,
+      "p99": 4.25,
+      "p99_9": 6.09,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 31
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 11,
+    "timestamp": "2026-08-07T16:27:00.085Z",
+    "uptimeSeconds": 660,
+    "memory": {
+      "rssMB": 239.82,
+      "heapUsedMB": 23.51,
+      "heapTotalMB": 155.48,
+      "externalMB": 4.89,
+      "arrayBuffersMB": 1.09
+    },
+    "cpu": {
+      "userUs": 258875000,
+      "systemUs": 57094000,
+      "usagePercent": 47.86
+    },
+    "eventLoopLagMs": {
+      "p95": 1.83,
+      "p99": 4.05,
+      "p99_9": 6.09,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 31
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 12,
+    "timestamp": "2026-08-07T16:28:00.091Z",
+    "uptimeSeconds": 720,
+    "memory": {
+      "rssMB": 239.79,
+      "heapUsedMB": 25.16,
+      "heapTotalMB": 156.23,
+      "externalMB": 5.36,
+      "arrayBuffersMB": 1.57
+    },
+    "cpu": {
+      "userUs": 282516000,
+      "systemUs": 63266000,
+      "usagePercent": 48.02
+    },
+    "eventLoopLagMs": {
+      "p95": 1.76,
+      "p99": 3.93,
+      "p99_9": 6.09,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 31
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 13,
+    "timestamp": "2026-08-07T16:29:00.096Z",
+    "uptimeSeconds": 780,
+    "memory": {
+      "rssMB": 241.17,
+      "heapUsedMB": 34.91,
+      "heapTotalMB": 155.98,
+      "externalMB": 7.6,
+      "arrayBuffersMB": 3.81
+    },
+    "cpu": {
+      "userUs": 307594000,
+      "systemUs": 67297000,
+      "usagePercent": 48.05
+    },
+    "eventLoopLagMs": {
+      "p95": 1.74,
+      "p99": 3.93,
+      "p99_9": 6.09,
+      "max": 9.87
+    },
+    "resources": {
+      "activeSockets": 31
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 14,
+    "timestamp": "2026-08-07T16:30:00.101Z",
+    "uptimeSeconds": 840,
+    "memory": {
+      "rssMB": 241.67,
+      "heapUsedMB": 21.66,
+      "heapTotalMB": 28.73,
+      "externalMB": 5.38,
+      "arrayBuffersMB": 0.53
+    },
+    "cpu": {
+      "userUs": 314407000,
+      "systemUs": 69110000,
+      "usagePercent": 45.65
+    },
+    "eventLoopLagMs": {
+      "p95": 4.25,
+      "p99": 11.01,
+      "p99_9": 14.23,
+      "max": 14.85
+    },
+    "resources": {
+      "activeSockets": 12
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 15,
+    "timestamp": "2026-08-07T16:31:00.106Z",
+    "uptimeSeconds": 900,
+    "memory": {
+      "rssMB": 247.55,
+      "heapUsedMB": 36.11,
+      "heapTotalMB": 62.43,
+      "externalMB": 9.93,
+      "arrayBuffersMB": 6.13
+    },
+    "cpu": {
+      "userUs": 316266000,
+      "systemUs": 69485000,
+      "usagePercent": 42.85
+    },
+    "eventLoopLagMs": {
+      "p95": 7.83,
+      "p99": 13.12,
+      "p99_9": 15.08,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 16,
+    "timestamp": "2026-08-07T16:32:00.112Z",
+    "uptimeSeconds": 960,
+    "memory": {
+      "rssMB": 250.29,
+      "heapUsedMB": 36.98,
+      "heapTotalMB": 94.53,
+      "externalMB": 11.44,
+      "arrayBuffersMB": 7.64
+    },
+    "cpu": {
+      "userUs": 318125000,
+      "systemUs": 70250000,
+      "usagePercent": 40.45
+    },
+    "eventLoopLagMs": {
+      "p95": 8.49,
+      "p99": 13.41,
+      "p99_9": 15.08,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 17,
+    "timestamp": "2026-08-07T16:33:00.120Z",
+    "uptimeSeconds": 1020,
+    "memory": {
+      "rssMB": 245.95,
+      "heapUsedMB": 34.82,
+      "heapTotalMB": 93.87,
+      "externalMB": 7.73,
+      "arrayBuffersMB": 3.93
+    },
+    "cpu": {
+      "userUs": 319954000,
+      "systemUs": 70656000,
+      "usagePercent": 38.29
+    },
+    "eventLoopLagMs": {
+      "p95": 8.98,
+      "p99": 13.64,
+      "p99_9": 15.06,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 18,
+    "timestamp": "2026-08-07T16:34:00.134Z",
+    "uptimeSeconds": 1080,
+    "memory": {
+      "rssMB": 243.48,
+      "heapUsedMB": 32.13,
+      "heapTotalMB": 94.12,
+      "externalMB": 7.55,
+      "arrayBuffersMB": 3.75
+    },
+    "cpu": {
+      "userUs": 321735000,
+      "systemUs": 71078000,
+      "usagePercent": 36.37
+    },
+    "eventLoopLagMs": {
+      "p95": 9.29,
+      "p99": 13.64,
+      "p99_9": 15.06,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 19,
+    "timestamp": "2026-08-07T16:35:00.142Z",
+    "uptimeSeconds": 1140,
+    "memory": {
+      "rssMB": 242.79,
+      "heapUsedMB": 30.94,
+      "heapTotalMB": 93.64,
+      "externalMB": 7.07,
+      "arrayBuffersMB": 3.28
+    },
+    "cpu": {
+      "userUs": 323204000,
+      "systemUs": 71500000,
+      "usagePercent": 34.62
+    },
+    "eventLoopLagMs": {
+      "p95": 9.47,
+      "p99": 13.75,
+      "p99_9": 15.06,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 20,
+    "timestamp": "2026-08-07T16:36:00.150Z",
+    "uptimeSeconds": 1200,
+    "memory": {
+      "rssMB": 249.14,
+      "heapUsedMB": 34.39,
+      "heapTotalMB": 95.3,
+      "externalMB": 11.06,
+      "arrayBuffersMB": 7.26
+    },
+    "cpu": {
+      "userUs": 324344000,
+      "systemUs": 72047000,
+      "usagePercent": 33.03
+    },
+    "eventLoopLagMs": {
+      "p95": 9.68,
+      "p99": 13.78,
+      "p99_9": 15.06,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 21,
+    "timestamp": "2026-08-07T16:37:00.160Z",
+    "uptimeSeconds": 1260,
+    "memory": {
+      "rssMB": 252.4,
+      "heapUsedMB": 34.44,
+      "heapTotalMB": 96.23,
+      "externalMB": 14.68,
+      "arrayBuffersMB": 8.34
+    },
+    "cpu": {
+      "userUs": 325875000,
+      "systemUs": 72750000,
+      "usagePercent": 31.63
+    },
+    "eventLoopLagMs": {
+      "p95": 9.84,
+      "p99": 13.81,
+      "p99_9": 15.06,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 22,
+    "timestamp": "2026-08-07T16:38:00.174Z",
+    "uptimeSeconds": 1320,
+    "memory": {
+      "rssMB": 244.87,
+      "heapUsedMB": 31.33,
+      "heapTotalMB": 95.85,
+      "externalMB": 7.9,
+      "arrayBuffersMB": 4.09
+    },
+    "cpu": {
+      "userUs": 327344000,
+      "systemUs": 73297000,
+      "usagePercent": 30.35
+    },
+    "eventLoopLagMs": {
+      "p95": 9.95,
+      "p99": 14.13,
+      "p99_9": 15.06,
+      "max": 15.51
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 23,
+    "timestamp": "2026-08-07T16:39:00.179Z",
+    "uptimeSeconds": 1380,
+    "memory": {
+      "rssMB": 244.49,
+      "heapUsedMB": 30.93,
+      "heapTotalMB": 159.66,
+      "externalMB": 7.76,
+      "arrayBuffersMB": 3.95
+    },
+    "cpu": {
+      "userUs": 328922000,
+      "systemUs": 73828000,
+      "usagePercent": 29.18
+    },
+    "eventLoopLagMs": {
+      "p95": 10.15,
+      "p99": 14.19,
+      "p99_9": 15.08,
+      "max": 15.53
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 24,
+    "timestamp": "2026-08-07T16:40:00.193Z",
+    "uptimeSeconds": 1440,
+    "memory": {
+      "rssMB": 247.28,
+      "heapUsedMB": 32.23,
+      "heapTotalMB": 159.48,
+      "externalMB": 9.42,
+      "arrayBuffersMB": 5.62
+    },
+    "cpu": {
+      "userUs": 330282000,
+      "systemUs": 74422000,
+      "usagePercent": 28.1
+    },
+    "eventLoopLagMs": {
+      "p95": 10.27,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 25,
+    "timestamp": "2026-08-07T16:41:00.198Z",
+    "uptimeSeconds": 1500,
+    "memory": {
+      "rssMB": 246.08,
+      "heapUsedMB": 32.57,
+      "heapTotalMB": 159.44,
+      "externalMB": 9.01,
+      "arrayBuffersMB": 5.22
+    },
+    "cpu": {
+      "userUs": 331938000,
+      "systemUs": 74953000,
+      "usagePercent": 27.12
+    },
+    "eventLoopLagMs": {
+      "p95": 10.61,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 26,
+    "timestamp": "2026-08-07T16:42:00.216Z",
+    "uptimeSeconds": 1560,
+    "memory": {
+      "rssMB": 246.21,
+      "heapUsedMB": 31.11,
+      "heapTotalMB": 159.71,
+      "externalMB": 8.01,
+      "arrayBuffersMB": 4.21
+    },
+    "cpu": {
+      "userUs": 333563000,
+      "systemUs": 75516000,
+      "usagePercent": 26.22
+    },
+    "eventLoopLagMs": {
+      "p95": 10.8,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 27,
+    "timestamp": "2026-08-07T16:43:00.231Z",
+    "uptimeSeconds": 1620,
+    "memory": {
+      "rssMB": 246.75,
+      "heapUsedMB": 33.19,
+      "heapTotalMB": 159.73,
+      "externalMB": 9.53,
+      "arrayBuffersMB": 5.73
+    },
+    "cpu": {
+      "userUs": 334922000,
+      "systemUs": 76016000,
+      "usagePercent": 25.36
+    },
+    "eventLoopLagMs": {
+      "p95": 10.94,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 28,
+    "timestamp": "2026-08-07T16:44:00.241Z",
+    "uptimeSeconds": 1680,
+    "memory": {
+      "rssMB": 247.83,
+      "heapUsedMB": 32.58,
+      "heapTotalMB": 159.76,
+      "externalMB": 9.91,
+      "arrayBuffersMB": 6.11
+    },
+    "cpu": {
+      "userUs": 336422000,
+      "systemUs": 76516000,
+      "usagePercent": 24.58
+    },
+    "eventLoopLagMs": {
+      "p95": 10.79,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 29,
+    "timestamp": "2026-08-07T16:45:00.247Z",
+    "uptimeSeconds": 1740,
+    "memory": {
+      "rssMB": 249.49,
+      "heapUsedMB": 34.73,
+      "heapTotalMB": 159.52,
+      "externalMB": 10.91,
+      "arrayBuffersMB": 7.11
+    },
+    "cpu": {
+      "userUs": 337985000,
+      "systemUs": 76985000,
+      "usagePercent": 23.84
+    },
+    "eventLoopLagMs": {
+      "p95": 10.8,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 30,
+    "timestamp": "2026-08-07T16:46:00.254Z",
+    "uptimeSeconds": 1800,
+    "memory": {
+      "rssMB": 250.73,
+      "heapUsedMB": 36.66,
+      "heapTotalMB": 160.73,
+      "externalMB": 15.64,
+      "arrayBuffersMB": 9.29
+    },
+    "cpu": {
+      "userUs": 339704000,
+      "systemUs": 77531000,
+      "usagePercent": 23.18
+    },
+    "eventLoopLagMs": {
+      "p95": 10.8,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 31,
+    "timestamp": "2026-08-07T16:47:00.269Z",
+    "uptimeSeconds": 1860,
+    "memory": {
+      "rssMB": 245.96,
+      "heapUsedMB": 37.51,
+      "heapTotalMB": 159.52,
+      "externalMB": 11.57,
+      "arrayBuffersMB": 7.78
+    },
+    "cpu": {
+      "userUs": 341297000,
+      "systemUs": 78031000,
+      "usagePercent": 22.54
+    },
+    "eventLoopLagMs": {
+      "p95": 10.94,
+      "p99": 14.19,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 32,
+    "timestamp": "2026-08-07T16:48:00.280Z",
+    "uptimeSeconds": 1920,
+    "memory": {
+      "rssMB": 243.2,
+      "heapUsedMB": 34.26,
+      "heapTotalMB": 159.73,
+      "externalMB": 9.82,
+      "arrayBuffersMB": 6.02
+    },
+    "cpu": {
+      "userUs": 343047000,
+      "systemUs": 78281000,
+      "usagePercent": 21.94
+    },
+    "eventLoopLagMs": {
+      "p95": 11.01,
+      "p99": 14.19,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 33,
+    "timestamp": "2026-08-07T16:49:00.297Z",
+    "uptimeSeconds": 1980,
+    "memory": {
+      "rssMB": 243.34,
+      "heapUsedMB": 33.58,
+      "heapTotalMB": 159.5,
+      "externalMB": 9.05,
+      "arrayBuffersMB": 5.25
+    },
+    "cpu": {
+      "userUs": 344438000,
+      "systemUs": 78891000,
+      "usagePercent": 21.38
+    },
+    "eventLoopLagMs": {
+      "p95": 11.09,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 34,
+    "timestamp": "2026-08-07T16:50:00.301Z",
+    "uptimeSeconds": 2040,
+    "memory": {
+      "rssMB": 246.21,
+      "heapUsedMB": 35.63,
+      "heapTotalMB": 159.52,
+      "externalMB": 10.96,
+      "arrayBuffersMB": 7.16
+    },
+    "cpu": {
+      "userUs": 345844000,
+      "systemUs": 79297000,
+      "usagePercent": 20.84
+    },
+    "eventLoopLagMs": {
+      "p95": 11.2,
+      "p99": 14.23,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 35,
+    "timestamp": "2026-08-07T16:51:00.305Z",
+    "uptimeSeconds": 2100,
+    "memory": {
+      "rssMB": 239.09,
+      "heapUsedMB": 32.33,
+      "heapTotalMB": 159.73,
+      "externalMB": 9.46,
+      "arrayBuffersMB": 5.66
+    },
+    "cpu": {
+      "userUs": 347407000,
+      "systemUs": 79875000,
+      "usagePercent": 20.34
+    },
+    "eventLoopLagMs": {
+      "p95": 11.22,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 36,
+    "timestamp": "2026-08-07T16:52:00.311Z",
+    "uptimeSeconds": 2160,
+    "memory": {
+      "rssMB": 236.88,
+      "heapUsedMB": 35.42,
+      "heapTotalMB": 159.55,
+      "externalMB": 8.2,
+      "arrayBuffersMB": 4.4
+    },
+    "cpu": {
+      "userUs": 348969000,
+      "systemUs": 80250000,
+      "usagePercent": 19.87
+    },
+    "eventLoopLagMs": {
+      "p95": 11.18,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 37,
+    "timestamp": "2026-08-07T16:53:00.328Z",
+    "uptimeSeconds": 2220,
+    "memory": {
+      "rssMB": 239.39,
+      "heapUsedMB": 33.13,
+      "heapTotalMB": 160.07,
+      "externalMB": 9.16,
+      "arrayBuffersMB": 5.36
+    },
+    "cpu": {
+      "userUs": 350422000,
+      "systemUs": 80781000,
+      "usagePercent": 19.42
+    },
+    "eventLoopLagMs": {
+      "p95": 11.18,
+      "p99": 14.19,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 38,
+    "timestamp": "2026-08-07T16:54:00.332Z",
+    "uptimeSeconds": 2280,
+    "memory": {
+      "rssMB": 235.77,
+      "heapUsedMB": 30.5,
+      "heapTotalMB": 159.91,
+      "externalMB": 7.47,
+      "arrayBuffersMB": 3.67
+    },
+    "cpu": {
+      "userUs": 351922000,
+      "systemUs": 81406000,
+      "usagePercent": 19
+    },
+    "eventLoopLagMs": {
+      "p95": 11.26,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 39,
+    "timestamp": "2026-08-07T16:55:00.337Z",
+    "uptimeSeconds": 2340,
+    "memory": {
+      "rssMB": 237.46,
+      "heapUsedMB": 31.01,
+      "heapTotalMB": 159.21,
+      "externalMB": 7.17,
+      "arrayBuffersMB": 3.37
+    },
+    "cpu": {
+      "userUs": 353532000,
+      "systemUs": 82031000,
+      "usagePercent": 18.61
+    },
+    "eventLoopLagMs": {
+      "p95": 11.3,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 40,
+    "timestamp": "2026-08-07T16:56:00.348Z",
+    "uptimeSeconds": 2400,
+    "memory": {
+      "rssMB": 230.73,
+      "heapUsedMB": 30.7,
+      "heapTotalMB": 159.68,
+      "externalMB": 7.25,
+      "arrayBuffersMB": 3.45
+    },
+    "cpu": {
+      "userUs": 354985000,
+      "systemUs": 82500000,
+      "usagePercent": 18.23
+    },
+    "eventLoopLagMs": {
+      "p95": 11.32,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 41,
+    "timestamp": "2026-08-07T16:57:00.352Z",
+    "uptimeSeconds": 2460,
+    "memory": {
+      "rssMB": 228.52,
+      "heapUsedMB": 26.5,
+      "heapTotalMB": 158.95,
+      "externalMB": 5.24,
+      "arrayBuffersMB": 1.45
+    },
+    "cpu": {
+      "userUs": 356782000,
+      "systemUs": 82969000,
+      "usagePercent": 17.87
+    },
+    "eventLoopLagMs": {
+      "p95": 11.49,
+      "p99": 14.39,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 42,
+    "timestamp": "2026-08-07T16:58:00.363Z",
+    "uptimeSeconds": 2520,
+    "memory": {
+      "rssMB": 228.93,
+      "heapUsedMB": 32.12,
+      "heapTotalMB": 158.95,
+      "externalMB": 5.83,
+      "arrayBuffersMB": 2.03
+    },
+    "cpu": {
+      "userUs": 358375000,
+      "systemUs": 83391000,
+      "usagePercent": 17.53
+    },
+    "eventLoopLagMs": {
+      "p95": 11.52,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 43,
+    "timestamp": "2026-08-07T16:59:00.367Z",
+    "uptimeSeconds": 2580,
+    "memory": {
+      "rssMB": 228.86,
+      "heapUsedMB": 29.8,
+      "heapTotalMB": 158.95,
+      "externalMB": 5.85,
+      "arrayBuffersMB": 2.05
+    },
+    "cpu": {
+      "userUs": 360297000,
+      "systemUs": 83860000,
+      "usagePercent": 17.21
+    },
+    "eventLoopLagMs": {
+      "p95": 11.49,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 44,
+    "timestamp": "2026-08-07T17:00:00.370Z",
+    "uptimeSeconds": 2640,
+    "memory": {
+      "rssMB": 240.08,
+      "heapUsedMB": 43.05,
+      "heapTotalMB": 162.04,
+      "externalMB": 15.57,
+      "arrayBuffersMB": 9.21
+    },
+    "cpu": {
+      "userUs": 361641000,
+      "systemUs": 84500000,
+      "usagePercent": 16.9
+    },
+    "eventLoopLagMs": {
+      "p95": 11.49,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 45,
+    "timestamp": "2026-08-07T17:01:00.376Z",
+    "uptimeSeconds": 2700,
+    "memory": {
+      "rssMB": 189.72,
+      "heapUsedMB": 31.96,
+      "heapTotalMB": 159.11,
+      "externalMB": 6.3,
+      "arrayBuffersMB": 2.51
+    },
+    "cpu": {
+      "userUs": 363375000,
+      "systemUs": 85110000,
+      "usagePercent": 16.61
+    },
+    "eventLoopLagMs": {
+      "p95": 11.41,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 46,
+    "timestamp": "2026-08-07T17:02:00.378Z",
+    "uptimeSeconds": 2760,
+    "memory": {
+      "rssMB": 193.73,
+      "heapUsedMB": 36.23,
+      "heapTotalMB": 161.29,
+      "externalMB": 10,
+      "arrayBuffersMB": 6.19
+    },
+    "cpu": {
+      "userUs": 365000000,
+      "systemUs": 85672000,
+      "usagePercent": 16.33
+    },
+    "eventLoopLagMs": {
+      "p95": 11.35,
+      "p99": 14.23,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 47,
+    "timestamp": "2026-08-07T17:03:00.388Z",
+    "uptimeSeconds": 2820,
+    "memory": {
+      "rssMB": 194.3,
+      "heapUsedMB": 39.75,
+      "heapTotalMB": 161.04,
+      "externalMB": 10.36,
+      "arrayBuffersMB": 6.56
+    },
+    "cpu": {
+      "userUs": 367844000,
+      "systemUs": 86344000,
+      "usagePercent": 16.1
+    },
+    "eventLoopLagMs": {
+      "p95": 11.32,
+      "p99": 14.2,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 48,
+    "timestamp": "2026-08-07T17:04:00.397Z",
+    "uptimeSeconds": 2880,
+    "memory": {
+      "rssMB": 201.55,
+      "heapUsedMB": 37.71,
+      "heapTotalMB": 162.29,
+      "externalMB": 16.57,
+      "arrayBuffersMB": 10.21
+    },
+    "cpu": {
+      "userUs": 369532000,
+      "systemUs": 87203000,
+      "usagePercent": 15.86
+    },
+    "eventLoopLagMs": {
+      "p95": 11.26,
+      "p99": 14.2,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 49,
+    "timestamp": "2026-08-07T17:05:00.402Z",
+    "uptimeSeconds": 2940,
+    "memory": {
+      "rssMB": 197.02,
+      "heapUsedMB": 35.72,
+      "heapTotalMB": 161.59,
+      "externalMB": 12.29,
+      "arrayBuffersMB": 8.47
+    },
+    "cpu": {
+      "userUs": 371235000,
+      "systemUs": 87688000,
+      "usagePercent": 15.61
+    },
+    "eventLoopLagMs": {
+      "p95": 11.35,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 50,
+    "timestamp": "2026-08-07T17:06:00.410Z",
+    "uptimeSeconds": 3000,
+    "memory": {
+      "rssMB": 179.86,
+      "heapUsedMB": 33.65,
+      "heapTotalMB": 160.28,
+      "externalMB": 9.05,
+      "arrayBuffersMB": 5.25
+    },
+    "cpu": {
+      "userUs": 373032000,
+      "systemUs": 88172000,
+      "usagePercent": 15.37
+    },
+    "eventLoopLagMs": {
+      "p95": 11.32,
+      "p99": 14.36,
+      "p99_9": 15.51,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 51,
+    "timestamp": "2026-08-07T17:07:00.418Z",
+    "uptimeSeconds": 3060,
+    "memory": {
+      "rssMB": 181.66,
+      "heapUsedMB": 34.33,
+      "heapTotalMB": 160.28,
+      "externalMB": 9.41,
+      "arrayBuffersMB": 5.61
+    },
+    "cpu": {
+      "userUs": 374407000,
+      "systemUs": 88656000,
+      "usagePercent": 15.13
+    },
+    "eventLoopLagMs": {
+      "p95": 11.49,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 52,
+    "timestamp": "2026-08-07T17:08:00.429Z",
+    "uptimeSeconds": 3120,
+    "memory": {
+      "rssMB": 177.79,
+      "heapUsedMB": 29.85,
+      "heapTotalMB": 158.7,
+      "externalMB": 6.46,
+      "arrayBuffersMB": 2.66
+    },
+    "cpu": {
+      "userUs": 376047000,
+      "systemUs": 89141000,
+      "usagePercent": 14.91
+    },
+    "eventLoopLagMs": {
+      "p95": 11.58,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 53,
+    "timestamp": "2026-08-07T17:09:00.439Z",
+    "uptimeSeconds": 3180,
+    "memory": {
+      "rssMB": 186.09,
+      "heapUsedMB": 35.26,
+      "heapTotalMB": 162.09,
+      "externalMB": 12.13,
+      "arrayBuffersMB": 8.33
+    },
+    "cpu": {
+      "userUs": 377422000,
+      "systemUs": 89563000,
+      "usagePercent": 14.68
+    },
+    "eventLoopLagMs": {
+      "p95": 11.58,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 54,
+    "timestamp": "2026-08-07T17:10:00.441Z",
+    "uptimeSeconds": 3240,
+    "memory": {
+      "rssMB": 190.78,
+      "heapUsedMB": 38.33,
+      "heapTotalMB": 163.34,
+      "externalMB": 17.94,
+      "arrayBuffersMB": 11.58
+    },
+    "cpu": {
+      "userUs": 379204000,
+      "systemUs": 90313000,
+      "usagePercent": 14.49
+    },
+    "eventLoopLagMs": {
+      "p95": 11.7,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 55,
+    "timestamp": "2026-08-07T17:11:00.458Z",
+    "uptimeSeconds": 3300,
+    "memory": {
+      "rssMB": 198.57,
+      "heapUsedMB": 38.16,
+      "heapTotalMB": 162.09,
+      "externalMB": 17.26,
+      "arrayBuffersMB": 10.9
+    },
+    "cpu": {
+      "userUs": 381016000,
+      "systemUs": 90797000,
+      "usagePercent": 14.3
+    },
+    "eventLoopLagMs": {
+      "p95": 11.71,
+      "p99": 14.49,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 56,
+    "timestamp": "2026-08-07T17:12:00.463Z",
+    "uptimeSeconds": 3360,
+    "memory": {
+      "rssMB": 187.27,
+      "heapUsedMB": 30.9,
+      "heapTotalMB": 160.18,
+      "externalMB": 7.9,
+      "arrayBuffersMB": 4.1
+    },
+    "cpu": {
+      "userUs": 382766000,
+      "systemUs": 91469000,
+      "usagePercent": 14.11
+    },
+    "eventLoopLagMs": {
+      "p95": 11.65,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 57,
+    "timestamp": "2026-08-07T17:13:00.466Z",
+    "uptimeSeconds": 3420,
+    "memory": {
+      "rssMB": 184.22,
+      "heapUsedMB": 27.39,
+      "heapTotalMB": 45.95,
+      "externalMB": 6.22,
+      "arrayBuffersMB": 2.42
+    },
+    "cpu": {
+      "userUs": 384360000,
+      "systemUs": 91828000,
+      "usagePercent": 13.92
+    },
+    "eventLoopLagMs": {
+      "p95": 11.64,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 58,
+    "timestamp": "2026-08-07T17:14:00.471Z",
+    "uptimeSeconds": 3480,
+    "memory": {
+      "rssMB": 188.79,
+      "heapUsedMB": 24.35,
+      "heapTotalMB": 65.45,
+      "externalMB": 5.55,
+      "arrayBuffersMB": 1.76
+    },
+    "cpu": {
+      "userUs": 386532000,
+      "systemUs": 92406000,
+      "usagePercent": 13.76
+    },
+    "eventLoopLagMs": {
+      "p95": 11.64,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 59,
+    "timestamp": "2026-08-07T17:15:00.473Z",
+    "uptimeSeconds": 3540,
+    "memory": {
+      "rssMB": 197.17,
+      "heapUsedMB": 34.98,
+      "heapTotalMB": 104.54,
+      "externalMB": 10.52,
+      "arrayBuffersMB": 6.71
+    },
+    "cpu": {
+      "userUs": 388500000,
+      "systemUs": 93031000,
+      "usagePercent": 13.6
+    },
+    "eventLoopLagMs": {
+      "p95": 11.65,
+      "p99": 14.49,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 60,
+    "timestamp": "2026-08-07T17:16:00.482Z",
+    "uptimeSeconds": 3600,
+    "memory": {
+      "rssMB": 198.09,
+      "heapUsedMB": 36.79,
+      "heapTotalMB": 105.34,
+      "externalMB": 12.29,
+      "arrayBuffersMB": 8.47
+    },
+    "cpu": {
+      "userUs": 390344000,
+      "systemUs": 93797000,
+      "usagePercent": 13.45
+    },
+    "eventLoopLagMs": {
+      "p95": 11.64,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 61,
+    "timestamp": "2026-08-07T17:17:00.491Z",
+    "uptimeSeconds": 3660,
+    "memory": {
+      "rssMB": 201.21,
+      "heapUsedMB": 36.27,
+      "heapTotalMB": 105.09,
+      "externalMB": 11.83,
+      "arrayBuffersMB": 8.01
+    },
+    "cpu": {
+      "userUs": 392407000,
+      "systemUs": 94281000,
+      "usagePercent": 13.3
+    },
+    "eventLoopLagMs": {
+      "p95": 11.58,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 62,
+    "timestamp": "2026-08-07T17:18:00.492Z",
+    "uptimeSeconds": 3720,
+    "memory": {
+      "rssMB": 197.26,
+      "heapUsedMB": 31.51,
+      "heapTotalMB": 103.72,
+      "externalMB": 9.26,
+      "arrayBuffersMB": 5.47
+    },
+    "cpu": {
+      "userUs": 394329000,
+      "systemUs": 94781000,
+      "usagePercent": 13.15
+    },
+    "eventLoopLagMs": {
+      "p95": 11.65,
+      "p99": 14.49,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 63,
+    "timestamp": "2026-08-07T17:19:00.494Z",
+    "uptimeSeconds": 3780,
+    "memory": {
+      "rssMB": 199.18,
+      "heapUsedMB": 31.69,
+      "heapTotalMB": 104.28,
+      "externalMB": 8.95,
+      "arrayBuffersMB": 5.15
+    },
+    "cpu": {
+      "userUs": 396000000,
+      "systemUs": 95172000,
+      "usagePercent": 12.99
+    },
+    "eventLoopLagMs": {
+      "p95": 11.65,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 64,
+    "timestamp": "2026-08-07T17:20:00.503Z",
+    "uptimeSeconds": 3840,
+    "memory": {
+      "rssMB": 194.96,
+      "heapUsedMB": 28.78,
+      "heapTotalMB": 103.86,
+      "externalMB": 6.88,
+      "arrayBuffersMB": 3.08
+    },
+    "cpu": {
+      "userUs": 397782000,
+      "systemUs": 95547000,
+      "usagePercent": 12.85
+    },
+    "eventLoopLagMs": {
+      "p95": 11.58,
+      "p99": 14.49,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 65,
+    "timestamp": "2026-08-07T17:21:00.504Z",
+    "uptimeSeconds": 3900,
+    "memory": {
+      "rssMB": 194.95,
+      "heapUsedMB": 31,
+      "heapTotalMB": 104.36,
+      "externalMB": 8.37,
+      "arrayBuffersMB": 4.57
+    },
+    "cpu": {
+      "userUs": 399282000,
+      "systemUs": 95985000,
+      "usagePercent": 12.7
+    },
+    "eventLoopLagMs": {
+      "p95": 11.58,
+      "p99": 14.49,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 66,
+    "timestamp": "2026-08-07T17:22:00.507Z",
+    "uptimeSeconds": 3960,
+    "memory": {
+      "rssMB": 195.07,
+      "heapUsedMB": 34.41,
+      "heapTotalMB": 102.97,
+      "externalMB": 9.62,
+      "arrayBuffersMB": 5.8
+    },
+    "cpu": {
+      "userUs": 401500000,
+      "systemUs": 96297000,
+      "usagePercent": 12.57
+    },
+    "eventLoopLagMs": {
+      "p95": 11.58,
+      "p99": 14.46,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 67,
+    "timestamp": "2026-08-07T17:23:00.506Z",
+    "uptimeSeconds": 4020,
+    "memory": {
+      "rssMB": 202.64,
+      "heapUsedMB": 35.69,
+      "heapTotalMB": 104.54,
+      "externalMB": 16.3,
+      "arrayBuffersMB": 9.94
+    },
+    "cpu": {
+      "userUs": 402938000,
+      "systemUs": 96750000,
+      "usagePercent": 12.43
+    },
+    "eventLoopLagMs": {
+      "p95": 11.71,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 68,
+    "timestamp": "2026-08-07T17:24:00.507Z",
+    "uptimeSeconds": 4080,
+    "memory": {
+      "rssMB": 195.55,
+      "heapUsedMB": 29.15,
+      "heapTotalMB": 103.43,
+      "externalMB": 7.42,
+      "arrayBuffersMB": 3.62
+    },
+    "cpu": {
+      "userUs": 404500000,
+      "systemUs": 97250000,
+      "usagePercent": 12.3
+    },
+    "eventLoopLagMs": {
+      "p95": 11.74,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 69,
+    "timestamp": "2026-08-07T17:25:00.518Z",
+    "uptimeSeconds": 4140,
+    "memory": {
+      "rssMB": 194.93,
+      "heapUsedMB": 35.91,
+      "heapTotalMB": 160.43,
+      "externalMB": 8.41,
+      "arrayBuffersMB": 4.61
+    },
+    "cpu": {
+      "userUs": 406125000,
+      "systemUs": 97735000,
+      "usagePercent": 12.17
+    },
+    "eventLoopLagMs": {
+      "p95": 11.7,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 70,
+    "timestamp": "2026-08-07T17:26:00.522Z",
+    "uptimeSeconds": 4200,
+    "memory": {
+      "rssMB": 200.34,
+      "heapUsedMB": 32.47,
+      "heapTotalMB": 160.29,
+      "externalMB": 10.42,
+      "arrayBuffersMB": 6.62
+    },
+    "cpu": {
+      "userUs": 407657000,
+      "systemUs": 98297000,
+      "usagePercent": 12.04
+    },
+    "eventLoopLagMs": {
+      "p95": 11.71,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 71,
+    "timestamp": "2026-08-07T17:27:00.529Z",
+    "uptimeSeconds": 4260,
+    "memory": {
+      "rssMB": 200.24,
+      "heapUsedMB": 33.39,
+      "heapTotalMB": 160.79,
+      "externalMB": 10.4,
+      "arrayBuffersMB": 6.6
+    },
+    "cpu": {
+      "userUs": 409157000,
+      "systemUs": 99000000,
+      "usagePercent": 11.93
+    },
+    "eventLoopLagMs": {
+      "p95": 11.71,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 72,
+    "timestamp": "2026-08-07T17:28:00.529Z",
+    "uptimeSeconds": 4320,
+    "memory": {
+      "rssMB": 201.31,
+      "heapUsedMB": 34.85,
+      "heapTotalMB": 162.09,
+      "externalMB": 11.83,
+      "arrayBuffersMB": 8.02
+    },
+    "cpu": {
+      "userUs": 410516000,
+      "systemUs": 99406000,
+      "usagePercent": 11.8
+    },
+    "eventLoopLagMs": {
+      "p95": 11.71,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 73,
+    "timestamp": "2026-08-07T17:29:00.533Z",
+    "uptimeSeconds": 4380,
+    "memory": {
+      "rssMB": 198.39,
+      "heapUsedMB": 32.35,
+      "heapTotalMB": 159.53,
+      "externalMB": 9.73,
+      "arrayBuffersMB": 5.93
+    },
+    "cpu": {
+      "userUs": 412000000,
+      "systemUs": 99969000,
+      "usagePercent": 11.69
+    },
+    "eventLoopLagMs": {
+      "p95": 11.65,
+      "p99": 14.39,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 74,
+    "timestamp": "2026-08-07T17:30:00.533Z",
+    "uptimeSeconds": 4440,
+    "memory": {
+      "rssMB": 201.39,
+      "heapUsedMB": 36.45,
+      "heapTotalMB": 161.09,
+      "externalMB": 12.07,
+      "arrayBuffersMB": 8.25
+    },
+    "cpu": {
+      "userUs": 413204000,
+      "systemUs": 100391000,
+      "usagePercent": 11.57
+    },
+    "eventLoopLagMs": {
+      "p95": 11.74,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 75,
+    "timestamp": "2026-08-07T17:31:00.538Z",
+    "uptimeSeconds": 4500,
+    "memory": {
+      "rssMB": 197.79,
+      "heapUsedMB": 37.63,
+      "heapTotalMB": 160.79,
+      "externalMB": 10.84,
+      "arrayBuffersMB": 7.04
+    },
+    "cpu": {
+      "userUs": 414672000,
+      "systemUs": 100922000,
+      "usagePercent": 11.46
+    },
+    "eventLoopLagMs": {
+      "p95": 11.74,
+      "p99": 14.49,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 76,
+    "timestamp": "2026-08-07T17:32:00.540Z",
+    "uptimeSeconds": 4560,
+    "memory": {
+      "rssMB": 200.99,
+      "heapUsedMB": 34.3,
+      "heapTotalMB": 161,
+      "externalMB": 10.2,
+      "arrayBuffersMB": 6.4
+    },
+    "cpu": {
+      "userUs": 416204000,
+      "systemUs": 101453000,
+      "usagePercent": 11.35
+    },
+    "eventLoopLagMs": {
+      "p95": 11.74,
+      "p99": 14.46,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 77,
+    "timestamp": "2026-08-07T17:33:00.547Z",
+    "uptimeSeconds": 4620,
+    "memory": {
+      "rssMB": 201.28,
+      "heapUsedMB": 35.29,
+      "heapTotalMB": 161.04,
+      "externalMB": 10.59,
+      "arrayBuffersMB": 6.79
+    },
+    "cpu": {
+      "userUs": 417532000,
+      "systemUs": 102172000,
+      "usagePercent": 11.25
+    },
+    "eventLoopLagMs": {
+      "p95": 11.76,
+      "p99": 14.49,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 78,
+    "timestamp": "2026-08-07T17:34:00.549Z",
+    "uptimeSeconds": 4680,
+    "memory": {
+      "rssMB": 207.18,
+      "heapUsedMB": 38.11,
+      "heapTotalMB": 163.04,
+      "externalMB": 15.93,
+      "arrayBuffersMB": 9.58
+    },
+    "cpu": {
+      "userUs": 419391000,
+      "systemUs": 102735000,
+      "usagePercent": 11.16
+    },
+    "eventLoopLagMs": {
+      "p95": 11.75,
+      "p99": 14.5,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 79,
+    "timestamp": "2026-08-07T17:35:00.560Z",
+    "uptimeSeconds": 4740,
+    "memory": {
+      "rssMB": 200.09,
+      "heapUsedMB": 33.54,
+      "heapTotalMB": 160.66,
+      "externalMB": 8.74,
+      "arrayBuffersMB": 4.95
+    },
+    "cpu": {
+      "userUs": 420922000,
+      "systemUs": 103344000,
+      "usagePercent": 11.06
+    },
+    "eventLoopLagMs": {
+      "p95": 11.79,
+      "p99": 14.49,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 80,
+    "timestamp": "2026-08-07T17:36:00.566Z",
+    "uptimeSeconds": 4800,
+    "memory": {
+      "rssMB": 203.13,
+      "heapUsedMB": 31.06,
+      "heapTotalMB": 159.18,
+      "externalMB": 8.86,
+      "arrayBuffersMB": 5.06
+    },
+    "cpu": {
+      "userUs": 423000000,
+      "systemUs": 103781000,
+      "usagePercent": 10.97
+    },
+    "eventLoopLagMs": {
+      "p95": 11.83,
+      "p99": 14.52,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 81,
+    "timestamp": "2026-08-07T17:37:00.568Z",
+    "uptimeSeconds": 4860,
+    "memory": {
+      "rssMB": 199.93,
+      "heapUsedMB": 28.29,
+      "heapTotalMB": 158.95,
+      "externalMB": 6.41,
+      "arrayBuffersMB": 2.61
+    },
+    "cpu": {
+      "userUs": 424282000,
+      "systemUs": 104391000,
+      "usagePercent": 10.88
+    },
+    "eventLoopLagMs": {
+      "p95": 11.85,
+      "p99": 14.51,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 82,
+    "timestamp": "2026-08-07T17:38:00.570Z",
+    "uptimeSeconds": 4920,
+    "memory": {
+      "rssMB": 201.36,
+      "heapUsedMB": 28.72,
+      "heapTotalMB": 159.79,
+      "externalMB": 6.8,
+      "arrayBuffersMB": 2.99
+    },
+    "cpu": {
+      "userUs": 425797000,
+      "systemUs": 104953000,
+      "usagePercent": 10.79
+    },
+    "eventLoopLagMs": {
+      "p95": 11.85,
+      "p99": 14.51,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 83,
+    "timestamp": "2026-08-07T17:39:00.574Z",
+    "uptimeSeconds": 4980,
+    "memory": {
+      "rssMB": 208.43,
+      "heapUsedMB": 36.25,
+      "heapTotalMB": 161.84,
+      "externalMB": 11.37,
+      "arrayBuffersMB": 7.57
+    },
+    "cpu": {
+      "userUs": 427391000,
+      "systemUs": 105610000,
+      "usagePercent": 10.7
+    },
+    "eventLoopLagMs": {
+      "p95": 11.9,
+      "p99": 14.53,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 84,
+    "timestamp": "2026-08-07T17:40:00.579Z",
+    "uptimeSeconds": 5040,
+    "memory": {
+      "rssMB": 205.82,
+      "heapUsedMB": 31.81,
+      "heapTotalMB": 159.78,
+      "externalMB": 8.51,
+      "arrayBuffersMB": 4.71
+    },
+    "cpu": {
+      "userUs": 429047000,
+      "systemUs": 106063000,
+      "usagePercent": 10.62
+    },
+    "eventLoopLagMs": {
+      "p95": 11.87,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 85,
+    "timestamp": "2026-08-07T17:41:00.580Z",
+    "uptimeSeconds": 5100,
+    "memory": {
+      "rssMB": 199.85,
+      "heapUsedMB": 29.36,
+      "heapTotalMB": 159.29,
+      "externalMB": 7.07,
+      "arrayBuffersMB": 3.28
+    },
+    "cpu": {
+      "userUs": 430454000,
+      "systemUs": 106469000,
+      "usagePercent": 10.53
+    },
+    "eventLoopLagMs": {
+      "p95": 11.96,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 86,
+    "timestamp": "2026-08-07T17:42:00.598Z",
+    "uptimeSeconds": 5160,
+    "memory": {
+      "rssMB": 204.04,
+      "heapUsedMB": 36.02,
+      "heapTotalMB": 161.04,
+      "externalMB": 10.41,
+      "arrayBuffersMB": 6.59
+    },
+    "cpu": {
+      "userUs": 431938000,
+      "systemUs": 106922000,
+      "usagePercent": 10.44
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 87,
+    "timestamp": "2026-08-07T17:43:00.608Z",
+    "uptimeSeconds": 5220,
+    "memory": {
+      "rssMB": 205.61,
+      "heapUsedMB": 35.5,
+      "heapTotalMB": 161.34,
+      "externalMB": 11.86,
+      "arrayBuffersMB": 8.05
+    },
+    "cpu": {
+      "userUs": 433172000,
+      "systemUs": 107453000,
+      "usagePercent": 10.36
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 88,
+    "timestamp": "2026-08-07T17:44:00.609Z",
+    "uptimeSeconds": 5280,
+    "memory": {
+      "rssMB": 205.48,
+      "heapUsedMB": 35.64,
+      "heapTotalMB": 161.09,
+      "externalMB": 11.23,
+      "arrayBuffersMB": 7.43
+    },
+    "cpu": {
+      "userUs": 434610000,
+      "systemUs": 107860000,
+      "usagePercent": 10.27
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 89,
+    "timestamp": "2026-08-07T17:45:00.614Z",
+    "uptimeSeconds": 5340,
+    "memory": {
+      "rssMB": 198.41,
+      "heapUsedMB": 28.81,
+      "heapTotalMB": 159.61,
+      "externalMB": 6.56,
+      "arrayBuffersMB": 2.77
+    },
+    "cpu": {
+      "userUs": 436032000,
+      "systemUs": 108328000,
+      "usagePercent": 10.19
+    },
+    "eventLoopLagMs": {
+      "p95": 12.02,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 90,
+    "timestamp": "2026-08-07T17:46:00.621Z",
+    "uptimeSeconds": 5400,
+    "memory": {
+      "rssMB": 196.63,
+      "heapUsedMB": 36.47,
+      "heapTotalMB": 161.29,
+      "externalMB": 10.43,
+      "arrayBuffersMB": 6.62
+    },
+    "cpu": {
+      "userUs": 437704000,
+      "systemUs": 108828000,
+      "usagePercent": 10.12
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 91,
+    "timestamp": "2026-08-07T17:47:00.626Z",
+    "uptimeSeconds": 5460,
+    "memory": {
+      "rssMB": 199.71,
+      "heapUsedMB": 36.04,
+      "heapTotalMB": 162.09,
+      "externalMB": 11.68,
+      "arrayBuffersMB": 7.87
+    },
+    "cpu": {
+      "userUs": 438907000,
+      "systemUs": 109438000,
+      "usagePercent": 10.04
+    },
+    "eventLoopLagMs": {
+      "p95": 12.02,
+      "p99": 14.52,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 92,
+    "timestamp": "2026-08-07T17:48:00.632Z",
+    "uptimeSeconds": 5520,
+    "memory": {
+      "rssMB": 204.52,
+      "heapUsedMB": 36.89,
+      "heapTotalMB": 162.09,
+      "externalMB": 16.87,
+      "arrayBuffersMB": 10.51
+    },
+    "cpu": {
+      "userUs": 440032000,
+      "systemUs": 110078000,
+      "usagePercent": 9.96
+    },
+    "eventLoopLagMs": {
+      "p95": 12.03,
+      "p99": 14.52,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 93,
+    "timestamp": "2026-08-07T17:49:00.638Z",
+    "uptimeSeconds": 5580,
+    "memory": {
+      "rssMB": 198.03,
+      "heapUsedMB": 31.43,
+      "heapTotalMB": 160.25,
+      "externalMB": 8.86,
+      "arrayBuffersMB": 5.06
+    },
+    "cpu": {
+      "userUs": 441375000,
+      "systemUs": 110485000,
+      "usagePercent": 9.89
+    },
+    "eventLoopLagMs": {
+      "p95": 12.02,
+      "p99": 14.52,
+      "p99_9": 15.27,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 94,
+    "timestamp": "2026-08-07T17:50:00.648Z",
+    "uptimeSeconds": 5640,
+    "memory": {
+      "rssMB": 199.45,
+      "heapUsedMB": 33.16,
+      "heapTotalMB": 161.59,
+      "externalMB": 11.44,
+      "arrayBuffersMB": 7.63
+    },
+    "cpu": {
+      "userUs": 442766000,
+      "systemUs": 110953000,
+      "usagePercent": 9.82
+    },
+    "eventLoopLagMs": {
+      "p95": 12.02,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 95,
+    "timestamp": "2026-08-07T17:51:00.651Z",
+    "uptimeSeconds": 5700,
+    "memory": {
+      "rssMB": 175.32,
+      "heapUsedMB": 28.6,
+      "heapTotalMB": 158.95,
+      "externalMB": 6.19,
+      "arrayBuffersMB": 2.39
+    },
+    "cpu": {
+      "userUs": 444344000,
+      "systemUs": 111313000,
+      "usagePercent": 9.75
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 96,
+    "timestamp": "2026-08-07T17:52:00.663Z",
+    "uptimeSeconds": 5760,
+    "memory": {
+      "rssMB": 181.03,
+      "heapUsedMB": 32.16,
+      "heapTotalMB": 161.29,
+      "externalMB": 9.78,
+      "arrayBuffersMB": 5.99
+    },
+    "cpu": {
+      "userUs": 445688000,
+      "systemUs": 111766000,
+      "usagePercent": 9.68
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 97,
+    "timestamp": "2026-08-07T17:53:00.665Z",
+    "uptimeSeconds": 5820,
+    "memory": {
+      "rssMB": 182.3,
+      "heapUsedMB": 30.46,
+      "heapTotalMB": 160.28,
+      "externalMB": 8.18,
+      "arrayBuffersMB": 4.38
+    },
+    "cpu": {
+      "userUs": 447235000,
+      "systemUs": 112141000,
+      "usagePercent": 9.61
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 98,
+    "timestamp": "2026-08-07T17:54:00.669Z",
+    "uptimeSeconds": 5880,
+    "memory": {
+      "rssMB": 184.31,
+      "heapUsedMB": 33.23,
+      "heapTotalMB": 161.09,
+      "externalMB": 11.51,
+      "arrayBuffersMB": 7.71
+    },
+    "cpu": {
+      "userUs": 448657000,
+      "systemUs": 112641000,
+      "usagePercent": 9.54
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 99,
+    "timestamp": "2026-08-07T17:55:00.677Z",
+    "uptimeSeconds": 5940,
+    "memory": {
+      "rssMB": 183.02,
+      "heapUsedMB": 33.04,
+      "heapTotalMB": 160.54,
+      "externalMB": 9.76,
+      "arrayBuffersMB": 5.97
+    },
+    "cpu": {
+      "userUs": 450266000,
+      "systemUs": 112969000,
+      "usagePercent": 9.48
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 100,
+    "timestamp": "2026-08-07T17:56:00.692Z",
+    "uptimeSeconds": 6000,
+    "memory": {
+      "rssMB": 175.93,
+      "heapUsedMB": 29.9,
+      "heapTotalMB": 159.68,
+      "externalMB": 7.43,
+      "arrayBuffersMB": 3.63
+    },
+    "cpu": {
+      "userUs": 451704000,
+      "systemUs": 113500000,
+      "usagePercent": 9.42
+    },
+    "eventLoopLagMs": {
+      "p95": 12.02,
+      "p99": 14.54,
+      "p99_9": 15.36,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 101,
+    "timestamp": "2026-08-07T17:57:00.699Z",
+    "uptimeSeconds": 6060,
+    "memory": {
+      "rssMB": 176.11,
+      "heapUsedMB": 30.28,
+      "heapTotalMB": 159.45,
+      "externalMB": 7.41,
+      "arrayBuffersMB": 3.61
+    },
+    "cpu": {
+      "userUs": 452922000,
+      "systemUs": 113906000,
+      "usagePercent": 9.35
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.54,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 102,
+    "timestamp": "2026-08-07T17:58:00.701Z",
+    "uptimeSeconds": 6120,
+    "memory": {
+      "rssMB": 175.09,
+      "heapUsedMB": 32.34,
+      "heapTotalMB": 159.95,
+      "externalMB": 7.83,
+      "arrayBuffersMB": 4.03
+    },
+    "cpu": {
+      "userUs": 454329000,
+      "systemUs": 114250000,
+      "usagePercent": 9.29
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.54,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 103,
+    "timestamp": "2026-08-07T17:59:00.703Z",
+    "uptimeSeconds": 6180,
+    "memory": {
+      "rssMB": 175.85,
+      "heapUsedMB": 31.77,
+      "heapTotalMB": 160.22,
+      "externalMB": 8.9,
+      "arrayBuffersMB": 5.09
+    },
+    "cpu": {
+      "userUs": 455719000,
+      "systemUs": 114797000,
+      "usagePercent": 9.23
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 104,
+    "timestamp": "2026-08-07T18:00:00.706Z",
+    "uptimeSeconds": 6240,
+    "memory": {
+      "rssMB": 177.31,
+      "heapUsedMB": 31.72,
+      "heapTotalMB": 160.52,
+      "externalMB": 8.74,
+      "arrayBuffersMB": 4.94
+    },
+    "cpu": {
+      "userUs": 457313000,
+      "systemUs": 115141000,
+      "usagePercent": 9.17
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 105,
+    "timestamp": "2026-08-07T18:01:00.714Z",
+    "uptimeSeconds": 6300,
+    "memory": {
+      "rssMB": 178.82,
+      "heapUsedMB": 30.69,
+      "heapTotalMB": 159.54,
+      "externalMB": 7.18,
+      "arrayBuffersMB": 3.38
+    },
+    "cpu": {
+      "userUs": 458813000,
+      "systemUs": 115547000,
+      "usagePercent": 9.12
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.53,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 106,
+    "timestamp": "2026-08-07T18:02:00.715Z",
+    "uptimeSeconds": 6360,
+    "memory": {
+      "rssMB": 178.5,
+      "heapUsedMB": 33.54,
+      "heapTotalMB": 161.54,
+      "externalMB": 9.98,
+      "arrayBuffersMB": 6.16
+    },
+    "cpu": {
+      "userUs": 460735000,
+      "systemUs": 116203000,
+      "usagePercent": 9.07
+    },
+    "eventLoopLagMs": {
+      "p95": 12,
+      "p99": 14.52,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 107,
+    "timestamp": "2026-08-07T18:03:00.724Z",
+    "uptimeSeconds": 6420,
+    "memory": {
+      "rssMB": 173.88,
+      "heapUsedMB": 28.37,
+      "heapTotalMB": 160.04,
+      "externalMB": 6.78,
+      "arrayBuffersMB": 2.99
+    },
+    "cpu": {
+      "userUs": 462110000,
+      "systemUs": 116594000,
+      "usagePercent": 9.01
+    },
+    "eventLoopLagMs": {
+      "p95": 11.99,
+      "p99": 14.52,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 108,
+    "timestamp": "2026-08-07T18:04:00.726Z",
+    "uptimeSeconds": 6480,
+    "memory": {
+      "rssMB": 173.91,
+      "heapUsedMB": 28.55,
+      "heapTotalMB": 159.77,
+      "externalMB": 6.99,
+      "arrayBuffersMB": 3.19
+    },
+    "cpu": {
+      "userUs": 463688000,
+      "systemUs": 117000000,
+      "usagePercent": 8.96
+    },
+    "eventLoopLagMs": {
+      "p95": 11.97,
+      "p99": 14.52,
+      "p99_9": 15.33,
+      "max": 15.64
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 109,
+    "timestamp": "2026-08-07T18:05:00.731Z",
+    "uptimeSeconds": 6540,
+    "memory": {
+      "rssMB": 177.29,
+      "heapUsedMB": 31.15,
+      "heapTotalMB": 160.77,
+      "externalMB": 8.45,
+      "arrayBuffersMB": 4.65
+    },
+    "cpu": {
+      "userUs": 465344000,
+      "systemUs": 117641000,
+      "usagePercent": 8.91
+    },
+    "eventLoopLagMs": {
+      "p95": 12,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 110,
+    "timestamp": "2026-08-07T18:06:00.732Z",
+    "uptimeSeconds": 6600,
+    "memory": {
+      "rssMB": 175.27,
+      "heapUsedMB": 30.88,
+      "heapTotalMB": 161.31,
+      "externalMB": 8.77,
+      "arrayBuffersMB": 4.97
+    },
+    "cpu": {
+      "userUs": 466516000,
+      "systemUs": 118016000,
+      "usagePercent": 8.86
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 111,
+    "timestamp": "2026-08-07T18:07:00.745Z",
+    "uptimeSeconds": 6660,
+    "memory": {
+      "rssMB": 171,
+      "heapUsedMB": 27.62,
+      "heapTotalMB": 159.95,
+      "externalMB": 5.89,
+      "arrayBuffersMB": 2.09
+    },
+    "cpu": {
+      "userUs": 467938000,
+      "systemUs": 118453000,
+      "usagePercent": 8.8
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 112,
+    "timestamp": "2026-08-07T18:08:00.748Z",
+    "uptimeSeconds": 6720,
+    "memory": {
+      "rssMB": 177.45,
+      "heapUsedMB": 32.14,
+      "heapTotalMB": 161.79,
+      "externalMB": 9.76,
+      "arrayBuffersMB": 5.97
+    },
+    "cpu": {
+      "userUs": 469375000,
+      "systemUs": 118922000,
+      "usagePercent": 8.75
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 113,
+    "timestamp": "2026-08-07T18:09:00.762Z",
+    "uptimeSeconds": 6780,
+    "memory": {
+      "rssMB": 181.23,
+      "heapUsedMB": 32.93,
+      "heapTotalMB": 161.79,
+      "externalMB": 11.3,
+      "arrayBuffersMB": 7.49
+    },
+    "cpu": {
+      "userUs": 471079000,
+      "systemUs": 119375000,
+      "usagePercent": 8.71
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 114,
+    "timestamp": "2026-08-07T18:10:00.766Z",
+    "uptimeSeconds": 6840,
+    "memory": {
+      "rssMB": 176.3,
+      "heapUsedMB": 29.86,
+      "heapTotalMB": 160.24,
+      "externalMB": 7.85,
+      "arrayBuffersMB": 4.05
+    },
+    "cpu": {
+      "userUs": 472438000,
+      "systemUs": 119860000,
+      "usagePercent": 8.66
+    },
+    "eventLoopLagMs": {
+      "p95": 12.02,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 115,
+    "timestamp": "2026-08-07T18:11:00.778Z",
+    "uptimeSeconds": 6900,
+    "memory": {
+      "rssMB": 176.51,
+      "heapUsedMB": 34.83,
+      "heapTotalMB": 162.33,
+      "externalMB": 10.99,
+      "arrayBuffersMB": 7.19
+    },
+    "cpu": {
+      "userUs": 473938000,
+      "systemUs": 120297000,
+      "usagePercent": 8.61
+    },
+    "eventLoopLagMs": {
+      "p95": 12.01,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 116,
+    "timestamp": "2026-08-07T18:12:00.783Z",
+    "uptimeSeconds": 6960,
+    "memory": {
+      "rssMB": 177.52,
+      "heapUsedMB": 34.07,
+      "heapTotalMB": 161.84,
+      "externalMB": 11.43,
+      "arrayBuffersMB": 7.61
+    },
+    "cpu": {
+      "userUs": 475532000,
+      "systemUs": 120860000,
+      "usagePercent": 8.57
+    },
+    "eventLoopLagMs": {
+      "p95": 12.04,
+      "p99": 14.51,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 117,
+    "timestamp": "2026-08-07T18:13:00.794Z",
+    "uptimeSeconds": 7020,
+    "memory": {
+      "rssMB": 176.68,
+      "heapUsedMB": 32.12,
+      "heapTotalMB": 161.29,
+      "externalMB": 9.49,
+      "arrayBuffersMB": 5.69
+    },
+    "cpu": {
+      "userUs": 477219000,
+      "systemUs": 121391000,
+      "usagePercent": 8.53
+    },
+    "eventLoopLagMs": {
+      "p95": 12.03,
+      "p99": 14.52,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 118,
+    "timestamp": "2026-08-07T18:14:00.796Z",
+    "uptimeSeconds": 7080,
+    "memory": {
+      "rssMB": 178.86,
+      "heapUsedMB": 32.57,
+      "heapTotalMB": 161.47,
+      "externalMB": 10.25,
+      "arrayBuffersMB": 6.43
+    },
+    "cpu": {
+      "userUs": 478782000,
+      "systemUs": 121844000,
+      "usagePercent": 8.48
+    },
+    "eventLoopLagMs": {
+      "p95": 12.03,
+      "p99": 14.51,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 119,
+    "timestamp": "2026-08-07T18:15:00.808Z",
+    "uptimeSeconds": 7140,
+    "memory": {
+      "rssMB": 179.68,
+      "heapUsedMB": 32.09,
+      "heapTotalMB": 160.47,
+      "externalMB": 8.83,
+      "arrayBuffersMB": 5.03
+    },
+    "cpu": {
+      "userUs": 480125000,
+      "systemUs": 122297000,
+      "usagePercent": 8.44
+    },
+    "eventLoopLagMs": {
+      "p95": 12.04,
+      "p99": 14.51,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 120,
+    "timestamp": "2026-08-07T18:16:00.812Z",
+    "uptimeSeconds": 7200,
+    "memory": {
+      "rssMB": 187.06,
+      "heapUsedMB": 34.36,
+      "heapTotalMB": 162.29,
+      "externalMB": 14.95,
+      "arrayBuffersMB": 8.59
+    },
+    "cpu": {
+      "userUs": 481500000,
+      "systemUs": 122985000,
+      "usagePercent": 8.39
+    },
+    "eventLoopLagMs": {
+      "p95": 12.03,
+      "p99": 14.52,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 121,
+    "timestamp": "2026-08-07T18:17:00.818Z",
+    "uptimeSeconds": 7260,
+    "memory": {
+      "rssMB": 178.54,
+      "heapUsedMB": 32.18,
+      "heapTotalMB": 162.04,
+      "externalMB": 9.8,
+      "arrayBuffersMB": 6
+    },
+    "cpu": {
+      "userUs": 482797000,
+      "systemUs": 123438000,
+      "usagePercent": 8.35
+    },
+    "eventLoopLagMs": {
+      "p95": 12.04,
+      "p99": 14.51,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 122,
+    "timestamp": "2026-08-07T18:18:00.820Z",
+    "uptimeSeconds": 7320,
+    "memory": {
+      "rssMB": 178.54,
+      "heapUsedMB": 29.28,
+      "heapTotalMB": 160.95,
+      "externalMB": 7.75,
+      "arrayBuffersMB": 3.95
+    },
+    "cpu": {
+      "userUs": 484110000,
+      "systemUs": 124156000,
+      "usagePercent": 8.31
+    },
+    "eventLoopLagMs": {
+      "p95": 12.04,
+      "p99": 14.51,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 123,
+    "timestamp": "2026-08-07T18:19:00.835Z",
+    "uptimeSeconds": 7380,
+    "memory": {
+      "rssMB": 186.23,
+      "heapUsedMB": 29.48,
+      "heapTotalMB": 161.02,
+      "externalMB": 8.08,
+      "arrayBuffersMB": 4.28
+    },
+    "cpu": {
+      "userUs": 485532000,
+      "systemUs": 124547000,
+      "usagePercent": 8.27
+    },
+    "eventLoopLagMs": {
+      "p95": 12.06,
+      "p99": 14.5,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 124,
+    "timestamp": "2026-08-07T18:20:00.838Z",
+    "uptimeSeconds": 7440,
+    "memory": {
+      "rssMB": 185.02,
+      "heapUsedMB": 27.64,
+      "heapTotalMB": 46.04,
+      "externalMB": 6.53,
+      "arrayBuffersMB": 2.73
+    },
+    "cpu": {
+      "userUs": 486969000,
+      "systemUs": 125016000,
+      "usagePercent": 8.22
+    },
+    "eventLoopLagMs": {
+      "p95": 12.06,
+      "p99": 14.49,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 125,
+    "timestamp": "2026-08-07T18:21:00.841Z",
+    "uptimeSeconds": 7500,
+    "memory": {
+      "rssMB": 177.69,
+      "heapUsedMB": 29.8,
+      "heapTotalMB": 63.21,
+      "externalMB": 8.42,
+      "arrayBuffersMB": 4.62
+    },
+    "cpu": {
+      "userUs": 488141000,
+      "systemUs": 125297000,
+      "usagePercent": 8.18
+    },
+    "eventLoopLagMs": {
+      "p95": 12.05,
+      "p99": 14.49,
+      "p99_9": 15.33,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 126,
+    "timestamp": "2026-08-07T18:22:00.854Z",
+    "uptimeSeconds": 7560,
+    "memory": {
+      "rssMB": 181.48,
+      "heapUsedMB": 31.48,
+      "heapTotalMB": 64.26,
+      "externalMB": 9.97,
+      "arrayBuffersMB": 6.15
+    },
+    "cpu": {
+      "userUs": 489422000,
+      "systemUs": 125656000,
+      "usagePercent": 8.13
+    },
+    "eventLoopLagMs": {
+      "p95": 12.05,
+      "p99": 14.49,
+      "p99_9": 15.36,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 127,
+    "timestamp": "2026-08-07T18:23:00.858Z",
+    "uptimeSeconds": 7620,
+    "memory": {
+      "rssMB": 189.92,
+      "heapUsedMB": 30.91,
+      "heapTotalMB": 96.56,
+      "externalMB": 8.85,
+      "arrayBuffersMB": 5.06
+    },
+    "cpu": {
+      "userUs": 490860000,
+      "systemUs": 125969000,
+      "usagePercent": 8.09
+    },
+    "eventLoopLagMs": {
+      "p95": 12.05,
+      "p99": 14.5,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 128,
+    "timestamp": "2026-08-07T18:24:00.861Z",
+    "uptimeSeconds": 7680,
+    "memory": {
+      "rssMB": 193.64,
+      "heapUsedMB": 31.52,
+      "heapTotalMB": 95.21,
+      "externalMB": 14.29,
+      "arrayBuffersMB": 7.93
+    },
+    "cpu": {
+      "userUs": 492016000,
+      "systemUs": 126219000,
+      "usagePercent": 8.05
+    },
+    "eventLoopLagMs": {
+      "p95": 12.05,
+      "p99": 14.49,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 129,
+    "timestamp": "2026-08-07T18:25:00.862Z",
+    "uptimeSeconds": 7740,
+    "memory": {
+      "rssMB": 182.21,
+      "heapUsedMB": 28.75,
+      "heapTotalMB": 94.84,
+      "externalMB": 6.78,
+      "arrayBuffersMB": 2.98
+    },
+    "cpu": {
+      "userUs": 493219000,
+      "systemUs": 126453000,
+      "usagePercent": 8.01
+    },
+    "eventLoopLagMs": {
+      "p95": 12.07,
+      "p99": 14.48,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 130,
+    "timestamp": "2026-08-07T18:26:00.878Z",
+    "uptimeSeconds": 7800,
+    "memory": {
+      "rssMB": 182.44,
+      "heapUsedMB": 29.82,
+      "heapTotalMB": 95.21,
+      "externalMB": 8.46,
+      "arrayBuffersMB": 4.66
+    },
+    "cpu": {
+      "userUs": 494454000,
+      "systemUs": 126844000,
+      "usagePercent": 7.96
+    },
+    "eventLoopLagMs": {
+      "p95": 12.09,
+      "p99": 14.49,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 131,
+    "timestamp": "2026-08-07T18:27:00.880Z",
+    "uptimeSeconds": 7860,
+    "memory": {
+      "rssMB": 186.36,
+      "heapUsedMB": 29.01,
+      "heapTotalMB": 46.95,
+      "externalMB": 7.27,
+      "arrayBuffersMB": 3.48
+    },
+    "cpu": {
+      "userUs": 496141000,
+      "systemUs": 127219000,
+      "usagePercent": 7.93
+    },
+    "eventLoopLagMs": {
+      "p95": 12.12,
+      "p99": 14.5,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 132,
+    "timestamp": "2026-08-07T18:28:00.888Z",
+    "uptimeSeconds": 7920,
+    "memory": {
+      "rssMB": 195.2,
+      "heapUsedMB": 34.13,
+      "heapTotalMB": 65.08,
+      "externalMB": 11.42,
+      "arrayBuffersMB": 7.62
+    },
+    "cpu": {
+      "userUs": 497297000,
+      "systemUs": 127625000,
+      "usagePercent": 7.89
+    },
+    "eventLoopLagMs": {
+      "p95": 12.14,
+      "p99": 14.5,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 133,
+    "timestamp": "2026-08-07T18:29:00.894Z",
+    "uptimeSeconds": 7980,
+    "memory": {
+      "rssMB": 203.77,
+      "heapUsedMB": 32.88,
+      "heapTotalMB": 97.08,
+      "externalMB": 10.69,
+      "arrayBuffersMB": 6.89
+    },
+    "cpu": {
+      "userUs": 498657000,
+      "systemUs": 127985000,
+      "usagePercent": 7.85
+    },
+    "eventLoopLagMs": {
+      "p95": 12.14,
+      "p99": 14.49,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 134,
+    "timestamp": "2026-08-07T18:30:00.896Z",
+    "uptimeSeconds": 8040,
+    "memory": {
+      "rssMB": 206.46,
+      "heapUsedMB": 33.23,
+      "heapTotalMB": 97.33,
+      "externalMB": 10.89,
+      "arrayBuffersMB": 7.09
+    },
+    "cpu": {
+      "userUs": 500157000,
+      "systemUs": 128375000,
+      "usagePercent": 7.82
+    },
+    "eventLoopLagMs": {
+      "p95": 12.14,
+      "p99": 14.49,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 135,
+    "timestamp": "2026-08-07T18:31:00.902Z",
+    "uptimeSeconds": 8100,
+    "memory": {
+      "rssMB": 204.48,
+      "heapUsedMB": 29.55,
+      "heapTotalMB": 96.21,
+      "externalMB": 8.46,
+      "arrayBuffersMB": 4.66
+    },
+    "cpu": {
+      "userUs": 501735000,
+      "systemUs": 128656000,
+      "usagePercent": 7.78
+    },
+    "eventLoopLagMs": {
+      "p95": 12.14,
+      "p99": 14.49,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 136,
+    "timestamp": "2026-08-07T18:32:00.911Z",
+    "uptimeSeconds": 8160,
+    "memory": {
+      "rssMB": 205.07,
+      "heapUsedMB": 31.47,
+      "heapTotalMB": 96.79,
+      "externalMB": 9.53,
+      "arrayBuffersMB": 5.72
+    },
+    "cpu": {
+      "userUs": 503329000,
+      "systemUs": 128985000,
+      "usagePercent": 7.75
+    },
+    "eventLoopLagMs": {
+      "p95": 12.14,
+      "p99": 14.5,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 137,
+    "timestamp": "2026-08-07T18:33:00.923Z",
+    "uptimeSeconds": 8220,
+    "memory": {
+      "rssMB": 193.59,
+      "heapUsedMB": 28.8,
+      "heapTotalMB": 95.7,
+      "externalMB": 7.35,
+      "arrayBuffersMB": 3.55
+    },
+    "cpu": {
+      "userUs": 504922000,
+      "systemUs": 129297000,
+      "usagePercent": 7.71
+    },
+    "eventLoopLagMs": {
+      "p95": 12.15,
+      "p99": 14.5,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 138,
+    "timestamp": "2026-08-07T18:34:00.926Z",
+    "uptimeSeconds": 8280,
+    "memory": {
+      "rssMB": 196.81,
+      "heapUsedMB": 29.61,
+      "heapTotalMB": 95.45,
+      "externalMB": 7.27,
+      "arrayBuffersMB": 3.48
+    },
+    "cpu": {
+      "userUs": 506610000,
+      "systemUs": 129672000,
+      "usagePercent": 7.68
+    },
+    "eventLoopLagMs": {
+      "p95": 12.15,
+      "p99": 14.5,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 139,
+    "timestamp": "2026-08-07T18:35:00.928Z",
+    "uptimeSeconds": 8340,
+    "memory": {
+      "rssMB": 196.27,
+      "heapUsedMB": 30.84,
+      "heapTotalMB": 96.71,
+      "externalMB": 8.58,
+      "arrayBuffersMB": 4.78
+    },
+    "cpu": {
+      "userUs": 508454000,
+      "systemUs": 130156000,
+      "usagePercent": 7.66
+    },
+    "eventLoopLagMs": {
+      "p95": 12.18,
+      "p99": 14.51,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 140,
+    "timestamp": "2026-08-07T18:36:00.939Z",
+    "uptimeSeconds": 8400,
+    "memory": {
+      "rssMB": 197.63,
+      "heapUsedMB": 31.07,
+      "heapTotalMB": 95.77,
+      "externalMB": 8.53,
+      "arrayBuffersMB": 4.74
+    },
+    "cpu": {
+      "userUs": 510110000,
+      "systemUs": 130594000,
+      "usagePercent": 7.63
+    },
+    "eventLoopLagMs": {
+      "p95": 12.2,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 11
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 141,
+    "timestamp": "2026-08-07T18:37:00.944Z",
+    "uptimeSeconds": 8460,
+    "memory": {
+      "rssMB": 199.41,
+      "heapUsedMB": 29.73,
+      "heapTotalMB": 96.36,
+      "externalMB": 8.21,
+      "arrayBuffersMB": 4.41
+    },
+    "cpu": {
+      "userUs": 511735000,
+      "systemUs": 131156000,
+      "usagePercent": 7.6
+    },
+    "eventLoopLagMs": {
+      "p95": 12.22,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 142,
+    "timestamp": "2026-08-07T18:38:00.954Z",
+    "uptimeSeconds": 8520,
+    "memory": {
+      "rssMB": 192.14,
+      "heapUsedMB": 28.96,
+      "heapTotalMB": 95.7,
+      "externalMB": 7.59,
+      "arrayBuffersMB": 3.8
+    },
+    "cpu": {
+      "userUs": 513250000,
+      "systemUs": 131313000,
+      "usagePercent": 7.56
+    },
+    "eventLoopLagMs": {
+      "p95": 12.28,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 143,
+    "timestamp": "2026-08-07T18:39:00.953Z",
+    "uptimeSeconds": 8580,
+    "memory": {
+      "rssMB": 201.52,
+      "heapUsedMB": 29.56,
+      "heapTotalMB": 96.54,
+      "externalMB": 7.12,
+      "arrayBuffersMB": 3.32
+    },
+    "cpu": {
+      "userUs": 515016000,
+      "systemUs": 131547000,
+      "usagePercent": 7.53
+    },
+    "eventLoopLagMs": {
+      "p95": 12.28,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 144,
+    "timestamp": "2026-08-07T18:40:00.958Z",
+    "uptimeSeconds": 8640,
+    "memory": {
+      "rssMB": 192.88,
+      "heapUsedMB": 31.78,
+      "heapTotalMB": 161.71,
+      "externalMB": 8.67,
+      "arrayBuffersMB": 4.87
+    },
+    "cpu": {
+      "userUs": 516735000,
+      "systemUs": 131766000,
+      "usagePercent": 7.5
+    },
+    "eventLoopLagMs": {
+      "p95": 12.3,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 145,
+    "timestamp": "2026-08-07T18:41:00.965Z",
+    "uptimeSeconds": 8701,
+    "memory": {
+      "rssMB": 200.74,
+      "heapUsedMB": 29.85,
+      "heapTotalMB": 160.71,
+      "externalMB": 8.47,
+      "arrayBuffersMB": 4.67
+    },
+    "cpu": {
+      "userUs": 518610000,
+      "systemUs": 132016000,
+      "usagePercent": 7.48
+    },
+    "eventLoopLagMs": {
+      "p95": 12.31,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 146,
+    "timestamp": "2026-08-07T18:42:00.966Z",
+    "uptimeSeconds": 8761,
+    "memory": {
+      "rssMB": 189.53,
+      "heapUsedMB": 28.77,
+      "heapTotalMB": 160.88,
+      "externalMB": 7.36,
+      "arrayBuffersMB": 3.56
+    },
+    "cpu": {
+      "userUs": 520032000,
+      "systemUs": 132235000,
+      "usagePercent": 7.45
+    },
+    "eventLoopLagMs": {
+      "p95": 12.34,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 147,
+    "timestamp": "2026-08-07T18:43:00.970Z",
+    "uptimeSeconds": 8821,
+    "memory": {
+      "rssMB": 184.94,
+      "heapUsedMB": 25.55,
+      "heapTotalMB": 159.7,
+      "externalMB": 5.46,
+      "arrayBuffersMB": 1.66
+    },
+    "cpu": {
+      "userUs": 521610000,
+      "systemUs": 132610000,
+      "usagePercent": 7.42
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 148,
+    "timestamp": "2026-08-07T18:44:00.975Z",
+    "uptimeSeconds": 8881,
+    "memory": {
+      "rssMB": 188.88,
+      "heapUsedMB": 29.39,
+      "heapTotalMB": 160.21,
+      "externalMB": 8.32,
+      "arrayBuffersMB": 4.51
+    },
+    "cpu": {
+      "userUs": 523391000,
+      "systemUs": 132875000,
+      "usagePercent": 7.39
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 149,
+    "timestamp": "2026-08-07T18:45:00.976Z",
+    "uptimeSeconds": 8941,
+    "memory": {
+      "rssMB": 198.62,
+      "heapUsedMB": 32.49,
+      "heapTotalMB": 162.33,
+      "externalMB": 10.52,
+      "arrayBuffersMB": 6.72
+    },
+    "cpu": {
+      "userUs": 524797000,
+      "systemUs": 133156000,
+      "usagePercent": 7.36
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.54,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 150,
+    "timestamp": "2026-08-07T18:46:00.985Z",
+    "uptimeSeconds": 9001,
+    "memory": {
+      "rssMB": 201.94,
+      "heapUsedMB": 30.57,
+      "heapTotalMB": 162,
+      "externalMB": 8.85,
+      "arrayBuffersMB": 5.05
+    },
+    "cpu": {
+      "userUs": 526172000,
+      "systemUs": 133563000,
+      "usagePercent": 7.33
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.54,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 151,
+    "timestamp": "2026-08-07T18:47:00.991Z",
+    "uptimeSeconds": 9061,
+    "memory": {
+      "rssMB": 201.29,
+      "heapUsedMB": 30.76,
+      "heapTotalMB": 162,
+      "externalMB": 9.06,
+      "arrayBuffersMB": 5.27
+    },
+    "cpu": {
+      "userUs": 527782000,
+      "systemUs": 133875000,
+      "usagePercent": 7.3
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.54,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 152,
+    "timestamp": "2026-08-07T18:48:00.994Z",
+    "uptimeSeconds": 9121,
+    "memory": {
+      "rssMB": 188.26,
+      "heapUsedMB": 26.43,
+      "heapTotalMB": 159.7,
+      "externalMB": 5.64,
+      "arrayBuffersMB": 1.84
+    },
+    "cpu": {
+      "userUs": 529360000,
+      "systemUs": 134360000,
+      "usagePercent": 7.28
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.54,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 153,
+    "timestamp": "2026-08-07T18:49:01.002Z",
+    "uptimeSeconds": 9181,
+    "memory": {
+      "rssMB": 189.98,
+      "heapUsedMB": 28.12,
+      "heapTotalMB": 160.45,
+      "externalMB": 7.03,
+      "arrayBuffersMB": 3.23
+    },
+    "cpu": {
+      "userUs": 530719000,
+      "systemUs": 134578000,
+      "usagePercent": 7.25
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.54,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 154,
+    "timestamp": "2026-08-07T18:50:01.004Z",
+    "uptimeSeconds": 9241,
+    "memory": {
+      "rssMB": 195.41,
+      "heapUsedMB": 29.61,
+      "heapTotalMB": 64.46,
+      "externalMB": 8.53,
+      "arrayBuffersMB": 4.72
+    },
+    "cpu": {
+      "userUs": 532266000,
+      "systemUs": 135078000,
+      "usagePercent": 7.22
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.54,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 155,
+    "timestamp": "2026-08-07T18:51:01.010Z",
+    "uptimeSeconds": 9301,
+    "memory": {
+      "rssMB": 199.96,
+      "heapUsedMB": 31.74,
+      "heapTotalMB": 65.54,
+      "externalMB": 9.81,
+      "arrayBuffersMB": 6
+    },
+    "cpu": {
+      "userUs": 534110000,
+      "systemUs": 135500000,
+      "usagePercent": 7.2
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 156,
+    "timestamp": "2026-08-07T18:52:01.022Z",
+    "uptimeSeconds": 9361,
+    "memory": {
+      "rssMB": 194.89,
+      "heapUsedMB": 31.2,
+      "heapTotalMB": 50.31,
+      "externalMB": 9.56,
+      "arrayBuffersMB": 5.77
+    },
+    "cpu": {
+      "userUs": 535422000,
+      "systemUs": 135750000,
+      "usagePercent": 7.17
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 157,
+    "timestamp": "2026-08-07T18:53:01.026Z",
+    "uptimeSeconds": 9421,
+    "memory": {
+      "rssMB": 192.94,
+      "heapUsedMB": 26.06,
+      "heapTotalMB": 33.2,
+      "externalMB": 5.98,
+      "arrayBuffersMB": 2.17
+    },
+    "cpu": {
+      "userUs": 537110000,
+      "systemUs": 136110000,
+      "usagePercent": 7.15
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 158,
+    "timestamp": "2026-08-07T18:54:01.027Z",
+    "uptimeSeconds": 9481,
+    "memory": {
+      "rssMB": 185.47,
+      "heapUsedMB": 28,
+      "heapTotalMB": 43.2,
+      "externalMB": 6.65,
+      "arrayBuffersMB": 2.85
+    },
+    "cpu": {
+      "userUs": 538719000,
+      "systemUs": 136391000,
+      "usagePercent": 7.12
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 159,
+    "timestamp": "2026-08-07T18:55:01.028Z",
+    "uptimeSeconds": 9541,
+    "memory": {
+      "rssMB": 199.55,
+      "heapUsedMB": 31.63,
+      "heapTotalMB": 51.21,
+      "externalMB": 14.95,
+      "arrayBuffersMB": 8.59
+    },
+    "cpu": {
+      "userUs": 540000000,
+      "systemUs": 136688000,
+      "usagePercent": 7.09
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 160,
+    "timestamp": "2026-08-07T18:56:01.030Z",
+    "uptimeSeconds": 9601,
+    "memory": {
+      "rssMB": 183.91,
+      "heapUsedMB": 23.23,
+      "heapTotalMB": 32.95,
+      "externalMB": 5.29,
+      "arrayBuffersMB": 1.49
+    },
+    "cpu": {
+      "userUs": 541657000,
+      "systemUs": 137078000,
+      "usagePercent": 7.07
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 161,
+    "timestamp": "2026-08-07T18:57:01.029Z",
+    "uptimeSeconds": 9661,
+    "memory": {
+      "rssMB": 187.47,
+      "heapUsedMB": 30.27,
+      "heapTotalMB": 64.01,
+      "externalMB": 9.57,
+      "arrayBuffersMB": 5.76
+    },
+    "cpu": {
+      "userUs": 543157000,
+      "systemUs": 137516000,
+      "usagePercent": 7.05
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 162,
+    "timestamp": "2026-08-07T18:58:01.035Z",
+    "uptimeSeconds": 9721,
+    "memory": {
+      "rssMB": 192.08,
+      "heapUsedMB": 30.16,
+      "heapTotalMB": 64.46,
+      "externalMB": 14.19,
+      "arrayBuffersMB": 7.83
+    },
+    "cpu": {
+      "userUs": 544766000,
+      "systemUs": 137875000,
+      "usagePercent": 7.02
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 163,
+    "timestamp": "2026-08-07T18:59:01.044Z",
+    "uptimeSeconds": 9781,
+    "memory": {
+      "rssMB": 189.4,
+      "heapUsedMB": 27.85,
+      "heapTotalMB": 44.45,
+      "externalMB": 6.95,
+      "arrayBuffersMB": 3.15
+    },
+    "cpu": {
+      "userUs": 546157000,
+      "systemUs": 138266000,
+      "usagePercent": 7
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 164,
+    "timestamp": "2026-08-07T19:00:01.045Z",
+    "uptimeSeconds": 9841,
+    "memory": {
+      "rssMB": 185.1,
+      "heapUsedMB": 26.19,
+      "heapTotalMB": 51.45,
+      "externalMB": 5.52,
+      "arrayBuffersMB": 1.72
+    },
+    "cpu": {
+      "userUs": 547516000,
+      "systemUs": 138610000,
+      "usagePercent": 6.97
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 165,
+    "timestamp": "2026-08-07T19:01:01.060Z",
+    "uptimeSeconds": 9901,
+    "memory": {
+      "rssMB": 194.78,
+      "heapUsedMB": 31.74,
+      "heapTotalMB": 75.29,
+      "externalMB": 9.6,
+      "arrayBuffersMB": 5.8
+    },
+    "cpu": {
+      "userUs": 549391000,
+      "systemUs": 139078000,
+      "usagePercent": 6.95
+    },
+    "eventLoopLagMs": {
+      "p95": 12.34,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 166,
+    "timestamp": "2026-08-07T19:02:01.063Z",
+    "uptimeSeconds": 9961,
+    "memory": {
+      "rssMB": 185.22,
+      "heapUsedMB": 27.03,
+      "heapTotalMB": 72.2,
+      "externalMB": 5.58,
+      "arrayBuffersMB": 1.78
+    },
+    "cpu": {
+      "userUs": 551438000,
+      "systemUs": 139485000,
+      "usagePercent": 6.94
+    },
+    "eventLoopLagMs": {
+      "p95": 12.34,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 167,
+    "timestamp": "2026-08-07T19:03:01.068Z",
+    "uptimeSeconds": 10021,
+    "memory": {
+      "rssMB": 197.4,
+      "heapUsedMB": 30.94,
+      "heapTotalMB": 116.76,
+      "externalMB": 9.61,
+      "arrayBuffersMB": 5.82
+    },
+    "cpu": {
+      "userUs": 553204000,
+      "systemUs": 140000000,
+      "usagePercent": 6.92
+    },
+    "eventLoopLagMs": {
+      "p95": 12.31,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 168,
+    "timestamp": "2026-08-07T19:04:01.077Z",
+    "uptimeSeconds": 10081,
+    "memory": {
+      "rssMB": 198.63,
+      "heapUsedMB": 31.37,
+      "heapTotalMB": 116.01,
+      "externalMB": 10.23,
+      "arrayBuffersMB": 6.43
+    },
+    "cpu": {
+      "userUs": 554735000,
+      "systemUs": 140266000,
+      "usagePercent": 6.89
+    },
+    "eventLoopLagMs": {
+      "p95": 12.3,
+      "p99": 14.52,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 169,
+    "timestamp": "2026-08-07T19:05:01.081Z",
+    "uptimeSeconds": 10141,
+    "memory": {
+      "rssMB": 199.26,
+      "heapUsedMB": 26.04,
+      "heapTotalMB": 115.2,
+      "externalMB": 5.62,
+      "arrayBuffersMB": 1.82
+    },
+    "cpu": {
+      "userUs": 556250000,
+      "systemUs": 140453000,
+      "usagePercent": 6.87
+    },
+    "eventLoopLagMs": {
+      "p95": 12.3,
+      "p99": 14.52,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 170,
+    "timestamp": "2026-08-07T19:06:01.094Z",
+    "uptimeSeconds": 10201,
+    "memory": {
+      "rssMB": 191.29,
+      "heapUsedMB": 28.54,
+      "heapTotalMB": 115.45,
+      "externalMB": 7.3,
+      "arrayBuffersMB": 3.5
+    },
+    "cpu": {
+      "userUs": 557750000,
+      "systemUs": 140797000,
+      "usagePercent": 6.85
+    },
+    "eventLoopLagMs": {
+      "p95": 12.31,
+      "p99": 14.52,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 10
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 171,
+    "timestamp": "2026-08-07T19:07:01.101Z",
+    "uptimeSeconds": 10261,
+    "memory": {
+      "rssMB": 196.36,
+      "heapUsedMB": 28.05,
+      "heapTotalMB": 116.46,
+      "externalMB": 8.19,
+      "arrayBuffersMB": 4.38
+    },
+    "cpu": {
+      "userUs": 559032000,
+      "systemUs": 141094000,
+      "usagePercent": 6.82
+    },
+    "eventLoopLagMs": {
+      "p95": 12.31,
+      "p99": 14.51,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 172,
+    "timestamp": "2026-08-07T19:08:01.108Z",
+    "uptimeSeconds": 10321,
+    "memory": {
+      "rssMB": 188.09,
+      "heapUsedMB": 25.44,
+      "heapTotalMB": 115.2,
+      "externalMB": 5.67,
+      "arrayBuffersMB": 1.87
+    },
+    "cpu": {
+      "userUs": 560422000,
+      "systemUs": 141328000,
+      "usagePercent": 6.8
+    },
+    "eventLoopLagMs": {
+      "p95": 12.32,
+      "p99": 14.51,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 173,
+    "timestamp": "2026-08-07T19:09:01.125Z",
+    "uptimeSeconds": 10381,
+    "memory": {
+      "rssMB": 196.63,
+      "heapUsedMB": 27.33,
+      "heapTotalMB": 40.95,
+      "externalMB": 7.67,
+      "arrayBuffersMB": 3.87
+    },
+    "cpu": {
+      "userUs": 561625000,
+      "systemUs": 141703000,
+      "usagePercent": 6.78
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 174,
+    "timestamp": "2026-08-07T19:10:01.130Z",
+    "uptimeSeconds": 10441,
+    "memory": {
+      "rssMB": 195.52,
+      "heapUsedMB": 25.87,
+      "heapTotalMB": 44.45,
+      "externalMB": 6.71,
+      "arrayBuffersMB": 2.91
+    },
+    "cpu": {
+      "userUs": 562907000,
+      "systemUs": 141875000,
+      "usagePercent": 6.75
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 175,
+    "timestamp": "2026-08-07T19:11:01.134Z",
+    "uptimeSeconds": 10501,
+    "memory": {
+      "rssMB": 195.34,
+      "heapUsedMB": 28.14,
+      "heapTotalMB": 60.24,
+      "externalMB": 7.92,
+      "arrayBuffersMB": 4.12
+    },
+    "cpu": {
+      "userUs": 564750000,
+      "systemUs": 142219000,
+      "usagePercent": 6.73
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 176,
+    "timestamp": "2026-08-07T19:12:01.150Z",
+    "uptimeSeconds": 10561,
+    "memory": {
+      "rssMB": 197.34,
+      "heapUsedMB": 28.21,
+      "heapTotalMB": 42.46,
+      "externalMB": 8.07,
+      "arrayBuffersMB": 4.27
+    },
+    "cpu": {
+      "userUs": 566110000,
+      "systemUs": 142485000,
+      "usagePercent": 6.71
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 177,
+    "timestamp": "2026-08-07T19:13:01.157Z",
+    "uptimeSeconds": 10621,
+    "memory": {
+      "rssMB": 202.88,
+      "heapUsedMB": 32.03,
+      "heapTotalMB": 60.08,
+      "externalMB": 11,
+      "arrayBuffersMB": 7.19
+    },
+    "cpu": {
+      "userUs": 567750000,
+      "systemUs": 142750000,
+      "usagePercent": 6.69
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.53,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 178,
+    "timestamp": "2026-08-07T19:14:01.150Z",
+    "uptimeSeconds": 10681,
+    "memory": {
+      "rssMB": 209.62,
+      "heapUsedMB": 25.85,
+      "heapTotalMB": 85.45,
+      "externalMB": 6.24,
+      "arrayBuffersMB": 2.45
+    },
+    "cpu": {
+      "userUs": 569360000,
+      "systemUs": 143078000,
+      "usagePercent": 6.67
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 179,
+    "timestamp": "2026-08-07T19:15:01.166Z",
+    "uptimeSeconds": 10741,
+    "memory": {
+      "rssMB": 208.55,
+      "heapUsedMB": 26.52,
+      "heapTotalMB": 85.79,
+      "externalMB": 6.29,
+      "arrayBuffersMB": 2.49
+    },
+    "cpu": {
+      "userUs": 570672000,
+      "systemUs": 143422000,
+      "usagePercent": 6.65
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 180,
+    "timestamp": "2026-08-07T19:16:01.176Z",
+    "uptimeSeconds": 10801,
+    "memory": {
+      "rssMB": 200.86,
+      "heapUsedMB": 28.74,
+      "heapTotalMB": 86.46,
+      "externalMB": 8.18,
+      "arrayBuffersMB": 4.39
+    },
+    "cpu": {
+      "userUs": 572079000,
+      "systemUs": 143719000,
+      "usagePercent": 6.63
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 181,
+    "timestamp": "2026-08-07T19:17:01.175Z",
+    "uptimeSeconds": 10861,
+    "memory": {
+      "rssMB": 203.8,
+      "heapUsedMB": 33.47,
+      "heapTotalMB": 87.33,
+      "externalMB": 10.9,
+      "arrayBuffersMB": 7.09
+    },
+    "cpu": {
+      "userUs": 573844000,
+      "systemUs": 143953000,
+      "usagePercent": 6.61
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 182,
+    "timestamp": "2026-08-07T19:18:01.185Z",
+    "uptimeSeconds": 10921,
+    "memory": {
+      "rssMB": 203.69,
+      "heapUsedMB": 28.02,
+      "heapTotalMB": 85.45,
+      "externalMB": 7.21,
+      "arrayBuffersMB": 3.41
+    },
+    "cpu": {
+      "userUs": 575438000,
+      "systemUs": 144281000,
+      "usagePercent": 6.59
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 183,
+    "timestamp": "2026-08-07T19:19:01.191Z",
+    "uptimeSeconds": 10981,
+    "memory": {
+      "rssMB": 202.3,
+      "heapUsedMB": 28.37,
+      "heapTotalMB": 85.7,
+      "externalMB": 7.23,
+      "arrayBuffersMB": 3.43
+    },
+    "cpu": {
+      "userUs": 576954000,
+      "systemUs": 144453000,
+      "usagePercent": 6.57
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 184,
+    "timestamp": "2026-08-07T19:20:01.193Z",
+    "uptimeSeconds": 11041,
+    "memory": {
+      "rssMB": 200.69,
+      "heapUsedMB": 29.74,
+      "heapTotalMB": 85.99,
+      "externalMB": 7.8,
+      "arrayBuffersMB": 4
+    },
+    "cpu": {
+      "userUs": 578422000,
+      "systemUs": 144750000,
+      "usagePercent": 6.55
+    },
+    "eventLoopLagMs": {
+      "p95": 12.37,
+      "p99": 14.52,
+      "p99_9": 15.41,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 185,
+    "timestamp": "2026-08-07T19:21:01.203Z",
+    "uptimeSeconds": 11101,
+    "memory": {
+      "rssMB": 198.57,
+      "heapUsedMB": 28.9,
+      "heapTotalMB": 85.99,
+      "externalMB": 7.5,
+      "arrayBuffersMB": 3.69
+    },
+    "cpu": {
+      "userUs": 579844000,
+      "systemUs": 145031000,
+      "usagePercent": 6.53
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.52,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 186,
+    "timestamp": "2026-08-07T19:22:01.214Z",
+    "uptimeSeconds": 11161,
+    "memory": {
+      "rssMB": 175.68,
+      "heapUsedMB": 29.05,
+      "heapTotalMB": 47.46,
+      "externalMB": 8.19,
+      "arrayBuffersMB": 4.39
+    },
+    "cpu": {
+      "userUs": 581141000,
+      "systemUs": 145344000,
+      "usagePercent": 6.51
+    },
+    "eventLoopLagMs": {
+      "p95": 12.38,
+      "p99": 14.51,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 187,
+    "timestamp": "2026-08-07T19:23:01.214Z",
+    "uptimeSeconds": 11221,
+    "memory": {
+      "rssMB": 175.76,
+      "heapUsedMB": 30.88,
+      "heapTotalMB": 63.49,
+      "externalMB": 7.71,
+      "arrayBuffersMB": 3.91
+    },
+    "cpu": {
+      "userUs": 582922000,
+      "systemUs": 145547000,
+      "usagePercent": 6.49
+    },
+    "eventLoopLagMs": {
+      "p95": 12.39,
+      "p99": 14.52,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  },
+  {
+    "sampleIndex": 188,
+    "timestamp": "2026-08-07T19:24:01.221Z",
+    "uptimeSeconds": 11281,
+    "memory": {
+      "rssMB": 183.41,
+      "heapUsedMB": 28.93,
+      "heapTotalMB": 47.46,
+      "externalMB": 8.22,
+      "arrayBuffersMB": 4.42
+    },
+    "cpu": {
+      "userUs": 584922000,
+      "systemUs": 145875000,
+      "usagePercent": 6.48
+    },
+    "eventLoopLagMs": {
+      "p95": 12.39,
+      "p99": 14.52,
+      "p99_9": 15.38,
+      "max": 23.33
+    },
+    "resources": {
+      "activeSockets": 9
+    },
+    "exchanges": {}
+  }
+]

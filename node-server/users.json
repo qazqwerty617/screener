@@ -1,0 +1,42 @@
+{
+  "USR-920634": {
+    "id": "USR-920634",
+    "username": "CryptoMaster",
+    "email": "crypto@obsidian.pro",
+    "passwordHash": "8efdf8b615ece6155d2167bee48bc26867d22337a662972d5ed83a25cad63716f83cca296f316651a1177a16e8b15ce342f9db66b75da2586c7721e236f53bf0",
+    "salt": "e414ebec7001e4a8e19ce1bd0ab18a7f",
+    "authMethod": "login",
+    "role": "PRO Trader",
+    "createdAt": "2026-08-11T15:52:08.431Z",
+    "avatar": ""
+  },
+  "USR-304136": {
+    "id": "USR-304136",
+    "username": "qazqwerty617",
+    "email": "7781497466@telegram.user",
+    "telegramId": "7781497466",
+    "telegramChatId": "7781497466",
+    "telegramLinked": true,
+    "photoUrl": "",
+    "authMethod": "telegram",
+    "role": "VIP Trader",
+    "createdAt": "2026-08-11T16:03:52.000Z",
+    "avatar": ""
+  },
+  "USR-284895": {
+    "id": "USR-284895",
+    "username": "@qazqwerty618",
+    "email": "8482582995@telegram.user",
+    "telegramId": "8482582995",
+    "telegramChatId": "8482582995",
+    "telegramLinked": true,
+    "photoUrl": "",
+    "authMethod": "telegram",
+    "role": "VIP Trader",
+    "createdAt": "2026-08-11T16:11:46.421Z",
+    "avatar": "",
+    "tags": [
+      "⭐ VIP"
+    ]
+  }
+}
