@@ -23,6 +23,7 @@ const httpsAgent = new https.Agent({
 const compression = require('compression');
 const patternDetector = require("./patternDetector");
 const serverLevels = require("./serverLevels");
+const wallScanner = require("./wallScanner");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
 let patternsCache = []; // Global in-memory patterns/signals cache
@@ -1643,8 +1644,15 @@ app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
 // Payment routes must be registered before the static catch-all route.
 registerPaymentRoutes(app, { userStore, paymentGateway });
 
-app.use(express.static(path.join(__dirname, "public"), { maxAge: 0, etag: false }));
-app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+app.use(express.static(path.join(__dirname, "public"), {
+  maxAge: 0,
+  etag: false,
+  setHeaders: (res) => res.setHeader("Cache-Control", "no-store, max-age=0")
+}));
+app.get("*", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 // тФАтФАтФА Exchange Modules тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exchanges = {
