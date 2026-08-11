@@ -3416,7 +3416,6 @@ canvas.addEventListener("mousedown", (e) => {
         savePriceAlerts();
       }
 
-      if (typeof playAlertSound === "function") playAlertSound("chime");
       if (typeof showToast === "function") {
         showToast({
           title: "Ценовой алерт создан",
