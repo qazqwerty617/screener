@@ -5715,6 +5715,13 @@ const densityClose = $("chart-density-close");
 if (densitySettingsToggle && densityPanel) {
   densitySettingsToggle.onclick = (e) => {
     e.stopPropagation();
+    const isPro = window.currentUser && window.currentUser.plan === "pro";
+    if (!isPro) {
+      if (typeof openProModal === "function") {
+        openProModal("Настройки графика и плотностей");
+      }
+      return;
+    }
     const open = densityPanel.classList.contains("open");
     if (open) {
       densityPanel.classList.remove("open");
