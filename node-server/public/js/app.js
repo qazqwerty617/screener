@@ -3914,6 +3914,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const tgBotLinkBtn = $("tg-bot-link-btn");
 
   function renderProfile(user) {
+    if (!user && (currentUser || window.currentUser)) {
+      user = currentUser || window.currentUser;
+    }
     currentUser = user;
     window.currentUser = user;
     if (user) {
@@ -11248,7 +11251,7 @@ function openProfileModal() {
   const modal = $("profile-modal");
   if (modal) {
     modal.style.display = "flex";
-    if (typeof renderProfile === "function") renderProfile();
+    if (typeof renderProfile === "function") renderProfile(window.currentUser);
   }
 }
 
