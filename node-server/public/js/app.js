@@ -3963,7 +3963,7 @@ document.addEventListener("DOMContentLoaded", () => {
         profileRoleBadge.className = isPro ? "profile-badge-pro" : "profile-badge-free";
       }
       if (profileUpgradeBanner) {
-        profileUpgradeBanner.style.display = isPro ? "none" : "flex";
+        profileUpgradeBanner.style.setProperty("display", isPro ? "none" : "flex", "important");
       }
 
       if (tgBotStatusText) {
@@ -4070,11 +4070,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  window.renderProfile = renderProfile;
   checkAuthSession();
 
   if (profileBtn) {
     profileBtn.onclick = () => {
-      if (currentUser) {
+      const activeUser = currentUser || window.currentUser;
+      if (activeUser) {
+        renderProfile(activeUser);
         if (profileModal) profileModal.style.display = "flex";
       } else {
         if (authModal) {
