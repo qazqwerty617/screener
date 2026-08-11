@@ -63,6 +63,8 @@ function getRegTokenStatus(token) {
   return result;
 }
 
+const chatAlertState = new Map();
+
 // Send message to Telegram Chat
 async function sendTelegramMessage(chatId, text) {
   if (!BOT_TOKEN) return { ok: false, error: "TELEGRAM_BOT_DISABLED" };
@@ -80,6 +82,53 @@ async function sendTelegramMessage(chatId, text) {
   } catch (err) {
     console.error("[TELEGRAM BOT ERROR] Failed to send message:", err.message);
   }
+}
+
+async function sendTelegramMessageWithKeyboard(chatId, text, replyMarkup) {
+  if (!BOT_TOKEN) return { ok: false, error: "TELEGRAM_BOT_DISABLED" };
+  try {
+    const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup
+      })
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("[TELEGRAM BOT ERROR] Failed to send keyboard message:", err.message);
+  }
+}
+
+async function answerCallbackQuery(callbackQueryId, text) {
+  if (!BOT_TOKEN) return;
+  try {
+    await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackQueryId, text })
+    });
+  } catch (_) {}
+}
+
+async function editMessageText(chatId, messageId, text, replyMarkup) {
+  if (!BOT_TOKEN) return;
+  try {
+    await fetch(`${TELEGRAM_API}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup
+      })
+    });
+  } catch (_) {}
 }
 
 // Long polling engine to process incoming Telegram Bot messages
@@ -105,7 +154,61 @@ async function pollUpdates() {
   }
 }
 
+function handleCallbackQuery(cb) {
+  if (!cb || !cb.message) return;
+  const chatId = cb.message.chat.id;
+  const messageId = cb.message.message_id;
+  const data = cb.data;
+  const tgUser = cb.from || {};
+
+  if (data === "toggle_alerts") {
+    let existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
+    let nextState = true;
+    if (existingUser) {
+      nextState = existingUser.tgAlertsEnabled === false ? true : false;
+      if (typeof userStore.setTelegramAlertsEnabledByChatId === "function") {
+        userStore.setTelegramAlertsEnabledByChatId(chatId, nextState);
+      }
+    } else {
+      const current = chatAlertState.get(chatId);
+      nextState = current === false ? true : false;
+      chatAlertState.set(chatId, nextState);
+    }
+
+    const btnText = nextState ? "🔔 Ценовые алерты: ✅ ВКЛ" : "🔕 Ценовые алерты: ❌ ВЫКЛ";
+    const statusText = nextState 
+      ? "<b>✅ Уведомления о ценовых алертах ВКЛЮЧЕНЫ!</b>\n\nВсе выставляемые вами ценовые сигналы 🔔 на графике поступают в реальном времени." 
+      : "<b>❌ Уведомления о ценовых алертах ВЫКЛЮЧЕНЫ.</b>\n\nСообщения о выставляемых уровнях цены временно приостановлены.";
+
+    answerCallbackQuery(cb.id, nextState ? "Уведомления ВКЛЮЧЕНЫ ✅" : "Уведомления ВЫКЛЮЧЕНЫ ❌");
+    editMessageText(chatId, messageId, statusText, {
+      inline_keyboard: [
+        [{ text: btnText, callback_data: "toggle_alerts" }],
+        [{ text: "📊 Мой аккаунт", callback_data: "account_info" }]
+      ]
+    });
+  } else if (data === "account_info") {
+    let existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
+    const isEnabled = existingUser ? (existingUser.tgAlertsEnabled !== false) : (chatAlertState.get(chatId) !== false);
+    
+    answerCallbackQuery(cb.id, "Информация о вашем профиле");
+    sendTelegramMessage(
+      chatId,
+      `<b>👤 Аккаунт Obsidian Pro</b>\n\n` +
+      `• <b>ID:</b> <code>${existingUser ? existingUser.id : "—"}</code>\n` +
+      `• <b>Пользователь:</b> ${existingUser ? existingUser.username : (tgUser.username ? "@" + tgUser.username : "Trader")}\n` +
+      `• <b>Тариф:</b> ${existingUser && existingUser.plan === "pro" ? "💎 PRO" : "⚪ FREE"}\n` +
+      `• <b>Ценовые алерты:</b> ${isEnabled ? "✅ Включены" : "❌ Выключены"}`
+    );
+  }
+}
+
 function handleUpdate(update) {
+  if (update.callback_query) {
+    handleCallbackQuery(update.callback_query);
+    return;
+  }
+
   const msg = update.message;
   if (!msg || !msg.text) return;
 
@@ -116,6 +219,13 @@ function handleUpdate(update) {
   if (text.startsWith("/start")) {
     const parts = text.split(" ");
     const startParam = parts[1] ? parts[1].trim() : null;
+
+    const defaultKeyboard = {
+      inline_keyboard: [
+        [{ text: "🔔 Ценовые алерты: ✅ ВКЛ", callback_data: "toggle_alerts" }],
+        [{ text: "📊 Мой аккаунт", callback_data: "account_info" }]
+      ]
+    };
 
     if (startParam && startParam.startsWith("reg_") && regTokens.has(startParam)) {
       // Direct registration / login via Telegram Bot
@@ -135,25 +245,19 @@ function handleUpdate(update) {
           createdAt: Date.now()
         });
 
+        sendTelegramMessageWithKeyboard(
+          chatId,
+          `<b>🎉 Telegram-уведомления Obsidian Screener подключены!</b>\n\n` +
+          `<b>Пользователь:</b> ${authResult.user.username || "@" + (tgUser.username || "Trader")}\n` +
+          `<b>Индивидуальный ID:</b> <code>${authResult.user.id}</code>\n\n` +
+          `Вы подтвердили включение уведомлений о ценовых уровнях 🔔 на графике.\n` +
+          `Они будут приходить в реальном времени, пока вы их не отключите.\n\n` +
+          `<i>Настройка бота:</i>`,
+          defaultKeyboard
+        );
+
         if (authResult.isNew) {
           sendAdminNotification(authResult.user, { authMethod: "Telegram", ip: "" });
-          sendTelegramMessage(
-            chatId,
-            `<b>🎉 Новый аккаунт успешно создан в Obsidian Pro!</b>\n\n` +
-            `<b>Индивидуальный ID:</b> <code>${authResult.user.id}</code>\n` +
-            `<b>Пользователь:</b> ${authResult.user.username}\n` +
-            `<b>Уведомления бота:</b> ✅ Подключены\n\n` +
-            `Добро пожаловать! Возвращайтесь на сайт — терминал открыт.`
-          );
-        } else {
-          sendTelegramMessage(
-            chatId,
-            `<b>👋 С возвращением в Obsidian Pro!</b>\n\n` +
-            `<b>Индивидуальный ID:</b> <code>${authResult.user.id}</code>\n` +
-            `<b>Пользователь:</b> ${authResult.user.username}\n` +
-            `<b>Способ входа:</b> Telegram\n\n` +
-            `Сессия входа активирована. Перейдите в браузер — терминал открыт.`
-          );
         }
       } catch (err) {
         sendTelegramMessage(chatId, `❌ Ошибка авторизации: ${err.message}`);
@@ -164,29 +268,32 @@ function handleUpdate(update) {
       linkTokens.delete(startParam);
 
       userStore.linkTelegramBot(userId, chatId, tgUser.username);
-      sendTelegramMessage(
+      sendTelegramMessageWithKeyboard(
         chatId,
-        `<b>✅ Telegram-бот успешно подключён!</b>\n\nТеперь вы будете получать уведомления терминала Obsidian Pro прямо здесь.`
+        `<b>✅ Telegram-уведомления успешно подключены!</b>\n\n` +
+        `Все ценовые алерты 🔔 с графика терминала будут поступать сюда в реальном времени.\n` +
+        `Уведомления активны непрерывно, пока вы не отключите их кнопкой ниже.`,
+        defaultKeyboard
       );
     } else {
-      // Plain /start greeting - check if user already exists
-      const existingUser = userStore.getUserByTelegramId(tgUser.id);
-      if (existingUser) {
-        sendTelegramMessage(
-          chatId,
-          `<b>👋 С возвращением в Obsidian Pro Bot!</b>\n\n` +
-          `<b>Ваш Индивидуальный ID:</b> <code>${existingUser.id}</code>\n` +
-          `<b>Пользователь:</b> ${existingUser.username}\n` +
-          `<b>Уведомления:</b> ✅ Подключены\n\n` +
-          `Для автоматического входа нажмите <i>«Войти через Telegram»</i> на сайте.`
-        );
-      } else {
-        sendTelegramMessage(
-          chatId,
-          `<b>👋 Добро пожаловать в Obsidian Pro Bot!</b>\n\n` +
-          `Для быстрой регистрации и входа откройте терминал Obsidian и нажмите кнопку <i>«Войти через Telegram»</i>.`
-        );
-      }
+      // Plain /start greeting
+      const existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
+      const isEnabled = existingUser ? (existingUser.tgAlertsEnabled !== false) : (chatAlertState.get(chatId) !== false);
+      const btnText = isEnabled ? "🔔 Ценовые алерты: ✅ ВКЛ" : "🔕 Ценовые алерты: ❌ ВЫКЛ";
+
+      sendTelegramMessageWithKeyboard(
+        chatId,
+        `<b>👋 Терминал Obsidian Pro Bot</b>\n\n` +
+        (existingUser 
+          ? `<b>ID:</b> <code>${existingUser.id}</code>\n<b>Статус бота:</b> ${isEnabled ? "✅ Уведомления включены" : "❌ Уведомления выключены"}\n\nВы получаете сигналы о достижении цен 🔔 с графиков в реальном времени.`
+          : `Нажмите «Подключить Telegram» в настройках терминала Obsidian.`),
+        {
+          inline_keyboard: [
+            [{ text: btnText, callback_data: "toggle_alerts" }],
+            [{ text: "📊 Мой аккаунт", callback_data: "account_info" }]
+          ]
+        }
+      );
     }
   }
 }

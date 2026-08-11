@@ -2102,6 +2102,10 @@ server.listen(PORT, () => {
     if (!chatId || !message) return res.status(400).json({ error: "chatId and message are required" });
     if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
 
+    if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(chatId)) {
+      return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
+    }
+
     const postData = JSON.stringify({
       chat_id: chatId,
       text: message,

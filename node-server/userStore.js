@@ -416,10 +416,35 @@ function linkTelegramBot(userId, chatId, tgUsername) {
   if (!userId || !users[userId]) return false;
   users[userId].telegramChatId = String(chatId);
   users[userId].telegramLinked = true;
+  users[userId].tgAlertsEnabled = true;
   if (tgUsername) users[userId].telegramUsername = tgUsername;
   saveJSON(USERS_FILE, users);
 
   logAuthEvent({ event: "LINK_TELEGRAM_BOT", userId, chatId: String(chatId), tgUsername });
+  return true;
+}
+
+function setTelegramAlertsEnabledByChatId(chatId, enabled) {
+  if (!chatId) return false;
+  const strId = String(chatId);
+  for (const u of Object.values(users)) {
+    if (u.telegramChatId === strId || u.telegramId === strId) {
+      u.tgAlertsEnabled = !!enabled;
+      saveJSON(USERS_FILE, users);
+      return true;
+    }
+  }
+  return false;
+}
+
+function isTelegramAlertsEnabled(chatId) {
+  if (!chatId) return true;
+  const strId = String(chatId);
+  for (const u of Object.values(users)) {
+    if (u.telegramChatId === strId || u.telegramId === strId) {
+      return u.tgAlertsEnabled !== false;
+    }
+  }
   return true;
 }
 
@@ -764,6 +789,8 @@ module.exports = {
   getUserByTelegramId,
   updateProfile,
   linkTelegramBot,
+  setTelegramAlertsEnabledByChatId,
+  isTelegramAlertsEnabled,
   getUserStats,
   setUserPlan,
   grantPlanForPayment,

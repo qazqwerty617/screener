@@ -1930,37 +1930,25 @@
                         <!-- 2. Telegram Integration -->
                         <div class="settings-group">
                             <label>Интеграция с Telegram</label>
-                            <div class="s-row" style="flex-direction: column; align-items: stretch; gap: 8px;">
-                                <div style="display: flex; gap: 8px;">
-                                    <input type="text" id="set-tg-chat-id" placeholder="Ваш Telegram Chat ID (напр. 12345678)" style="flex: 1; padding: 8px; background: var(--bg2); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; font-size: 13px;" />
-                                    <button type="button" id="btn-test-tg" style="padding: 8px 14px; background: #2aabee; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px;">Тест в TG</button>
+                            <div class="s-row" style="flex-direction: column; align-items: stretch; gap: 10px;">
+                                <div id="tg-settings-box" style="padding: 12px; background: rgba(42, 171, 238, 0.08); border: 1px solid rgba(42, 171, 238, 0.25); border-radius: 8px; font-size: 13px; color: var(--t1); display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="#2aabee" style="flex-shrink: 0;">
+                                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.67-.52.36-1 .53-1.42.52-.47-.01-1.37-.26-2.03-.48-.82-.27-1.47-.42-1.42-.88.03-.24.37-.49 1.02-.75 3.99-1.74 6.66-2.89 8.01-3.45 3.81-1.59 4.6-.186 4.6.87z"/>
+                                        </svg>
+                                        <div>
+                                            <div id="tg-settings-status-title" style="font-weight: 600; font-size: 13px; margin-bottom: 2px;">Подключение Telegram</div>
+                                            <div id="tg-settings-status-sub" style="font-size: 11px; color: var(--t2);">Нажмите кнопку для привязки Telegram-бота</div>
+                                        </div>
+                                    </div>
+                                    <button type="button" id="btn-connect-tg-settings" style="padding: 8px 16px; background: #2aabee; color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px; white-space: nowrap; box-shadow: 0 0 10px rgba(42,171,238,0.3);">
+                                        Подключить Telegram
+                                    </button>
                                 </div>
-                                <span style="font-size: 11px; color: var(--t2);">Запустите <a href="https://t.me/userinfobot" target="_blank" style="color: #2aabee; text-decoration: underline;">@userinfobot</a> в Telegram чтобы узнать ваш Chat ID, затем включите нашего бота <a href="https://t.me/ObsidianScreenerBot" target="_blank" style="color: #2aabee; text-decoration: underline;">@ObsidianScreenerBot</a>.</span>
-                            </div>
-                        </div>
-
-                        <!-- 3. Price Level Alerts -->
-                        <div class="settings-group">
-                            <label>Ценовые Алерты (Price Level Alerts)</label>
-                            <div class="alert-form-grid" style="display: grid; grid-template-columns: 1fr 1fr 90px 1fr 90px; gap: 6px; margin-bottom: 10px;">
-                                <select id="alert-ex-select" class="density-select" style="padding: 6px; font-size: 12px;">
-                                    <option value="BN">Binance</option>
-                                    <option value="BB">Bybit</option>
-                                    <option value="OK">OKX</option>
-                                    <option value="MX">MEXC</option>
-                                    <option value="GT">Gate.io</option>
-                                </select>
-                                <input type="text" id="alert-sym-input" placeholder="BTCUSDT" style="padding: 6px; background: var(--bg2); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; font-size: 12px; text-transform: uppercase;" />
-                                <select id="alert-dir-select" class="density-select" style="padding: 6px; font-size: 12px;">
-                                    <option value="gte">&gt;= (Выше)</option>
-                                    <option value="lte">&lt;= (Ниже)</option>
-                                </select>
-                                <input type="number" step="any" id="alert-price-input" placeholder="Цена (напр. 95000)" style="padding: 6px; background: var(--bg2); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; font-size: 12px;" />
-                                <button type="button" id="btn-add-price-alert" style="padding: 6px; background: var(--ac); color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px;">+ Добавить</button>
-                            </div>
-
-                            <div id="price-alerts-list" class="price-alerts-list" style="display: flex; flex-direction: column; gap: 6px; max-height: 160px; overflow-y: auto;">
-                                <div style="color: var(--t3); font-size: 12px; text-align: center; padding: 12px 0;">Нет активных ценовых алертов</div>
+                                <span style="font-size: 11px; color: var(--t2); line-height: 1.45;">
+                                    После нажатия кнопки перейдите в Telegram-бота <a href="https://t.me/ObsidianScreenerBot" target="_blank" style="color: #2aabee; text-decoration: underline;">@ObsidianScreenerBot</a> и нажмите <b>START</b>.
+                                    Все созданные алерты 🔔 на графике будут в реальном времени поступать в ваш Telegram. Управлять уведомлениями можно прямо в меню бота.
+                                </span>
                             </div>
                         </div>
                     </div>

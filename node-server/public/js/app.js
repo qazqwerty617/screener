@@ -11750,7 +11750,8 @@ function showToast({ title, message, type = "info", durationMs = 5000 }) {
 }
 
 function sendTelegramAlert(message) {
-  const chatId = $("set-tg-chat-id")?.value?.trim() || localStorage.getItem("obsidian_tg_chat_id");
+  const activeUser = currentUser || window.currentUser;
+  const chatId = activeUser?.telegramChatId || localStorage.getItem("obsidian_tg_chat_id");
   if (!chatId) return;
   fetch("/api/notifications/telegram", {
     method: "POST",
@@ -11818,77 +11819,76 @@ function checkPriceAlerts(ex, sym, price) {
   }
 }
 
-function renderPriceAlertsList() {
-  const listEl = $("price-alerts-list");
-  if (!listEl) return;
-  
-  if (!priceAlerts.length) {
-    listEl.innerHTML = `<div style="color: var(--t3); font-size: 12px; text-align: center; padding: 12px 0;">Нет активных ценовых алертов</div>`;
-    return;
-  }
-  
-  listEl.innerHTML = priceAlerts.map((a, i) => `
-    <div class="price-alert-item" style="${a.triggered ? 'opacity: 0.5;' : ''}">
-      <div>
-        <strong>${a.ex} · ${a.sym}</strong> 
-        <span style="color: var(--t2); font-size: 11px;">${a.dir === 'gte' ? '≥' : '≤'} ${a.price.toLocaleString()} USDT</span>
-        ${a.triggered ? '<span style="color: #2bd98a; font-size: 10px; margin-left: 6px;">[Сработано]</span>' : ''}
-      </div>
-      <button class="alert-del-btn" onclick="deletePriceAlert(${i})">Удалить</button>
-    </div>
-  `).join("");
-}
-
-function deletePriceAlert(index) {
-  priceAlerts.splice(index, 1);
-  savePriceAlerts();
-}
-window.deletePriceAlert = deletePriceAlert;
-
 function initNotificationsUI() {
   loadPriceAlerts();
   
-  const savedTg = localStorage.getItem("obsidian_tg_chat_id");
-  if (savedTg && $("set-tg-chat-id")) $("set-tg-chat-id").value = savedTg;
-  
-  $("set-tg-chat-id")?.addEventListener("input", (e) => {
-    localStorage.setItem("obsidian_tg_chat_id", e.target.value.trim());
+  const btnConnectTg = $("btn-connect-tg-settings");
+  const tgTitle = $("tg-settings-status-title");
+  const tgSub = $("tg-settings-status-sub");
+
+  function updateTgSettingsUI() {
+    const user = currentUser || window.currentUser;
+    if (user && user.telegramLinked) {
+      if (tgTitle) tgTitle.textContent = `✅ Telegram подключен (${user.telegramUsername || user.username || "Подключен"})`;
+      if (tgSub) tgSub.textContent = "Уведомления о ценовых алертах активны в боте";
+      if (btnConnectTg) btnConnectTg.textContent = "Переподключить TG";
+      if (user.telegramChatId) localStorage.setItem("obsidian_tg_chat_id", user.telegramChatId);
+    } else {
+      if (tgTitle) tgTitle.textContent = "Подключение Telegram";
+      if (tgSub) tgSub.textContent = "Нажмите кнопку для привязки Telegram-бота";
+      if (btnConnectTg) btnConnectTg.textContent = "Подключить Telegram";
+    }
+  }
+
+  updateTgSettingsUI();
+
+  btnConnectTg?.addEventListener("click", async () => {
+    try {
+      const activeUser = currentUser || window.currentUser;
+      const endpoint = activeUser ? "/api/auth/telegram-link-token" : "/api/auth/telegram-start";
+      const headers = activeUser && authToken ? { "Authorization": `Bearer ${authToken}` } : {};
+      const r = await fetch(endpoint, { method: "POST", headers });
+      const data = await r.json();
+      
+      if (!r.ok || !data.success || !data.botUrl) {
+        throw new Error(data.error || "Не удалось запустить интеграцию Telegram");
+      }
+
+      window.open(data.botUrl, "_blank");
+      if (typeof showToast === "function") {
+        showToast("Перейдите в Telegram и нажмите START для подтверждения включения уведомлений", "info");
+      }
+
+      const token = data.regToken || data.linkToken;
+      if (token && data.regToken) {
+        let count = 0;
+        const timer = setInterval(async () => {
+          count++;
+          if (count > 80) clearInterval(timer);
+          try {
+            const pollRes = await fetch(`/api/auth/telegram-poll?token=${token}`);
+            const pollData = await pollRes.json();
+            if (pollData.status === "approved" && pollData.user) {
+              clearInterval(timer);
+              authToken = pollData.token || authToken;
+              if (pollData.token) localStorage.setItem("obsidian_auth_token", authToken);
+              if (typeof renderProfile === "function") renderProfile(pollData.user);
+              updateTgSettingsUI();
+              if (typeof showToast === "function") {
+                showToast("Telegram успешно подключен!", "success");
+              }
+            }
+          } catch (_) {}
+        }, 1500);
+      }
+    } catch (err) {
+      alert("Ошибка: " + err.message);
+    }
   });
   
   $("btn-test-sound")?.addEventListener("click", () => {
     playAlertSound("chime");
     showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
-  });
-  
-  $("btn-test-tg")?.addEventListener("click", () => {
-    const chatId = $("set-tg-chat-id")?.value?.trim();
-    if (!chatId) return alert("Введите ваш Telegram Chat ID!");
-    localStorage.setItem("obsidian_tg_chat_id", chatId);
-    fetch("/api/notifications/telegram", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId, message: "💎 <b>Obsidian Screener</b>\n\nТестовое уведомление успешно доставлено в Telegram!" })
-    }).then(r => r.json()).then(data => {
-      if (data.success) alert("✅ Тестовое сообщение отправлено в Telegram!");
-      else alert("❌ Ошибка отправки: " + (data.error || "Не удалось доставить"));
-    }).catch(e => alert("❌ Ошибка соединения: " + e.message));
-  });
-  
-  $("btn-add-price-alert")?.addEventListener("click", () => {
-    const ex = $("alert-ex-select")?.value || "BN";
-    const sym = ($("alert-sym-input")?.value || "").trim().toUpperCase();
-    const dir = $("alert-dir-select")?.value || "gte";
-    const priceVal = Number($("alert-price-input")?.value);
-    
-    if (!sym) return alert("Введите тикер монеты (напр. BTCUSDT)");
-    if (!priceVal || priceVal <= 0) return alert("Укажите правильную целевую цену!");
-    
-    priceAlerts.push({ id: Date.now(), ex, sym, dir, price: priceVal, triggered: false });
-    savePriceAlerts();
-    
-    if ($("alert-sym-input")) $("alert-sym-input").value = "";
-    if ($("alert-price-input")) $("alert-price-input").value = "";
-    showToast({ title: "Алерт создан", message: `Следим за ${ex} · ${sym} (${dir === 'gte' ? '≥' : '≤'} ${priceVal})`, type: "price_alert" });
   });
 }
 
