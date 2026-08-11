@@ -5274,6 +5274,8 @@ body {
 
 .j-pnl-card-header {
     display: flex;
+}
+
 .j-chart-box canvas {
     width: 100% !important;
     height: 100% !important;
