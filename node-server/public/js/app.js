@@ -11801,34 +11801,164 @@ function showToast({ title, message, type = "info", durationMs = 6000 }) {
   }, durationMs);
 }
 
-function captureChartSnapshot() {
+function getFullExchangeName(ex) {
+  if (!ex) return "BINANCE FUTURES";
+  const s = String(ex).toUpperCase().trim();
+  if (s === "BN" || s === "BINANCE" || s === "BNF") return "BINANCE FUTURES";
+  if (s === "BNS") return "BINANCE SPOT";
+  if (s === "BB" || s === "BYBIT" || s === "BBF") return "BYBIT FUTURES";
+  if (s === "BBS") return "BYBIT SPOT";
+  if (s === "OK" || s === "OX" || s === "OKX") return "OKX FUTURES";
+  if (s === "MX" || s === "MEXC") return "MEXC FUTURES";
+  if (s === "GT" || s === "GATE" || s === "GATEIO") return "GATE FUTURES";
+  if (s === "BG" || s === "BITGET") return "BITGET FUTURES";
+  if (s === "BX" || s === "BINGX") return "BINGX FUTURES";
+  if (s === "KC" || s === "KUCOIN") return "KUCOIN FUTURES";
+  if (s === "HT" || s === "HTX" || s === "HUOBI") return "HTX FUTURES";
+  if (s === "HL" || s === "HYPERLIQUID") return "HYPERLIQUID";
+  if (s === "AD" || s === "ASTERDEX") return "ASTERDEX";
+  return s;
+}
+
+function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) {
+  const mainCv = document.getElementById("chart-canvas") || (typeof canvas !== "undefined" ? canvas : null);
+  const vCv = document.getElementById("vol-canvas") || (typeof volCv !== "undefined" ? volCv : null);
+
+  // Strategy A: Direct canvas clone
+  if (mainCv && mainCv.width && mainCv.height) {
+    try {
+      const shot = document.createElement("canvas");
+      const w = mainCv.width;
+      const h = mainCv.height + (vCv && vCv.height ? vCv.height : 0);
+      shot.width = w;
+      shot.height = h;
+      const sCtx = shot.getContext("2d");
+
+      sCtx.fillStyle = "#0d0f14";
+      sCtx.fillRect(0, 0, w, h);
+      sCtx.drawImage(mainCv, 0, 0);
+      if (vCv && vCv.width && vCv.height) {
+        sCtx.drawImage(vCv, 0, mainCv.height);
+      }
+
+      const dataUrl = shot.toDataURL("image/jpeg", 0.85);
+      if (dataUrl && dataUrl.length > 1000) return dataUrl;
+    } catch (e) {
+      console.warn("[SNAPSHOT] Canvas clone tainted or error, using offscreen renderer fallback:", e.message);
+    }
+  }
+
+  // Strategy B: Pure Offscreen Render (100% immune to CORS tainting!)
   try {
-    const mainCv = document.getElementById("chart-canvas") || (typeof canvas !== "undefined" ? canvas : null) || document.querySelector("canvas");
-    const vCv = document.getElementById("vol-canvas") || (typeof volCv !== "undefined" ? volCv : null);
-    if (!mainCv || !mainCv.width || !mainCv.height) return null;
-
+    const width = 800;
+    const height = 450;
     const shot = document.createElement("canvas");
-    const w = mainCv.width;
-    const h = mainCv.height;
-    shot.width = w;
-    shot.height = h;
-    const sCtx = shot.getContext("2d");
+    shot.width = width;
+    shot.height = height;
+    const ctx = shot.getContext("2d");
 
-    // Dark background matching Obsidian Pro theme
-    sCtx.fillStyle = "#0d0f14";
-    sCtx.fillRect(0, 0, w, h);
+    // Dark theme background
+    ctx.fillStyle = "#0d0f14";
+    ctx.fillRect(0, 0, width, height);
 
-    // Draw main price chart
-    sCtx.drawImage(mainCv, 0, 0);
-
-    // Draw volume canvas if present
-    if (vCv && vCv.width && vCv.height) {
-      sCtx.drawImage(vCv, 0, h - vCv.height);
+    // Grid background lines
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.lineWidth = 1;
+    for (let y = 50; y < height; y += 50) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+    for (let x = 80; x < width; x += 100) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
     }
 
-    return shot.toDataURL("image/jpeg", 0.80);
+    // Title / Watermark
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillText(`${(sym || "OBSIDIAN").toUpperCase()} PRO`, 30, 45);
+
+    const candleData = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
+      ? candles.slice(-50)
+      : [];
+
+    if (candleData.length > 0) {
+      let minP = Infinity, maxP = -Infinity;
+      for (const c of candleData) {
+        if (c.l < minP) minP = c.l;
+        if (c.h > maxP) maxP = c.h;
+      }
+      if (alertPriceVal > 0) {
+        minP = Math.min(minP, alertPriceVal * 0.998);
+        maxP = Math.max(maxP, alertPriceVal * 1.002);
+      }
+      const pad = (maxP - minP) * 0.08 || 1;
+      minP -= pad;
+      maxP += pad;
+
+      const topY = 40;
+      const botY = height - 40;
+      const chartH = botY - topY;
+      const stepX = (width - 100) / candleData.length;
+
+      const getY = p => botY - ((p - minP) / (maxP - minP)) * chartH;
+
+      // Draw Candlesticks
+      for (let i = 0; i < candleData.length; i++) {
+        const c = candleData[i];
+        const x = 30 + i * stepX;
+        const openY = getY(c.o);
+        const closeY = getY(c.c);
+        const highY = getY(c.h);
+        const lowY = getY(c.l);
+        const isUp = c.c >= c.o;
+        const color = isUp ? "#0eac68" : "#e04343";
+
+        // Wick
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x + stepX * 0.4, highY);
+        ctx.lineTo(x + stepX * 0.4, lowY);
+        ctx.stroke();
+
+        // Body
+        ctx.fillStyle = color;
+        const bTop = Math.min(openY, closeY);
+        const bH = Math.max(Math.abs(closeY - openY), 2);
+        ctx.fillRect(x + 1, bTop, Math.max(stepX - 2, 2), bH);
+      }
+
+      // Draw Alert Price Level Line (Dashed Green/Gold)
+      const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
+      if (targetLevel > 0) {
+        const levelY = getY(targetLevel);
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = "#f0b90b";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, levelY);
+        ctx.lineTo(width - 95, levelY);
+        ctx.stroke();
+        ctx.restore();
+
+        // Alert Level Badge
+        ctx.fillStyle = "#f0b90b";
+        ctx.fillRect(width - 95, levelY - 12, 90, 24);
+        ctx.fillStyle = "#000000";
+        ctx.font = "bold 12px monospace";
+        ctx.fillText(`🔔 ${typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4)}`, width - 90, levelY + 4);
+      }
+    }
+
+    return shot.toDataURL("image/jpeg", 0.85);
   } catch (err) {
-    console.error("Failed to capture chart screenshot:", err);
+    console.error("[OFFSCREEN RENDER ERROR]", err);
     return null;
   }
 }
@@ -11914,13 +12044,13 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
 
           // Capture chart screenshot WITH the alert line visible BEFORE removing drawing
           let photoDataUrl = null;
-          try { photoDataUrl = captureChartSnapshot(); } catch (_) {}
+          try { photoDataUrl = captureChartSnapshot(sym || activeSym, price, alertPrice); } catch (_) {}
 
           chartDrawings.splice(i, 1);
           if (typeof saveDrawings === "function") saveDrawings();
           if (typeof drawChart === "function") requestAnimationFrame(drawChart);
 
-          const displayEx = (ex || activeEx || "BN").toUpperCase();
+          const displayExFull = getFullExchangeName(ex || activeEx || "BN");
           const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
           const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
           const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
@@ -11929,11 +12059,11 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
           const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
           const title = `🔔 Достигнут уровень цены!`;
-          const body = `<b>${displayEx} · ${displaySym}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: $${formattedTarget})`;
+          const body = `<b>${displayExFull} · ${displaySym}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: $${formattedTarget})`;
 
           const telegramMsg =
             `─────── <b>${displaySym}</b> ───────\n` +
-            `• <b>Биржа:</b> ${displayEx}\n` +
+            `• <b>Биржа:</b> ${displayExFull}\n` +
             `• <b>Текущая цена:</b> $${formattedPrice}\n` +
             `• <b>Ценовой уровень:</b> $${formattedTarget}\n` +
             `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
@@ -11983,7 +12113,7 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
       alert.triggered = true;
 
       let photoDataUrl = null;
-      try { photoDataUrl = captureChartSnapshot(); } catch (_) {}
+      try { photoDataUrl = captureChartSnapshot(alert.sym || sym || activeSym, price, alert.price); } catch (_) {}
       
       // Remove alert drawing from chartDrawings for active symbol
       if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings)) {
@@ -12023,7 +12153,7 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
         chartInstances.forEach(inst => { if (inst && inst.draw) inst.draw(true); });
       }
 
-      const alertExName = (alert.ex || targetEx || "BN").toUpperCase();
+      const alertExNameFull = getFullExchangeName(alert.ex || targetEx || "BN");
       const alertSymName = (alert.sym || targetSym || "BTCUSDT").toUpperCase();
       const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
       const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
@@ -12032,11 +12162,11 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
       const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
       const title = `🔔 Достигнут уровень цены!`;
-      const body = `<b>${alertExName} · ${alertSymName}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget})`;
+      const body = `<b>${alertExNameFull} · ${alertSymName}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget})`;
       
       const telegramMsg =
         `─────── <b>${alertSymName}</b> ───────\n` +
-        `• <b>Биржа:</b> ${alertExName}\n` +
+        `• <b>Биржа:</b> ${alertExNameFull}\n` +
         `• <b>Текущая цена:</b> $${formattedPrice}\n` +
         `• <b>Ценовой уровень:</b> ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget}\n` +
         `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
