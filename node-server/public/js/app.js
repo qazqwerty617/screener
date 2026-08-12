@@ -4499,13 +4499,8 @@ function connectWS() {
 
   const wsUrl =
     location.protocol === "file:"
-      ? null
+      ? "ws://169.58.138.33/ws"
       : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
-
-  if (!wsUrl) {
-    loadFallback();
-    return;
-  }
 
   // Tear down old connection cleanly
   if (ws) {
@@ -9631,12 +9626,7 @@ window.addEventListener("resize", () => {
   setTimeout(resizeChart, 100);
   startRender();
   startMcLoop(); // start 240fps logic loop
-  if (location.href.startsWith("file:")) {
-    $("cd-label").textContent = "Reconnecting...";
-    loadFallback();
-  } else {
-    connectWS();
-  }
+  connectWS();
   setTimeout(() => fetchKlines(activeEx, activeSym, activeTf), 200);
   // Periodic safety redraw (catches edge cases)
   setInterval(() => {
