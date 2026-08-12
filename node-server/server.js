@@ -2028,7 +2028,7 @@ app.post("/api/notifications/telegram", express.json(), (req, res) => {
   return sendTextMessage(token, targetChatId, message, res);
 });
 
-app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), (req, res) => {
+app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   const { chatId, caption, photoDataUrl, botToken } = req.body || {};
   const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
@@ -2052,75 +2052,45 @@ app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), (
     return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
   }
 
-  if (!photoDataUrl || typeof photoDataUrl !== "string" || !photoDataUrl.startsWith("data:image")) {
+  if (!photoDataUrl || typeof photoDataUrl !== "string" || !photoDataUrl.includes(";base64,")) {
     return sendTextMessage(token, targetChatId, caption, res);
   }
 
   try {
-    const matches = photoDataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
-    if (!matches) {
+    const parts = photoDataUrl.split(";base64,");
+    if (parts.length !== 2) {
       return sendTextMessage(token, targetChatId, caption, res);
     }
 
-    const rawType = (matches[1] || "png").toLowerCase();
-    const mimeType = rawType === "jpeg" || rawType === "jpg" ? "image/jpeg" : "image/png";
-    const ext = mimeType === "image/png" ? "png" : "jpg";
-    const imgBuffer = Buffer.from(matches[2], "base64");
-    const boundary = "----ObsidianBoundary" + crypto.randomBytes(8).toString("hex");
+    const mimeMatch = parts[0].match(/data:(image\/\w+)/);
+    const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    const ext = mimeType.includes("png") ? "png" : "jpg";
 
-    const head = Buffer.from(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="chat_id"\r\n\r\n${targetChatId}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="photo"; filename="chart_alert.${ext}"\r\n` +
-      `Content-Type: ${mimeType}\r\n\r\n`
-    );
-    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const imgBuffer = Buffer.from(parts[1].trim(), "base64");
+    const blob = new Blob([imgBuffer], { type: mimeType });
 
-    const postData = Buffer.concat([head, imgBuffer, tail]);
+    const form = new FormData();
+    form.append("chat_id", String(targetChatId));
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+    form.append("photo", blob, `chart_alert.${ext}`);
 
-    const options = {
-      hostname: "api.telegram.org",
-      port: 443,
-      path: `/bot${token}/sendPhoto`,
+    const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
       method: "POST",
-      headers: {
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        "Content-Length": postData.length
-      }
-    };
-
-    const reqTg = https.request(options, (resTg) => {
-      let body = "";
-      resTg.on("data", (chunk) => body += chunk);
-      resTg.on("end", () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.ok) {
-            console.log(`[TELEGRAM PHOTO SENT] Chat: ${targetChatId}`);
-            return res.json({ success: true, messageId: parsed.result?.message_id });
-          }
-          console.warn(`[TELEGRAM PHOTO FAIL] Chat: ${targetChatId}, Error: ${parsed.description}`);
-          sendTextMessage(token, targetChatId, caption, res);
-        } catch (_) {
-          sendTextMessage(token, targetChatId, caption, res);
-        }
-      });
+      body: form
     });
 
-    reqTg.on("error", (err) => {
-      console.error("[TELEGRAM PHOTO ERROR]", err.message);
-      sendTextMessage(token, targetChatId, caption, res);
-    });
+    const parsed = await tgRes.json();
+    if (parsed.ok) {
+      console.log(`[TELEGRAM PHOTO SENT] Chat: ${targetChatId}`);
+      return res.json({ success: true, messageId: parsed.result?.message_id });
+    }
 
-    reqTg.write(postData);
-    reqTg.end();
+    console.warn(`[TELEGRAM PHOTO FAIL] Chat: ${targetChatId}, Error: ${parsed.description}`);
+    return sendTextMessage(token, targetChatId, caption, res);
   } catch (err) {
-    sendTextMessage(token, targetChatId, caption, res);
+    console.error("[TELEGRAM PHOTO EXCEPTION]", err.message);
+    return sendTextMessage(token, targetChatId, caption, res);
   }
 });
 
