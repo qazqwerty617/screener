@@ -442,11 +442,24 @@ let mainMarketKey = null;
 let lastMarketEventAt = 0;
 let lastLatencyPaintAt = 0;
 
-function marketKey(ex, sym, tf) { return `${ex}|${sym}|${tf}`; }
+function normMarketSym(sym) {
+  if (!sym) return "";
+  let s = String(sym).toUpperCase().trim();
+  s = s.replace(/\.F$|\.S$/i, "");
+  s = s.replace(/[-_/.]/g, "");
+  if (!s.endsWith("USDT") && !s.endsWith("PERP") && !s.endsWith("USD")) {
+    s += "USDT";
+  }
+  return s;
+}
+
+function marketKey(ex, sym, tf) {
+  return `${normExCode(ex)}|${normMarketSym(sym)}|${tf || "1m"}`;
+}
 
 function sendMarketSubscription(type, ex, sym, tf) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  try { ws.send(JSON.stringify({ type, ex, sym, tf })); } catch (_) {}
+  try { ws.send(JSON.stringify({ type, ex: normExCode(ex), sym: normMarketSym(sym), tf })); } catch (_) {}
 }
 
 function subscribeMarketData({ ex, sym, tf, onKline, onTick, onStatus }) {
