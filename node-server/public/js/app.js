@@ -11802,19 +11802,17 @@ function showToast({ title, message, type = "info", durationMs = 6000 }) {
 }
 
 function getFullExchangeName(ex) {
-  if (!ex) return "BINANCE FUTURES";
+  if (!ex) return "BINANCE";
   const s = String(ex).toUpperCase().trim();
-  if (s === "BN" || s === "BINANCE" || s === "BNF") return "BINANCE FUTURES";
-  if (s === "BNS") return "BINANCE SPOT";
-  if (s === "BB" || s === "BYBIT" || s === "BBF") return "BYBIT FUTURES";
-  if (s === "BBS") return "BYBIT SPOT";
-  if (s === "OK" || s === "OX" || s === "OKX") return "OKX FUTURES";
-  if (s === "MX" || s === "MEXC") return "MEXC FUTURES";
-  if (s === "GT" || s === "GATE" || s === "GATEIO") return "GATE FUTURES";
-  if (s === "BG" || s === "BITGET") return "BITGET FUTURES";
-  if (s === "BX" || s === "BINGX") return "BINGX FUTURES";
-  if (s === "KC" || s === "KUCOIN") return "KUCOIN FUTURES";
-  if (s === "HT" || s === "HTX" || s === "HUOBI") return "HTX FUTURES";
+  if (s === "BN" || s === "BINANCE" || s === "BNF" || s === "BNS") return "BINANCE";
+  if (s === "BB" || s === "BYBIT" || s === "BBF" || s === "BBS") return "BYBIT";
+  if (s === "OK" || s === "OX" || s === "OKX") return "OKX";
+  if (s === "MX" || s === "MEXC") return "MEXC";
+  if (s === "GT" || s === "GATE" || s === "GATEIO") return "GATE";
+  if (s === "BG" || s === "BITGET") return "BITGET";
+  if (s === "BX" || s === "BINGX") return "BINGX";
+  if (s === "KC" || s === "KUCOIN") return "KUCOIN";
+  if (s === "HT" || s === "HTX" || s === "HUOBI") return "HTX";
   if (s === "HL" || s === "HYPERLIQUID") return "HYPERLIQUID";
   if (s === "AD" || s === "ASTERDEX") return "ASTERDEX";
   return s;
@@ -11824,7 +11822,7 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
   const mainCv = document.getElementById("chart-canvas") || (typeof canvas !== "undefined" ? canvas : null);
   const vCv = document.getElementById("vol-canvas") || (typeof volCv !== "undefined" ? volCv : null);
 
-  // Strategy A: Direct canvas clone
+  // Strategy A: Direct canvas clone if not tainted
   if (mainCv && mainCv.width && mainCv.height) {
     try {
       const shot = document.createElement("canvas");
@@ -11841,49 +11839,61 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
         sCtx.drawImage(vCv, 0, mainCv.height);
       }
 
-      const dataUrl = shot.toDataURL("image/jpeg", 0.85);
+      const dataUrl = shot.toDataURL("image/png");
       if (dataUrl && dataUrl.length > 1000) return dataUrl;
     } catch (e) {
-      console.warn("[SNAPSHOT] Canvas clone tainted or error, using offscreen renderer fallback:", e.message);
+      console.warn("[SNAPSHOT] Canvas clone tainted or error, using offscreen 15m renderer fallback:", e.message);
     }
   }
 
-  // Strategy B: Pure Offscreen Render (100% immune to CORS tainting!)
+  // Strategy B: Offscreen 15m Candlestick Chart Renderer (100% CORS-proof!)
   try {
-    const width = 800;
-    const height = 450;
+    const width = 850;
+    const height = 480;
     const shot = document.createElement("canvas");
     shot.width = width;
     shot.height = height;
     const ctx = shot.getContext("2d");
 
-    // Dark theme background
+    // Dark theme background (#0d0f14)
     ctx.fillStyle = "#0d0f14";
     ctx.fillRect(0, 0, width, height);
 
-    // Grid background lines
+    // Subtle grid lines
     ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
     ctx.lineWidth = 1;
-    for (let y = 50; y < height; y += 50) {
+    for (let y = 50; y < height - 30; y += 45) {
       ctx.beginPath();
       ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
+      ctx.lineTo(width - 80, y);
       ctx.stroke();
     }
-    for (let x = 80; x < width; x += 100) {
+    for (let x = 60; x < width - 80; x += 90) {
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
+      ctx.moveTo(x, 40);
+      ctx.lineTo(x, height - 30);
       ctx.stroke();
     }
 
-    // Title / Watermark
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
-    ctx.fillText(`${(sym || "OBSIDIAN").toUpperCase()} PRO`, 30, 45);
+    // Header & 15m Timeframe Badge
+    const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
+    const displayExFull = getFullExchangeName(activeEx);
+    ctx.font = "bold 18px sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(`${displaySym}`, 20, 30);
+
+    ctx.fillStyle = "#a855f7"; // Purple badge for 15m
+    ctx.fillRect(20 + ctx.measureText(displaySym).width + 10, 14, 45, 20);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("15m", 20 + ctx.measureText(displaySym).width + 22, 28);
+
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.fillText(`${displayExFull} · OBSIDIAN PRO`, width - 230, 28);
 
     const candleData = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
-      ? candles.slice(-50)
+      ? candles.slice(-55)
       : [];
 
     if (candleData.length > 0) {
@@ -11893,24 +11903,24 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
         if (c.h > maxP) maxP = c.h;
       }
       if (alertPriceVal > 0) {
-        minP = Math.min(minP, alertPriceVal * 0.998);
-        maxP = Math.max(maxP, alertPriceVal * 1.002);
+        minP = Math.min(minP, alertPriceVal * 0.997);
+        maxP = Math.max(maxP, alertPriceVal * 1.003);
       }
       const pad = (maxP - minP) * 0.08 || 1;
       minP -= pad;
       maxP += pad;
 
-      const topY = 40;
+      const topY = 45;
       const botY = height - 40;
       const chartH = botY - topY;
-      const stepX = (width - 100) / candleData.length;
+      const stepX = (width - 110) / candleData.length;
 
       const getY = p => botY - ((p - minP) / (maxP - minP)) * chartH;
 
       // Draw Candlesticks
       for (let i = 0; i < candleData.length; i++) {
         const c = candleData[i];
-        const x = 30 + i * stepX;
+        const x = 20 + i * stepX;
         const openY = getY(c.o);
         const closeY = getY(c.c);
         const highY = getY(c.h);
@@ -11922,41 +11932,44 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(x + stepX * 0.4, highY);
-        ctx.lineTo(x + stepX * 0.4, lowY);
+        ctx.moveTo(x + stepX * 0.45, highY);
+        ctx.lineTo(x + stepX * 0.45, lowY);
         ctx.stroke();
 
         // Body
         ctx.fillStyle = color;
         const bTop = Math.min(openY, closeY);
         const bH = Math.max(Math.abs(closeY - openY), 2);
-        ctx.fillRect(x + 1, bTop, Math.max(stepX - 2, 2), bH);
+        ctx.fillRect(x + 1, bTop, Math.max(stepX - 3, 2), bH);
       }
 
-      // Draw Alert Price Level Line (Dashed Green/Gold)
+      // Draw Alert Price Level Line (Glow Gold Dashed Line)
       const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
       if (targetLevel > 0) {
         const levelY = getY(targetLevel);
+        
         ctx.save();
-        ctx.setLineDash([6, 4]);
+        ctx.shadowColor = "#f0b90b";
+        ctx.shadowBlur = 8;
+        ctx.setLineDash([7, 4]);
         ctx.strokeStyle = "#f0b90b";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, levelY);
-        ctx.lineTo(width - 95, levelY);
+        ctx.lineTo(width - 85, levelY);
         ctx.stroke();
         ctx.restore();
 
-        // Alert Level Badge
+        // Alert Level Badge on Price Scale Axis
         ctx.fillStyle = "#f0b90b";
-        ctx.fillRect(width - 95, levelY - 12, 90, 24);
+        ctx.fillRect(width - 85, levelY - 12, 85, 24);
         ctx.fillStyle = "#000000";
-        ctx.font = "bold 12px monospace";
-        ctx.fillText(`🔔 ${typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4)}`, width - 90, levelY + 4);
+        ctx.font = "bold 11px monospace";
+        ctx.fillText(`🔔 ${typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4)}`, width - 80, levelY + 4);
       }
     }
 
-    return shot.toDataURL("image/jpeg", 0.85);
+    return shot.toDataURL("image/png");
   } catch (err) {
     console.error("[OFFSCREEN RENDER ERROR]", err);
     return null;

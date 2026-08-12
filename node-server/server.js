@@ -2109,6 +2109,9 @@ server.listen(PORT, () => {
         return sendTextMessage(token, targetChatId, caption, res);
       }
 
+      const rawType = (matches[1] || "png").toLowerCase();
+      const mimeType = rawType === "jpeg" || rawType === "jpg" ? "image/jpeg" : "image/png";
+      const ext = mimeType === "image/png" ? "png" : "jpg";
       const imgBuffer = Buffer.from(matches[2], "base64");
       const boundary = "----ObsidianBoundary" + crypto.randomBytes(8).toString("hex");
 
@@ -2120,8 +2123,8 @@ server.listen(PORT, () => {
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n` +
         `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="photo"; filename="chart_alert.jpg"\r\n` +
-        `Content-Type: image/jpeg\r\n\r\n`
+        `Content-Disposition: form-data; name="photo"; filename="chart_alert.${ext}"\r\n` +
+        `Content-Type: ${mimeType}\r\n\r\n`
       );
       const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
 
