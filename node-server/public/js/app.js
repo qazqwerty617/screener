@@ -11820,120 +11820,120 @@ function getFullExchangeName(ex) {
 
 function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) {
   try {
-    const width = 850;
-    const height = 540;
+    const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
+
+    // 1. Try capturing real on-screen main canvas if active symbol matches or DOM canvas is available
+    const mainCanvas = document.getElementById("chart-canvas");
+    const volCanvas = document.getElementById("vol-canvas");
+
+    const isCurrentActiveSym = (!sym || normSymCode(sym) === normSymCode(activeSym));
+
+    if (isCurrentActiveSym && mainCanvas && mainCanvas.width > 100 && mainCanvas.height > 100) {
+      // Create a canvas with the real chart's pixel dimensions
+      const shot = document.createElement("canvas");
+      shot.width = mainCanvas.width;
+      shot.height = mainCanvas.height + (volCanvas && volCanvas.height > 0 ? volCanvas.height : 0);
+      const ctx = shot.getContext("2d");
+
+      // Fill background
+      ctx.fillStyle = typeof getCanvasBgColor === "function" ? getCanvasBgColor() : "#0d0f14";
+      ctx.fillRect(0, 0, shot.width, shot.height);
+
+      // Draw main chart canvas
+      ctx.drawImage(mainCanvas, 0, 0);
+
+      // Draw volume canvas directly underneath main chart canvas if present
+      if (volCanvas && volCanvas.height > 0) {
+        ctx.drawImage(volCanvas, 0, mainCanvas.height);
+      }
+
+      // Convert to compressed JPEG data URL for fast delivery
+      const result = shot.toDataURL("image/jpeg", 0.88);
+      console.log(`[CHART SNAPSHOT] Captured REAL screener canvas OK, size=${result ? result.length : 0}`);
+      return result;
+    }
+
+    // 2. Check if user is in multi-chart grid mode and capture matching cell canvas
+    const gridContainer = document.getElementById("chart-grid-container");
+    if (gridContainer && gridContainer.style.display !== "none") {
+      const cellCanvases = gridContainer.querySelectorAll(".cell-canvas");
+      for (const cellCv of cellCanvases) {
+        if (cellCv && cellCv.width > 100 && cellCv.height > 100) {
+          const shot = document.createElement("canvas");
+          shot.width = cellCv.width;
+          shot.height = cellCv.height;
+          const ctx = shot.getContext("2d");
+          ctx.fillStyle = "#0d0f14";
+          ctx.fillRect(0, 0, shot.width, shot.height);
+          ctx.drawImage(cellCv, 0, 0);
+          const result = shot.toDataURL("image/jpeg", 0.88);
+          console.log(`[CHART SNAPSHOT] Captured GRID cell canvas OK, size=${result ? result.length : 0}`);
+          return result;
+        }
+      }
+    }
+
+    // 3. Fallback: Standalone High-Quality 15m Offscreen Renderer with real klines / synthetic candles
+    const width = 900;
+    const height = 500;
     const shot = document.createElement("canvas");
     shot.width = width;
     shot.height = height;
     const ctx = shot.getContext("2d");
 
-    const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
-    const exCode = normExCode(activeEx || "BN");
-    const displayExFull = typeof getFullExchangeName === "function" ? getFullExchangeName(exCode) : "BINANCE";
-    const coinKey = `${exCode}:${displaySym}`;
-    const coinData = (typeof coins !== "undefined" && coins.get) ? coins.get(coinKey) : null;
-
-    const currentPrice = priceVal > 0 ? priceVal : (coinData?.p || alertPriceVal || 0);
-    const targetLevel = alertPriceVal > 0 ? alertPriceVal : currentPrice;
-    const chg24 = coinData?.chg || 0;
-    const fundingVal = coinData?.funding || 0;
-    const vol24 = coinData?.v || 0;
-    const trades24 = coinData?.trades || 0;
-
-    // 1. Overall Dark Background (#080a0e)
-    ctx.fillStyle = "#080a0e";
+    // Dark theme background
+    ctx.fillStyle = "#0d0f14";
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Top Header Bar (#0e1118, height: 60px)
-    ctx.fillStyle = "#0e1118";
-    ctx.fillRect(0, 0, width, 60);
-    ctx.strokeStyle = "#1e2433";
+    // Grid lines
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, 60);
-    ctx.lineTo(width, 60);
-    ctx.stroke();
-
-    // Header Title: "Формации | OBSIDIAN PRO"
-    ctx.font = "bold 14px sans-serif";
-    ctx.fillStyle = "#38bdf8"; // Cyan
-    ctx.fillText("Формации | OBSIDIAN PRO", 20, 24);
-
-    // Symbol, Timeframe badge, Exchange & Signal Type
-    ctx.font = "bold 16px sans-serif";
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(`• ${displaySym}`, 20, 48);
-
-    const symWidth = ctx.measureText(`• ${displaySym}`).width;
-    // 15m Badge
-    ctx.fillStyle = "#a855f7"; // Purple badge
-    ctx.beginPath();
-    ctx.roundRect(20 + symWidth + 10, 34, 38, 18, 4);
-    ctx.fill();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 11px sans-serif";
-    ctx.fillText("15m", 20 + symWidth + 19, 47);
-
-    // Exchange & Signal type text
-    ctx.font = "12px sans-serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
-    const exRuName = displayExFull === "BINANCE" ? "Бинанс фьючерсы" : displayExFull;
-    ctx.fillText(`${exRuName}  ·  Пробой уровня`, 20 + symWidth + 56, 47);
-
-    // Right Header: Big Current Price & 24h Change badge
-    if (currentPrice > 0) {
-      const priceStr = (typeof fP === "function" ? fP(currentPrice) : currentPrice.toString()) + " $";
-      ctx.font = "bold 18px sans-serif";
-      ctx.fillStyle = "#ffffff";
-      const pWidth = ctx.measureText(priceStr).width;
-      ctx.fillText(priceStr, width - 20 - pWidth, 32);
-
-      // 24h Change badge below price
-      const chgStr = (chg24 >= 0 ? "+" : "") + chg24.toFixed(2) + "% 24h";
-      const isPos = chg24 >= 0;
-      ctx.font = "bold 11px sans-serif";
-      const chgW = ctx.measureText(chgStr).width;
-      const chgX = width - 20 - chgW;
-      
-      ctx.fillStyle = isPos ? "rgba(14, 203, 129, 0.2)" : "rgba(246, 70, 93, 0.2)";
-      ctx.beginPath();
-      ctx.roundRect(chgX - 6, 38, chgW + 12, 16, 3);
-      ctx.fill();
-      ctx.fillStyle = isPos ? "#0ecb81" : "#f6465d";
-      ctx.fillText(chgStr, chgX, 50);
-    }
-
-    // 3. Main Chart Area (Y: 60 to 470, Height: 410)
-    const topY = 70;
-    const botY = 460;
-    const chartH = botY - topY;
-    const scaleWidth = 90;
-    const chartW = width - scaleWidth;
-
-    // Grid Lines
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
-    ctx.lineWidth = 1;
-    for (let y = topY + 40; y < botY; y += 50) {
+    for (let y = 50; y < height - 30; y += 45) {
       ctx.beginPath();
       ctx.moveTo(0, y);
-      ctx.lineTo(chartW, y);
+      ctx.lineTo(width - 80, y);
       ctx.stroke();
     }
-    for (let x = 60; x < chartW; x += 100) {
+    for (let x = 60; x < width - 80; x += 90) {
       ctx.beginPath();
-      ctx.moveTo(x, topY);
-      ctx.lineTo(x, botY);
+      ctx.moveTo(x, 40);
+      ctx.lineTo(x, height - 30);
       ctx.stroke();
     }
 
-    // Fetch or synthesize candle data
-    let candleData = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
-      ? candles.slice(-50)
+    // Header & 15m Timeframe Badge
+    const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
+    const displayExFull = typeof getFullExchangeName === "function" ? getFullExchangeName(activeEx || "BN") : "BINANCE";
+    ctx.font = "bold 18px sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(`${displaySym}`, 20, 30);
+
+    const symWidth = ctx.measureText(displaySym).width;
+    ctx.fillStyle = "#a855f7"; // Purple 15m badge
+    ctx.fillRect(20 + symWidth + 12, 14, 45, 20);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("15m", 20 + symWidth + 24, 28);
+
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.fillText(`${displayExFull} · OBSIDIAN PRO`, width - 230, 28);
+
+    // Fetch candle data from global candles array or synthesize candles around target level
+    let rawCandles = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
+      ? candles.slice(-60)
       : [];
+
+    let candleData = rawCandles.map(c => ({
+      o: Number(c.o ?? c.open ?? 0),
+      h: Number(c.h ?? c.high ?? 0),
+      l: Number(c.l ?? c.low ?? 0),
+      c: Number(c.c ?? c.close ?? 0)
+    })).filter(c => c.h > 0 && c.l > 0);
 
     if (candleData.length === 0 && targetLevel > 0) {
       const base = targetLevel;
-      let curr = base * 0.994;
+      let curr = base * 0.995;
       for (let i = 0; i < 45; i++) {
         const change = (Math.random() - 0.48) * base * 0.003;
         const o = curr;
@@ -11959,150 +11959,60 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
       minP -= pad;
       maxP += pad;
 
-      const stepX = chartW / candleData.length;
+      const topY = 45;
+      const botY = height - 40;
+      const chartH = botY - topY;
+      const stepX = (width - 110) / candleData.length;
       const getY = p => botY - ((p - minP) / (maxP - minP)) * chartH;
 
-      // Draw Level Zone Highlight (Semi-transparent red band at bottom/target)
-      if (targetLevel > 0) {
-        const levelY = getY(targetLevel);
-        ctx.fillStyle = "rgba(246, 70, 93, 0.15)";
-        ctx.fillRect(0, Math.min(levelY, botY - 20), chartW, Math.abs(botY - levelY) + 20);
-
-        ctx.strokeStyle = "rgba(246, 70, 93, 0.4)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, botY);
-        ctx.lineTo(chartW, botY);
-        ctx.stroke();
-      }
-
-      // Draw Candlesticks
       for (let i = 0; i < candleData.length; i++) {
         const c = candleData[i];
-        const x = i * stepX + stepX * 0.15;
+        const x = 20 + i * stepX;
         const openY = getY(c.o);
         const closeY = getY(c.c);
         const highY = getY(c.h);
         const lowY = getY(c.l);
         const isUp = c.c >= c.o;
-        const color = isUp ? "#0ecb81" : "#f6465d";
+        const color = isUp ? "#0eac68" : "#e04343";
 
-        // Wick
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(x + stepX * 0.35, highY);
-        ctx.lineTo(x + stepX * 0.35, lowY);
+        ctx.moveTo(x + stepX * 0.45, highY);
+        ctx.lineTo(x + stepX * 0.45, lowY);
         ctx.stroke();
 
-        // Body
         ctx.fillStyle = color;
         const bTop = Math.min(openY, closeY);
         const bH = Math.max(Math.abs(closeY - openY), 2);
-        ctx.fillRect(x + 1, bTop, Math.max(stepX * 0.7, 2), bH);
+        ctx.fillRect(x + 1, bTop, Math.max(stepX - 3, 2), bH);
       }
 
-      // Draw Level Line & Badge (Glowing Gold/Red Line)
       if (targetLevel > 0) {
         const levelY = getY(targetLevel);
-
         ctx.save();
-        ctx.shadowColor = "#f6465d";
-        ctx.shadowBlur = 10;
-        ctx.strokeStyle = "#f6465d";
+        ctx.shadowColor = "#f0b90b";
+        ctx.shadowBlur = 8;
+        ctx.setLineDash([7, 4]);
+        ctx.strokeStyle = "#f0b90b";
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, levelY);
-        ctx.lineTo(chartW, levelY);
+        ctx.lineTo(width - 85, levelY);
         ctx.stroke();
         ctx.restore();
 
-        // Right Y-Axis Scale Price Badge
-        const lvlStr = (typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4));
-        ctx.fillStyle = "#f6465d";
-        ctx.beginPath();
-        ctx.roundRect(chartW, levelY - 12, scaleWidth, 24, [0, 4, 4, 0]);
-        ctx.fill();
-
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = "#f0b90b";
+        ctx.fillRect(width - 85, levelY - 12, 85, 24);
+        ctx.fillStyle = "#000000";
         ctx.font = "bold 11px monospace";
-        ctx.fillText(`${lvlStr}$`, chartW + 8, levelY + 4);
-      }
-
-      // Draw Y-Axis Scale Bar (#0b0e14)
-      ctx.fillStyle = "#0b0e14";
-      ctx.fillRect(chartW, topY - 10, scaleWidth, chartH + 20);
-      ctx.strokeStyle = "#1e2433";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(chartW, topY - 10);
-      ctx.lineTo(chartW, botY + 10);
-      ctx.stroke();
-
-      // Y-Axis Price Ticks
-      ctx.font = "10px monospace";
-      ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-      for (let i = 0; i <= 5; i++) {
-        const p = minP + (i / 5) * (maxP - minP);
-        const y = botY - (i / 5) * chartH;
-        const pStr = typeof fP === "function" ? fP(p) : p.toFixed(4);
-        ctx.fillText(pStr, chartW + 8, y + 3);
-      }
-
-      // Re-draw Level Badge on Axis so it stays crisp over axis line
-      if (targetLevel > 0) {
-        const levelY = getY(targetLevel);
-        const lvlStr = (typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4));
-        ctx.fillStyle = "#f6465d";
-        ctx.beginPath();
-        ctx.roundRect(chartW + 2, levelY - 11, scaleWidth - 4, 22, 3);
-        ctx.fill();
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 11px monospace";
-        ctx.fillText(`${lvlStr}$`, chartW + 8, levelY + 4);
+        const priceStr = typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4);
+        ctx.fillText(`🔔 ${priceStr}`, width - 80, levelY + 4);
       }
     }
 
-    // 4. Bottom Stats Strip / Footer Bar (#0e1118, Y: 470 to 540)
-    ctx.fillStyle = "#0e1118";
-    ctx.fillRect(0, 470, width, 70);
-    ctx.strokeStyle = "#1e2433";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, 470);
-    ctx.lineTo(width, 470);
-    ctx.stroke();
-
-    // Stats Grid
-    const stats = [
-      { label: "MA14", val: "0.53", color: "#f59e0b" },
-      { label: "ФАНДИНГ", val: (fundingVal >= 0 ? "+" : "") + (fundingVal * 100).toFixed(3) + "%", color: "#0ecb81" },
-      { label: "ИЗМ. ЦЕНЫ 24H", val: (chg24 >= 0 ? "+" : "") + chg24.toFixed(2) + "%", color: chg24 >= 0 ? "#0ecb81" : "#f6465d" },
-      { label: "ОБЪЁМ 24H", val: vol24 > 1e6 ? `$${(vol24 / 1e6).toFixed(1)}M` : (vol24 > 0 ? `$${(vol24 / 1e3).toFixed(1)}K` : "$80.4M"), color: "#ffffff" },
-      { label: "СДЕЛКИ 24H", val: trades24 > 1e3 ? `${(trades24 / 1e3).toFixed(1)}K` : (trades24 > 0 ? trades24.toString() : "556.1K"), color: "#ffffff" },
-    ];
-
-    let startX = 20;
-    const colW = 120;
-    for (const st of stats) {
-      ctx.font = "9px sans-serif";
-      ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-      ctx.fillText(st.label, startX, 494);
-
-      ctx.font = "bold 13px sans-serif";
-      ctx.fillStyle = st.color;
-      ctx.fillText(st.val, startX, 516);
-
-      startX += colW;
-    }
-
-    // Watermark / Logo on Right Footer
-    ctx.font = "bold 13px sans-serif";
-    ctx.fillStyle = "#38bdf8";
-    ctx.fillText("👁 OBSIDIAN", width - 120, 508);
-
-    const result = shot.toDataURL("image/png");
-    console.log(`[CHART SNAPSHOT] Generated OK, length=${result ? result.length : 0}, candles=${candleData.length}, targetLevel=${targetLevel}`);
+    const result = shot.toDataURL("image/jpeg", 0.88);
+    console.log(`[CHART SNAPSHOT] Rendered fallback chart OK, size=${result ? result.length : 0}`);
     return result;
   } catch (err) {
     console.error("[OFFSCREEN RENDER ERROR]", err);
