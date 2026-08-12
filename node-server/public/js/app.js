@@ -11803,7 +11803,8 @@ function showToast({ title, message, type = "info", durationMs = 6000 }) {
 
 function captureChartSnapshot() {
   try {
-    const mainCv = document.querySelector("#cwrap canvas") || (typeof canvas !== "undefined" ? canvas : null);
+    const mainCv = document.getElementById("chart-canvas") || (typeof canvas !== "undefined" ? canvas : null) || document.querySelector("canvas");
+    const vCv = document.getElementById("vol-canvas") || (typeof volCv !== "undefined" ? volCv : null);
     if (!mainCv || !mainCv.width || !mainCv.height) return null;
 
     const shot = document.createElement("canvas");
@@ -11820,13 +11821,12 @@ function captureChartSnapshot() {
     // Draw main price chart
     sCtx.drawImage(mainCv, 0, 0);
 
-    // Draw volume canvas if present below chart
-    const vCv = (typeof volCv !== "undefined" && volCv) ? volCv : document.querySelector("#cwrap canvas.vol");
+    // Draw volume canvas if present
     if (vCv && vCv.width && vCv.height) {
       sCtx.drawImage(vCv, 0, h - vCv.height);
     }
 
-    return shot.toDataURL("image/jpeg", 0.85);
+    return shot.toDataURL("image/jpeg", 0.80);
   } catch (err) {
     console.error("Failed to capture chart screenshot:", err);
     return null;

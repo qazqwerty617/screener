@@ -2003,12 +2003,7 @@ server.listen(PORT, () => {
     }
   }
   
-  // Start Wall Scanner Engine
-  wallScanner.startScanning(tickers, apiFetch, (payload) => {
-    const walls = Array.isArray(payload) ? payload : (payload.walls || []);
-    const meta = payload;
-
-    function sendTextMessage(token, chatId, text, res) {
+  function sendTextMessage(token, chatId, text, res) {
     const postData = JSON.stringify({
       chat_id: chatId,
       text: text,
@@ -2173,6 +2168,10 @@ server.listen(PORT, () => {
     }
   });
 
+  // Start Wall Scanner Engine
+  wallScanner.startScanning(tickers, apiFetch, (payload) => {
+    const walls = Array.isArray(payload) ? payload : (payload.walls || []);
+    const meta = payload;
     currentWallsCache = walls;
     currentWallsMeta = meta;
     const msg = JSON.stringify({ type: "walls", data: walls, meta });
