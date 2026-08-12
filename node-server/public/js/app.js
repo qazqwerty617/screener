@@ -442,24 +442,11 @@ let mainMarketKey = null;
 let lastMarketEventAt = 0;
 let lastLatencyPaintAt = 0;
 
-function normMarketSym(sym) {
-  if (!sym) return "";
-  let s = String(sym).toUpperCase().trim();
-  s = s.replace(/\.F$|\.S$/i, "");
-  s = s.replace(/[-_/.]/g, "");
-  if (!s.endsWith("USDT") && !s.endsWith("PERP") && !s.endsWith("USD")) {
-    s += "USDT";
-  }
-  return s;
-}
-
-function marketKey(ex, sym, tf) {
-  return `${normExCode(ex)}|${normMarketSym(sym)}|${tf || "1m"}`;
-}
+function marketKey(ex, sym, tf) { return `${ex}|${sym}|${tf}`; }
 
 function sendMarketSubscription(type, ex, sym, tf) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  try { ws.send(JSON.stringify({ type, ex: normExCode(ex), sym: normMarketSym(sym), tf })); } catch (_) {}
+  try { ws.send(JSON.stringify({ type, ex, sym, tf })); } catch (_) {}
 }
 
 function subscribeMarketData({ ex, sym, tf, onKline, onTick, onStatus }) {
@@ -11860,13 +11847,55 @@ function normSymCode(s) {
 }
 
 function checkPriceAlerts(ex, sym, price, high = price, low = price) {
-  if (!priceAlerts || !priceAlerts.length || !price || price <= 0) return;
+  if (!price || price <= 0) return;
   const targetSym = normSymCode(sym);
   const targetEx = normExCode(ex);
   
   const hVal = high > 0 ? high : price;
   const lVal = low > 0 ? low : price;
-  
+
+  // 1. Direct check on live chartDrawings visible on the active chart
+  if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && chartDrawings.length > 0) {
+    const isCurrentChart = !sym || normSymCode(sym) === normSymCode(activeSym);
+    if (isCurrentChart) {
+      for (let i = chartDrawings.length - 1; i >= 0; i--) {
+        const d = chartDrawings[i];
+        if (!d || d.type !== "alert" || d.triggered) continue;
+
+        const alertPrice = d.p1;
+        if (!alertPrice || alertPrice <= 0) continue;
+
+        let isHit = false;
+        if (hVal >= alertPrice && lVal <= alertPrice) isHit = true;
+        else if (Math.abs(price - alertPrice) / alertPrice <= 0.001) isHit = true;
+        else if (d.createdP && d.createdP < alertPrice && hVal >= alertPrice) isHit = true;
+        else if (d.createdP && d.createdP > alertPrice && lVal <= alertPrice) isHit = true;
+
+        if (isHit) {
+          d.triggered = true;
+          chartDrawings.splice(i, 1);
+          if (typeof saveDrawings === "function") saveDrawings();
+          if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+
+          const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
+          const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
+          const displayEx = ex || activeEx || "BN";
+          const displaySym = sym || activeSym || "BTCUSDT";
+
+          const title = `🔔 Достигнут уровень цены!`;
+          const body = `<b>${displayEx} · ${displaySym}</b> цена достигла <b>${formattedPrice} USDT</b> (Уровень: ${formattedTarget})`;
+
+          try { playAlertSound("chime"); } catch (_) {}
+          try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
+          try { sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${displayEx} · <b>${displaySym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${formattedTarget})`); } catch (_) {}
+        }
+      }
+    }
+  }
+
+  // 2. Check global priceAlerts array for background/multi-coin alerts
+  if (!priceAlerts || !priceAlerts.length) return;
+
   for (let i = 0; i < priceAlerts.length; i++) {
     const alert = priceAlerts[i];
     if (!alert || alert.triggered) continue;
@@ -11879,17 +11908,17 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
     
     let isHit = false;
 
-    // 1. Standard direction checks (including candle high/low range)
+    // Standard direction checks (including candle high/low range)
     if (alert.dir === "gte" && hVal >= alert.price) isHit = true;
     if (alert.dir === "lte" && lVal <= alert.price) isHit = true;
 
-    // 2. Initial price relative crossing check
+    // Initial price relative crossing check
     if (!isHit && alert.createdPrice && alert.createdPrice > 0) {
       if (alert.createdPrice < alert.price && hVal >= alert.price) isHit = true;
       if (alert.createdPrice > alert.price && lVal <= alert.price) isHit = true;
     }
 
-    // 3. Proximity check (within 0.1% tolerance)
+    // Proximity check (within 0.1% tolerance)
     if (!isHit) {
       const relDiff = Math.min(Math.abs(price - alert.price), Math.abs(hVal - alert.price), Math.abs(lVal - alert.price)) / alert.price;
       if (relDiff <= 0.001) isHit = true;
