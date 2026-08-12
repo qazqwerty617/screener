@@ -2006,7 +2006,173 @@ server.listen(PORT, () => {
   // Start Wall Scanner Engine
   wallScanner.startScanning(tickers, apiFetch, (payload) => {
     const walls = Array.isArray(payload) ? payload : (payload.walls || []);
-    const meta = Array.isArray(payload) ? { walls, updatedAt: Date.now() } : payload;
+    const meta = payload;
+
+    function sendTextMessage(token, chatId, text, res) {
+    const postData = JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      parse_mode: "HTML"
+    });
+
+    const options = {
+      hostname: "api.telegram.org",
+      port: 443,
+      path: `/bot${token}/sendMessage`,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData)
+      }
+    };
+
+    const reqTg = https.request(options, (resTg) => {
+      let body = "";
+      resTg.on("data", (chunk) => body += chunk);
+      resTg.on("end", () => {
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed.ok) {
+            console.log(`[TELEGRAM ALERT SENT] Chat: ${chatId}`);
+            return res.json({ success: true, messageId: parsed.result?.message_id });
+          }
+          console.warn(`[TELEGRAM ALERT FAIL] Chat: ${chatId}, Error: ${parsed.description}`);
+          return res.status(400).json({ error: parsed.description || "Telegram API error" });
+        } catch (_) {
+          return res.status(500).json({ error: "Failed to parse Telegram response" });
+        }
+      });
+    });
+
+    reqTg.on("error", (err) => {
+      console.error("[TELEGRAM ALERT ERROR]", err.message);
+      res.status(500).json({ error: err.message });
+    });
+
+    reqTg.write(postData);
+    reqTg.end();
+  }
+
+  app.post("/api/notifications/telegram", express.json(), (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    const { chatId, message, botToken } = req.body || {};
+    const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
+
+    let targetChatId = chatId;
+    if (!targetChatId) {
+      const authHeader = req.headers.authorization || "";
+      const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+      if (bearerToken) {
+        const user = userStore.getUserByToken(bearerToken);
+        if (user && (user.telegramChatId || user.telegramId)) {
+          targetChatId = user.telegramChatId || user.telegramId;
+        }
+      }
+    }
+
+    if (!targetChatId || !message) return res.status(400).json({ error: "chatId and message are required" });
+    if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
+
+    if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
+      return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
+    }
+
+    return sendTextMessage(token, targetChatId, message, res);
+  });
+
+  app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), (req, res) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    const { chatId, caption, photoDataUrl, botToken } = req.body || {};
+    const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
+
+    let targetChatId = chatId;
+    if (!targetChatId) {
+      const authHeader = req.headers.authorization || "";
+      const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+      if (bearerToken) {
+        const user = userStore.getUserByToken(bearerToken);
+        if (user && (user.telegramChatId || user.telegramId)) {
+          targetChatId = user.telegramChatId || user.telegramId;
+        }
+      }
+    }
+
+    if (!targetChatId || !caption) return res.status(400).json({ error: "chatId and caption are required" });
+    if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
+
+    if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
+      return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
+    }
+
+    if (!photoDataUrl || typeof photoDataUrl !== "string" || !photoDataUrl.startsWith("data:image")) {
+      return sendTextMessage(token, targetChatId, caption, res);
+    }
+
+    try {
+      const matches = photoDataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
+      if (!matches) {
+        return sendTextMessage(token, targetChatId, caption, res);
+      }
+
+      const imgBuffer = Buffer.from(matches[2], "base64");
+      const boundary = "----ObsidianBoundary" + crypto.randomBytes(8).toString("hex");
+
+      const head = Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="chat_id"\r\n\r\n${targetChatId}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n` +
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="photo"; filename="chart_alert.jpg"\r\n` +
+        `Content-Type: image/jpeg\r\n\r\n`
+      );
+      const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+
+      const postData = Buffer.concat([head, imgBuffer, tail]);
+
+      const options = {
+        hostname: "api.telegram.org",
+        port: 443,
+        path: `/bot${token}/sendPhoto`,
+        method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": postData.length
+        }
+      };
+
+      const reqTg = https.request(options, (resTg) => {
+        let body = "";
+        resTg.on("data", (chunk) => body += chunk);
+        resTg.on("end", () => {
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed.ok) {
+              console.log(`[TELEGRAM PHOTO SENT] Chat: ${targetChatId}`);
+              return res.json({ success: true, messageId: parsed.result?.message_id });
+            }
+            console.warn(`[TELEGRAM PHOTO FAIL] Chat: ${targetChatId}, Error: ${parsed.description}`);
+            sendTextMessage(token, targetChatId, caption, res);
+          } catch (_) {
+            sendTextMessage(token, targetChatId, caption, res);
+          }
+        });
+      });
+
+      reqTg.on("error", (err) => {
+        console.error("[TELEGRAM PHOTO ERROR]", err.message);
+        sendTextMessage(token, targetChatId, caption, res);
+      });
+
+      reqTg.write(postData);
+      reqTg.end();
+    } catch (err) {
+      sendTextMessage(token, targetChatId, caption, res);
+    }
+  });
+
     currentWallsCache = walls;
     currentWallsMeta = meta;
     const msg = JSON.stringify({ type: "walls", data: walls, meta });

@@ -11801,17 +11801,55 @@ function showToast({ title, message, type = "info", durationMs = 6000 }) {
   }, durationMs);
 }
 
-function sendTelegramAlert(message) {
+function captureChartSnapshot() {
+  try {
+    const mainCv = document.querySelector("#cwrap canvas") || (typeof canvas !== "undefined" ? canvas : null);
+    if (!mainCv || !mainCv.width || !mainCv.height) return null;
+
+    const shot = document.createElement("canvas");
+    const w = mainCv.width;
+    const h = mainCv.height;
+    shot.width = w;
+    shot.height = h;
+    const sCtx = shot.getContext("2d");
+
+    // Dark background matching Obsidian Pro theme
+    sCtx.fillStyle = "#0d0f14";
+    sCtx.fillRect(0, 0, w, h);
+
+    // Draw main price chart
+    sCtx.drawImage(mainCv, 0, 0);
+
+    // Draw volume canvas if present below chart
+    const vCv = (typeof volCv !== "undefined" && volCv) ? volCv : document.querySelector("#cwrap canvas.vol");
+    if (vCv && vCv.width && vCv.height) {
+      sCtx.drawImage(vCv, 0, h - vCv.height);
+    }
+
+    return shot.toDataURL("image/jpeg", 0.85);
+  } catch (err) {
+    console.error("Failed to capture chart screenshot:", err);
+    return null;
+  }
+}
+
+function sendTelegramAlert(message, photoDataUrl = null) {
   const activeUser = window.currentUser;
   const chatId = activeUser?.telegramChatId || activeUser?.telegramId || localStorage.getItem("obsidian_tg_chat_id");
   const headers = { "Content-Type": "application/json" };
   if (authToken) {
     headers["Authorization"] = `Bearer ${authToken}`;
   }
-  fetch("/api/notifications/telegram", {
+
+  const endpoint = photoDataUrl ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
+  const body = photoDataUrl
+    ? { chatId: chatId || undefined, caption: message, photoDataUrl }
+    : { chatId: chatId || undefined, message };
+
+  fetch(endpoint, {
     method: "POST",
     headers,
-    body: JSON.stringify({ chatId: chatId || undefined, message })
+    body: JSON.stringify(body)
   }).then(async r => {
     const d = await r.json();
     if (!r.ok || !d.success) {
@@ -11873,21 +11911,38 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
 
         if (isHit) {
           d.triggered = true;
+
+          // Capture chart screenshot WITH the alert line visible BEFORE removing drawing
+          let photoDataUrl = null;
+          try { photoDataUrl = captureChartSnapshot(); } catch (_) {}
+
           chartDrawings.splice(i, 1);
           if (typeof saveDrawings === "function") saveDrawings();
           if (typeof drawChart === "function") requestAnimationFrame(drawChart);
 
+          const displayEx = (ex || activeEx || "BN").toUpperCase();
+          const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
           const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
           const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
-          const displayEx = ex || activeEx || "BN";
-          const displaySym = sym || activeSym || "BTCUSDT";
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
           const title = `🔔 Достигнут уровень цены!`;
-          const body = `<b>${displayEx} · ${displaySym}</b> цена достигла <b>${formattedPrice} USDT</b> (Уровень: ${formattedTarget})`;
+          const body = `<b>${displayEx} · ${displaySym}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: $${formattedTarget})`;
+
+          const telegramMsg =
+            `─────── <b>${displaySym}</b> ───────\n` +
+            `• <b>Биржа:</b> ${displayEx}\n` +
+            `• <b>Текущая цена:</b> $${formattedPrice}\n` +
+            `• <b>Ценовой уровень:</b> $${formattedTarget}\n` +
+            `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+            `─────────────────────────\n` +
+            `🎯 <b>Obsidian Price Alert</b>`;
 
           try { playAlertSound("chime"); } catch (_) {}
           try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
-          try { sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${displayEx} · <b>${displaySym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${formattedTarget})`); } catch (_) {}
+          try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
         }
       }
     }
@@ -11926,6 +11981,9 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
     
     if (isHit) {
       alert.triggered = true;
+
+      let photoDataUrl = null;
+      try { photoDataUrl = captureChartSnapshot(); } catch (_) {}
       
       // Remove alert drawing from chartDrawings for active symbol
       if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings)) {
@@ -11965,16 +12023,29 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
         chartInstances.forEach(inst => { if (inst && inst.draw) inst.draw(true); });
       }
 
-      const alertExName = alert.ex || targetEx || "BN";
+      const alertExName = (alert.ex || targetEx || "BN").toUpperCase();
+      const alertSymName = (alert.sym || targetSym || "BTCUSDT").toUpperCase();
       const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
       const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
-      
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
+
       const title = `🔔 Достигнут уровень цены!`;
-      const body = `<b>${alertExName} · ${alert.sym}</b> цена достигла <b>${formattedPrice} USDT</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`;
+      const body = `<b>${alertExName} · ${alertSymName}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget})`;
       
+      const telegramMsg =
+        `─────── <b>${alertSymName}</b> ───────\n` +
+        `• <b>Биржа:</b> ${alertExName}\n` +
+        `• <b>Текущая цена:</b> $${formattedPrice}\n` +
+        `• <b>Ценовой уровень:</b> ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget}\n` +
+        `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+        `─────────────────────────\n` +
+        `🎯 <b>Obsidian Price Alert</b>`;
+
       try { playAlertSound("chime"); } catch (_) {}
       try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
-      try { sendTelegramAlert(`🎯 <b>Obsidian Price Alert</b>\n\n${alertExName} · <b>${alert.sym}</b> достигла цены <b>${formattedPrice} USDT</b>\n(Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} ${formattedTarget})`); } catch (_) {}
+      try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
       
       savePriceAlerts();
     }
