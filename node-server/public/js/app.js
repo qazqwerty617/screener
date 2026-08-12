@@ -2,6 +2,9 @@
 
 // ── State ──
 window.DEBUG_LEVELS = false;
+var currentUser = null;
+window.currentUser = null;
+var authToken = localStorage.getItem("obsidian_auth_token") || "";
 const coins = new Map();
 const dirty = new Set();
 const rowEls = new Map();
@@ -3959,8 +3962,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ── Authentication & Profile System ──
-  let currentUser = null;
-  let authToken = localStorage.getItem("obsidian_auth_token") || "";
+  currentUser = window.currentUser || null;
+  authToken = localStorage.getItem("obsidian_auth_token") || "";
 
   const profileBtn = $("profile-btn");
   const profileModal = $("profile-modal");
@@ -11799,7 +11802,7 @@ function showToast({ title, message, type = "info", durationMs = 6000 }) {
 }
 
 function sendTelegramAlert(message) {
-  const activeUser = currentUser || window.currentUser;
+  const activeUser = window.currentUser;
   const chatId = activeUser?.telegramChatId || activeUser?.telegramId || localStorage.getItem("obsidian_tg_chat_id");
   const headers = { "Content-Type": "application/json" };
   if (authToken) {
@@ -11944,7 +11947,7 @@ function initNotificationsUI() {
   const tgSub = $("tg-settings-status-sub");
 
   function updateTgSettingsUI() {
-    const user = currentUser || window.currentUser;
+    const user = window.currentUser;
     if (user && user.telegramLinked) {
       if (tgTitle) tgTitle.textContent = `✅ Telegram подключен (${user.telegramUsername || user.username || "Подключен"})`;
       if (tgSub) tgSub.textContent = "Уведомления о ценовых алертах активны в боте";
@@ -11961,7 +11964,7 @@ function initNotificationsUI() {
 
   btnConnectTg?.addEventListener("click", async () => {
     try {
-      const activeUser = currentUser || window.currentUser;
+      const activeUser = window.currentUser;
       const endpoint = activeUser ? "/api/auth/telegram-link-token" : "/api/auth/telegram-start";
       const headers = activeUser && authToken ? { "Authorization": `Bearer ${authToken}` } : {};
       const r = await fetch(endpoint, { method: "POST", headers });
