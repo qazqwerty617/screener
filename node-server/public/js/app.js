@@ -12035,9 +12035,9 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
   const hVal = high > 0 ? high : price;
   const lVal = low > 0 ? low : price;
 
-  // 1. Direct check on live chartDrawings visible on the active chart
+  // 1. Direct check on live chartDrawings visible on the active chart (STRICTLY matching both symbol AND exchange)
   if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && chartDrawings.length > 0) {
-    const isCurrentChart = !sym || normSymCode(sym) === normSymCode(activeSym);
+    const isCurrentChart = (!sym || normSymCode(sym) === normSymCode(activeSym)) && (!ex || normExCode(ex) === normExCode(activeEx));
     if (isCurrentChart) {
       for (let i = chartDrawings.length - 1; i >= 0; i--) {
         const d = chartDrawings[i];
