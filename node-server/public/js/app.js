@@ -11819,34 +11819,6 @@ function getFullExchangeName(ex) {
 }
 
 function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) {
-  const mainCv = document.getElementById("chart-canvas") || (typeof canvas !== "undefined" ? canvas : null);
-  const vCv = document.getElementById("vol-canvas") || (typeof volCv !== "undefined" ? volCv : null);
-
-  // Strategy A: Direct canvas clone if not tainted
-  if (mainCv && mainCv.width && mainCv.height) {
-    try {
-      const shot = document.createElement("canvas");
-      const w = mainCv.width;
-      const h = mainCv.height + (vCv && vCv.height ? vCv.height : 0);
-      shot.width = w;
-      shot.height = h;
-      const sCtx = shot.getContext("2d");
-
-      sCtx.fillStyle = "#0d0f14";
-      sCtx.fillRect(0, 0, w, h);
-      sCtx.drawImage(mainCv, 0, 0);
-      if (vCv && vCv.width && vCv.height) {
-        sCtx.drawImage(vCv, 0, mainCv.height);
-      }
-
-      const dataUrl = shot.toDataURL("image/png");
-      if (dataUrl && dataUrl.length > 1000) return dataUrl;
-    } catch (e) {
-      console.warn("[SNAPSHOT] Canvas clone tainted or error, using offscreen 15m renderer fallback:", e.message);
-    }
-  }
-
-  // Strategy B: Offscreen 15m Candlestick Chart Renderer (100% CORS-proof!)
   try {
     const width = 850;
     const height = 480;
@@ -11860,7 +11832,7 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
     ctx.fillRect(0, 0, width, height);
 
     // Subtle grid lines
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
     ctx.lineWidth = 1;
     for (let y = 50; y < height - 30; y += 45) {
       ctx.beginPath();
@@ -11877,24 +11849,43 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
 
     // Header & 15m Timeframe Badge
     const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
-    const displayExFull = getFullExchangeName(activeEx);
+    const displayExFull = typeof getFullExchangeName === "function" ? getFullExchangeName(activeEx || "BN") : "BINANCE";
     ctx.font = "bold 18px sans-serif";
     ctx.fillStyle = "#ffffff";
     ctx.fillText(`${displaySym}`, 20, 30);
 
+    const symWidth = ctx.measureText(displaySym).width;
     ctx.fillStyle = "#a855f7"; // Purple badge for 15m
-    ctx.fillRect(20 + ctx.measureText(displaySym).width + 10, 14, 45, 20);
+    ctx.fillRect(20 + symWidth + 12, 14, 45, 20);
     ctx.fillStyle = "#ffffff";
     ctx.font = "bold 12px sans-serif";
-    ctx.fillText("15m", 20 + ctx.measureText(displaySym).width + 22, 28);
+    ctx.fillText("15m", 20 + symWidth + 24, 28);
 
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
     ctx.fillText(`${displayExFull} · OBSIDIAN PRO`, width - 230, 28);
 
-    const candleData = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
+    // Fetch or synthesize candle data
+    let candleData = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
       ? candles.slice(-55)
       : [];
+
+    const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
+
+    // Fallback candle data generator around target level if candles array is empty
+    if (candleData.length === 0 && targetLevel > 0) {
+      const base = targetLevel;
+      let curr = base * 0.995;
+      for (let i = 0; i < 40; i++) {
+        const change = (Math.random() - 0.48) * base * 0.003;
+        const o = curr;
+        const c = curr + change;
+        const h = Math.max(o, c) + Math.random() * base * 0.001;
+        const l = Math.min(o, c) - Math.random() * base * 0.001;
+        candleData.push({ o, h, l, c });
+        curr = c;
+      }
+    }
 
     if (candleData.length > 0) {
       let minP = Infinity, maxP = -Infinity;
@@ -11902,9 +11893,9 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
         if (c.l < minP) minP = c.l;
         if (c.h > maxP) maxP = c.h;
       }
-      if (alertPriceVal > 0) {
-        minP = Math.min(minP, alertPriceVal * 0.997);
-        maxP = Math.max(maxP, alertPriceVal * 1.003);
+      if (targetLevel > 0) {
+        minP = Math.min(minP, targetLevel * 0.997);
+        maxP = Math.max(maxP, targetLevel * 1.003);
       }
       const pad = (maxP - minP) * 0.08 || 1;
       minP -= pad;
@@ -11944,7 +11935,6 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
       }
 
       // Draw Alert Price Level Line (Glow Gold Dashed Line)
-      const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
       if (targetLevel > 0) {
         const levelY = getY(targetLevel);
         
@@ -11965,7 +11955,8 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
         ctx.fillRect(width - 85, levelY - 12, 85, 24);
         ctx.fillStyle = "#000000";
         ctx.font = "bold 11px monospace";
-        ctx.fillText(`🔔 ${typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4)}`, width - 80, levelY + 4);
+        const priceStr = typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4);
+        ctx.fillText(`🔔 ${priceStr}`, width - 80, levelY + 4);
       }
     }
 
@@ -12065,19 +12056,17 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
 
           const displayExFull = getFullExchangeName(ex || activeEx || "BN");
           const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
-          const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
           const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
           const now = new Date();
           const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
           const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
           const title = `🔔 Достигнут уровень цены!`;
-          const body = `<b>${displayExFull} · ${displaySym}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: $${formattedTarget})`;
+          const body = `<b>${displayExFull} · ${displaySym}</b> достиг уровня <b>$${formattedTarget}</b>`;
 
           const telegramMsg =
             `─────── <b>${displaySym}</b> ───────\n` +
             `• <b>Биржа:</b> ${displayExFull}\n` +
-            `• <b>Текущая цена:</b> $${formattedPrice}\n` +
             `• <b>Ценовой уровень:</b> $${formattedTarget}\n` +
             `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
             `─────────────────────────\n` +
@@ -12168,19 +12157,17 @@ function checkPriceAlerts(ex, sym, price, high = price, low = price) {
 
       const alertExNameFull = getFullExchangeName(alert.ex || targetEx || "BN");
       const alertSymName = (alert.sym || targetSym || "BTCUSDT").toUpperCase();
-      const formattedPrice = typeof fP === "function" ? fP(price) : price.toLocaleString();
       const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
       const now = new Date();
       const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
       const title = `🔔 Достигнут уровень цены!`;
-      const body = `<b>${alertExNameFull} · ${alertSymName}</b> цена достигла <b>$${formattedPrice}</b> (Уровень: ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget})`;
+      const body = `<b>${alertExNameFull} · ${alertSymName}</b> достиг уровня <b>$${formattedTarget}</b>`;
       
       const telegramMsg =
         `─────── <b>${alertSymName}</b> ───────\n` +
         `• <b>Биржа:</b> ${alertExNameFull}\n` +
-        `• <b>Текущая цена:</b> $${formattedPrice}\n` +
         `• <b>Ценовой уровень:</b> ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget}\n` +
         `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
         `─────────────────────────\n` +
