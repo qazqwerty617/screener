@@ -345,12 +345,16 @@ if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 
   app.set("trust proxy", trustProxyHops);
 }
 app.use(compression());
-app.use(express.json({
-  limit: "128kb",
-  verify(req, _res, buffer) {
-    req.rawBody = Buffer.from(buffer);
-  }
-}));
+app.use((req, res, next) => {
+  // Skip global JSON parser for telegram-photo (needs 15mb limit handled by route)
+  if (req.path === "/api/notifications/telegram-photo") return next();
+  express.json({
+    limit: "128kb",
+    verify(req, _res, buffer) {
+      req.rawBody = Buffer.from(buffer);
+    }
+  })(req, res, next);
+});
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
@@ -2216,128 +2220,7 @@ server.listen(PORT, () => {
     reqTg.end();
   }
 
-  app.post("/api/notifications/telegram", express.json(), (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    const { chatId, message, botToken } = req.body || {};
-    const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
-
-    let targetChatId = chatId;
-    if (!targetChatId) {
-      const authHeader = req.headers.authorization || "";
-      const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
-      if (bearerToken) {
-        const user = userStore.getUserByToken(bearerToken);
-        if (user && (user.telegramChatId || user.telegramId)) {
-          targetChatId = user.telegramChatId || user.telegramId;
-        }
-      }
-    }
-
-    if (!targetChatId || !message) return res.status(400).json({ error: "chatId and message are required" });
-    if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
-
-    if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
-      return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
-    }
-
-    return sendTextMessage(token, targetChatId, message, res);
-  });
-
-  app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    const { chatId, caption, photoDataUrl, botToken } = req.body || {};
-    const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
-
-    let targetChatId = chatId;
-    if (!targetChatId) {
-      const authHeader = req.headers.authorization || "";
-      const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
-      if (bearerToken) {
-        const user = userStore.getUserByToken(bearerToken);
-        if (user && (user.telegramChatId || user.telegramId)) {
-          targetChatId = user.telegramChatId || user.telegramId;
-        }
-      }
-    }
-
-    if (!targetChatId || !caption) return res.status(400).json({ error: "chatId and caption are required" });
-    if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
-
-    if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
-      return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
-    }
-
-    if (!photoDataUrl || typeof photoDataUrl !== "string" || !photoDataUrl.startsWith("data:image")) {
-      return sendTextMessage(token, targetChatId, caption, res);
-    }
-
-    try {
-      const matches = photoDataUrl.match(/^data:image\/(\w+);base64,(.+)$/);
-      if (!matches) {
-        return sendTextMessage(token, targetChatId, caption, res);
-      }
-
-      const rawType = (matches[1] || "png").toLowerCase();
-      const mimeType = rawType === "jpeg" || rawType === "jpg" ? "image/jpeg" : "image/png";
-      const ext = mimeType === "image/png" ? "png" : "jpg";
-      const imgBuffer = Buffer.from(matches[2], "base64");
-      const boundary = "----ObsidianBoundary" + crypto.randomBytes(8).toString("hex");
-
-      const head = Buffer.from(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="chat_id"\r\n\r\n${targetChatId}\r\n` +
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML\r\n` +
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="photo"; filename="chart_alert.${ext}"\r\n` +
-        `Content-Type: ${mimeType}\r\n\r\n`
-      );
-      const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
-
-      const postData = Buffer.concat([head, imgBuffer, tail]);
-
-      const options = {
-        hostname: "api.telegram.org",
-        port: 443,
-        path: `/bot${token}/sendPhoto`,
-        method: "POST",
-        headers: {
-          "Content-Type": `multipart/form-data; boundary=${boundary}`,
-          "Content-Length": postData.length
-        }
-      };
-
-      const reqTg = https.request(options, (resTg) => {
-        let body = "";
-        resTg.on("data", (chunk) => body += chunk);
-        resTg.on("end", () => {
-          try {
-            const parsed = JSON.parse(body);
-            if (parsed.ok) {
-              console.log(`[TELEGRAM PHOTO SENT] Chat: ${targetChatId}`);
-              return res.json({ success: true, messageId: parsed.result?.message_id });
-            }
-            console.warn(`[TELEGRAM PHOTO FAIL] Chat: ${targetChatId}, Error: ${parsed.description}`);
-            sendTextMessage(token, targetChatId, caption, res);
-          } catch (_) {
-            sendTextMessage(token, targetChatId, caption, res);
-          }
-        });
-      });
-
-      reqTg.on("error", (err) => {
-        console.error("[TELEGRAM PHOTO ERROR]", err.message);
-        sendTextMessage(token, targetChatId, caption, res);
-      });
-
-      reqTg.write(postData);
-      reqTg.end();
-    } catch (err) {
-      sendTextMessage(token, targetChatId, caption, res);
-    }
-  });
+  // (Duplicate telegram routes removed — primary routes registered above)
 
   // Start Wall Scanner Engine
   wallScanner.startScanning(tickers, apiFetch, (payload) => {

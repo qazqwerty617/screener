@@ -11960,7 +11960,9 @@ function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) 
       }
     }
 
-    return shot.toDataURL("image/png");
+    const result = shot.toDataURL("image/png");
+    console.log(`[CHART SNAPSHOT] Generated OK, length=${result ? result.length : 0}, candles=${candleData.length}, targetLevel=${targetLevel}`);
+    return result;
   } catch (err) {
     console.error("[OFFSCREEN RENDER ERROR]", err);
     return null;
@@ -11975,8 +11977,11 @@ function sendTelegramAlert(message, photoDataUrl = null) {
     headers["Authorization"] = `Bearer ${authToken}`;
   }
 
-  const endpoint = photoDataUrl ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
-  const body = photoDataUrl
+  const hasPhoto = photoDataUrl && typeof photoDataUrl === "string" && photoDataUrl.startsWith("data:image");
+  console.log(`[ALERT TG] hasPhoto=${!!hasPhoto}, photoLen=${photoDataUrl ? photoDataUrl.length : 0}, chatId=${chatId}`);
+
+  const endpoint = hasPhoto ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
+  const body = hasPhoto
     ? { chatId: chatId || undefined, caption: message, photoDataUrl }
     : { chatId: chatId || undefined, message };
 
@@ -11986,10 +11991,11 @@ function sendTelegramAlert(message, photoDataUrl = null) {
     body: JSON.stringify(body)
   }).then(async r => {
     const d = await r.json();
+    console.log(`[ALERT TG] Response status=${r.status}`, d);
     if (!r.ok || !d.success) {
       console.warn("Telegram alert dispatch result:", d);
     }
-  }).catch(() => {});
+  }).catch(err => { console.error("[ALERT TG] fetch error:", err); });
 }
 
 function normExCode(e) {
