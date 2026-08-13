@@ -32,3 +32,8 @@ node-server/data/
 go-scanner/*.exe
 go-scanner/data/
 go-scanner/*.tmp
+
+# Scratch python scripts
+check_remote*.py
+scratch_digest.py
+

@@ -11,7 +11,7 @@ const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const LOGS_FILE = path.join(__dirname, "auth_logs.json");
 
 const PASSWORD_ALGORITHM = "scrypt-v1";
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365-day (1 year) persistent session TTL
 
 // Atomic, crash-resistant file write. Callers can fail closed on false.
 function saveJSON(filePath, data) {
@@ -26,7 +26,9 @@ function saveJSON(filePath, data) {
     fs.renameSync(tempPath, filePath);
     try { fs.chmodSync(filePath, 0o600); } catch (_) {}
     if (filePath === USERS_FILE) {
-      excelExporter.generateUsersExcel(data);
+      setImmediate(() => {
+        try { excelExporter.generateUsersExcel(data); } catch (_) {}
+      });
     }
     return true;
   } catch (err) {
@@ -178,7 +180,96 @@ function sanitizeUser(user) {
   } else {
     safe.proDaysLeft = null;
   }
+  safe.notifications = Array.isArray(user.notifications) ? user.notifications : [];
   return safe;
+}
+
+const DISPOSABLE_EMAIL_DOMAINS = new Set([
+  "mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com",
+  "trashmail.com", "yopmail.com", "dispostable.com", "getnada.com",
+  "sharklasers.com", "throwawaymail.com", "fake.com", "test.com",
+  "example.com", "asdf.com", "qwerty.com", "temp-mail.org", "fakeinbox.com",
+  "maildrop.cc", "getairmail.com", "mohmal.com", "crazymailing.com"
+]);
+
+const FAKE_TLDS = new Set([
+  "test", "example", "invalid", "localhost", "local", "sdfg", "asdf", "qwerty"
+]);
+
+function validateEmail(email) {
+  if (!email || typeof email !== "string") {
+    return { valid: false, error: "Укажите Email адрес" };
+  }
+
+  const clean = email.trim().toLowerCase();
+
+  if (clean.length > 254) {
+    return { valid: false, error: "Email слишком длинный" };
+  }
+
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  if (!emailRegex.test(clean)) {
+    return { valid: false, error: "Введите корректный Email адрес (например: name@domain.com)" };
+  }
+
+  if (clean.includes("..") || clean.startsWith(".") || clean.includes("@.")) {
+    return { valid: false, error: "Некорректный формат Email адреса" };
+  }
+
+  const parts = clean.split("@");
+  if (parts.length !== 2) {
+    return { valid: false, error: "Email должен содержать ровно один символ '@'" };
+  }
+
+  const [localPart, domain] = parts;
+  if (localPart.length < 1 || domain.length < 3) {
+    return { valid: false, error: "Слишком короткое имя или домен Email" };
+  }
+
+  const domainParts = domain.split(".");
+  const tld = domainParts[domainParts.length - 1];
+
+  if (FAKE_TLDS.has(tld) || tld.length < 2) {
+    return { valid: false, error: "Укажите существующий домен электронной почты (например, gmail.com, yandex.ru, mail.ru)" };
+  }
+
+  if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) {
+    return { valid: false, error: "Регистрация с временных или одноразовых Email адресов запрещена" };
+  }
+
+  return { valid: true };
+}
+
+function validatePassword(password) {
+  if (!password || typeof password !== "string") {
+    return { valid: false, error: "Укажите пароль" };
+  }
+
+  if (/[а-яА-ЯЁё]/i.test(password)) {
+    return { valid: false, error: "Пароль должен быть на английском языке (без кириллицы)" };
+  }
+
+  if (/\s/.test(password)) {
+    return { valid: false, error: "Пароль не должен содержать пробелы" };
+  }
+
+  if (password.length < 8 || password.length > 128) {
+    return { valid: false, error: "Пароль должен быть длиной от 8 до 128 символов" };
+  }
+
+  if (!/^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?/~'"]+$/.test(password)) {
+    return { valid: false, error: "Пароль содержит недопустимые символы. Используйте только английские буквы, цифры и спецсимволы" };
+  }
+
+  if (!/[a-zA-Z]/.test(password)) {
+    return { valid: false, error: "Пароль должен содержать хотя бы одну английскую букву" };
+  }
+
+  if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?/~'"]/.test(password)) {
+    return { valid: false, error: "Пароль должен содержать хотя бы одну цифру или спецсимвол" };
+  }
+
+  return { valid: true };
 }
 
 // Register user with email/username & password
@@ -191,11 +282,17 @@ function registerUser({ username, email, password, ip = "" }) {
   const cleanUsername = String(username).trim();
   const passwordText = cleanPassword(password);
 
-  if (passwordText.length < 10 || passwordText.length > 1024) {
-    throw new Error("Пароль должен содержать от 10 до 1024 символов");
-  }
   if (cleanUsername.length < 2 || cleanUsername.length > 64) throw new Error("Некорректное имя пользователя");
-  if (cleanEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) throw new Error("Некорректный Email");
+
+  const passCheck = validatePassword(passwordText);
+  if (!passCheck.valid) {
+    throw new Error(passCheck.error);
+  }
+  
+  const emailCheck = validateEmail(cleanEmail);
+  if (!emailCheck.valid) {
+    throw new Error(emailCheck.error);
+  }
 
   // Check uniqueness
   for (const u of Object.values(users)) {
@@ -266,6 +363,10 @@ function loginUser({ emailOrUsername, password, ip = "" }) {
     throw new Error("Неверный логин или пароль");
   }
 
+  if (foundUser.blocked) {
+    throw new Error(`Аккаунт заблокирован: ${foundUser.blockReason || "Нарушение правил"}`);
+  }
+
   const passwordText = cleanPassword(password);
   if (passwordText.length > 1024) throw new Error("Неверный логин или пароль");
   const isValid = verifyPassword(passwordText, foundUser);
@@ -302,6 +403,10 @@ function telegramAuth(tgData, chatId = null, ip = "") {
       foundUser = u;
       break;
     }
+  }
+
+  if (foundUser && foundUser.blocked) {
+    throw new Error(`Аккаунт заблокирован: ${foundUser.blockReason || "Нарушение правил"}`);
   }
 
   let isNew = false;
@@ -366,7 +471,7 @@ function telegramAuth(tgData, chatId = null, ip = "") {
   return { token, user: sanitizeUser(foundUser), isNew };
 }
 
-// Validate session token
+// Validate session token with 365-day sliding renewal
 function getUserByToken(token) {
   if (typeof token !== "string" || token.length < 32 || token.length > 256) return null;
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
@@ -381,16 +486,25 @@ function getUserByToken(token) {
     saveJSON(SESSIONS_FILE, sessions);
   }
   if (!session) return null;
+  const now = Date.now();
   const createdAt = Date.parse(session.createdAt || "");
   const expiresAt = Number(session.expiresAt) || (createdAt + SESSION_TTL_MS);
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+  if (!Number.isFinite(expiresAt) || expiresAt <= now) {
     delete sessions[sessionKey];
     saveJSON(SESSIONS_FILE, sessions);
     return null;
   }
+
+  // Sliding Session Renewal: Automatically renew 365 days every 6 hours of user activity
+  if (now - (session.lastRenewedAt || 0) > 6 * 60 * 60 * 1000) {
+    session.expiresAt = now + SESSION_TTL_MS;
+    session.lastRenewedAt = now;
+    saveJSON(SESSIONS_FILE, sessions);
+  }
+
   const user = users[session.userId];
   if (!user) return null;
-  if (user.blocked && (!user.blockExpiresAt || user.blockExpiresAt > Date.now())) return null;
+  if (user.blocked && (!user.blockExpiresAt || user.blockExpiresAt > now)) return null;
   return sanitizeUser(user);
 }
 
@@ -695,6 +809,7 @@ function blockUser(userId, { reason = "Нарушение правил", days = 
     delete target.blockExpiresAt;
   }
   saveJSON(USERS_FILE, users);
+  revokeAllUserSessions(target.id);
   logAuthEvent({ event: "BLOCK_USER", userId: target.id, reason, days });
   return sanitizeUser(target);
 }
@@ -781,6 +896,42 @@ function exportUsersExcel() {
   return excelExporter.generateUsersExcel(users);
 }
 
+function addNotificationToUser(userIdOrQuery, notif) {
+  let target = findUser(userIdOrQuery);
+  if (!target) return null;
+  if (!Array.isArray(target.notifications)) target.notifications = [];
+  
+  const notifObj = {
+    id: "notif_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6),
+    type: notif.type || "info",
+    title: notif.title || "Уведомление",
+    message: notif.message || "",
+    days: notif.days || 0,
+    read: false,
+    createdAt: notif.createdAt || new Date().toISOString()
+  };
+
+  target.notifications.unshift(notifObj);
+  if (target.notifications.length > 50) {
+    target.notifications = target.notifications.slice(0, 50);
+  }
+  saveJSON(USERS_FILE, users);
+  return notifObj;
+}
+
+function markNotificationRead(userIdOrQuery, notifId) {
+  let target = findUser(userIdOrQuery);
+  if (!target || !Array.isArray(target.notifications)) return false;
+  
+  const notif = target.notifications.find(n => n.id === notifId);
+  if (notif) {
+    notif.read = true;
+    saveJSON(USERS_FILE, users);
+    return true;
+  }
+  return false;
+}
+
 module.exports = {
   registerUser,
   loginUser,
@@ -808,5 +959,7 @@ module.exports = {
   revokeAllUserSessions,
   resetUserPassword,
   touchUserActivity,
-  getAllUsersRaw
+  getAllUsersRaw,
+  addNotificationToUser,
+  markNotificationRead
 };

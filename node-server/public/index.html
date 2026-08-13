@@ -25,7 +25,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/css/app.css?v=1002" />
+    <link rel="stylesheet" href="/css/app.css?v=1005" />
     <link rel="stylesheet" href="/css/arbitrage.css?v=1" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=1" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
@@ -133,16 +133,22 @@
 
                     <div class="sep"></div>
                     <div class="stat">
-                        <span class="sl">Vol&nbsp;24ч:</span><span class="sv" id="sv">–</span>
+                        <span class="sl">24ч:</span><span class="sv" id="schg">–</span>
                     </div>
                     <div class="stat">
-                        <span class="sl">OI:</span><span class="sv pos" id="soi">–</span>
+                        <span class="sl">Vol:</span><span class="sv" id="sv">–</span>
+                    </div>
+                    <div class="stat">
+                        <span class="sl">NATR:</span><span class="sv" id="snatr">–</span>
+                    </div>
+                    <div class="stat">
+                        <span class="sl">О.Корр:</span><span class="sv" id="scorr">–</span>
                     </div>
                     <div class="stat">
                         <span class="sl">Фандинг:</span><span class="sv" id="sfun">–</span>
                     </div>
                     <div class="stat">
-                        <span class="sl">RSI:</span><span class="sv" id="srsi">–</span>
+                        <span class="sl">OI:</span><span class="sv pos" id="soi">–</span>
                     </div>
 
                     <div class="sep"></div>
@@ -228,7 +234,7 @@
                     <!-- Exchange dropdown -->
                     <div class="exc-wrap" id="exc-wrap">
                         <div class="exc-btn" id="exc-btn" role="button" aria-haspopup="listbox" aria-expanded="false"
-                            tabindex="0">
+                            tabindex="0" style="outline: none !important;">
                             <div class="exc-dot" id="exc-dot"
                                 style="background: center/contain no-repeat url('/img/BN.svg')"></div>
                             <span id="exc-name">Binance Futures</span>
@@ -1790,12 +1796,8 @@
                         <div class="settings-group">
                             <label>Скринер (список монет)</label>
                             <div class="s-row">
-                                <span>Цвет фона</span>
+                                <span>Цвет фона и шапки</span>
                                 <div class="custom-color-picker" data-picker-id="screener-bg"></div>
-                            </div>
-                            <div class="s-row">
-                                <span>Цвет шапки</span>
-                                <div class="custom-color-picker" data-picker-id="screener-header"></div>
                             </div>
                         </div>
                         <div class="settings-group">
@@ -2184,6 +2186,17 @@
                 </div>
                 <button type="button" class="tg-bot-link-btn" id="tg-bot-link-btn">Подключить бота</button>
             </div>
+            <div class="profile-bug-card" onclick="openBugReportModal();">
+                <div class="bug-card-left">
+                    <div class="bug-card-icon-box">🐛</div>
+                    <div class="bug-card-text">
+                        <strong>Нашли ошибку или баг?!</strong>
+                        <span>За каждый подтверждённый баг — <b>+2 дня PRO</b> (или больше) в подарок! 🎁</span>
+                    </div>
+                </div>
+                <button type="button" class="bug-card-action-btn">Сообщить →</button>
+            </div>
+
             <div class="profile-edit-section">
                 <label for="profile-name-input">Имя профиля</label>
                 <div class="profile-input-group">
@@ -2204,50 +2217,248 @@
         </div>
     </div>
 
+    <!-- BUG REPORT MODAL -->
+    <div id="bugReportModal" class="pro-modal-backdrop" style="display: none;">
+        <div class="pro-modal-content bug-modal-box">
+            <button class="pro-modal-close" onclick="closeBugReportModal();" aria-label="Закрыть">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+
+            <div class="bug-modal-header">
+                <div class="bug-modal-crown">🐛</div>
+                <h3>Сообщить об ошибке или баге</h3>
+                <p class="bug-modal-sub">Помогите сделать Obsidian Screener лучше и получите PRO доступ!</p>
+            </div>
+
+            <div class="bug-modal-gift-banner">
+                <div class="gift-icon">🎁</div>
+                <div class="gift-info">
+                    <strong>Награда за найденный баг:</strong>
+                    <span>За каждый подтверждённый репорт начисляем <b>+2 дня PRO подписки</b> (или больше) на ваш аккаунт!</span>
+                </div>
+            </div>
+
+            <form id="bug-report-form" onsubmit="submitBugReport(event);">
+                <div class="bug-form-field">
+                    <label for="bug-text-input">Подробное описание проблемы:</label>
+                    <textarea id="bug-text-input" rows="3" placeholder="Опишите, что именно работает не так (например: не отображается стакан на Bybit, не работает рисовашка и т.д.)..." required></textarea>
+                </div>
+
+                <div class="bug-form-field">
+                    <label>Скриншот проблемы (необязательно):</label>
+                    <div id="bug-screenshot-dropzone" class="bug-screenshot-dropzone">
+                        <input type="file" id="bug-screenshot-input" accept="image/*" style="display: none;" onchange="handleBugScreenshotSelect(event);" />
+                        <div id="bug-dropzone-prompt" class="bug-dropzone-prompt" onclick="document.getElementById('bug-screenshot-input').click();">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            <span>Прикрепите скриншот или просто <b>вставьте из буфера (Ctrl+V)</b> 📋</span>
+                        </div>
+                        <div id="bug-screenshot-preview" class="bug-screenshot-preview" style="display: none;">
+                            <img id="bug-preview-img" src="" alt="Скриншот" />
+                            <button type="button" class="bug-remove-img-btn" onclick="removeBugScreenshot();" title="Удалить скриншот">×</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="bug-report-msg" class="bug-report-msg" style="display: none;"></div>
+
+                <div class="bug-modal-actions">
+                    <button type="button" class="bug-modal-cancel" onclick="closeBugReportModal();">Отмена</button>
+                    <button type="submit" id="bug-report-submit-btn" class="bug-modal-submit">
+                        <span>Отправить репорт 🚀</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- PRO Subscription Modal -->
     <div id="proModal" class="pro-modal-backdrop" style="display: none;">
         <div class="pro-modal-content">
-            <button class="pro-modal-close" onclick="closeProModal();">&times;</button>
+            <button class="pro-modal-close" onclick="closeProModal();" aria-label="Закрыть">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+            
             <div class="pro-modal-header">
                 <div class="pro-crown-icon">👑</div>
-                <h3>Obsidian PRO</h3>
+                <div class="pro-title-wrap">
+                    <h3>Obsidian <span class="pro-badge-pill">PRO</span></h3>
+                </div>
                 <span class="pro-modal-subtitle">Доступно исключительно в подписке PRO</span>
             </div>
+
             <div class="pro-features-list">
                 <div class="pro-feature-item">
-                    <div class="pro-feature-icon">📊</div>
+                    <div class="pro-feature-icon icon-heatmap">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="9" rx="1.5"></rect>
+                            <rect x="14" y="3" width="7" height="5" rx="1.5"></rect>
+                            <rect x="14" y="12" width="7" height="9" rx="1.5"></rect>
+                            <rect x="3" y="16" width="7" height="5" rx="1.5"></rect>
+                        </svg>
+                    </div>
                     <div class="pro-feature-info">
                         <strong>Карта ликвидаций & Heatmap</strong>
                         <span>Визуализация крупных объёмов и скрытых стенок со всех бирж</span>
                     </div>
                 </div>
+
                 <div class="pro-feature-item">
-                    <div class="pro-feature-icon">⚡</div>
+                    <div class="pro-feature-icon icon-arbitrage">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline>
+                            <polyline points="17 6 23 6 23 12"></polyline>
+                        </svg>
+                    </div>
                     <div class="pro-feature-info">
                         <strong>Межбиржевой & Фандинг Арбитраж</strong>
                         <span>Поиск спредов, ставок финансирования и глубины стаканов 11 бирж</span>
                     </div>
                 </div>
+
                 <div class="pro-feature-item">
-                    <div class="pro-feature-icon">🎯</div>
+                    <div class="pro-feature-icon icon-detector">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="9"></circle>
+                            <circle cx="12" cy="12" r="4"></circle>
+                            <line x1="12" y1="1" x2="12" y2="4"></line>
+                            <line x1="12" y1="20" x2="12" y2="23"></line>
+                            <line x1="1" y1="12" x2="4" y2="12"></line>
+                            <line x1="20" y1="12" x2="23" y2="12"></line>
+                        </svg>
+                    </div>
                     <div class="pro-feature-info">
                         <strong>Детектор формаций и Уровни</strong>
                         <span>Автоматический поиск пробоев, плотностей и сигналов в Telegram</span>
                     </div>
                 </div>
+
                 <div class="pro-feature-item">
-                    <div class="pro-feature-icon">📈</div>
+                    <div class="pro-feature-icon icon-backtest">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                            <polyline points="10 9 9 9 8 9"></polyline>
+                        </svg>
+                    </div>
                     <div class="pro-feature-info">
                         <strong>Бэктестинг & Дневник трейдера</strong>
                         <span>Тестирование стратегий и автоматический анализ торговых сделок</span>
                     </div>
                 </div>
             </div>
+
             <div class="pro-modal-actions">
                 <button type="button" id="pro-modal-buy-btn" class="pro-modal-buy-btn">
-                    🚀 Получить PRO доступ
+                    <span>Активировать PRO доступ</span>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
                 </button>
-                <button class="pro-modal-cancel-btn" onclick="closeProModal();">Позже</button>
+                <button type="button" id="pro-modal-details-btn" class="pro-modal-details-btn" onclick="openProCompareModal();">Подробнее →</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PRO COMPARISON TABLE MODAL -->
+    <div id="proCompareModal" class="pro-modal-backdrop" style="display: none;">
+        <div class="pro-modal-content pro-compare-box">
+            <button class="pro-modal-close" onclick="closeProCompareModal();" aria-label="Закрыть">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+
+            <div class="pro-compare-header">
+                <div class="pro-crown-icon">👑</div>
+                <h3>Сравнение возможностей подписок</h3>
+                <p class="pro-compare-sub">Сравните базовый функционал и преимущества подписки Obsidian PRO</p>
+            </div>
+
+            <div class="pro-compare-table-wrapper">
+                <table class="pro-compare-table">
+                    <thead>
+                        <tr>
+                            <th class="col-feature">Функция / Возможность</th>
+                            <th class="col-free">FREE (Начинающий)</th>
+                            <th class="col-pro">Obsidian PRO 👑</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="table-section-title">
+                            <td colspan="3">Скринер и Инструменты</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Подключение бирж</td>
+                            <td class="col-free">Только Binance Futures</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Все 11 бирж (Bybit, OKX...)</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Карта ликвидаций & Heatmap</td>
+                            <td class="col-free"><span class="badge-cross">✕</span> Ограничено</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Полный доступ ко всем парам</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Межбиржевой & Фандинг Арбитраж</td>
+                            <td class="col-free"><span class="badge-cross">✕</span> Нет доступа</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Поиск спредов и стаканов 11 бирж</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Детектор формаций и Уровни</td>
+                            <td class="col-free"><span class="badge-cross">✕</span> Нет доступа</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Авто-поиск плотностей и пробоев</td>
+                        </tr>
+
+                        <tr class="table-section-title">
+                            <td colspan="3">Терминал и Уведомления</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Рабочие пространства / Окна</td>
+                            <td class="col-free">2 рабочих пространства</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Неограниченно</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Telegram-сигналы & Push</td>
+                            <td class="col-free">5 уведомлений</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Мгновенные сигналы в Telegram</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Скорость обновления стаканов</td>
+                            <td class="col-free">Стандартная</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Ultra Low Latency WebSocket</td>
+                        </tr>
+
+                        <tr class="table-section-title">
+                            <td colspan="3">Аналитика и Сервис</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Бэктестинг & Дневник трейдера</td>
+                            <td class="col-free"><span class="badge-cross">✕</span> Нет доступа</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Автоматический анализ сделок</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Настройки интерфейса & Темы</td>
+                            <td class="col-free">Ограничено</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> Полный доступ к настройкам</td>
+                        </tr>
+                        <tr>
+                            <td class="col-feature">Отсутствие рекламы</td>
+                            <td class="col-free">Есть реклама</td>
+                            <td class="col-pro"><span class="badge-check">✓</span> 100% Без рекламы</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pro-compare-actions">
+                <button type="button" id="pro-compare-back-btn" class="pro-compare-back-btn" onclick="backToProModal();">← Назад</button>
+                <button type="button" id="pro-compare-buy-btn" class="pro-compare-buy-btn" onclick="openPayModal();">
+                    👑 Получить PRO доступ
+                </button>
             </div>
         </div>
     </div>

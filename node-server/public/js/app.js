@@ -11,6 +11,95 @@ const rowEls = new Map();
 const priceHistories = new Map();
 let isHoveringScreener = false;
 
+// ════ TOAST NOTIFICATIONS ═════════════════════════════
+function showToast(options, typeArg, titleArg, durationArg) {
+  let title = "";
+  let message = "";
+  let type = "info";
+  let durationMs = 8000;
+
+  const validTypes = ["info", "success", "error", "warning", "price_alert", "bug_reward", "bug_reject"];
+
+  if (typeof options === "object" && options !== null) {
+    title = options.title !== undefined && options.title !== null ? String(options.title) : "";
+    message = options.message || options.msg || options.text || options.body || "";
+    type = options.type || "info";
+    durationMs = options.durationMs || options.duration || 8000;
+  } else if (typeof options === "string") {
+    if (validTypes.includes(options.toLowerCase())) {
+      type = options.toLowerCase();
+      title = typeof typeArg === "string" ? typeArg : "";
+      message = typeof titleArg === "string" ? titleArg : "";
+      if (typeof durationArg === "number") durationMs = durationArg;
+    } else if (typeof typeArg === "string" && validTypes.includes(typeArg.toLowerCase())) {
+      title = options;
+      type = typeArg.toLowerCase();
+      message = typeof titleArg === "string" ? titleArg : "";
+      if (typeof durationArg === "number") durationMs = durationArg;
+    } else {
+      title = options;
+      message = typeof typeArg === "string" ? typeArg : "";
+      if (typeof titleArg === "number") durationMs = titleArg;
+    }
+  }
+
+  // Clean strings
+  if (title === "undefined" || title === "null") title = "";
+  if (typeof message === "string" && (message === "undefined" || message === "null")) message = "";
+
+  // Fallback icon & title
+  let icon = "";
+  if (!title) {
+    if (type === "bug_reward" || type === "success") { icon = "🎁"; title = "Баг подтверждён!"; }
+    else if (type === "bug_reject") { icon = "ℹ️"; title = "Статус баг-репорта"; }
+    else if (type === "error") { icon = "❌"; title = "Ошибка"; }
+    else if (type === "price_alert") { icon = "📈"; title = "Сигнал"; }
+    else { icon = "ℹ️"; title = "Уведомление"; }
+  } else {
+    // If title doesn't start with an emoji, add a matching default emoji
+    if (!/^[\u{1F300}-\u{1F9FF}|✅|❌|ℹ️|🔔|📈|⚠️|🎁]/u.test(title)) {
+      if (type === "bug_reward" || type === "success") icon = "🎁";
+      else if (type === "bug_reject") icon = "ℹ️";
+      else if (type === "error") icon = "❌";
+      else if (type === "price_alert") icon = "📈";
+      else icon = "ℹ️";
+    }
+  }
+
+  const container = typeof $ === "function" ? $("toast-container") : document.getElementById("toast-container");
+  if (!container) return;
+  
+  const card = document.createElement("div");
+  card.className = `toast-card toast-${type}`;
+  card.innerHTML = `
+    <div class="toast-header">
+      <span class="toast-title">${icon ? icon + " " : ""}${title}</span>
+      <button class="toast-close" onclick="this.closest('.toast-card').remove()">×</button>
+    </div>
+    ${message ? `<div class="toast-body">${message}</div>` : ""}
+    <div class="toast-progress"></div>
+  `;
+  
+  const progress = card.querySelector(".toast-progress");
+  if (progress) {
+    progress.style.animationDuration = `${durationMs}ms`;
+  }
+
+  container.appendChild(card);
+  
+  setTimeout(() => {
+    if (card.parentNode) {
+      card.style.opacity = "0";
+      card.style.transform = "translateY(-10px)";
+      card.style.transition = "all 0.25s ease";
+      setTimeout(() => {
+        if (card.parentNode) card.remove();
+      }, 250);
+    }
+  }, durationMs);
+}
+window.showToast = showToast;
+
 function pearsonCorrelationAbs(x, y) {
   let n = Math.min(x.length, y.length);
   if (n < 2) return 0;
@@ -3726,10 +3815,24 @@ canvas.addEventListener("touchstart", (e) => {
 }, { passive: true });
 
 canvas.addEventListener("touchmove", (e) => {
-  if (e.touches.length === 1 && isTouchPanning) {
+  if (e.touches.length === 1) {
     const t = e.touches[0];
-    const dx = t.clientX - touchStartX;
-    offsetX = getClampedOffsetX(touchDragOffX + dx / (candleW || 10));
+    const r = canvas.getBoundingClientRect();
+    mX = t.clientX - r.left;
+    mY = t.clientY - r.top;
+
+    if (isTouchPanning) {
+      const dx = t.clientX - touchStartX;
+      offsetX = getClampedOffsetX(touchDragOffX + dx / (candleW || 10));
+    }
+
+    if (quickMeasure) {
+      const { t: ct, p: cp } = getCursorTP(mX, mY);
+      quickMeasure.t2 = ct;
+      quickMeasure.p2 = cp;
+      normalizeDrawing(quickMeasure);
+    }
+
     requestDraw();
   } else if (e.touches.length === 2 && touchPinchDist > 0) {
     const t1 = e.touches[0];
@@ -3740,16 +3843,6 @@ canvas.addEventListener("touchmove", (e) => {
       candleW = clamp(touchStartCandleW * ratio, 1.5, 50);
       requestDraw();
     }
-  } else if (quickMeasure && e.touches.length === 1) {
-    const t = e.touches[0];
-    const r = canvas.getBoundingClientRect();
-    const px = t.clientX - r.left;
-    const py = t.clientY - r.top;
-    const { t: ct, p: cp } = getCursorTP(px, py);
-    quickMeasure.t2 = ct;
-    quickMeasure.p2 = cp;
-    normalizeDrawing(quickMeasure);
-    requestDraw();
   }
 }, { passive: true });
 
@@ -3848,46 +3941,7 @@ window.addEventListener("focus", () => {
   requestDraw();
 });
 
-// тФАтФА TOAST NOTIFICATIONS & COPY COIN TO CLIPBOARD тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-function showToast(msg) {
-  let toast = $("global-toast");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.id = "global-toast";
-    toast.style.cssText = `
-      position: fixed;
-      top: 65px;
-      left: 50%;
-      transform: translateX(-50%) translateY(-10px);
-      background: rgba(16, 22, 34, 0.94);
-      color: #fff;
-      padding: 9px 20px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      font-family: Inter, system-ui, -apple-system, sans-serif;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.15);
-      backdrop-filter: blur(12px);
-      z-index: 99999;
-      opacity: 0;
-      pointer-events: none;
-      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    `;
-    document.body.appendChild(toast);
-  }
-  toast.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#26c97a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><polyline points="20 6 9 17 4 12"></polyline></svg> ${msg}`;
-  toast.style.opacity = "1";
-  toast.style.transform = "translateX(-50%) translateY(0)";
-
-  if (toast._timer) clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => {
-    toast.style.opacity = "0";
-    toast.style.transform = "translateX(-50%) translateY(-10px)";
-  }, 1800);
-}
+// ════ COPY COIN TO CLIPBOARD ═════════════════════════════
 
 function copyCoinNameToClipboard(rawText) {
   if (!rawText) return;
@@ -4076,8 +4130,72 @@ document.addEventListener("DOMContentLoaded", () => {
       if (profileAvatar && user.avatar) {
         profileAvatar.innerHTML = `<img src="${user.avatar}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
       }
+
+      if (Array.isArray(user.notifications) && user.notifications.length > 0) {
+        const token = localStorage.getItem("obsidian_auth_token") || "";
+        user.notifications.forEach(n => processNotificationItem(n, token));
+      }
     }
   }
+
+  window.shownNotificationIds = window.shownNotificationIds || new Set();
+
+  function processNotificationItem(n, token) {
+    if (!n || !n.id || n.read || window.shownNotificationIds.has(n.id)) return;
+
+    window.shownNotificationIds.add(n.id);
+    n.read = true;
+
+    const notifType = n.type === "bug_reward" ? "bug_reward" : (n.type === "bug_reject" ? "bug_reject" : "info");
+    const title = n.title || (n.type === "bug_reward" ? "🎁 Баг подтверждён!" : "ℹ️ Статус баг-репорта");
+    let message = n.message || "";
+    if (notifType === "bug_reward" && !message.includes("обновите страницу")) {
+      message += "\n(обновите страницу)";
+    }
+
+    if (typeof showToast === "function") {
+      showToast({ type: notifType, title: title, message: message, durationMs: 5000 });
+    }
+
+    if (token) {
+      fetch("/api/notifications/mark-read", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ notificationId: n.id })
+      }).catch(() => {});
+    }
+  }
+
+  async function checkUnreadNotifications() {
+    const token = localStorage.getItem("obsidian_auth_token") || "";
+    if (!token) return;
+
+    try {
+      const res = await fetch("/api/notifications/unread", {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.success && Array.isArray(data.notifications) && data.notifications.length > 0) {
+        let hasNew = false;
+        data.notifications.forEach(n => {
+          if (!window.shownNotificationIds.has(n.id)) {
+            processNotificationItem(n, token);
+            hasNew = true;
+          }
+        });
+        if (hasNew && typeof fetchUserProfile === "function") {
+          fetchUserProfile();
+        }
+      }
+    } catch (_) {}
+  }
+
+  setInterval(checkUnreadNotifications, 15000);
+  setTimeout(checkUnreadNotifications, 2000);
 
   // Telegram Bot Link Handler
   if (tgBotLinkBtn) {
@@ -4132,15 +4250,47 @@ document.addEventListener("DOMContentLoaded", () => {
       renderProfile(data.user);
       if (authModal) authModal.style.display = "none";
       if (typeof showToast === "function") {
-        showToast({ title: "Авторизация", message: `Telegram вход выполнен! Ваш ID: ${data.user.id}`, type: "success" });
+        showToast({ title: "Добро пожаловать!", message: `Telegram вход выполнен! Ваш ID: ${data.user.id}`, type: "success" });
       }
     } catch (err) {
       showAuthError(err.message);
+      if (typeof showToast === "function") {
+        showToast({ title: "Ошибка входа", message: err.message || "Ошибка проверки авторизации Telegram", type: "error" });
+      }
     }
   };
 
+  function getStoredAuthToken() {
+    let token = "";
+    try { token = localStorage.getItem("obsidian_auth_token") || ""; } catch (_) {}
+    if (!token) {
+      try {
+        const match = document.cookie.match(/(?:^|; )obsidian_auth_token=([^;]*)/);
+        if (match && match[1]) {
+          token = decodeURIComponent(match[1]);
+          if (token) {
+            try { localStorage.setItem("obsidian_auth_token", token); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    }
+    return token;
+  }
+
+  function setStoredAuthToken(token) {
+    if (token) {
+      try { localStorage.setItem("obsidian_auth_token", token); } catch (_) {}
+      try { document.cookie = `obsidian_auth_token=${encodeURIComponent(token)}; max-age=31536000; path=/; SameSite=Lax`; } catch (_) {}
+    } else {
+      try { localStorage.removeItem("obsidian_auth_token"); } catch (_) {}
+      try { document.cookie = "obsidian_auth_token=; max-age=0; path=/"; } catch (_) {}
+    }
+  }
+  window.setStoredAuthToken = setStoredAuthToken;
+  window.getStoredAuthToken = getStoredAuthToken;
+
   async function checkAuthSession() {
-    authToken = localStorage.getItem("obsidian_auth_token") || "";
+    authToken = getStoredAuthToken();
     if (!authToken) {
       currentUser = null;
       window.currentUser = null;
@@ -4153,18 +4303,23 @@ document.addEventListener("DOMContentLoaded", () => {
       if (r.ok) {
         const data = await r.json();
         if (data.success && data.user) {
+          setStoredAuthToken(authToken); // ensure 365-day cookie backup is synced
           renderProfile(data.user);
           return;
         }
       }
       if (r.status === 401) {
-        authToken = "";
-        localStorage.removeItem("obsidian_auth_token");
-        currentUser = null;
-        window.currentUser = null;
+        const data = await r.json().catch(() => ({}));
+        if (data && (data.error === "Неавторизован" || data.error === "INVALID_TOKEN" || data.error === "USER_BLOCKED")) {
+          authToken = "";
+          setStoredAuthToken("");
+          currentUser = null;
+          window.currentUser = null;
+          renderProfile(null);
+        }
       }
     } catch (_) {
-      // Network hiccup — retain local token
+      // Network hiccup or server restart — retain local token in storage and cookies
     }
   }
 
@@ -4264,10 +4419,13 @@ document.addEventListener("DOMContentLoaded", () => {
         renderProfile(data.user);
         if (authModal) authModal.style.display = "none";
         if (typeof showToast === "function") {
-          showToast(`Добро пожаловать, ${data.user.username}! (ID: ${data.user.id})`, "success");
+          showToast({ title: "Добро пожаловать!", message: `Вход выполнен успешно (${data.user.username})`, type: "success" });
         }
       } catch (err) {
         showAuthError(err.message);
+        if (typeof showToast === "function") {
+          showToast({ title: "Ошибка входа", message: err.message || "Неверный логин или пароль", type: "error" });
+        }
       }
     };
   }
@@ -4278,11 +4436,56 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       showAuthError("");
       const username = ($("reg-username")?.value || "").trim();
-      const email = ($("reg-email")?.value || "").trim();
+      const email = ($("reg-email")?.value || "").trim().toLowerCase();
       const password = $("reg-password")?.value || "";
 
-      if (password.length < 8) {
-        showAuthError("Пароль должен содержать минимум 8 символов");
+      if (username.length < 2) {
+        showAuthError("Имя пользователя должно содержать минимум 2 символа");
+        return;
+      }
+
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      if (!email || !emailRegex.test(email) || email.includes("..")) {
+        showAuthError("Введите настоящий Email адрес (например: name@domain.com)");
+        return;
+      }
+
+      const domain = email.split("@")[1] || "";
+      const tld = domain.split(".").pop() || "";
+      const disposableDomains = ["mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com", "trashmail.com", "yopmail.com", "dispostable.com", "fake.com", "test.com", "example.com", "asdf.com", "qwerty.com"];
+      const fakeTlds = ["test", "example", "invalid", "localhost", "local", "sdfg", "asdf", "qwerty"];
+      if (disposableDomains.includes(domain) || fakeTlds.includes(tld) || tld.length < 2) {
+        showAuthError("Регистрация с временных или недействительных Email адресов запрещена");
+        return;
+      }
+
+      if (/[а-яА-ЯЁё]/i.test(password)) {
+        showAuthError("Пароль должен быть на английском языке (без кириллицы)");
+        return;
+      }
+
+      if (/\s/.test(password)) {
+        showAuthError("Пароль не должен содержать пробелы");
+        return;
+      }
+
+      if (password.length < 8 || password.length > 128) {
+        showAuthError("Пароль должен быть длиной от 8 до 128 символов");
+        return;
+      }
+
+      if (!/^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?/~'"]+$/.test(password)) {
+        showAuthError("Пароль должен содержать только английские буквы, цифры и спецсимволы");
+        return;
+      }
+
+      if (!/[a-zA-Z]/.test(password)) {
+        showAuthError("Пароль должен содержать хотя бы одну английскую букву");
+        return;
+      }
+
+      if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?/~'"]/.test(password)) {
+        showAuthError("Пароль должен содержать хотя бы одну цифру или спецсимвол");
         return;
       }
 
@@ -4301,10 +4504,13 @@ document.addEventListener("DOMContentLoaded", () => {
         renderProfile(data.user);
         if (authModal) authModal.style.display = "none";
         if (typeof showToast === "function") {
-          showToast(`Аккаунт создан! Ваш ID: ${data.user.id}`, "success");
+          showToast({ title: "Регистрация успешна", message: `Добро пожаловать, ${data.user.username}! Аккаунт успешно создан`, type: "success" });
         }
       } catch (err) {
         showAuthError(err.message);
+        if (typeof showToast === "function") {
+          showToast({ title: "Ошибка регистрации", message: err.message || "Ошибка создания аккаунта", type: "error" });
+        }
       }
     };
   }
@@ -4324,7 +4530,7 @@ document.addEventListener("DOMContentLoaded", () => {
         window.open(data.botUrl, "_blank");
 
         if (typeof showToast === "function") {
-          showToast("Перейдите в Telegram и нажмите START для завершения входа", "info");
+          showToast({ title: "Авторизация Telegram", message: "Перейдите в Telegram и нажмите START для завершения входа", type: "info" });
         }
 
         // Poll for authorization approval
@@ -4345,7 +4551,7 @@ document.addEventListener("DOMContentLoaded", () => {
               renderProfile(pollData.user);
               if (authModal) authModal.style.display = "none";
               if (typeof showToast === "function") {
-                showToast(`Вход через Telegram выполнен! Ваш ID: ${pollData.user.id}`, "success");
+                showToast({ title: "Успешный вход", message: `Вход через Telegram выполнен! Добро пожаловать, ${pollData.user.username || 'пользователь'}`, type: "success" });
               }
             }
           } catch (_) {}
@@ -4375,7 +4581,7 @@ document.addEventListener("DOMContentLoaded", () => {
           const data = await r.json();
           if (data.success && data.user) {
             renderProfile(data.user);
-            if (typeof showToast === "function") showToast("Имя профиля обновлено", "success");
+            if (typeof showToast === "function") showToast({ title: "Профиль обновлен", message: "Имя профиля успешно сохранено", type: "success" });
           }
         } catch (_) {}
       } else if (profileNameDisplay) {
@@ -4388,10 +4594,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (authLogoutBtn) {
     authLogoutBtn.onclick = () => {
       authToken = "";
-      localStorage.removeItem("obsidian_auth_token");
+      setStoredAuthToken("");
       if (profileModal) profileModal.style.display = "none";
       renderProfile(null);
-      if (typeof showToast === "function") showToast("Вы вышли из аккаунта", "info");
+      if (typeof showToast === "function") {
+        showToast({ title: "Выход из аккаунта", message: "Вы успешно вышли из аккаунта. До новых встреч!", type: "info" });
+      }
     };
   }
 });
@@ -5625,8 +5833,10 @@ function updateSymInfoInterp(c) {
   const displayChg = c.o > 0 ? ((dp - c.o) / c.o) * 100 : c.chg;
   const sn = $("sn"),
     sc = $("sc"),
+    schg = $("schg"),
     sv = $("sv"),
-    srsi = $("srsi"),
+    snatr = $("snatr"),
+    scorr = $("scorr"),
     sfun = $("sfun"),
     soi = $("soi");
   if (sn) sn.textContent = c.base + ".F";
@@ -5634,11 +5844,28 @@ function updateSymInfoInterp(c) {
     sc.textContent = fC(displayChg);
     sc.className = "sym-chg " + (displayChg >= 0 ? "pos" : "neg");
   }
+  if (schg) {
+    schg.textContent = fC(displayChg);
+    schg.className = "sv " + (displayChg >= 0 ? "pos" : "neg");
+  }
   if (sv) sv.textContent = fV(c.v);
-  const rsi = clamp(35 + Math.abs(displayChg) * 2, 20, 80).toFixed(1);
-  if (srsi) {
-    srsi.textContent = rsi;
-    srsi.className = "sv " + (+rsi > 60 ? "pos" : +rsi < 40 ? "neg" : "");
+
+  // NATR (Normalized ATR)
+  let natr = 0;
+  if (c.p > 0 && c.h && c.l && c.h >= c.l) {
+    natr = ((c.h - c.l) / c.p) * 100;
+  }
+  natr = Math.max(0, Math.min(100, natr));
+  if (snatr) {
+    snatr.textContent = natr.toFixed(1);
+    snatr.className = "sv " + (natr >= 5 ? "pos" : "");
+  }
+
+  // О.Корр (Overall Correlation)
+  if (scorr) {
+    const corrVal = c.corr !== undefined ? c.corr : "—";
+    scorr.textContent = corrVal;
+    scorr.className = "sv " + (typeof corrVal === "number" && corrVal > 50 ? "pos" : typeof corrVal === "number" && corrVal < 0 ? "neg" : "");
   }
 
   // Funding in % and countdown
@@ -6419,12 +6646,15 @@ function hexToRgba(hex, opacity = 100) {
 
 function updateScreenerBgColor(color, save = true) {
   document.documentElement.style.setProperty("--screener-bg", color);
-  if (save) localStorage.setItem("screener-sidebar-bg-color", color);
+  document.documentElement.style.setProperty("--screener-header-bg", color);
+  if (save) {
+    localStorage.setItem("screener-sidebar-bg-color", color);
+    localStorage.setItem("screener-sidebar-header-bg-color", color);
+  }
 }
 
 function updateScreenerHeaderColor(color, save = true) {
-  document.documentElement.style.setProperty("--screener-header-bg", color);
-  if (save) localStorage.setItem("screener-sidebar-header-bg-color", color);
+  updateScreenerBgColor(color, save);
 }
 
 function updateBgColor(color, opacity = 100, save = true) {
@@ -6482,6 +6712,12 @@ function selectCoin(c) {
   loadDrawings();
   updateSymInfo();
   fetchKlines(c.ex, c.sym, activeTf);
+
+  // Mobile: scroll chart into view when coin selected
+  if (window.innerWidth <= 767) {
+    const chartArea = document.getElementById("chart-area");
+    if (chartArea) chartArea.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 function hideLoading() {
@@ -6501,6 +6737,11 @@ function toggleExcDropdown() {
     excBtn.classList.remove("open");
     excBtn.setAttribute("aria-expanded", "false");
   } else {
+    // Position the fixed menu below the button
+    const rect = excBtn.getBoundingClientRect();
+    excMenu.style.top = (rect.bottom + 6) + "px";
+    excMenu.style.left = "auto";
+    excMenu.style.right = (window.innerWidth - rect.right) + "px";
     excMenu.classList.add("open");
     excBtn.classList.add("open");
     excBtn.setAttribute("aria-expanded", "true");
@@ -8183,6 +8424,8 @@ function toggleScreenerView(view) {
     b.classList.toggle("on", b.dataset.view === view);
   });
 
+  document.body.classList.toggle("view-is-multichart", view === "multichart");
+
   if (view === "multichart") {
     gridContainer.style.display = "grid";
     gridConfig.style.display = "flex";
@@ -8525,10 +8768,16 @@ function resizeDensityCanvas() {
   if (!densityCanvas) return;
   const wrap = $("density-canvas-wrap");
   if (!wrap) return;
+  const dpr = window.devicePixelRatio || 1;
   densityW = wrap.clientWidth;
   densityH = wrap.clientHeight;
-  densityCanvas.width = densityW;
-  densityCanvas.height = densityH;
+  densityCanvas.width = Math.floor(densityW * dpr);
+  densityCanvas.height = Math.floor(densityH * dpr);
+  densityCanvas.style.width = densityW + "px";
+  densityCanvas.style.height = densityH + "px";
+  if (densityCtx) {
+    densityCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
   layoutDensityBadges();
 }
 
@@ -8779,12 +9028,19 @@ function drawDensityMap() {
     const dy = densityMouseY - d.ry;
     const isHover = Math.sqrt(dx * dx + dy * dy) < 45;
     if (isHover) densityHover = i;
-    drawDensityBubble(ctx, d, d.rx, d.ry, isHover);
+    const isSelected = densitySelectedKey && (d.ex + ":" + d.sym === densitySelectedKey);
+    drawDensityBubble(ctx, d, d.rx, d.ry, isHover || isSelected);
   }
 
-  // тФАтФА Hover connector line
-  if (densityHover >= 0) {
-    const d = filtered[densityHover];
+  // Active item for tooltip / line (hovered or explicitly selected on tap)
+  let activeItemIndex = densityHover;
+  if (activeItemIndex < 0 && densitySelectedKey) {
+    activeItemIndex = filtered.findIndex(d => (d.ex + ":" + d.sym) === densitySelectedKey);
+  }
+
+  // тФАтФА Hover/Select connector line & Tooltip
+  if (activeItemIndex >= 0 && activeItemIndex < filtered.length) {
+    const d = filtered[activeItemIndex];
     const isBid = d.side === "bid";
     const lineColor = isBid ? "rgba(22,199,132,0.3)" : "rgba(255,69,96,0.3)";
     ctx.save();
@@ -8793,13 +9049,24 @@ function drawDensityMap() {
     ctx.setLineDash([]); ctx.restore();
 
     // тФАтФА Tooltip
-    // Math to get tip width
-    const tipW = 230;
+    // Math to get tip width (adaptive on mobile)
+    const tipW = Math.min(230, densityW - 20);
     const tipH = 125 + (d.count > 1 ? 20 : 0);
-    let tipX = d.rx + 55, tipY = d.ry - tipH / 2;
-    if (tipX + tipW > densityW - 10) tipX = d.rx - tipW - 55;
-    if (tipY < 10) tipY = 10;
-    if (tipY + tipH > densityH - 10) tipY = densityH - tipH - 10;
+    let tipX, tipY;
+    if (densityW <= 500) {
+      // Mobile: center tooltip horizontally or keep safely within bounds
+      tipX = Math.max(10, Math.min(densityW - tipW - 10, (densityW - tipW) / 2));
+      tipY = d.ry - tipH - 25;
+      if (tipY < 10) tipY = d.ry + 25;
+      if (tipY + tipH > densityH - 10) tipY = densityH - tipH - 10;
+    } else {
+      tipX = d.rx + 55;
+      tipY = d.ry - tipH / 2;
+      if (tipX + tipW > densityW - 10) tipX = d.rx - tipW - 55;
+      if (tipX < 10) tipX = 10;
+      if (tipY < 10) tipY = 10;
+      if (tipY + tipH > densityH - 10) tipY = densityH - tipH - 10;
+    }
 
     ctx.save();
     // Dark background box with subtle border
@@ -9004,23 +9271,52 @@ document.addEventListener("mousemove", (e) => {
   densityMouseY = e.clientY - rect.top;
 });
 
+function handleDensityTouch(e) {
+  if (activeView !== "map" || !densityCanvas) return;
+  const rect = densityCanvas.getBoundingClientRect();
+  const t = e.touches[0] || e.changedTouches[0];
+  if (t) {
+    densityMouseX = t.clientX - rect.left;
+    densityMouseY = t.clientY - rect.top;
+  }
+}
+
 densityCanvas = $("density-canvas");
 if (densityCanvas) {
   densityCanvas.style.cursor = "default";
   densityCanvas.addEventListener("mousemove", () => {
     if (densityCanvas) densityCanvas.style.cursor = densityHover >= 0 ? "pointer" : "default";
   });
+  densityCanvas.addEventListener("touchstart", (e) => {
+    handleDensityTouch(e);
+  }, { passive: true });
+  densityCanvas.addEventListener("touchmove", (e) => {
+    handleDensityTouch(e);
+  }, { passive: true });
 }
 
+let densitySelectedKey = null;
+
 document.addEventListener("click", (e) => {
-  if (activeView !== "map" || densityHover < 0) return;
+  if (activeView !== "map") return;
   if (e.target !== densityCanvas) return; // Only switch view when clicking directly on the density canvas
+
+  if (densityHover < 0) {
+    // Clicked empty canvas space — deselect
+    densitySelectedKey = null;
+    return;
+  }
 
   const filtered = densityVisibleData;
   const d = filtered[densityHover];
-  if (d) {
-    const coinKey = d.ex + ":" + d.sym;
-    let c = coins.get(coinKey);
+  if (!d) return;
+
+  const currentKey = d.ex + ":" + d.sym;
+
+  if (densitySelectedKey === currentKey) {
+    // 2nd tap/click on the SAME bubble — open chart in screener!
+    densitySelectedKey = null;
+    let c = coins.get(currentKey);
 
     // If coin is spot or not found in our futures-only list, look up equivalent futures coin
     if (!c || !isUsdtFutures(c)) {
@@ -9038,6 +9334,9 @@ document.addEventListener("click", (e) => {
       });
       selectCoin(c);
     }
+  } else {
+    // 1st tap/click on a bubble — select it and show info card
+    densitySelectedKey = currentKey;
   }
 });
 
@@ -11407,8 +11706,32 @@ function closeProModal() {
   if (proModal) proModal.style.display = "none";
 }
 
+function openProCompareModal() {
+  closeProModal();
+  const compareModal = $("proCompareModal");
+  if (compareModal) compareModal.style.display = "flex";
+}
+
+function closeProCompareModal() {
+  const compareModal = $("proCompareModal");
+  if (compareModal) compareModal.style.display = "none";
+}
+
+function backToProModal() {
+  closeProCompareModal();
+  const proModal = $("proModal");
+  if (proModal) proModal.style.display = "flex";
+}
+
+window.openProCompareModal = openProCompareModal;
+window.closeProCompareModal = closeProCompareModal;
+window.backToProModal = backToProModal;
+window.openProModal = openProModal;
+window.closeProModal = closeProModal;
+
 function openPayModal() {
   closeProModal();
+  closeProCompareModal();
   const modal = $("obsidian-pay-modal");
   if (modal) {
     modal.style.display = "flex";
@@ -11442,12 +11765,176 @@ function closePayModal() {
   if (payCountdownTimer) clearInterval(payCountdownTimer);
 }
 
+let currentBugScreenshotBase64 = null;
+
+function handleBugScreenshotFile(file) {
+  if (!file || !file.type || !file.type.startsWith("image/")) return;
+
+  if (file.size > 8 * 1024 * 1024) {
+    const msg = $("bug-report-msg");
+    if (msg) {
+      msg.textContent = "Скриншот слишком большой (максимум 8MB)";
+      msg.className = "bug-report-msg error";
+      msg.style.display = "block";
+    }
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    currentBugScreenshotBase64 = e.target.result;
+    const previewImg = $("bug-preview-img");
+    const previewBox = $("bug-screenshot-preview");
+    const promptBox = $("bug-dropzone-prompt");
+
+    if (previewImg) previewImg.src = currentBugScreenshotBase64;
+    if (previewBox) previewBox.style.display = "flex";
+    if (promptBox) promptBox.style.display = "none";
+  };
+  reader.readAsDataURL(file);
+}
+
+function handleBugScreenshotSelect(event) {
+  const file = event.target.files && event.target.files[0];
+  if (file) handleBugScreenshotFile(file);
+}
+
+function removeBugScreenshot() {
+  currentBugScreenshotBase64 = null;
+  const fileInput = $("bug-screenshot-input");
+  if (fileInput) fileInput.value = "";
+  const previewBox = $("bug-screenshot-preview");
+  const promptBox = $("bug-dropzone-prompt");
+  if (previewBox) previewBox.style.display = "none";
+  if (promptBox) promptBox.style.display = "flex";
+}
+
+function openBugReportModal() {
+  closeProfileModal();
+  removeBugScreenshot();
+  const modal = $("bugReportModal");
+  if (modal) {
+    modal.style.display = "flex";
+    const input = $("bug-text-input");
+    if (input) input.value = "";
+    const msg = $("bug-report-msg");
+    if (msg) msg.style.display = "none";
+  }
+}
+
+function closeBugReportModal() {
+  const modal = $("bugReportModal");
+  if (modal) modal.style.display = "none";
+  removeBugScreenshot();
+}
+
+async function submitBugReport(event) {
+  if (event) event.preventDefault();
+  const input = $("bug-text-input");
+  const msg = $("bug-report-msg");
+  const btn = $("bug-report-submit-btn");
+
+  const description = (input ? input.value : "").trim();
+  if (!description || description.length < 3) {
+    if (msg) {
+      msg.textContent = "Пожалуйста, опишите проблему более подробно (минимум 3 символа)";
+      msg.className = "bug-report-msg error";
+      msg.style.display = "block";
+    }
+    return;
+  }
+
+  const token = localStorage.getItem("obsidian_auth_token") || "";
+  const activeUser = window.currentUser || null;
+
+  if (btn) btn.disabled = true;
+
+  try {
+    const response = await fetch("/api/bug-report", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": token ? `Bearer ${token}` : ""
+      },
+      body: JSON.stringify({
+        description,
+        image: currentBugScreenshotBase64 || null,
+        userId: activeUser ? activeUser.id : null
+      })
+    });
+
+    const data = await response.json();
+    if (response.ok && data.success) {
+      if (msg) {
+        msg.textContent = "🎉 Ваш баг-репорт отправлен разработчикам! Награда зачислится после проверки.";
+        msg.className = "bug-report-msg success";
+        msg.style.display = "block";
+      }
+      if (input) input.value = "";
+      removeBugScreenshot();
+      setTimeout(() => closeBugReportModal(), 2500);
+    } else {
+      if (msg) {
+        msg.textContent = data.error || "Ошибка при отправке баг-репорта";
+        msg.className = "bug-report-msg error";
+        msg.style.display = "block";
+      }
+    }
+  } catch (err) {
+    if (msg) {
+      msg.textContent = "Сетевая ошибка при отправке. Попробуйте ещё раз.";
+      msg.className = "bug-report-msg error";
+      msg.style.display = "block";
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Global Paste (Ctrl+V) handler for screenshot images
+document.addEventListener("paste", function(e) {
+  const modal = $("bugReportModal");
+  if (!modal || modal.style.display === "none") return;
+
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type.indexOf("image") !== -1) {
+      const file = items[i].getAsFile();
+      if (file) {
+        handleBugScreenshotFile(file);
+        e.preventDefault();
+        break;
+      }
+    }
+  }
+});
+
+window.openBugReportModal = openBugReportModal;
+window.closeBugReportModal = closeBugReportModal;
+window.submitBugReport = submitBugReport;
+window.handleBugScreenshotSelect = handleBugScreenshotSelect;
+window.removeBugScreenshot = removeBugScreenshot;
+
 // Keep subscription actions out of inline HTML handlers. Besides being easier
 // to maintain, this keeps the upgrade flow working under a strict CSP.
 function bindProAccessControls() {
   const profileUpgradeButton = $("profile-upgrade-btn");
   const proModalBuyButton = $("pro-modal-buy-btn");
+  const proModalDetailsBtn = $("pro-modal-details-btn");
+  const proCompareBuyBtn = $("pro-compare-buy-btn");
+  const proCompareBackBtn = $("pro-compare-back-btn");
   const proModal = $("proModal");
+  const proCompareModal = $("proCompareModal");
+  const bugReportModal = $("bugReportModal");
+
+  if (bugReportModal && !bugReportModal.dataset.bound) {
+    bugReportModal.dataset.bound = "true";
+    bugReportModal.addEventListener("click", (event) => {
+      if (event.target === bugReportModal) closeBugReportModal();
+    });
+  }
 
   if (profileUpgradeButton && !profileUpgradeButton.dataset.bound) {
     profileUpgradeButton.dataset.bound = "true";
@@ -11468,10 +11955,44 @@ function bindProAccessControls() {
     });
   }
 
+  if (proModalDetailsBtn && !proModalDetailsBtn.dataset.bound) {
+    proModalDetailsBtn.dataset.bound = "true";
+    proModalDetailsBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openProCompareModal();
+    });
+  }
+
+  if (proCompareBuyBtn && !proCompareBuyBtn.dataset.bound) {
+    proCompareBuyBtn.dataset.bound = "true";
+    proCompareBuyBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openPayModal();
+    });
+  }
+
+  if (proCompareBackBtn && !proCompareBackBtn.dataset.bound) {
+    proCompareBackBtn.dataset.bound = "true";
+    proCompareBackBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      backToProModal();
+    });
+  }
+
   if (proModal && !proModal.dataset.bound) {
     proModal.dataset.bound = "true";
     proModal.addEventListener("click", (event) => {
       if (event.target === proModal) closeProModal();
+    });
+  }
+
+  if (proCompareModal && !proCompareModal.dataset.bound) {
+    proCompareModal.dataset.bound = "true";
+    proCompareModal.addEventListener("click", (event) => {
+      if (event.target === proCompareModal) closeProCompareModal();
     });
   }
 }
@@ -11498,7 +12019,9 @@ function bindProFeatureGate() {
     if (event.key !== "Escape") return;
     const payModal = $("obsidian-pay-modal");
     const proModal = $("proModal");
+    const proCompareModal = $("proCompareModal");
     if (payModal && payModal.style.display !== "none") closePayModal();
+    else if (proCompareModal && proCompareModal.style.display !== "none") closeProCompareModal();
     else if (proModal && proModal.style.display !== "none") closeProModal();
   });
 }
@@ -11769,27 +12292,7 @@ function playAlertSound(kind = "chime") {
   } catch (_) {}
 }
 
-function showToast({ title, message, type = "info", durationMs = 6000 }) {
-  const container = $("toast-container");
-  if (!container) return;
-  
-  const card = document.createElement("div");
-  card.className = `toast-card toast-${type}`;
-  card.innerHTML = `
-    <div class="toast-header">
-      <span>🔔 ${title}</span>
-      <button class="toast-close" onclick="this.closest('.toast-card').remove()">×</button>
-    </div>
-    <div class="toast-body">${message}</div>
-    <div class="toast-progress"></div>
-  `;
-  
-  container.appendChild(card);
-  
-  setTimeout(() => {
-    if (card.parentNode) card.remove();
-  }, durationMs);
-}
+
 
 function getFullExchangeName(ex) {
   if (!ex) return "BINANCE";

@@ -15,6 +15,7 @@ const PAYMENTS_FILE = path.join(process.env.PAYMENT_DATA_DIR || __dirname, "paym
 const SUPPORT_FILE = path.join(__dirname, "support.json");
 const SETTINGS_FILE = path.join(__dirname, "admin_settings.json");
 const AUDIT_FILE = path.join(__dirname, "admin_audit.json");
+const BUG_REPORTS_FILE = path.join(__dirname, "bug_reports.json");
 
 function loadJSON(fp, fallback) {
   try {
@@ -25,7 +26,8 @@ function loadJSON(fp, fallback) {
 
 function saveJSON(fp, data) {
   try {
-    fs.writeFileSync(fp, JSON.stringify(data, null, 2), "utf8");
+    const jsonStr = JSON.stringify(data);
+    fs.writeFile(fp, jsonStr, "utf8", () => {});
   } catch (e) {}
 }
 
@@ -35,6 +37,7 @@ let promos = loadJSON(PROMOS_FILE, [
 ]);
 let payments = loadJSON(PAYMENTS_FILE, []);
 let supportTickets = loadJSON(SUPPORT_FILE, []);
+let bugReports = loadJSON(BUG_REPORTS_FILE, []);
 let adminSettings = loadJSON(SETTINGS_FILE, {
   sysAlerts: true,
   payAlerts: true,
@@ -61,20 +64,52 @@ function logAdminAction(adminName, actionName, details = {}) {
   saveJSON(AUDIT_FILE, adminAudit);
 }
 
-// Telegram API Helper
-async function apiCall(method, payload) {
-  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
-  try {
-    const res = await fetch(`${TELEGRAM_API}/${method}`, {
+const https = require("https");
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 60000,
+  maxSockets: 100,
+  scheduling: "fifo"
+});
+
+// High-speed Telegram API Helper with HTTP Keep-Alive Connection Pooling
+function apiCall(method, payload) {
+  return new Promise((resolve) => {
+    if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return resolve({ ok: false, error: "ADMIN_BOT_DISABLED" });
+    const postData = JSON.stringify(payload || {});
+    const req = https.request(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/${method}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      agent: httpsAgent,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData)
+      },
+      timeout: 10000
+    }, (res) => {
+      let raw = "";
+      res.on("data", (chunk) => { raw += chunk; });
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(raw));
+        } catch (e) {
+          resolve({ ok: false, error: e.message });
+        }
+      });
     });
-    return await res.json();
-  } catch (err) {
-    console.error(`[ADMIN BOT ERROR] API Call ${method} failed:`, err.message);
-    return { ok: false, error: err.message };
-  }
+
+    req.on("error", (err) => {
+      console.error(`[ADMIN BOT ERROR] API Call ${method} failed:`, err.message);
+      resolve({ ok: false, error: err.message });
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ ok: false, error: "TIMEOUT" });
+    });
+
+    req.write(postData);
+    req.end();
+  });
 }
 
 async function sendAdminMessage(text, replyMarkup = null) {
@@ -109,14 +144,57 @@ async function sendAdminDocument(filePath, filename, caption = "") {
   }
 }
 
+async function sendAdminPhoto(filePath, caption = "", replyMarkup = null) {
+  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const blob = new Blob([fileBuffer], { type: "image/png" });
+    const formData = new FormData();
+    formData.append("chat_id", ADMIN_CHAT_ID);
+    formData.append("photo", blob, "bug_screenshot.png");
+    if (caption) formData.append("caption", caption);
+    formData.append("parse_mode", "HTML");
+    if (replyMarkup) formData.append("reply_markup", JSON.stringify(replyMarkup));
+
+    const res = await fetch(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendPhoto`, {
+      method: "POST",
+      body: formData
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("[ADMIN BOT ERROR] sendPhoto failed:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 async function editAdminMessage(messageId, text, replyMarkup = null) {
-  return await apiCall("editMessageText", {
+  const rm = replyMarkup || { inline_keyboard: [] };
+  
+  const resText = await apiCall("editMessageText", {
     chat_id: ADMIN_CHAT_ID,
     message_id: messageId,
     text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    reply_markup: replyMarkup
+    reply_markup: rm
+  });
+
+  if (resText && resText.ok) return resText;
+
+  const resCap = await apiCall("editMessageCaption", {
+    chat_id: ADMIN_CHAT_ID,
+    message_id: messageId,
+    caption: text,
+    parse_mode: "HTML",
+    reply_markup: rm
+  });
+
+  if (resCap && resCap.ok) return resCap;
+
+  return await apiCall("editMessageReplyMarkup", {
+    chat_id: ADMIN_CHAT_ID,
+    message_id: messageId,
+    reply_markup: rm
   });
 }
 
@@ -763,6 +841,97 @@ function buildSupportMenu() {
   return { text, keyboard };
 }
 
+async function sendAdminPhotoBuffer(imageBuffer, filename, caption, replyMarkup = null) {
+  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
+  try {
+    const blob = new Blob([imageBuffer], { type: "image/jpeg" });
+    const formData = new FormData();
+    formData.append("chat_id", ADMIN_CHAT_ID);
+    formData.append("photo", blob, filename || "screenshot.jpg");
+    if (caption) formData.append("caption", caption);
+    formData.append("parse_mode", "HTML");
+    if (replyMarkup) formData.append("reply_markup", JSON.stringify(replyMarkup));
+
+    const res = await fetch(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendPhoto`, {
+      method: "POST",
+      body: formData
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("[ADMIN BOT ERROR] sendPhoto buffer failed:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function createSupportTicket({ chatId, userId, username, name, text, photoFileId }) {
+  const id = "sup_" + Date.now().toString(36) + "_" + Math.floor(Math.random() * 1000);
+  const ticket = {
+    id,
+    chatId: String(chatId),
+    userId: String(userId || "—"),
+    username: username ? "@" + username.replace(/^@/, "") : "—",
+    name: name || "Трейдер",
+    text,
+    photoFileId: photoFileId || null,
+    status: "waiting_admin",
+    createdAt: new Date().toISOString(),
+    messages: [
+      { sender: "user", text, photoFileId: photoFileId || null, createdAt: new Date().toISOString() }
+    ]
+  };
+
+  supportTickets.unshift(ticket);
+  if (supportTickets.length > 500) supportTickets = supportTickets.slice(0, 500);
+  saveJSON(SUPPORT_FILE, supportTickets);
+
+  // Send real-time notification to ADMIN
+  const adminMsg =
+    `<b>💬 НОВОЕ ОБРАЩЕНИЕ В ПОДДЕРЖКУ!</b>\n\n` +
+    `<b>Имя:</b> <b>${ticket.name}</b> (${ticket.username})\n` +
+    `<b>ID пользователя:</b> <code>${ticket.userId}</code>\n` +
+    `<b>Chat ID:</b> <code>${ticket.chatId}</code>\n` +
+    `<b>Время:</b> ${new Date().toLocaleString("ru-RU")}\n\n` +
+    `<b>Вопрос:</b>\n<i>«${text}»</i>`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "✉️ Ответить", callback_data: `adm:supp:reply:${ticket.id}` },
+        { text: "✅ Закрыть", callback_data: `adm:supp:close:${ticket.id}` }
+      ]
+    ]
+  };
+
+  let sentOk = false;
+
+  if (photoFileId && MAIN_BOT_TOKEN) {
+    try {
+      const fileRes = await fetch(`https://api.telegram.org/bot${MAIN_BOT_TOKEN}/getFile?file_id=${photoFileId}`);
+      if (fileRes.ok) {
+        const fileData = await fileRes.json();
+        if (fileData.ok && fileData.result && fileData.result.file_path) {
+          const downloadUrl = `https://api.telegram.org/file/bot${MAIN_BOT_TOKEN}/${fileData.result.file_path}`;
+          const imgRes = await fetch(downloadUrl);
+          if (imgRes.ok) {
+            const buffer = Buffer.from(await imgRes.arrayBuffer());
+            const uploadRes = await sendAdminPhotoBuffer(buffer, "screenshot.jpg", adminMsg, keyboard);
+            if (uploadRes && uploadRes.ok) {
+              sentOk = true;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[SUPPORT PHOTO TRANSMIT ERROR]", err.message);
+    }
+  }
+
+  if (!sentOk) {
+    await sendAdminMessage(adminMsg + (photoFileId ? `\n\n📷 <i>К сообщению прикреплено фото / скриншот</i>` : ""), keyboard);
+  }
+  return ticket;
+}
+
 // 14. SUBSCRIPTIONS OVERVIEW MENU
 function buildSubscriptionsMenu() {
   const allUsers = Object.values(userStore.getAllUsersRaw());
@@ -815,11 +984,25 @@ function buildSubscriptionsMenu() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function handleAdminMessageText(msg) {
-  const text = msg && msg.text ? msg.text.trim() : "";
-  const chatId = msg && msg.chat ? String(msg.chat.id) : "";
+  if (!msg) return;
+  const chatId = msg.chat ? String(msg.chat.id) : "";
+  let text = (msg.text || msg.caption || "").trim();
+  let adminPhotoId = Array.isArray(msg.photo) && msg.photo.length > 0 ? msg.photo[msg.photo.length - 1].file_id : (msg.document ? msg.document.file_id : null);
 
   if (chatId !== ADMIN_CHAT_ID) {
     sendAdminMessage("⛔ <b>Доступ запрещен.</b> Панель доступна только Администратору.");
+    return;
+  }
+
+  if (text === "/digest") {
+    try {
+      const telegramBot = require("./telegramBot");
+      await sendAdminMessage(`<b>📊 Отправка рыночного дайджеста...</b>\n\n<i>Запущена принудительная рассылка топ волатильных монет всем пользователям.</i>`);
+      telegramBot.sendDigestToAllUsers();
+      logAdminAction("Администратор #1", "Принудительная рассылка дайджеста рынка");
+    } catch (err) {
+      await sendAdminMessage(`❌ Ошибка рассылки дайджеста: ${err.message}`);
+    }
     return;
   }
 
@@ -984,6 +1167,137 @@ async function handleAdminMessageText(msg) {
       };
       await sendAdminMessage(confirmText, keyboard);
       return;
+    } else if (currentState.action === "create_promo_code") {
+      adminState.delete(chatId);
+      const parts = text.split(" ").filter(Boolean);
+      const code = (parts[0] || "").toUpperCase().trim();
+      const typeStr = (parts[1] || "percent").toLowerCase().trim();
+      const value = parseInt(parts[2], 10) || 10;
+      const limit = parseInt(parts[3], 10) || 100;
+
+      if (!code || code.length < 3) {
+        await sendAdminMessage(
+          `❌ Некорректный формат промокода.\nПример: <code>SUMMER50 percent 50 100</code>`,
+          { inline_keyboard: [[{ text: "🎟 В меню промокодов", callback_data: "adm:promos:main" }]] }
+        );
+        return;
+      }
+
+      const type = (typeStr === "days" || typeStr === "day" || typeStr === "дней") ? "days" : "percent";
+      const newPromo = {
+        code,
+        type,
+        value,
+        active: true,
+        usedCount: 0,
+        limit,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
+      };
+
+      promos.unshift(newPromo);
+      saveJSON(PROMOS_FILE, promos);
+      logAdminAction("Администратор #1", `Создан промокод ${code}`, { type, value, limit });
+
+      const typeTitle = type === "days" ? `+${value} дн. PRO подписки` : `${value}% скидка`;
+      await sendAdminMessage(
+        `<b>🎉 Промокод <code>${code}</code> успешно создан!</b>\n\n` +
+        `<b>Тип:</b> ${typeTitle}\n` +
+        `<b>Лимит активаций:</b> ${limit}\n` +
+        `<b>Статус:</b> 🟢 Активен`,
+        { inline_keyboard: [[{ text: "🎟 К промокодам", callback_data: "adm:promos:main" }]] }
+      );
+      return;
+    } else if (currentState.action === "search_payment") {
+      adminState.delete(chatId);
+      const queryStr = text.trim().toLowerCase();
+      const found = payments.filter(p => 
+        (p.id && p.id.toLowerCase().includes(queryStr)) ||
+        (p.userId && p.userId.toLowerCase().includes(queryStr)) ||
+        (p.txHash && p.txHash.toLowerCase().includes(queryStr))
+      );
+
+      if (found.length === 0) {
+        await sendAdminMessage(`❌ Платёж по запросу <code>${text}</code> не найден.`, {
+          inline_keyboard: [[{ text: "💳 К платежам", callback_data: "adm:pays:main" }]]
+        });
+      } else {
+        let listText = `<b>💳 Результаты поиска платежей (${found.length}):</b>\n\n`;
+        found.slice(0, 10).forEach((p, i) => {
+          const statusIcon = p.status === "success" ? "✅" : (p.status === "pending" ? "⏳" : "❌");
+          listText += `${i+1}. ${statusIcon} <b>$${p.amount || 0}</b> — #${p.userId} (${p.date ? p.date.slice(0, 10) : "—"})\n`;
+        });
+        await sendAdminMessage(listText, { inline_keyboard: [[{ text: "💳 К платежам", callback_data: "adm:pays:main" }]] });
+      }
+      return;
+    } else if (currentState.action === "reply_support_ticket") {
+      adminState.delete(chatId);
+      const ticketId = currentState.data.ticketId;
+      const ticket = supportTickets.find(t => t.id === ticketId);
+
+      if (!ticket) {
+        await sendAdminMessage("❌ Обращение не найдено.");
+        return;
+      }
+
+      ticket.status = "closed";
+      ticket.messages = ticket.messages || [];
+      ticket.messages.push({ sender: "admin", text: text || "(Фото)", photoFileId: adminPhotoId || null, createdAt: new Date().toISOString() });
+      saveJSON(SUPPORT_FILE, supportTickets);
+
+      if (MAIN_BOT_TOKEN && ticket.chatId) {
+        try {
+          let sentUserOk = false;
+          if (adminPhotoId) {
+            const fileRes = await fetch(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/getFile?file_id=${adminPhotoId}`);
+            if (fileRes.ok) {
+              const fileData = await fileRes.json();
+              if (fileData.ok && fileData.result && fileData.result.file_path) {
+                const downloadUrl = `https://api.telegram.org/file/bot${ADMIN_BOT_TOKEN}/${fileData.result.file_path}`;
+                const imgRes = await fetch(downloadUrl);
+                if (imgRes.ok) {
+                  const buffer = Buffer.from(await imgRes.arrayBuffer());
+                  const blob = new Blob([buffer], { type: "image/jpeg" });
+                  const formData = new FormData();
+                  formData.append("chat_id", ticket.chatId);
+                  formData.append("photo", blob, "reply.jpg");
+                  formData.append("caption", `<b>💬 Ответ от техподдержки Obsidian:</b>\n\n${text || "(Скриншот / фото)"}\n\n<i>Если у вас есть ещё вопросы — нажмите кнопку «💬 Поддержка» в меню бота.</i>`);
+                  formData.append("parse_mode", "HTML");
+
+                  const userUploadRes = await fetch(`https://api.telegram.org/bot${MAIN_BOT_TOKEN}/sendPhoto`, {
+                    method: "POST",
+                    body: formData
+                  });
+                  if (userUploadRes.ok) sentUserOk = true;
+                }
+              }
+            }
+          }
+          if (!sentUserOk) {
+            const mainBotApi = `https://api.telegram.org/bot${MAIN_BOT_TOKEN}/sendMessage`;
+            await fetch(mainBotApi, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: ticket.chatId,
+                text: `<b>💬 Ответ от техподдержки Obsidian:</b>\n\n${text || "(Фото)"}\n\n<i>Если у вас есть ещё вопросы — нажмите кнопку «💬 Поддержка» в меню бота.</i>`,
+                parse_mode: "HTML"
+              })
+            });
+          }
+        } catch (err) {
+          console.error("[SUPPORT REPLY ERROR]", err.message);
+        }
+      }
+
+      logAdminAction("Администратор #1", `Ответ на поддержку #${ticketId}`, { message: text || "(Фото)" });
+      await sendAdminMessage(
+        `<b>✅ Ответ успешно отправлен пользователю!</b>\n\n` +
+        `<b>Пользователь:</b> ${ticket.name} (${ticket.username})\n` +
+        `<b>Ваш ответ:</b>\n<i>«${text || "(Скриншот / фото)"}»</i>`,
+        { inline_keyboard: [[{ text: "🎫 В меню поддержки", callback_data: "adm:supp:main" }]] }
+      );
+      return;
     }
   }
 
@@ -1028,7 +1342,7 @@ async function handleAdminCallbackQuery(query) {
     return;
   }
 
-  await answerCallback(query.id);
+  answerCallback(query.id);
 
   // Parse structured callback data: adm:<domain>:<action>:[param1]:[param2]
   const parts = data.split(":");
@@ -1127,14 +1441,18 @@ async function handleAdminCallbackQuery(query) {
     } else if (action === "do_block") {
       const reasonKey = param2 || "rules";
       const reason = reasonKey === "fraud" ? "Мошенничество с оплатой" : (reasonKey === "spam" ? "Спам" : "Нарушение правил");
-      const updated = userStore.blockUser(userId, { reason });
+      userStore.blockUser(userId, { reason });
+      await answerCallback(query.id, "🚫 Пользователь заблокирован!", true);
       logAdminAction("Администратор #1", `Заблокирован пользователь #${userId}`, { reason });
-      const card = buildUserCard(updated);
+      const user = userStore.findUser(userId);
+      const card = buildUserCard(user);
       await editAdminMessage(messageId, card.text, card.keyboard);
     } else if (action === "unblock") {
-      const updated = userStore.unblockUser(userId);
+      userStore.unblockUser(userId);
+      await answerCallback(query.id, "✅ Пользователь разблокирован!", true);
       logAdminAction("Администратор #1", `Разблокирован пользователь #${userId}`);
-      const card = buildUserCard(updated);
+      const user = userStore.findUser(userId);
+      const card = buildUserCard(user);
       await editAdminMessage(messageId, card.text, card.keyboard);
     } else if (action === "msg_prompt") {
       adminState.set(chatId, { action: "msg_user", data: { userId } });
@@ -1503,6 +1821,41 @@ async function handleAdminCallbackQuery(query) {
         ]
       };
       await editAdminMessage(messageId, text, keyboard);
+    } else if (action === "exp" || action === "new" || action === "renewals") {
+      const expType = param1 || "today";
+      const allUsers = Object.values(userStore.getAllUsersRaw());
+      const now = Date.now();
+      let filtered = [];
+      let title = "Подписки";
+
+      if (action === "exp") {
+        if (expType === "today") {
+          filtered = allUsers.filter(u => u.plan === "pro" && u.proExpiresAt && (u.proExpiresAt - now) <= 24 * 3600 * 1000 && u.proExpiresAt > now);
+          title = "⏳ Заканчиваются сегодня";
+        } else if (expType === "3d") {
+          filtered = allUsers.filter(u => u.plan === "pro" && u.proExpiresAt && (u.proExpiresAt - now) <= 3 * 24 * 3600 * 1000 && u.proExpiresAt > now);
+          title = "📅 Заканчиваются за 3 дня";
+        } else if (expType === "7d") {
+          filtered = allUsers.filter(u => u.plan === "pro" && u.proExpiresAt && (u.proExpiresAt - now) <= 7 * 24 * 3600 * 1000 && u.proExpiresAt > now);
+          title = "📅 Заканчиваются за 7 дней";
+        } else if (expType === "recent") {
+          filtered = allUsers.filter(u => u.plan === "free" && u.hadPro);
+          title = "❌ Недавно закончились";
+        }
+      } else if (action === "new") {
+        filtered = allUsers.filter(u => u.plan === "pro" && new Date(u.createdAt).getTime() >= now - 24 * 3600 * 1000);
+        title = "🆕 Новые подписки";
+      } else if (action === "renewals") {
+        filtered = allUsers.filter(u => u.plan === "pro" && u.renewalCount > 0);
+        title = "♻️ Продления подписок";
+      }
+
+      let text = `<b>💎 ${title} (${filtered.length}):</b>\n\n`;
+      if (filtered.length === 0) text += `<i>Список пуст</i>`;
+
+      const buttons = filtered.slice(0, 8).map(u => [{ text: `👤 ${u.username} (${u.id})`, callback_data: `adm:user:view:${u.id}` }]);
+      buttons.push([{ text: "← Назад к подпискам", callback_data: "adm:subs:main" }]);
+      await editAdminMessage(messageId, text, { inline_keyboard: buttons });
     } else {
       const sMenu = buildSubscriptionsMenu();
       await editAdminMessage(messageId, sMenu.text, sMenu.keyboard);
@@ -1511,14 +1864,103 @@ async function handleAdminCallbackQuery(query) {
 
   // 7. PAYMENTS OVERVIEW
   else if (domain === "payments" || domain === "pays") {
-    const pMenu = buildPaymentsMenu();
-    await editAdminMessage(messageId, pMenu.text, pMenu.keyboard);
+    if (action === "search_prompt") {
+      adminState.set(chatId, { action: "search_payment" });
+      await editAdminMessage(
+        messageId,
+        `<b>🔎 Поиск платежа</b>\n\nОтправьте в чат ID транзакции, ID пользователя или Hash транзакции:`,
+        { inline_keyboard: [[{ text: "← Отмена", callback_data: "adm:pays:main" }]] }
+      );
+    } else if (action === "list") {
+      const filterType = param1 || "recent";
+      let filtered = payments;
+      let title = "Все платежи";
+
+      if (filterType === "recent") {
+        filtered = [...payments].reverse().slice(0, 10);
+        title = "🧾 Последние платежи";
+      } else if (filterType === "failed") {
+        filtered = payments.filter(p => p.status === "failed");
+        title = "❌ Неуспешные платежи";
+      } else if (filterType === "refunds") {
+        filtered = payments.filter(p => p.status === "refunded");
+        title = "↩️ Возвраты";
+      }
+
+      let listText = `<b>${title} (${filtered.length}):</b>\n\n`;
+      if (filtered.length === 0) listText += `<i>Список пуст</i>`;
+      else {
+        filtered.slice(0, 10).forEach((p, i) => {
+          const st = p.status === "success" ? "✅" : (p.status === "pending" ? "⏳" : "❌");
+          listText += `${i+1}. ${st} <b>$${p.amount || 0}</b> — #${p.userId} (${p.date ? p.date.slice(0, 10) : "—"})\n`;
+        });
+      }
+
+      const buttons = [[{ text: "← Назад в меню платежей", callback_data: "adm:pays:main" }]];
+      await editAdminMessage(messageId, listText, { inline_keyboard: buttons });
+    } else {
+      const pMenu = buildPaymentsMenu();
+      await editAdminMessage(messageId, pMenu.text, pMenu.keyboard);
+    }
   }
 
   // 8. PROMO CODES
   else if (domain === "promos") {
-    const prMenu = buildPromosMenu();
-    await editAdminMessage(messageId, prMenu.text, prMenu.keyboard);
+    if (action === "create_prompt") {
+      adminState.set(chatId, { action: "create_promo_code" });
+      await editAdminMessage(
+        messageId,
+        `<b>🎟 Создание промокода</b>\n\n` +
+        `Отправьте промокод в чат в формате:\n` +
+        `<code>КОД ТИП ЗНАЧЕНИЕ ЛИМИТ</code>\n\n` +
+        `<i>Примеры:</i>\n` +
+        `• <code>SUMMER50 percent 50 100</code> — скидка 50% на 100 человек\n` +
+        `• <code>PROSTART days 7 50</code> — +7 дней подписки на 50 человек`,
+        { inline_keyboard: [[{ text: "← Отмена", callback_data: "adm:promos:main" }]] }
+      );
+    } else if (action === "list") {
+      const filterType = param1 || "active";
+      let list = promos;
+      if (filterType === "active") list = promos.filter(p => p.active);
+      if (filterType === "disabled") list = promos.filter(p => !p.active);
+
+      let text = `<b>🎟 Промокоды (${filterType}):</b>\n\n`;
+      if (list.length === 0) text += `<i>Список пуст</i>\n\n`;
+      else {
+        list.forEach((p, i) => {
+          const valStr = p.type === "days" ? `+${p.value}дн.` : `${p.value}%`;
+          text += `${i+1}. <code>${p.code}</code> (${valStr}) — Использовано: ${p.usedCount || 0}/${p.limit || "∞"}\n`;
+        });
+      }
+
+      const buttons = list.slice(0, 6).map(p => [
+        { text: `${p.active ? "❌ Отключить" : "✅ Включить"} ${p.code}`, callback_data: `adm:promos:toggle:${p.code}` }
+      ]);
+      buttons.push([{ text: "← Назад к промокодам", callback_data: "adm:promos:main" }]);
+      await editAdminMessage(messageId, text, { inline_keyboard: buttons });
+    } else if (action === "toggle") {
+      const code = param1;
+      const promo = promos.find(p => p.code === code);
+      if (promo) {
+        promo.active = !promo.active;
+        saveJSON(PROMOS_FILE, promos);
+        await answerCallback(query.id, promo.active ? "Промокод включен ✅" : "Промокод отключен ❌");
+      }
+      const prMenu = buildPromosMenu();
+      await editAdminMessage(messageId, prMenu.text, prMenu.keyboard);
+    } else if (action === "stats") {
+      const totalPromos = promos.length;
+      const totalUses = promos.reduce((s, p) => s + (p.usedCount || 0), 0);
+      const text =
+        `<b>📊 Статистика промокодов</b>\n\n` +
+        `<b>Всего промокодов:</b> ${totalPromos}\n` +
+        `<b>Всего активаций:</b> ${totalUses}\n\n` +
+        `<i>Все промокоды активны и готовы к использованию.</i>`;
+      await editAdminMessage(messageId, text, { inline_keyboard: [[{ text: "← Назад", callback_data: "adm:promos:main" }]] });
+    } else {
+      const prMenu = buildPromosMenu();
+      await editAdminMessage(messageId, prMenu.text, prMenu.keyboard);
+    }
   }
 
   // 9. BROADCASTS
@@ -1573,8 +2015,68 @@ async function handleAdminCallbackQuery(query) {
 
   // 10. SUPPORT
   else if (domain === "supp") {
-    const suppMenu = buildSupportMenu();
-    await editAdminMessage(messageId, suppMenu.text, suppMenu.keyboard);
+    if (action === "reply") {
+      const ticketId = param1;
+      const ticket = supportTickets.find(t => t.id === ticketId);
+      if (ticket) {
+        adminState.set(chatId, { action: "reply_support_ticket", data: { ticketId } });
+        await sendAdminMessage(
+          `<b>✉️ Ответ на обращение в поддержку</b>\n\n` +
+          `<b>От кого:</b> ${ticket.name} (${ticket.username})\n` +
+          `<b>ID:</b> <code>${ticket.userId}</code> | <b>Chat ID:</b> <code>${ticket.chatId}</code>\n` +
+          `<b>Вопрос пользователя:</b>\n<i>«${ticket.text}»</i>\n\n` +
+          `Введите ваше сообщение-ответ в чат 👇:`
+        );
+      } else {
+        await answerCallback(query.id, "Обращение не найдено", true);
+      }
+    } else if (action === "close") {
+      const ticketId = param1;
+      const ticket = supportTickets.find(t => t.id === ticketId);
+      if (ticket) {
+        ticket.status = "closed";
+        saveJSON(SUPPORT_FILE, supportTickets);
+      }
+      await answerCallback(query.id, "Обращение закрыто ✅");
+
+      const name = ticket ? ticket.name : "Пользователь";
+      const uname = ticket ? ticket.username : "";
+      const text = ticket ? ticket.text : "";
+      
+      const closedText =
+        `<b>✅ ОБРАЩЕНИЕ ЗАКРЫТО</b>\n\n` +
+        `<b>От:</b> ${name} (${uname})\n` +
+        `<b>Текст:</b> <i>«${text}»</i>`;
+
+      await apiCall("editMessageReplyMarkup", {
+        chat_id: ADMIN_CHAT_ID,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] }
+      });
+
+      await editAdminMessage(messageId, closedText, { inline_keyboard: [] });
+    } else if (action === "list") {
+      const statusFilter = param1 || "new";
+      let list = supportTickets;
+      if (statusFilter === "new") list = supportTickets.filter(t => t.status === "waiting_admin" || t.status === "open");
+      else if (statusFilter === "waiting") list = supportTickets.filter(t => t.status === "waiting_user");
+      else if (statusFilter === "closed") list = supportTickets.filter(t => t.status === "closed");
+
+      let text = `<b>🎫 Обращения в поддержку (${statusFilter}):</b>\n\n`;
+      if (list.length === 0) text += `<i>Обращений со статусом "${statusFilter}" нет</i>`;
+      else {
+        list.slice(0, 10).forEach((t, i) => {
+          text += `${i+1}. <b>${t.name}</b> (${t.username}) — <i>${t.text.slice(0, 40)}...</i>\n`;
+        });
+      }
+      const keyboard = {
+        inline_keyboard: list.slice(0, 5).map(t => [{ text: `✉️ ${t.name}: ${t.text.slice(0, 20)}...`, callback_data: `adm:supp:reply:${t.id}` }]).concat([[{ text: "← Назад в меню поддержки", callback_data: "adm:supp:main" }]])
+      };
+      await editAdminMessage(messageId, text, keyboard);
+    } else {
+      const suppMenu = buildSupportMenu();
+      await editAdminMessage(messageId, suppMenu.text, suppMenu.keyboard);
+    }
   }
 
   // 11. STATISTICS
@@ -1632,10 +2134,187 @@ async function handleAdminCallbackQuery(query) {
     const qMenu = buildQuickActionsMenu();
     await editAdminMessage(messageId, qMenu.text, qMenu.keyboard);
   }
+
+  // 17. BUG REPORT REWARDS
+  else if (domain === "bug") {
+    const days = parseInt(action) || 0;
+    const reportId = param1;
+    const targetUserId = param2;
+
+    const report = bugReports.find(r => r.id === reportId);
+    if (report && report.status !== "pending") {
+      await answerCallback(query.id, `Репорт уже обработан (${report.status})`, true);
+      return;
+    }
+
+    if (report) {
+      report.status = days > 0 ? "rewarded" : "rejected";
+      report.rewardDays = days;
+      report.processedAt = new Date().toISOString();
+      saveJSON(BUG_REPORTS_FILE, bugReports);
+    }
+
+    const targetUser = userStore.getUserById ? userStore.getUserById(targetUserId) : null;
+    const tgName = (report && report.username) ? `@${report.username.replace(/^@/, '')}` : (targetUser ? targetUser.username : targetUserId);
+    const safeDesc = report ? (report.description || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : "—";
+
+    if (days > 0) {
+      const updatedUser = userStore.setUserPlan(targetUserId, "pro", days);
+
+      if (typeof userStore.addNotificationToUser === "function") {
+        userStore.addNotificationToUser(targetUserId, {
+          type: "bug_reward",
+          title: "🎁 Баг подтверждён!",
+          message: `Спасибо за сотрудничество! Вам зачислено +${days} дн. PRO подписки на аккаунт.\n(обновите страницу)`,
+          days: days
+        });
+      }
+
+      let telegramBot = null;
+      try { telegramBot = require("./telegramBot"); } catch (_) {}
+
+      const userTgId = (updatedUser && updatedUser.telegramId) || (report && report.telegramId) || (targetUser && targetUser.telegramId);
+
+      if (userTgId && telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+        const userMsg =
+          `🎉 <b>СПАСИБО ЗА СОТРУДНИЧЕСТВО!</b>\n\n` +
+          `Ваш баг-репорт проверен и подтверждён администратором.\n` +
+          `🎁 <b>Вам зачислено +${days} дней PRO подписки!</b>\n\n` +
+          `<i>Обновите страницу скринера для применения изменений.</i>`;
+        try {
+          await telegramBot.sendTelegramMessage(userTgId, userMsg);
+        } catch (e) {
+          console.error("[BUG REWARD TG NOTIFY ERROR]", e.message);
+        }
+      }
+
+      logAdminAction("Администратор", "REWARD_BUG_REPORT", { userId: targetUserId, days, reportId });
+
+      const updatedAdminText =
+        `✅ <b>БАГ-РЕПОРТ ОБРАБОТАН — НАГРАДА ВЫДАНА!</b>\n\n` +
+        `👤 <b>Пользователь:</b> ${tgName} (<code>${targetUserId}</code>)\n` +
+        `📝 <b>Описание:</b> <i>«${safeDesc}»</i>\n\n` +
+        `🎉 <b>Начислено:</b> <b>+${days} дн. PRO подписки</b> ✅`;
+
+      await apiCall("editMessageReplyMarkup", {
+        chat_id: ADMIN_CHAT_ID,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] }
+      });
+      await editAdminMessage(messageId, updatedAdminText, { inline_keyboard: [] });
+      await answerCallback(query.id, `✅ Зачислено +${days} дн. PRO трейдеру ${targetUserId}!`, true);
+    } else {
+      if (typeof userStore.addNotificationToUser === "function") {
+        userStore.addNotificationToUser(targetUserId, {
+          type: "bug_reject",
+          title: "ℹ️ Статус баг-репорта",
+          message: `Благодарим за внимание к проекту! Наш администратор проверил репорт — к сожалению, описанная проблема не является ошибкой. Спасибо за помощь!`,
+          days: 0
+        });
+      }
+
+      let telegramBot = null;
+      try { telegramBot = require("./telegramBot"); } catch (_) {}
+
+      const userTgId = (report && report.telegramId) || (targetUser && targetUser.telegramId);
+
+      if (userTgId && telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+        const userMsg =
+          `ℹ️ <b>СТАТУС ВАШЕГО БАГ-РЕПОРТА</b>\n\n` +
+          `Благодарим за внимание к проекту Obsidian Screener! 🙏\n` +
+          `Наш администратор проверил ваше сообщение, однако описанная проблема не является ошибкой или багом в работе сервиса.\n\n` +
+          `Спасибо за помощь и удачной торговли!`;
+        try {
+          await telegramBot.sendTelegramMessage(userTgId, userMsg);
+        } catch (e) {
+          console.error("[BUG REJECT TG NOTIFY ERROR]", e.message);
+        }
+      }
+
+      logAdminAction("Администратор", "REJECT_BUG_REPORT", { userId: targetUserId, reportId });
+
+      const updatedAdminText =
+        `❌ <b>БАГ-РЕПОРТ ОТКЛОНЁН</b>\n\n` +
+        `👤 <b>Пользователь:</b> ${tgName} (<code>${targetUserId}</code>)\n` +
+        `📝 <b>Описание:</b> <i>«${safeDesc}»</i>\n\n` +
+        `<i>Репорт отклонён администратором (пользователь уведомлен).</i>`;
+
+      await apiCall("editMessageReplyMarkup", {
+        chat_id: ADMIN_CHAT_ID,
+        message_id: messageId,
+        reply_markup: { inline_keyboard: [] }
+      });
+      await editAdminMessage(messageId, updatedAdminText, { inline_keyboard: [] });
+      await answerCallback(query.id, "Репорт отклонён", true);
+    }
+  }
+}
+
+async function notifyBugReport(reportData) {
+  bugReports.unshift(reportData);
+  if (bugReports.length > 500) bugReports = bugReports.slice(0, 500);
+  saveJSON(BUG_REPORTS_FILE, bugReports);
+
+  const safeDesc = (reportData.description || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  const tgName = reportData.username ? `@${reportData.username.replace(/^@/, '')}` : "Трейдер";
+  const userPlanText = reportData.plan === "pro" ? "💎 PRO" : "⚪ FREE";
+
+  const text =
+    `🐛 <b>НОВЫЙ БАГ-РЕПОРТ!</b>\n\n` +
+    `👤 <b>Пользователь:</b> ${tgName} (<code>${reportData.userId}</code>)\n` +
+    `• <b>Способ:</b> ${reportData.authMethod}\n` +
+    `• <b>Email/Логин:</b> ${reportData.email}\n` +
+    `• <b>Текущий тариф:</b> ${userPlanText}\n` +
+    `• <b>Время:</b> ${formatDateTime(reportData.createdAt)}\n\n` +
+    `📝 <b>Описание проблемы:</b>\n` +
+    `<i>«${safeDesc}»</i>\n\n` +
+    `🎁 <b>Начислить награду PRO подписки:</b>`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "🎁 +2 Дня PRO", callback_data: `adm:bug:2:${reportData.id}:${reportData.userId}` },
+        { text: "🎁 +5 Дней PRO", callback_data: `adm:bug:5:${reportData.id}:${reportData.userId}` }
+      ],
+      [
+        { text: "🚀 +7 Дней PRO", callback_data: `adm:bug:7:${reportData.id}:${reportData.userId}` },
+        { text: "👑 +30 Дней PRO", callback_data: `adm:bug:30:${reportData.id}:${reportData.userId}` }
+      ],
+      [
+        { text: "❌ Отклонить (Не баг)", callback_data: `adm:bug:0:${reportData.id}:${reportData.userId}` }
+      ]
+    ]
+  };
+
+  if (reportData.image && typeof reportData.image === "string" && reportData.image.startsWith("data:image/")) {
+    const tempDir = path.join(__dirname, "scratch_bugs");
+    if (!fs.existsSync(tempDir)) {
+      try { fs.mkdirSync(tempDir, { recursive: true }); } catch (_) {}
+    }
+    const tempPath = path.join(tempDir, `${reportData.id}.png`);
+    try {
+      const base64Data = reportData.image.replace(/^data:image\/\w+;base64,/, "");
+      fs.writeFileSync(tempPath, Buffer.from(base64Data, "base64"));
+
+      const res = await sendAdminPhoto(tempPath, text, keyboard);
+      try { fs.unlinkSync(tempPath); } catch (_) {}
+      if (res && res.ok) return res;
+    } catch (e) {
+      console.error("[BUG REPORT PHOTO SEND ERROR]", e.message);
+    }
+  }
+
+  return await sendAdminMessage(text, keyboard);
 }
 
 module.exports = {
   sendAdminMessage,
+  createSupportTicket,
   handleAdminMessageText,
-  handleAdminCallbackQuery
+  handleAdminCallbackQuery,
+  notifyBugReport
 };

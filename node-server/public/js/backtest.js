@@ -1235,6 +1235,52 @@
   }, { passive: false });
   canvas.addEventListener("dblclick", () => { state.panBars = 0; state.priceOffset = 0; state.priceZoom = 1; state.viewBars = 170; draw(); });
 
+  // Touch event handlers for Backtest canvas
+  function handleBtTouch(e) {
+    if (!state.session || !e.touches.length) return;
+    const t = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, t.clientX - rect.left));
+    const y = Math.max(0, Math.min(rect.height, t.clientY - rect.top));
+    state.hover = { x, y };
+  }
+
+  canvas.addEventListener("touchstart", (e) => {
+    if (!state.session) return;
+    handleBtTouch(e);
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      const m = metrics();
+      state.panning = {
+        mode: "chart",
+        x: t.clientX, y: t.clientY,
+        panBars: state.panBars, priceOffset: state.priceOffset, priceZoom: state.priceZoom,
+        stepX: m.stepX, range: m.range, priceH: m.plot.priceH,
+      };
+    }
+  }, { passive: true });
+
+  canvas.addEventListener("touchmove", (e) => {
+    if (!state.session) return;
+    handleBtTouch(e);
+    if (e.touches.length === 1 && state.panning) {
+      const t = e.touches[0];
+      const dx = t.clientX - state.panning.x;
+      const dy = t.clientY - state.panning.y;
+      const count = Math.min(state.viewBars, state.candles.length);
+      const minPan = -Math.floor(count * .45);
+      const maxPan = Math.max(0, state.candles.length - count);
+      state.panBars = Math.max(minPan, Math.min(maxPan, state.panning.panBars + Math.round(dx / Math.max(1, state.panning.stepX))));
+      state.priceOffset = state.panning.priceOffset + dy / Math.max(1, state.panning.priceH) * state.panning.range;
+      draw();
+    }
+  }, { passive: true });
+
+  canvas.addEventListener("touchend", () => {
+    state.panning = null;
+    draw();
+  }, { passive: true });
+
   function syncIndicatorButtons(id) {
     document.querySelectorAll(`[data-bt-indicator="${id}"]`).forEach(button => button.classList.toggle("on", state.indicators.has(id)));
   }

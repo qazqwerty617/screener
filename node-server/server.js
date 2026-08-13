@@ -30,10 +30,12 @@ const marketDataCore = require("./marketDataCore");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 let currentWallsCache = [];
 let currentWallsMeta = { walls: [], updatedAt: 0, partial: false, exchangesReady: 0, exchangesTotal: 11, exchangeStatuses: {} };
+global.__obsidianWallsMeta = currentWallsMeta;
 let patternsCache = []; // Global in-memory patterns/signals cache
 
 // тФАтФАтФА In-memory store тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const tickers = new Map();
+global.__obsidianTickers = tickers; // expose for telegramBot digest engine
 const dirtyKeys = new Set();
 const clients = new Set();
 
@@ -335,6 +337,7 @@ function updateLiveTradeTick(ex, sym, tf, tradeTime, price, volume) {
 const userStore = require("./userStore");
 const telegramBot = require("./telegramBot");
 const paymentGateway = require("./paymentGateway");
+const adminBot = require("./adminBot");
 const { registerPaymentRoutes, createSlidingWindowLimiter } = require("./paymentRoutes");
 
 // ── HTTP + WebSocket server ──
@@ -346,8 +349,8 @@ if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 
 }
 app.use(compression());
 app.use((req, res, next) => {
-  // Skip global JSON parser for telegram-photo (needs 15mb limit handled by route)
-  if (req.path === "/api/notifications/telegram-photo") return next();
+  // Skip global JSON parser for endpoints requiring larger payload limits
+  if (req.path === "/api/notifications/telegram-photo" || req.path === "/api/bug-report") return next();
   express.json({
     limit: "128kb",
     verify(req, _res, buffer) {
@@ -1929,6 +1932,31 @@ app.get("/api/auth/me", (req, res) => {
   res.json({ success: true, user });
 });
 
+app.get("/api/notifications/unread", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.json({ success: true, notifications: [] });
+  }
+  const notifs = Array.isArray(user.notifications) ? user.notifications.filter(n => !n.read) : [];
+  res.json({ success: true, notifications: notifs });
+});
+
+app.post("/api/notifications/mark-read", express.json(), (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.json({ success: true });
+  }
+  const { notificationId } = req.body || {};
+  if (notificationId && typeof userStore.markNotificationRead === "function") {
+    userStore.markNotificationRead(user.id, notificationId);
+  }
+  res.json({ success: true });
+});
+
 app.post("/api/auth/update-profile", (req, res) => {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -1954,6 +1982,68 @@ app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
     return res.status(404).json({ error: "Пользователь не найден" });
   }
   res.json({ success: true, user: updated });
+});
+
+app.post("/api/bug-report", express.json({
+  limit: "15mb",
+  verify(req, _res, buffer) {
+    req.rawBody = Buffer.from(buffer);
+  }
+}), async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    let user = userStore.getUserByToken(token);
+
+    if (!user && req.body && req.body.userId) {
+      user = userStore.getUserById ? userStore.getUserById(req.body.userId) : null;
+    }
+
+    if (!user) {
+      user = {
+        id: "GUEST_" + Math.random().toString(36).slice(2, 7).toUpperCase(),
+        username: "Гость",
+        email: "—",
+        authMethod: "Гость (Без аккаунта)",
+        plan: "free"
+      };
+    }
+
+    const { description, image } = req.body || {};
+    const cleanDesc = String(description || "").trim();
+    if (!cleanDesc || cleanDesc.length < 3) {
+      return res.status(400).json({ error: "Пожалуйста, опишите проблему (минимум 3 символа)" });
+    }
+
+    const reportId = "bug_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+    const reportData = {
+      id: reportId,
+      userId: user.id,
+      username: user.username || "Трейдер",
+      telegramId: user.telegramId || null,
+      authMethod: user.authMethod || "Логин/Пароль",
+      email: user.email || "—",
+      plan: user.plan || "free",
+      description: cleanDesc,
+      image: image || null,
+      status: "pending",
+      createdAt: new Date().toISOString()
+    };
+
+    let adminBotModule = typeof adminBot !== "undefined" ? adminBot : null;
+    if (!adminBotModule) {
+      try { adminBotModule = require("./adminBot"); } catch (_) {}
+    }
+
+    if (adminBotModule && typeof adminBotModule.notifyBugReport === "function") {
+      await adminBotModule.notifyBugReport(reportData);
+    }
+
+    res.json({ success: true, message: "Ваш баг-репорт успешно отправлен!" });
+  } catch (err) {
+    console.error("[BUG REPORT API ERROR]", err);
+    res.status(500).json({ error: "Ошибка при отправке баг-репорта: " + err.message });
+  }
 });
 
 function sendTextMessage(token, chatId, text, res) {

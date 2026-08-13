@@ -64,83 +64,118 @@ function getRegTokenStatus(token) {
 }
 
 const chatAlertState = new Map();
+const userSupportState = new Map();
+
+function getDefaultKeyboard(chatId, tgUser) {
+  let existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser ? tgUser.id : null) : null;
+  const isEnabled = existingUser ? (existingUser.tgAlertsEnabled !== false) : (chatAlertState.get(chatId) !== false);
+  const btnText = isEnabled ? "🔔 Ценовые алерты: ✅ ВКЛ" : "🔕 Ценовые алерты: ❌ ВЫКЛ";
+
+  return {
+    inline_keyboard: [
+      [{ text: "🔥 Топ монеты сейчас", callback_data: "top_coins" }],
+      [{ text: btnText, callback_data: "toggle_alerts" }],
+      [
+        { text: "📊 Мой аккаунт", callback_data: "account_info" },
+        { text: "💬 Поддержка", callback_data: "support_prompt" }
+      ]
+    ]
+  };
+}
+
+const https = require("https");
+const userHttpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 60000,
+  maxSockets: 100,
+  scheduling: "fifo"
+});
+
+// High-speed Telegram API Helper for User Bot with HTTP Keep-Alive Connection Pooling
+function userApiCall(method, payload) {
+  return new Promise((resolve) => {
+    if (!BOT_TOKEN) return resolve({ ok: false, error: "TELEGRAM_BOT_DISABLED" });
+    const postData = JSON.stringify(payload || {});
+    const req = https.request(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+      method: "POST",
+      agent: userHttpsAgent,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData)
+      },
+      timeout: 10000
+    }, (res) => {
+      let raw = "";
+      res.on("data", (chunk) => { raw += chunk; });
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(raw));
+        } catch (e) {
+          resolve({ ok: false, error: e.message });
+        }
+      });
+    });
+
+    req.on("error", (err) => {
+      console.error(`[USER BOT ERROR] API Call ${method} failed:`, err.message);
+      resolve({ ok: false, error: err.message });
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ ok: false, error: "TIMEOUT" });
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}
 
 // Send message to Telegram Chat
 async function sendTelegramMessage(chatId, text) {
-  if (!BOT_TOKEN) return { ok: false, error: "TELEGRAM_BOT_DISABLED" };
-  try {
-    const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML"
-      })
-    });
-    return await res.json();
-  } catch (err) {
-    console.error("[TELEGRAM BOT ERROR] Failed to send message:", err.message);
-  }
+  return await userApiCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML"
+  });
 }
 
 async function sendTelegramMessageWithKeyboard(chatId, text, replyMarkup) {
-  if (!BOT_TOKEN) return { ok: false, error: "TELEGRAM_BOT_DISABLED" };
-  try {
-    const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup
-      })
-    });
-    return await res.json();
-  } catch (err) {
-    console.error("[TELEGRAM BOT ERROR] Failed to send keyboard message:", err.message);
-  }
+  return await userApiCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    reply_markup: replyMarkup
+  });
 }
 
-async function answerCallbackQuery(callbackQueryId, text) {
-  if (!BOT_TOKEN) return;
-  try {
-    await fetch(`${TELEGRAM_API}/answerCallbackQuery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ callback_query_id: callbackQueryId, text })
-    });
-  } catch (_) {}
+function answerCallbackQuery(callbackQueryId, text) {
+  if (!BOT_TOKEN || !callbackQueryId) return;
+  userApiCall("answerCallbackQuery", { callback_query_id: callbackQueryId, text });
 }
 
 async function editMessageText(chatId, messageId, text, replyMarkup) {
-  if (!BOT_TOKEN) return;
-  try {
-    await fetch(`${TELEGRAM_API}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup
-      })
-    });
-  } catch (_) {}
+  return await userApiCall("editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "HTML",
+    reply_markup: replyMarkup
+  });
 }
 
 // Long polling engine to process incoming Telegram Bot messages
 let offset = 0;
 async function pollUpdates() {
+  let hasUpdates = false;
   try {
     const res = await fetch(`${TELEGRAM_API}/getUpdates?offset=${offset}&timeout=20`, {
       signal: AbortSignal.timeout(25000)
     });
     if (res.ok) {
       const data = await res.json();
-      if (data.ok && Array.isArray(data.result)) {
+      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+        hasUpdates = true;
         for (const update of data.result) {
           offset = update.update_id + 1;
           handleUpdate(update);
@@ -150,7 +185,11 @@ async function pollUpdates() {
   } catch (e) {
     // Ignore timeout / network aborts
   } finally {
-    setTimeout(pollUpdates, 1000);
+    if (hasUpdates) {
+      setImmediate(pollUpdates);
+    } else {
+      setTimeout(pollUpdates, 10);
+    }
   }
 }
 
@@ -181,51 +220,94 @@ function handleCallbackQuery(cb) {
       : "<b>❌ Уведомления о ценовых алертах ВЫКЛЮЧЕНЫ.</b>\n\nСообщения о выставляемых уровнях цены временно приостановлены.";
 
     answerCallbackQuery(cb.id, nextState ? "Уведомления ВКЛЮЧЕНЫ ✅" : "Уведомления ВЫКЛЮЧЕНЫ ❌");
-    editMessageText(chatId, messageId, statusText, {
-      inline_keyboard: [
-        [{ text: btnText, callback_data: "toggle_alerts" }],
-        [{ text: "📊 Мой аккаунт", callback_data: "account_info" }]
-      ]
-    });
+    editMessageText(chatId, messageId, statusText, getDefaultKeyboard(chatId, tgUser));
   } else if (data === "account_info") {
     let existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
     const isEnabled = existingUser ? (existingUser.tgAlertsEnabled !== false) : (chatAlertState.get(chatId) !== false);
     
     answerCallbackQuery(cb.id, "Информация о вашем профиле");
-    sendTelegramMessage(
+    sendTelegramMessageWithKeyboard(
       chatId,
       `<b>👤 Аккаунт Obsidian Pro</b>\n\n` +
       `• <b>ID:</b> <code>${existingUser ? existingUser.id : "—"}</code>\n` +
       `• <b>Пользователь:</b> ${existingUser ? existingUser.username : (tgUser.username ? "@" + tgUser.username : "Trader")}\n` +
       `• <b>Тариф:</b> ${existingUser && existingUser.plan === "pro" ? "💎 PRO" : "⚪ FREE"}\n` +
-      `• <b>Ценовые алерты:</b> ${isEnabled ? "✅ Включены" : "❌ Выключены"}`
+      `• <b>Ценовые алерты:</b> ${isEnabled ? "✅ Включены" : "❌ Выключены"}`,
+      getDefaultKeyboard(chatId, tgUser)
     );
+  } else if (data === "support_prompt") {
+    userSupportState.set(chatId, { awaiting: true });
+    answerCallbackQuery(cb.id, "Поддержка");
+    sendTelegramMessage(
+      chatId,
+      `<b>💬 Техническая поддержка Obsidian Screener</b>\n\n` +
+      `Напишите ваш вопрос или сообщение прямо сюда в чат 👇\n` +
+      `Наш администратор получит его и ответит вам прямо в этом боте.`
+    );
+  } else if (data === "top_coins") {
+    answerCallbackQuery(cb.id, "Загрузка топ монет...");
+    const digest = buildMarketDigest();
+    if (digest) {
+      sendTelegramMessageWithKeyboard(chatId, digest, getDefaultKeyboard(chatId, tgUser));
+    } else {
+      sendTelegramMessageWithKeyboard(
+        chatId,
+        `<b>📊 Данные о рынке</b>\n\n<i>Рыночные данные загружаются, попробуйте через минуту...</i>`,
+        getDefaultKeyboard(chatId, tgUser)
+      );
+    }
   }
 }
 
-function handleUpdate(update) {
+async function getTelegramFileUrl(botToken, fileId) {
+  if (!botToken || !fileId) return null;
+  try {
+    const res = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ok && data.result && data.result.file_path) {
+        return `https://api.telegram.org/file/bot${botToken}/${data.result.file_path}`;
+      }
+    }
+  } catch (e) {
+    console.error("[TELEGRAM FILE FETCH ERROR]", e.message);
+  }
+  return null;
+}
+
+async function handleUpdate(update) {
   if (update.callback_query) {
     handleCallbackQuery(update.callback_query);
     return;
   }
 
-  const msg = update.message;
-  if (!msg || !msg.text) return;
+  const msg = update.message || update.edited_message;
+  if (!msg) return;
 
   const chatId = msg.chat.id;
-  const text = msg.text.trim();
   const tgUser = msg.from || {};
+  let text = (msg.text || msg.caption || "").trim();
+  let photoFileId = null;
+
+  if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+    photoFileId = msg.photo[msg.photo.length - 1].file_id;
+  } else if (msg.document) {
+    photoFileId = msg.document.file_id;
+  }
+
+  if (!text && !photoFileId) return;
+
+  let photoUrl = null;
+  if (photoFileId) {
+    photoUrl = await getTelegramFileUrl(BOT_TOKEN, photoFileId);
+  }
 
   if (text.startsWith("/start")) {
     const parts = text.split(" ");
     const startParam = parts[1] ? parts[1].trim() : null;
+    userSupportState.delete(chatId);
 
-    const defaultKeyboard = {
-      inline_keyboard: [
-        [{ text: "🔔 Ценовые алерты: ✅ ВКЛ", callback_data: "toggle_alerts" }],
-        [{ text: "📊 Мой аккаунт", callback_data: "account_info" }]
-      ]
-    };
+    const defaultKeyboard = getDefaultKeyboard(chatId, tgUser);
 
     if (startParam && startParam.startsWith("reg_") && regTokens.has(startParam)) {
       // Direct registration / login via Telegram Bot
@@ -279,7 +361,6 @@ function handleUpdate(update) {
       // Plain /start greeting
       const existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
       const isEnabled = existingUser ? (existingUser.tgAlertsEnabled !== false) : (chatAlertState.get(chatId) !== false);
-      const btnText = isEnabled ? "🔔 Ценовые алерты: ✅ ВКЛ" : "🔕 Ценовые алерты: ❌ ВЫКЛ";
 
       sendTelegramMessageWithKeyboard(
         chatId,
@@ -287,14 +368,38 @@ function handleUpdate(update) {
         (existingUser 
           ? `<b>ID:</b> <code>${existingUser.id}</code>\n<b>Статус бота:</b> ${isEnabled ? "✅ Уведомления включены" : "❌ Уведомления выключены"}\n\nВы получаете сигналы о достижении цен 🔔 с графиков в реальном времени.`
           : `Нажмите «Подключить Telegram» в настройках терминала Obsidian.`),
-        {
-          inline_keyboard: [
-            [{ text: btnText, callback_data: "toggle_alerts" }],
-            [{ text: "📊 Мой аккаунт", callback_data: "account_info" }]
-          ]
-        }
+        defaultKeyboard
       );
     }
+  } else {
+    // Non-command text/media message -> support ticket!
+    userSupportState.delete(chatId);
+    let existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
+    const userId = existingUser ? existingUser.id : "—";
+    const name = `${tgUser.first_name || ""} ${tgUser.last_name || ""}`.trim() || (existingUser ? existingUser.username : "Trader");
+    const ticketText = text || "(Прикреплен скриншот / файл)";
+    const safeText = ticketText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    
+    Promise.all([
+      sendTelegramMessageWithKeyboard(
+        chatId,
+        `<b>✅ Ваш вопрос ${photoFileId ? "и скриншот отправлены" : "отправлен"} в поддержку!</b>\n\n` +
+        `<b>Ваше сообщение:</b>\n<i>«${safeText}»</i>\n\n` +
+        `Администратор ответит вам здесь в боте в ближайшее время.`,
+        getDefaultKeyboard(chatId, tgUser)
+      ),
+      (adminBot && typeof adminBot.createSupportTicket === "function") 
+        ? adminBot.createSupportTicket({
+            chatId,
+            userId,
+            username: tgUser.username,
+            name,
+            text: ticketText,
+            photoFileId,
+            photoUrl
+          })
+        : Promise.resolve()
+    ]).catch(err => console.error("[SUPPORT TRANSMIT ERROR]", err.message));
   }
 }
 
@@ -349,13 +454,15 @@ const adminBot = require("./adminBot");
 // Admin Bot Command Polling Engine
 let adminOffset = 0;
 async function pollAdminUpdates() {
+  let hasUpdates = false;
   try {
     const res = await fetch(`${ADMIN_TELEGRAM_API}/getUpdates?offset=${adminOffset}&timeout=20`, {
       signal: AbortSignal.timeout(25000)
     });
     if (res.ok) {
       const data = await res.json();
-      if (data.ok && Array.isArray(data.result)) {
+      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+        hasUpdates = true;
         for (const update of data.result) {
           adminOffset = update.update_id + 1;
           handleAdminUpdate(update);
@@ -365,7 +472,11 @@ async function pollAdminUpdates() {
   } catch (e) {
     // Ignore timeout / network aborts
   } finally {
-    setTimeout(pollAdminUpdates, 1000);
+    if (hasUpdates) {
+      setImmediate(pollAdminUpdates);
+    } else {
+      setTimeout(pollAdminUpdates, 10);
+    }
   }
 }
 
@@ -393,6 +504,199 @@ async function sendAdminBotMessage(chatId, text) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY MARKET DIGEST — Top volatile "in-play" coins at 09:00 & 21:00 MSK
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Reference to server tickers Map — injected lazily to avoid circular deps
+let _serverTickers = null;
+function getServerTickers() {
+  if (_serverTickers) return _serverTickers;
+  try {
+    // server.js stores tickers on global — we read from there
+    _serverTickers = global.__obsidianTickers;
+  } catch (_) {}
+  return _serverTickers;
+}
+
+function getMarketWallsMap() {
+  const wallsMap = new Map();
+  try {
+    const meta = global.__obsidianWallsMeta;
+    if (meta && Array.isArray(meta.walls)) {
+      for (const w of meta.walls) {
+        if (!w || !w.sym || !w.usdValue) continue;
+        const sym = w.sym.toUpperCase();
+        let entry = wallsMap.get(sym);
+        if (!entry) {
+          entry = { bidWall: null, askWall: null };
+          wallsMap.set(sym, entry);
+        }
+        if (w.type === "BID" && (!entry.bidWall || w.usdValue > entry.bidWall.usdValue)) {
+          entry.bidWall = w;
+        }
+        if (w.type === "ASK" && (!entry.askWall || w.usdValue > entry.askWall.usdValue)) {
+          entry.askWall = w;
+        }
+      }
+    }
+  } catch (_) {}
+  return wallsMap;
+}
+
+function buildMarketDigest() {
+  const tickersMap = getServerTickers();
+  if (!tickersMap || tickersMap.size === 0) return null;
+
+  const seen = new Map();
+  for (const t of tickersMap.values()) {
+    if (!t || !t.key || !t.p || t.p <= 0) continue;
+    const parts = t.key.split(":");
+    if (parts.length < 2) continue;
+    const ex = parts[0];
+    let sym = parts[1] || "";
+    if (!sym || sym.length > 30) continue;
+
+    let cleanSym = sym.toUpperCase()
+      .replace(/[-_]SWAP$/i, "")
+      .replace(/[-_]PERP$/i, "")
+      .replace(/MUSDT$/i, "")
+      .replace(/USDTM$/i, "")
+      .replace(/[-_]/g, "");
+
+    let base = cleanSym;
+    if (base.endsWith("USDT")) base = base.slice(0, -4);
+    else if (base.endsWith("USDC")) base = base.slice(0, -4);
+    else if (base.endsWith("BUSD")) base = base.slice(0, -4);
+    else if (base.endsWith("USD")) base = base.slice(0, -3);
+
+    // Exclude stocks, tokenized equities, indices, fiat, and stablecoins (ONLY CRYPTO)
+    if (
+      !base || base.length < 2 ||
+      /STOCK|INDEX|ETF|EQUITY/i.test(base) ||
+      ["USDT", "USDC", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "USDE", "PYUSD", "USD1", "EUR1", "USDC1", "BTC1",
+       "XAUT", "PAXG", "XAG", "XAU", "SILVER", "GOLD",
+       "EUR", "GBP", "JPY", "AUD", "USD", "CHF", "TRY", "RUB", "BRL",
+       "SPY", "QQQ", "AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "NFLX"].includes(base)
+    ) continue;
+
+    const absChg = Math.abs(t.chg || 0);
+    const existing = seen.get(base);
+    if (!existing || (ex === "BN" && existing.ex !== "BN") || (ex === existing.ex && (t.v || 0) > (existing.v || 0))) {
+      seen.set(base, { sym: `${base}USDT`, chg: t.chg || 0, p: t.p, v: t.v || 0, ex, absChg });
+    }
+  }
+
+  if (seen.size === 0) return null;
+
+  const inPlayCoins = [...seen.values()]
+    .filter(d => d.absChg >= 2.5 && d.v >= 200000)
+    .sort((a, b) => b.absChg - a.absChg);
+
+  if (inPlayCoins.length === 0) {
+    let text = `<b>Obsidian Screener</b>\n\n`;
+    text += `<b>GM!</b>\n\n`;
+    text += `Рынок сегодня спокойный. Аномальной волатильности не зафиксировано.`;
+    return text;
+  }
+
+  const top = inPlayCoins.slice(0, 8);
+
+  const tableRows = [];
+  top.forEach(d => {
+    const chgSign = d.chg >= 0 ? "+" : "";
+    const chgStr = (chgSign + d.chg.toFixed(2) + "%").padEnd(9, " ");
+    
+    let volStr;
+    if (d.v >= 1_000_000_000) volStr = (d.v / 1_000_000_000).toFixed(2) + "B$";
+    else if (d.v >= 1_000_000) volStr = (d.v / 1_000_000).toFixed(2) + "M$";
+    else if (d.v >= 1_000) volStr = (d.v / 1_000).toFixed(0) + "K$";
+    else volStr = d.v.toFixed(0) + "$";
+
+    const symStr = (`★ ${d.sym}`).padEnd(14, " ");
+    tableRows.push(`${symStr} ${chgStr} ${volStr.padStart(9, " ")}`);
+  });
+
+  const now = new Date();
+  const mskHour = (now.getUTCHours() + 3) % 24;
+  const greeting = mskHour < 17 ? "GM!" : "GN!";
+
+  let text = `<b>Obsidian Screener</b>\n\n`;
+  text += `<pre>${tableRows.join("\n")}</pre>\n\n`;
+  text += `<b>${greeting}</b>\n\n`;
+  text += `<b>Внимание на эти тикеры 👀</b>\n\n`;
+  text += `<i>Не финансовая рекомендация!</i>`;
+
+  return text;
+}
+
+async function sendDigestToAllUsers() {
+  const digestText = buildMarketDigest();
+  if (!digestText) {
+    console.log("[DIGEST] No data available for market digest");
+    return;
+  }
+
+  const allUsers = Object.values(userStore.getAllUsersRaw());
+  const recipients = allUsers.filter(u => u.telegramChatId && !u.blocked);
+
+  let sent = 0;
+  let failed = 0;
+
+  for (const u of recipients) {
+    try {
+      const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: u.telegramChatId,
+          text: digestText,
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        })
+      });
+      if (res.ok) sent++;
+      else failed++;
+    } catch (_) {
+      failed++;
+    }
+    // 50ms delay between messages to respect Telegram rate limits (30 msg/s)
+    if (sent % 25 === 0) await new Promise(r => setTimeout(r, 50));
+  }
+
+  console.log(`[DIGEST] Market digest sent to ${sent}/${recipients.length} users (${failed} failed)`);
+}
+
+// Schedule daily digests at 09:00 and 21:00 MSK (UTC+3)
+function scheduleDigest() {
+  const checkInterval = 60_000; // check every 60 seconds
+  let lastSentHour = -1;
+  let lastSentDay = -1;
+
+  setInterval(() => {
+    const now = new Date();
+    const mskHour = (now.getUTCHours() + 3) % 24;
+    const mskDay = now.getUTCDate();
+    const mskMinute = now.getUTCMinutes();
+
+    // Send at HH:00 (first minute of the hour)
+    if ((mskHour === 9 || mskHour === 21) && mskMinute === 0) {
+      // Prevent double-send within same hour
+      if (lastSentHour === mskHour && lastSentDay === mskDay) return;
+      lastSentHour = mskHour;
+      lastSentDay = mskDay;
+      console.log(`[DIGEST] Sending ${mskHour === 9 ? "morning" : "evening"} market digest...`);
+      sendDigestToAllUsers();
+    }
+  }, checkInterval);
+
+  console.log("[DIGEST] Daily market digest scheduler active (09:00 & 21:00 MSK)");
+}
+
+if (process.env.DISABLE_TELEGRAM_BOT !== "true" && BOT_TOKEN) {
+  scheduleDigest();
+}
+
 // Start polling unless disabled
 if (process.env.DISABLE_TELEGRAM_BOT !== "true" && BOT_TOKEN) {
   pollUpdates();
@@ -409,5 +713,7 @@ module.exports = {
   createRegToken,
   getRegTokenStatus,
   sendTelegramMessage,
-  sendAdminNotification
+  sendAdminNotification,
+  buildMarketDigest,
+  sendDigestToAllUsers
 };
