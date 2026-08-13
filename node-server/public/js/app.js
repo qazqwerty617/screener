@@ -187,6 +187,13 @@ let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", 
 let chartActiveIndicators = new Set([]);
 let chartActiveFormations = new Set([]);
 let chartActiveSmc = new Set([]);
+// ═══ Formations Overlay on Main Chart ═══
+let chartFormationsOnChart = false;          // master switch
+let chartFovTypes = new Set(['cascades']);    // which formation types to show
+let chartFovMinTouches = 1;                  // min touches / cascade levels
+let chartFovShowLabels = true;               // show Resistance / Support labels
+let chartFovShowTouches = true;              // show touch circles on level
+
 const TAG_PALETTE = [
   "#ff4560",
   "#26c97a",
@@ -1638,8 +1645,176 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
   ctx.restore();
 }
 
+// ════════════════════════════════════════════════════════════
+// Formations Overlay – renders formation levels on main chart
+// ════════════════════════════════════════════════════════════
+function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
+  if (!chartFormationsOnChart || !candles || candles.length < 40) return;
+
+  const N = candles.length;
+  const lastPrice = candles[N - 1].c;
+  const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
+
+  // Helper: draw a price pill label
+  function drawPill(text, x, y, bg, border, textCol) {
+    ctx.save();
+    ctx.font = 'bold 10px Inter, sans-serif';
+    const tw = ctx.measureText(text).width;
+    const pw = tw + 14, ph = 17;
+    const bx = Math.max(5, Math.min(PW - pw - 5, x));
+    const by = Math.max(TOP + 2, Math.min(TOP + PH - ph - 2, y - ph / 2));
+    ctx.beginPath();
+    ctx.roundRect(bx, by, pw, ph, 4);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    ctx.stroke();
+    ctx.fillStyle = textCol;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx + pw / 2, by + ph / 2);
+    ctx.restore();
+  }
+
+  // ─── 1. CASCADES (horizontal levels) ─────────────────────
+  if (chartFovTypes.has('cascades')) {
+    const levels = window.detectChartBreakoutLevels ? window.detectChartBreakoutLevels(candles) : [];
+    for (const lv of levels) {
+      if ((lv.touches || 1) < chartFovMinTouches) continue;
+      const y = toY(lv.price);
+      if (y < TOP || y > TOP + PH) continue;
+
+      const isRes = lv.direction === 'up';
+      const col = isRes ? 'rgba(255,69,96,' : 'rgba(38,201,122,';
+      ctx.save();
+      ctx.setLineDash([6, 3]);
+      ctx.strokeStyle = col + '0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(PW, y);
+      ctx.stroke();
+
+      // Touch circles
+      if (chartFovShowTouches && lv.touchIndices) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = col + '0.85)';
+        for (const ti of lv.touchIndices) {
+          const tx = getCandleX(ti);
+          if (tx < 0 || tx > PW) continue;
+          ctx.beginPath();
+          ctx.arc(tx, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Label
+      if (chartFovShowLabels) {
+        const labelText = (isRes ? 'R' : 'S') + ' ' + (lv.touches || '') + 'x';
+        const bg = isRes ? 'rgba(127,29,29,0.85)' : 'rgba(20,83,45,0.85)';
+        const border = isRes ? '#ef4444' : '#22c55e';
+        const tc = isRes ? '#fca5a5' : '#4ade80';
+        drawPill(labelText, PW - 55, y, bg, border, tc);
+      }
+      ctx.restore();
+    }
+  }
+
+  // ─── 2. BREAKOUT horizontal levels ───────────────────────
+  if (chartFovTypes.has('breakout')) {
+    const levels = window.detectChartBreakoutLevels ? window.detectChartBreakoutLevels(candles) : [];
+    for (const lv of levels) {
+      if ((lv.touches || 1) < chartFovMinTouches) continue;
+      const y = toY(lv.price);
+      if (y < TOP || y > TOP + PH) continue;
+      const isRes = lv.direction === 'up';
+      const col = isRes ? 'rgba(255,165,0,' : 'rgba(0,186,255,';
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = col + '0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(PW, y);
+      ctx.stroke();
+      if (chartFovShowLabels) {
+        const lbl = isRes ? 'BRK R' : 'BRK S';
+        drawPill(lbl, PW - 65, y, isRes ? 'rgba(100,50,0,0.85)' : 'rgba(0,60,90,0.85)', col + '0.9)', isRes ? '#ffd580' : '#7feeff');
+      }
+      ctx.restore();
+    }
+  }
+
+  // ─── 3. TRENDLINES ───────────────────────────────────────
+  if (chartFovTypes.has('trendline')) {
+    const trendlines = window.detectChartTrendlines ? window.detectChartTrendlines(candles) : [];
+    for (const tl of trendlines) {
+      if ((tl.touches || 1) < chartFovMinTouches) continue;
+      const x1 = getCandleX(tl.p1.idx);
+      const x2 = getCandleX(N - 1);
+      const y1 = toY(tl.p1.price);
+      const y2 = toY(tl.p1.price + tl.slope * (N - 1 - tl.p1.idx));
+      if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
+      const isRes = tl.direction === 'up';
+      const col = isRes ? '#ff4560' : '#26c97a';
+      ctx.save();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = isRes ? 'rgba(255,69,96,0.75)' : 'rgba(38,201,122,0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      if (chartFovShowTouches && tl.swingIndices) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = isRes ? 'rgba(255,69,96,0.85)' : 'rgba(38,201,122,0.85)';
+        for (const ti of tl.swingIndices) {
+          const tx = getCandleX(ti);
+          const ty = toY(tl.p1.price + tl.slope * (ti - tl.p1.idx));
+          if (tx < 0 || tx > PW) continue;
+          ctx.beginPath();
+          ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      if (chartFovShowLabels) {
+        const lbl = isRes ? 'TL R' : 'TL S';
+        drawPill(lbl, PW - 55, y2, isRes ? 'rgba(100,20,20,0.85)' : 'rgba(10,60,30,0.85)', col, isRes ? '#fca5a5' : '#4ade80');
+      }
+      ctx.restore();
+    }
+  }
+
+  // ─── 4. RETESTS ──────────────────────────────────────────
+  if (chartFovTypes.has('retest')) {
+    const retests = window.detectChartRetests ? window.detectChartRetests(candles) : [];
+    for (const rt of retests) {
+      if ((rt.touches || 1) < chartFovMinTouches) continue;
+      const y = toY(rt.price);
+      if (y < TOP || y > TOP + PH) continue;
+      const isBull = rt.direction === 'up';
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = isBull ? 'rgba(168,85,247,0.75)' : 'rgba(250,204,21,0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(PW, y);
+      ctx.stroke();
+      if (chartFovShowLabels) {
+        const lbl = isBull ? 'RETEST ▲' : 'RETEST ▼';
+        drawPill(lbl, PW - 75, y, isBull ? 'rgba(80,20,110,0.85)' : 'rgba(100,80,5,0.85)', isBull ? '#a855f7' : '#facc15', isBull ? '#e9d5ff' : '#fef08a');
+      }
+      ctx.restore();
+    }
+  }
+}
+
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
+
 
   // Calculate active indicators first to determine volH
   const activeIndicators = [];
@@ -1979,7 +2154,11 @@ function drawChart() {
     renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
   }
 
+  // тФАтФА Formations Overlay тФАтФА
+  renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart);
+
   ctx.restore();
+
 
   // тФАтФА Draw Sub-indicators / Oscillators in separated rows of Volume Pane тФАтФА
   // activeIndicators is already calculated above!
@@ -6257,7 +6436,101 @@ if (settingsBtn && settingsOverlay) {
     };
   });
 
+  // ═══ Formations Overlay Settings Init ═══
+  (function initFormationsOverlay() {
+    const LS_KEY = 'fov_settings';
+
+    // Load saved settings
+    try {
+      const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+      if (typeof saved.enabled === 'boolean') chartFormationsOnChart = saved.enabled;
+      if (Array.isArray(saved.types)) { chartFovTypes = new Set(saved.types); }
+      if (typeof saved.minTouches === 'number') chartFovMinTouches = saved.minTouches;
+      if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
+      if (typeof saved.showTouches === 'boolean') chartFovShowTouches = saved.showTouches;
+    } catch(e) {}
+
+    function saveSettings() {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        enabled: chartFormationsOnChart,
+        types: Array.from(chartFovTypes),
+        minTouches: chartFovMinTouches,
+        showLabels: chartFovShowLabels,
+        showTouches: chartFovShowTouches
+      }));
+    }
+
+    function syncUI() {
+      const elEnabled = document.getElementById('fov-enabled');
+      if (elEnabled) elEnabled.checked = chartFormationsOnChart;
+      document.querySelectorAll('.fov-type').forEach(cb => {
+        cb.checked = chartFovTypes.has(cb.dataset.fov);
+      });
+      document.querySelectorAll('.fov-touch-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.val) === chartFovMinTouches);
+      });
+      const elLabels = document.getElementById('fov-show-labels');
+      if (elLabels) elLabels.checked = chartFovShowLabels;
+      const elTouches = document.getElementById('fov-show-touches');
+      if (elTouches) elTouches.checked = chartFovShowTouches;
+    }
+
+    syncUI();
+
+    // Master toggle
+    const elEnabled = document.getElementById('fov-enabled');
+    if (elEnabled) {
+      elEnabled.onchange = () => {
+        chartFormationsOnChart = elEnabled.checked;
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    }
+
+    // Type checkboxes
+    document.querySelectorAll('.fov-type').forEach(cb => {
+      cb.onchange = () => {
+        if (cb.checked) chartFovTypes.add(cb.dataset.fov);
+        else chartFovTypes.delete(cb.dataset.fov);
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    });
+
+    // Touch count buttons
+    document.querySelectorAll('.fov-touch-btn').forEach(btn => {
+      btn.onclick = () => {
+        chartFovMinTouches = parseInt(btn.dataset.val) || 1;
+        document.querySelectorAll('.fov-touch-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    });
+
+    // Labels toggle
+    const elLabels = document.getElementById('fov-show-labels');
+    if (elLabels) {
+      elLabels.onchange = () => {
+        chartFovShowLabels = elLabels.checked;
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    }
+
+    // Touch circles toggle
+    const elTouchCircles = document.getElementById('fov-show-touches');
+    if (elTouchCircles) {
+      elTouchCircles.onchange = () => {
+        chartFovShowTouches = elTouchCircles.checked;
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    }
+  })();
+
   // Background color custom picker logic
+
   const bgPreview = $("bg-color-preview");
   const bgDropdown = $("bg-color-dropdown");
   const hiddenBgPicker = $("hidden-bg-picker");

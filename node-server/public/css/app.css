@@ -1873,6 +1873,29 @@ button {
     color: #fff;
 }
 
+/* Formation Overlay Settings – touch count buttons */
+.fov-touch-btn {
+    padding: 5px 13px;
+    border-radius: 6px;
+    border: 1px solid var(--bd2);
+    background: var(--bg3);
+    color: var(--t2);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.fov-touch-btn:hover {
+    border-color: var(--purple);
+    color: var(--t1);
+}
+.fov-touch-btn.active {
+    background: var(--purple);
+    border-color: var(--purple);
+    color: #fff;
+}
+
+
 .settings-group {
     margin-bottom: 24px;
 }

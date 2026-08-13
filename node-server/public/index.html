@@ -1706,7 +1706,15 @@
                         </svg>
                         <span>Фильтры</span>
                     </div>
+                    <div class="settings-tab" data-tab="formations-overlay">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                        </svg>
+                        <span>Формации</span>
+                    </div>
                 </div>
+
                 <div class="settings-content">
                     <div class="settings-pane active" id="tab-appearance">
                         <h2>Оформление</h2>
@@ -1992,7 +2000,82 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- ═══ Formations Overlay Settings Pane ═══ -->
+                    <div class="settings-pane" id="tab-formations-overlay">
+                        <h2>Формации на графике</h2>
+                        <p style="color: var(--t2); font-size: 12px; margin-bottom: 14px;">
+                            Включите отображение формаций прямо на основном графике скринера.
+                            Выберите нужные типы и параметры.
+                        </p>
+
+                        <!-- Master toggle -->
+                        <div class="settings-group">
+                            <div class="s-row">
+                                <span style="font-weight:600;">Показывать формации на графике</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="fov-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Formation types -->
+                        <div class="settings-group" id="fov-types-group">
+                            <label>Типы формаций</label>
+                            <div class="s-row" style="flex-wrap:wrap; gap:6px; align-items:flex-start;">
+                                <label class="check-row" style="min-width:140px;">
+                                    <input type="checkbox" id="fov-type-cascades" class="beautiful-checkbox fov-type" data-fov="cascades" checked>
+                                    <span>Каскады уровней</span>
+                                </label>
+                                <label class="check-row" style="min-width:140px;">
+                                    <input type="checkbox" id="fov-type-breakout" class="beautiful-checkbox fov-type" data-fov="breakout">
+                                    <span>Горизонт. уровень</span>
+                                </label>
+                                <label class="check-row" style="min-width:140px;">
+                                    <input type="checkbox" id="fov-type-trendline" class="beautiful-checkbox fov-type" data-fov="trendline">
+                                    <span>Наклонный уровень</span>
+                                </label>
+                                <label class="check-row" style="min-width:140px;">
+                                    <input type="checkbox" id="fov-type-retest" class="beautiful-checkbox fov-type" data-fov="retest">
+                                    <span>Ретест уровня</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Min touches -->
+                        <div class="settings-group" id="fov-touches-group">
+                            <label>Мин. касаний / уровней каскада</label>
+                            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+                                <button class="fov-touch-btn active" data-val="1">1+</button>
+                                <button class="fov-touch-btn" data-val="2">2+</button>
+                                <button class="fov-touch-btn" data-val="3">3+</button>
+                                <button class="fov-touch-btn" data-val="4">4+</button>
+                                <button class="fov-touch-btn" data-val="5">5+</button>
+                            </div>
+                        </div>
+
+                        <!-- Label visibility -->
+                        <div class="settings-group" id="fov-labels-group">
+                            <div class="s-row">
+                                <span>Подписи уровней (Resistance / Support)</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="fov-show-labels" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                            <div class="s-row">
+                                <span>Показывать точки касания</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="fov-show-touches" checked>
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
+
             </div>
             <div class="settings-footer">
                 <button class="settings-reset-btn" id="settings-reset-btn">Сбросить всё</button>
