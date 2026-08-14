@@ -188,11 +188,16 @@ let chartActiveIndicators = new Set([]);
 let chartActiveFormations = new Set([]);
 let chartActiveSmc = new Set([]);
 // ═══ Formations Overlay on Main Chart ═══
-let chartFormationsOnChart = false;          // master switch
-let chartFovTypes = new Set(['cascades']);    // which formation types to show
-let chartFovMinTouches = 1;                  // min touches / cascade levels
+let chartFormationsOnChart = false;          // master switch (OFF by default)
+let chartFovTypes = new Set();               // active types (empty set by default)
+let chartFovCascadesMin = 1;                 // min levels for cascades (1..5)
+let chartFovBreakoutMin = 1;                 // min touches for horiz levels (1..5)
+let chartFovTrendlineMin = 1;                // min touches for trendlines (1..5)
+let chartFovRetestApproaching = false;       // approach to retest toggle
+let chartFovNearest = false;                 // show nearest level only
 let chartFovShowLabels = true;               // show Resistance / Support labels
 let chartFovShowTouches = true;              // show touch circles on level
+
 
 const TAG_PALETTE = [
   "#ff4560",
@@ -529,7 +534,7 @@ let ws = null,
   wsReady = false;
 let chartNeedsDraw = false; // set true when live candle updated
 const MAX_DIRTY_ROWS_PER_TICK = 1000;
-const KLINES_CACHE_TTL_MS = 120000;
+const KLINES_CACHE_TTL_MS = 300000;
 const KLINES_CACHE = new Map();
 let klFetchToken = 0;
 const marketListeners = new Map();
@@ -1655,52 +1660,72 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const lastPrice = candles[N - 1].c;
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
 
-  // Helper: draw a price pill label
-  function drawPill(text, x, y, bg, border, textCol) {
-    ctx.save();
-    ctx.font = 'bold 10px Inter, sans-serif';
-    const tw = ctx.measureText(text).width;
-    const pw = tw + 14, ph = 17;
-    const bx = Math.max(5, Math.min(PW - pw - 5, x));
-    const by = Math.max(TOP + 2, Math.min(TOP + PH - ph - 2, y - ph / 2));
-    ctx.beginPath();
-    ctx.roundRect(bx, by, pw, ph, 4);
-    ctx.fillStyle = bg;
-    ctx.fill();
-    ctx.strokeStyle = border;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([]);
-    ctx.stroke();
-    ctx.fillStyle = textCol;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, bx + pw / 2, by + ph / 2);
-    ctx.restore();
-  }
 
-  // ─── 1. CASCADES (horizontal levels) ─────────────────────
+  // ─── 1. CASCADES / LEVELS (Same level detection engine as Formations tab) ───
   if (chartFovTypes.has('cascades')) {
-    const levels = window.detectChartBreakoutLevels ? window.detectChartBreakoutLevels(candles) : [];
+    let levels = window.detectChartLevelsAndTouches ? window.detectChartLevelsAndTouches(candles) : [];
+
+    if (chartFovNearest && levels.length > 0) {
+      levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
+      levels = levels.slice(0, 2);
+    }
+
     for (const lv of levels) {
-      if ((lv.touches || 1) < chartFovMinTouches) continue;
       const y = toY(lv.price);
       if (y < TOP || y > TOP + PH) continue;
 
-      const isRes = lv.direction === 'up';
-      const col = isRes ? 'rgba(255,69,96,' : 'rgba(38,201,122,';
+      const startX = (typeof lv.swingIdx === 'number') ? Math.max(0, getCandleX(lv.swingIdx)) : 0;
+
       ctx.save();
-      ctx.setLineDash([6, 3]);
-      ctx.strokeStyle = col + '0.75)';
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(180, 190, 205, 0.4)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(0, y);
+      ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
 
-      // Touch circles
+      // Touch circle at swingIdx
+      if (chartFovShowTouches && lv.swingIdx !== undefined) {
+        ctx.fillStyle = 'rgba(180, 190, 205, 0.6)';
+        const tx = getCandleX(lv.swingIdx);
+        if (tx >= 0 && tx <= PW) {
+          ctx.beginPath();
+          ctx.arc(tx, y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  // ─── 2. BREAKOUT horizontal levels ───────────────────────
+  if (chartFovTypes.has('breakout')) {
+    let levels = window.detectChartBreakoutLevels ? window.detectChartBreakoutLevels(candles, chartFovBreakoutMin) : [];
+    levels = levels.filter(lv => (lv.touches || 1) >= chartFovBreakoutMin);
+
+    if (chartFovNearest && levels.length > 0) {
+      levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
+      levels = levels.slice(0, 2);
+    }
+
+    for (const lv of levels) {
+      const y = toY(lv.price);
+      if (y < TOP || y > TOP + PH) continue;
+
+      const startX = (typeof lv.swingIdx === 'number') ? Math.max(0, getCandleX(lv.swingIdx)) : 0;
+
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(180, 190, 205, 0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(startX, y);
+      ctx.lineTo(PW, y);
+      ctx.stroke();
+
       if (chartFovShowTouches && lv.touchIndices) {
-        ctx.setLineDash([]);
-        ctx.fillStyle = col + '0.85)';
+        ctx.fillStyle = 'rgba(180, 190, 205, 0.6)';
         for (const ti of lv.touchIndices) {
           const tx = getCandleX(ti);
           if (tx < 0 || tx > PW) continue;
@@ -1709,67 +1734,37 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
           ctx.fill();
         }
       }
-
-      // Label
-      if (chartFovShowLabels) {
-        const labelText = (isRes ? 'R' : 'S') + ' ' + (lv.touches || '') + 'x';
-        const bg = isRes ? 'rgba(127,29,29,0.85)' : 'rgba(20,83,45,0.85)';
-        const border = isRes ? '#ef4444' : '#22c55e';
-        const tc = isRes ? '#fca5a5' : '#4ade80';
-        drawPill(labelText, PW - 55, y, bg, border, tc);
-      }
       ctx.restore();
     }
   }
 
-  // ─── 2. BREAKOUT horizontal levels ───────────────────────
-  if (chartFovTypes.has('breakout')) {
-    const levels = window.detectChartBreakoutLevels ? window.detectChartBreakoutLevels(candles) : [];
-    for (const lv of levels) {
-      if ((lv.touches || 1) < chartFovMinTouches) continue;
-      const y = toY(lv.price);
-      if (y < TOP || y > TOP + PH) continue;
-      const isRes = lv.direction === 'up';
-      const col = isRes ? 'rgba(255,165,0,' : 'rgba(0,186,255,';
-      ctx.save();
-      ctx.setLineDash([]);
-      ctx.strokeStyle = col + '0.8)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(PW, y);
-      ctx.stroke();
-      if (chartFovShowLabels) {
-        const lbl = isRes ? 'BRK R' : 'BRK S';
-        drawPill(lbl, PW - 65, y, isRes ? 'rgba(100,50,0,0.85)' : 'rgba(0,60,90,0.85)', col + '0.9)', isRes ? '#ffd580' : '#7feeff');
-      }
-      ctx.restore();
-    }
-  }
 
   // ─── 3. TRENDLINES ───────────────────────────────────────
   if (chartFovTypes.has('trendline')) {
-    const trendlines = window.detectChartTrendlines ? window.detectChartTrendlines(candles) : [];
+    let trendlines = window.detectChartTrendlines ? window.detectChartTrendlines(candles, chartFovTrendlineMin) : [];
+    trendlines = trendlines.filter(tl => (tl.touches || 1) >= chartFovTrendlineMin);
+
+    if (chartFovNearest && trendlines.length > 0) {
+      trendlines.sort((a, b) => Math.abs((a.endPrice || lastPrice) - lastPrice) - Math.abs((b.endPrice || lastPrice) - lastPrice));
+      trendlines = trendlines.slice(0, 2);
+    }
+
     for (const tl of trendlines) {
-      if ((tl.touches || 1) < chartFovMinTouches) continue;
       const x1 = getCandleX(tl.p1.idx);
       const x2 = getCandleX(N - 1);
       const y1 = toY(tl.p1.price);
       const y2 = toY(tl.p1.price + tl.slope * (N - 1 - tl.p1.idx));
       if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
-      const isRes = tl.direction === 'up';
-      const col = isRes ? '#ff4560' : '#26c97a';
       ctx.save();
-      ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = isRes ? 'rgba(255,69,96,0.75)' : 'rgba(38,201,122,0.75)';
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(180, 190, 205, 0.45)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
       if (chartFovShowTouches && tl.swingIndices) {
-        ctx.setLineDash([]);
-        ctx.fillStyle = isRes ? 'rgba(255,69,96,0.85)' : 'rgba(38,201,122,0.85)';
+        ctx.fillStyle = 'rgba(180, 190, 205, 0.6)';
         for (const ti of tl.swingIndices) {
           const tx = getCandleX(ti);
           const ty = toY(tl.p1.price + tl.slope * (ti - tl.p1.idx));
@@ -1779,38 +1774,43 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
           ctx.fill();
         }
       }
-      if (chartFovShowLabels) {
-        const lbl = isRes ? 'TL R' : 'TL S';
-        drawPill(lbl, PW - 55, y2, isRes ? 'rgba(100,20,20,0.85)' : 'rgba(10,60,30,0.85)', col, isRes ? '#fca5a5' : '#4ade80');
-      }
       ctx.restore();
     }
   }
 
   // ─── 4. RETESTS ──────────────────────────────────────────
   if (chartFovTypes.has('retest')) {
-    const retests = window.detectChartRetests ? window.detectChartRetests(candles) : [];
+    let retests = [];
+    if (chartFovRetestApproaching && window.detectChartApproachingRetests) {
+      retests = window.detectChartApproachingRetests(candles);
+    } else if (window.detectChartRetests) {
+      retests = window.detectChartRetests(candles);
+    }
+
+    if (chartFovNearest && retests.length > 0) {
+      retests.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
+      retests = retests.slice(0, 2);
+    }
+
     for (const rt of retests) {
-      if ((rt.touches || 1) < chartFovMinTouches) continue;
       const y = toY(rt.price);
       if (y < TOP || y > TOP + PH) continue;
-      const isBull = rt.direction === 'up';
+
+      const startX = (typeof rt.swingIdx === 'number') ? Math.max(0, getCandleX(rt.swingIdx)) : 0;
+
       ctx.save();
-      ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = isBull ? 'rgba(168,85,247,0.75)' : 'rgba(250,204,21,0.75)';
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(180, 190, 205, 0.4)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(0, y);
+      ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
-      if (chartFovShowLabels) {
-        const lbl = isBull ? 'RETEST ▲' : 'RETEST ▼';
-        drawPill(lbl, PW - 75, y, isBull ? 'rgba(80,20,110,0.85)' : 'rgba(100,80,5,0.85)', isBull ? '#a855f7' : '#facc15', isBull ? '#e9d5ff' : '#fef08a');
-      }
       ctx.restore();
     }
   }
 }
+
 
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
@@ -4886,7 +4886,7 @@ function connectWS() {
 
   const wsUrl =
     location.protocol === "file:"
-      ? "ws://169.58.138.33/ws"
+      ? "ws://localhost:3000/ws"
       : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
   // Tear down old connection cleanly
@@ -5372,98 +5372,84 @@ async function fetchKlines(ex, sym, tf) {
   try {
     const key = `${ex}|${sym}|${tf}`;
     const cached = KLINES_CACHE.get(key);
+    let loadedSuccess = false;
+
+    // 1. Instant cache hit (0ms)
     if (cached && Date.now() - cached.ts < KLINES_CACHE_TTL_MS) {
       candles = sanitizeCandles(cached.data);
       if (candles.length > 0) {
+        loadedSuccess = true;
         updateOHLC();
         if (!chartW || !chartH) resizeChart();
         chartNeedsDraw = true;
       }
     }
-    const useProxy = !location.href.startsWith("file:");
-    let loadedSuccess = false;
 
-    if (useProxy) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500); // 3.5s timeout for server proxy
-        const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        const dataLite = await rLite.json();
-
-        if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf) {
+    // 2. Ultra-fast fetch for unopened coins: Direct Exchange REST API (<40ms) with Proxy Server fallback
+    if (!loadedSuccess) {
+      let fastCandles = await fetchDirectKlines(ex, sym, tf).catch(() => []);
+      
+      if (!fastCandles || fastCandles.length === 0) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 1200);
+          const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          const dataLite = await rLite.json();
           if (Array.isArray(dataLite) && dataLite.length > 0) {
             const flat = [];
             if (typeof dataLite[0] === 'number') {
               for (let i = 0; i < dataLite.length; i += 6) {
                 flat.push({ t: dataLite[i], o: dataLite[i + 1], h: dataLite[i + 2], l: dataLite[i + 3], c: dataLite[i + 4], v: dataLite[i + 5] });
               }
-              candles = sanitizeCandles(flat);
+              fastCandles = sanitizeCandles(flat);
             } else {
-              candles = sanitizeCandles(dataLite);
-            }
-            if (candles.length > 0) {
-              loadedSuccess = true;
-              updateOHLC();
-              if (!chartW || !chartH) resizeChart();
-              chartNeedsDraw = true;
+              fastCandles = sanitizeCandles(dataLite);
             }
           }
-        }
-      } catch (_) {}
-    }
+        } catch (_) {}
+      }
 
-    // Direct Exchange API Fallback (runs instantly if proxy failed, returned error or timed out > 1.2s)
-    if (!loadedSuccess && fetchToken === klFetchToken) {
-      const directCandles = await fetchDirectKlines(ex, sym, tf);
-      if (fetchToken === klFetchToken && directCandles.length > 0) {
-        candles = directCandles;
-        updateOHLC();
-        if (!chartW || !chartH) resizeChart();
-        chartNeedsDraw = true;
+      if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf) {
+        if (fastCandles && fastCandles.length > 0) {
+          candles = fastCandles;
+          KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
+          loadedSuccess = true;
+          updateOHLC();
+          if (!chartW || !chartH) resizeChart();
+          chartNeedsDraw = true;
+        }
       }
     }
 
-    // 2. Fetch Full history (1500+ candles) seamlessly in background without blocking initial load
+    // 3. Background full history fetch without blocking initial rendering
     setTimeout(() => {
       if (fetchToken !== klFetchToken) return;
       fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=0`)
         .then(res => res.json())
         .then(dataFull => {
-          if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym) return;
+          if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
           if (Array.isArray(dataFull) && dataFull.length > 0) {
-            let centerTs = null;
-            const curPW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
-            const curN = Math.max(1, curPW / (candleW || 10));
-            if (candles.length > 0 && offsetX > 0) {
-              const curViewStart = candles.length - curN - offsetX;
-              centerTs = getTimeFromIdx(curViewStart + curN / 2);
-            }
-
+            let parsed = [];
             if (typeof dataFull[0] === 'number') {
               const flat = [];
               for (let i = 0; i < dataFull.length; i += 6) {
                 flat.push({ t: dataFull[i], o: dataFull[i + 1], h: dataFull[i + 2], l: dataFull[i + 3], c: dataFull[i + 4], v: dataFull[i + 5] });
               }
-              candles = sanitizeCandles(flat);
+              parsed = sanitizeCandles(flat);
             } else {
-              candles = sanitizeCandles(dataFull);
+              parsed = sanitizeCandles(dataFull);
             }
 
-            if (offsetX === 0 && !isDragY && !isDragYScale && !isDragX) {
-              offsetX = 0;
-              autoFitY = true;
-            } else if (centerTs != null && candles.length > 0) {
-              const newCenterIdx = getIdxFromTime(centerTs, candles);
-              const newViewStart = newCenterIdx - curN / 2;
-              offsetX = getClampedOffsetX(candles.length - curN - newViewStart);
+            if (parsed.length > 0) {
+              candles = parsed;
+              KLINES_CACHE.set(key, { ts: Date.now(), data: parsed });
+              chartNeedsDraw = true;
             }
-            KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
-            chartNeedsDraw = true;
           }
         })
         .catch(err => console.error("BG fetch error:", err));
-    }, 400);
+    }, 150);
 
   } catch (err) {
     console.error("klines", err);
@@ -6445,7 +6431,11 @@ if (settingsBtn && settingsOverlay) {
       const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
       if (typeof saved.enabled === 'boolean') chartFormationsOnChart = saved.enabled;
       if (Array.isArray(saved.types)) { chartFovTypes = new Set(saved.types); }
-      if (typeof saved.minTouches === 'number') chartFovMinTouches = saved.minTouches;
+      if (typeof saved.cascadesMin === 'number') chartFovCascadesMin = saved.cascadesMin;
+      if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
+      if (typeof saved.trendlineMin === 'number') chartFovTrendlineMin = saved.trendlineMin;
+      if (typeof saved.retestApproaching === 'boolean') chartFovRetestApproaching = saved.retestApproaching;
+      if (typeof saved.nearest === 'boolean') chartFovNearest = saved.nearest;
       if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
       if (typeof saved.showTouches === 'boolean') chartFovShowTouches = saved.showTouches;
     } catch(e) {}
@@ -6454,21 +6444,59 @@ if (settingsBtn && settingsOverlay) {
       localStorage.setItem(LS_KEY, JSON.stringify({
         enabled: chartFormationsOnChart,
         types: Array.from(chartFovTypes),
-        minTouches: chartFovMinTouches,
+        cascadesMin: chartFovCascadesMin,
+        breakoutMin: chartFovBreakoutMin,
+        trendlineMin: chartFovTrendlineMin,
+        retestApproaching: chartFovRetestApproaching,
+        nearest: chartFovNearest,
         showLabels: chartFovShowLabels,
         showTouches: chartFovShowTouches
       }));
     }
 
     function syncUI() {
+      // Master toggle (checkbox)
       const elEnabled = document.getElementById('fov-enabled');
       if (elEnabled) elEnabled.checked = chartFormationsOnChart;
-      document.querySelectorAll('.fov-type').forEach(cb => {
-        cb.checked = chartFovTypes.has(cb.dataset.fov);
+
+      const controlsBody = document.getElementById('fov-controls-body');
+      if (controlsBody) controlsBody.style.display = chartFormationsOnChart ? 'block' : 'none';
+
+      // Type buttons
+      document.querySelectorAll('button.fov-type-btn').forEach(btn => {
+        const isSelected = chartFovTypes.has(btn.dataset.fov);
+        btn.classList.toggle('on', isSelected);
+
+        // Toggle visibility of matching sub-block
+        const subBlock = document.getElementById('fov-sub-' + btn.dataset.fov);
+        if (subBlock) subBlock.style.display = (chartFormationsOnChart && isSelected) ? 'block' : 'none';
       });
-      document.querySelectorAll('.fov-touch-btn').forEach(btn => {
-        btn.classList.toggle('active', parseInt(btn.dataset.val) === chartFovMinTouches);
+
+
+      // Cascades min buttons
+      document.querySelectorAll('.fov-cascades-touch-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.val) === chartFovCascadesMin);
       });
+
+      // Breakout min buttons
+      document.querySelectorAll('.fov-breakout-touch-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.val) === chartFovBreakoutMin);
+      });
+
+      // Trendline min buttons
+      document.querySelectorAll('.fov-trendline-touch-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.val) === chartFovTrendlineMin);
+      });
+
+      // Retest approaching checkbox
+      const elApp = document.getElementById('fov-retest-approaching');
+      if (elApp) elApp.checked = chartFovRetestApproaching;
+
+      // Nearest checkbox
+      const elNear = document.getElementById('fov-nearest');
+      if (elNear) elNear.checked = chartFovNearest;
+
+      // Extra checkboxes
       const elLabels = document.getElementById('fov-show-labels');
       if (elLabels) elLabels.checked = chartFovShowLabels;
       const elTouches = document.getElementById('fov-show-touches');
@@ -6482,31 +6510,77 @@ if (settingsBtn && settingsOverlay) {
     if (elEnabled) {
       elEnabled.onchange = () => {
         chartFormationsOnChart = elEnabled.checked;
+        syncUI();
         saveSettings();
         requestAnimationFrame(drawChart);
       };
     }
 
-    // Type checkboxes
-    document.querySelectorAll('.fov-type').forEach(cb => {
-      cb.onchange = () => {
-        if (cb.checked) chartFovTypes.add(cb.dataset.fov);
-        else chartFovTypes.delete(cb.dataset.fov);
+
+    // Type buttons
+    document.querySelectorAll('button.fov-type-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const fov = btn.dataset.fov;
+        if (chartFovTypes.has(fov)) {
+          chartFovTypes.delete(fov);
+        } else {
+          chartFovTypes.add(fov);
+        }
+        syncUI();
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      });
+    });
+
+    // Cascades min touch buttons
+    document.querySelectorAll('.fov-cascades-touch-btn').forEach(btn => {
+      btn.onclick = () => {
+        chartFovCascadesMin = parseInt(btn.dataset.val) || 1;
+        syncUI();
         saveSettings();
         requestAnimationFrame(drawChart);
       };
     });
 
-    // Touch count buttons
-    document.querySelectorAll('.fov-touch-btn').forEach(btn => {
+    // Breakout min touch buttons
+    document.querySelectorAll('.fov-breakout-touch-btn').forEach(btn => {
       btn.onclick = () => {
-        chartFovMinTouches = parseInt(btn.dataset.val) || 1;
-        document.querySelectorAll('.fov-touch-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+        chartFovBreakoutMin = parseInt(btn.dataset.val) || 1;
+        syncUI();
         saveSettings();
         requestAnimationFrame(drawChart);
       };
     });
+
+    // Trendline min touch buttons
+    document.querySelectorAll('.fov-trendline-touch-btn').forEach(btn => {
+      btn.onclick = () => {
+        chartFovTrendlineMin = parseInt(btn.dataset.val) || 1;
+        syncUI();
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    });
+
+    // Retest approaching toggle
+    const elApp = document.getElementById('fov-retest-approaching');
+    if (elApp) {
+      elApp.onchange = () => {
+        chartFovRetestApproaching = elApp.checked;
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    }
+
+    // Nearest toggle
+    const elNear = document.getElementById('fov-nearest');
+    if (elNear) {
+      elNear.onchange = () => {
+        chartFovNearest = elNear.checked;
+        saveSettings();
+        requestAnimationFrame(drawChart);
+      };
+    }
 
     // Labels toggle
     const elLabels = document.getElementById('fov-show-labels');
@@ -6528,6 +6602,8 @@ if (settingsBtn && settingsOverlay) {
       };
     }
   })();
+
+
 
   // Background color custom picker logic
 
@@ -10388,10 +10464,11 @@ window.addEventListener("resize", () => {
     return kept;
   };
 
-  window.detectChartBreakoutLevels = function (candles) {
+  window.detectChartBreakoutLevels = function (candles, minTouchesOverride) {
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
+    const minTouches = (typeof minTouchesOverride === 'number') ? minTouchesOverride : formationsMinCascade;
 
     // 1. Swing Highs & Lows (window=3)
     const W = 3;
@@ -10409,8 +10486,7 @@ window.addEventListener("resize", () => {
 
     const highSwings = swings.filter(s => s.type === 'high');
     const lowSwings = swings.filter(s => s.type === 'low');
-    const tol = 0.0002; // 0.02%
-    const maxBarsToRetest = 25;
+    const tol = 0.0012; // 0.12% clustering tolerance for solid levels
     const candidates = [];
 
     // Resistance (breaks UP)
@@ -10435,7 +10511,7 @@ window.addEventListener("resize", () => {
 
     // Filter Resistance
     for (const cl of resClusters) {
-      if (cl.touches < formationsMinCascade) continue;
+      if (cl.touches < minTouches) continue;
       const firstIdx = Math.min(...cl.swingIndices);
 
       let active = true;
@@ -10443,14 +10519,14 @@ window.addEventListener("resize", () => {
       let lastTouchIndex = cl.lastTouch;
 
       for (let i = firstIdx; i < N; i++) {
-        // High strictly above resistance level => ЗАКОЛ! Level is destroyed.
-        if (candles[i].h > cl.price) {
+        // Level is broken if candle closes > 0.2% above or spikes > 0.4% above
+        if (candles[i].c > cl.price * 1.002 || candles[i].h > cl.price * 1.004) {
           active = false;
           break;
         }
 
-        // Touch if candle high reaches within tolerance below/at the resistance line
-        const isTouch = candles[i].h >= cl.price * (1 - tol) && candles[i].h <= cl.price;
+        // Touch if candle high reaches within 0.25% below/at resistance line
+        const isTouch = candles[i].h >= cl.price * (1 - tol * 2) && candles[i].h <= cl.price * 1.001;
         if (isTouch) {
           touchIndices.add(i);
           lastTouchIndex = Math.max(lastTouchIndex, i);
@@ -10460,7 +10536,6 @@ window.addEventListener("resize", () => {
       if (active) {
         const dist = Math.abs(cl.price - lastPrice) / lastPrice;
         const barsSinceLastTouch = N - 1 - lastTouchIndex;
-        // Relevance: closer price (priority) + recency of last touch
         const relevance = - (dist * 1000) - (barsSinceLastTouch / 20);
 
         candidates.push({
@@ -10498,7 +10573,7 @@ window.addEventListener("resize", () => {
 
     // Filter Support
     for (const cl of supClusters) {
-      if (cl.touches < formationsMinCascade) continue;
+      if (cl.touches < minTouches) continue;
       const firstIdx = Math.min(...cl.swingIndices);
 
       let active = true;
@@ -10506,14 +10581,14 @@ window.addEventListener("resize", () => {
       let lastTouchIndex = cl.lastTouch;
 
       for (let i = firstIdx; i < N; i++) {
-        // Low strictly below support level => ЗАКОЛ! Level is destroyed.
-        if (candles[i].l < cl.price) {
+        // Level is broken if candle closes > 0.2% below or spikes > 0.4% below
+        if (candles[i].c < cl.price * 0.998 || candles[i].l < cl.price * 0.996) {
           active = false;
           break;
         }
 
-        // Touch if candle low reaches within tolerance above/at the support line
-        const isTouch = candles[i].l <= cl.price * (1 + tol) && candles[i].l >= cl.price;
+        // Touch if candle low reaches within 0.25% above/at support line
+        const isTouch = candles[i].l <= cl.price * (1 + tol * 2) && candles[i].l >= cl.price * 0.999;
         if (isTouch) {
           touchIndices.add(i);
           lastTouchIndex = Math.max(lastTouchIndex, i);
@@ -10541,21 +10616,23 @@ window.addEventListener("resize", () => {
     // Sort by relevance (highest relevance first)
     candidates.sort((a, b) => b.relevance - a.relevance);
 
-    // Deduplicate: min distance 0.5%
+    // Deduplicate: min distance 0.4%
     const kept = [];
     for (const c of candidates) {
-      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.004);
       if (!near) kept.push(c);
     }
 
-    // Limit to 3 most relevant active levels
-    return kept.slice(0, 3);
+    return kept.slice(0, 8);
   };
 
-  window.detectChartTrendlines = function (candles) {
+
+
+  window.detectChartTrendlines = function (candles, minTouchesOverride) {
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
+    const minTouches = (typeof minTouchesOverride === 'number') ? minTouchesOverride : formationsMinCascade;
 
     // 1. Swing Highs & Lows (window=3)
     const W = 3;
@@ -10606,7 +10683,7 @@ window.addEventListener("resize", () => {
         swingIndices.sort((a, b) => a - b);
         const uniqueTouches = Array.from(new Set(swingIndices));
 
-        if (uniqueTouches.length < formationsMinCascade) continue;
+        if (uniqueTouches.length < minTouches) continue;
 
         const lineLastVal = s1.price + slope * ((N - 1) - s1.idx);
         if (lastPrice > lineLastVal) continue;
@@ -10656,7 +10733,8 @@ window.addEventListener("resize", () => {
         swingIndices.sort((a, b) => a - b);
         const uniqueTouches = Array.from(new Set(swingIndices));
 
-        if (uniqueTouches.length < formationsMinCascade) continue;
+        if (uniqueTouches.length < minTouches) continue;
+
 
         const lineLastVal = s1.price + slope * ((N - 1) - s1.idx);
         if (lastPrice < lineLastVal) continue;

@@ -1326,10 +1326,15 @@ button {
     right: 14px;
     z-index: 80;
     width: 320px;
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(124, 58, 237, 0.4) transparent;
     display: none;
     flex-direction: column;
-    gap: 12px;
-    padding: 14px;
+    gap: 10px;
+    padding: 12px;
     border: 1px solid rgba(124, 58, 237, 0.2);
     border-radius: 14px;
     background:
@@ -1340,9 +1345,18 @@ button {
         inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
+.chart-density-panel::-webkit-scrollbar {
+    width: 4px;
+}
+.chart-density-panel::-webkit-scrollbar-thumb {
+    background: rgba(124, 58, 237, 0.4);
+    border-radius: 4px;
+}
+
 .chart-density-panel.open {
     display: flex;
 }
+
 
 #chart-formations-panel {
     position: absolute;
@@ -1875,14 +1889,17 @@ button {
 
 /* Formation Overlay Settings – touch count buttons */
 .fov-touch-btn {
-    padding: 5px 13px;
-    border-radius: 6px;
+    padding: 3px 8px;
+    border-radius: 5px;
     border: 1px solid var(--bd2);
     background: var(--bg3);
     color: var(--t2);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
+    flex: 1;
+    text-align: center;
+    min-width: 32px;
     transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 .fov-touch-btn:hover {
@@ -1894,6 +1911,7 @@ button {
     border-color: var(--purple);
     color: #fff;
 }
+
 
 
 .settings-group {

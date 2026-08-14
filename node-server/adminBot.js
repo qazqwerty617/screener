@@ -4,10 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const userStore = require("./userStore");
 
-const ADMIN_BOT_TOKEN = String(process.env.ADMIN_BOT_TOKEN || "").trim();
-const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || "").trim();
-const MAIN_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
-const TELEGRAM_API = `https://api.telegram.org/bot${ADMIN_BOT_TOKEN}`;
+function getAdminBotToken() { return String(process.env.ADMIN_BOT_TOKEN || "").trim(); }
+function getAdminChatId() { return String(process.env.ADMIN_CHAT_ID || "").trim(); }
+function getMainBotToken() { return String(process.env.TELEGRAM_BOT_TOKEN || "").trim(); }
 
 // Files for persistent admin data
 const PROMOS_FILE = path.join(__dirname, "promos.json");
@@ -72,49 +71,27 @@ const httpsAgent = new https.Agent({
   scheduling: "fifo"
 });
 
-// High-speed Telegram API Helper with HTTP Keep-Alive Connection Pooling
-function apiCall(method, payload) {
-  return new Promise((resolve) => {
-    if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return resolve({ ok: false, error: "ADMIN_BOT_DISABLED" });
-    const postData = JSON.stringify(payload || {});
-    const req = https.request(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/${method}`, {
+async function apiCall(method, payload) {
+  const token = getAdminBotToken();
+  const adminChatId = getAdminChatId();
+  if (!token || !adminChatId) return { ok: false, error: "ADMIN_BOT_DISABLED" };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
-      agent: httpsAgent,
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(postData)
-      },
-      timeout: 10000
-    }, (res) => {
-      let raw = "";
-      res.on("data", (chunk) => { raw += chunk; });
-      res.on("end", () => {
-        try {
-          resolve(JSON.parse(raw));
-        } catch (e) {
-          resolve({ ok: false, error: e.message });
-        }
-      });
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+      signal: AbortSignal.timeout(10000)
     });
-
-    req.on("error", (err) => {
-      console.error(`[ADMIN BOT ERROR] API Call ${method} failed:`, err.message);
-      resolve({ ok: false, error: err.message });
-    });
-
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ ok: false, error: "TIMEOUT" });
-    });
-
-    req.write(postData);
-    req.end();
-  });
+    return await res.json();
+  } catch (err) {
+    console.error(`[ADMIN BOT ERROR] API Call ${method} failed:`, err.message);
+    return { ok: false, error: err.message };
+  }
 }
 
 async function sendAdminMessage(text, replyMarkup = null) {
   return await apiCall("sendMessage", {
-    chat_id: ADMIN_CHAT_ID,
+    chat_id: getAdminChatId(),
     text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
@@ -123,17 +100,19 @@ async function sendAdminMessage(text, replyMarkup = null) {
 }
 
 async function sendAdminDocument(filePath, filename, caption = "") {
-  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
+  const adminToken = getAdminBotToken();
+  const adminChatId = getAdminChatId();
+  if (!adminToken || !adminChatId) return { ok: false, error: "ADMIN_BOT_DISABLED" };
   try {
     const fileBuffer = fs.readFileSync(filePath);
     const blob = new Blob([fileBuffer], { type: "text/csv" });
     const formData = new FormData();
-    formData.append("chat_id", ADMIN_CHAT_ID);
+    formData.append("chat_id", adminChatId);
     formData.append("document", blob, filename);
     if (caption) formData.append("caption", caption);
     formData.append("parse_mode", "HTML");
 
-    const res = await fetch(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendDocument`, {
+    const res = await fetch(`https://api.telegram.org/bot${adminToken}/sendDocument`, {
       method: "POST",
       body: formData
     });
@@ -145,18 +124,20 @@ async function sendAdminDocument(filePath, filename, caption = "") {
 }
 
 async function sendAdminPhoto(filePath, caption = "", replyMarkup = null) {
-  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
+  const adminToken = getAdminBotToken();
+  const adminChatId = getAdminChatId();
+  if (!adminToken || !adminChatId) return { ok: false, error: "ADMIN_BOT_DISABLED" };
   try {
     const fileBuffer = fs.readFileSync(filePath);
     const blob = new Blob([fileBuffer], { type: "image/png" });
     const formData = new FormData();
-    formData.append("chat_id", ADMIN_CHAT_ID);
+    formData.append("chat_id", adminChatId);
     formData.append("photo", blob, "bug_screenshot.png");
     if (caption) formData.append("caption", caption);
     formData.append("parse_mode", "HTML");
     if (replyMarkup) formData.append("reply_markup", JSON.stringify(replyMarkup));
 
-    const res = await fetch(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendPhoto`, {
+    const res = await fetch(`https://api.telegram.org/bot${adminToken}/sendPhoto`, {
       method: "POST",
       body: formData
     });
@@ -169,9 +150,10 @@ async function sendAdminPhoto(filePath, caption = "", replyMarkup = null) {
 
 async function editAdminMessage(messageId, text, replyMarkup = null) {
   const rm = replyMarkup || { inline_keyboard: [] };
+  const adminChatId = getAdminChatId();
   
   const resText = await apiCall("editMessageText", {
-    chat_id: ADMIN_CHAT_ID,
+    chat_id: adminChatId,
     message_id: messageId,
     text,
     parse_mode: "HTML",
@@ -182,7 +164,7 @@ async function editAdminMessage(messageId, text, replyMarkup = null) {
   if (resText && resText.ok) return resText;
 
   const resCap = await apiCall("editMessageCaption", {
-    chat_id: ADMIN_CHAT_ID,
+    chat_id: adminChatId,
     message_id: messageId,
     caption: text,
     parse_mode: "HTML",
@@ -192,7 +174,7 @@ async function editAdminMessage(messageId, text, replyMarkup = null) {
   if (resCap && resCap.ok) return resCap;
 
   return await apiCall("editMessageReplyMarkup", {
-    chat_id: ADMIN_CHAT_ID,
+    chat_id: adminChatId,
     message_id: messageId,
     reply_markup: rm
   });
@@ -842,17 +824,19 @@ function buildSupportMenu() {
 }
 
 async function sendAdminPhotoBuffer(imageBuffer, filename, caption, replyMarkup = null) {
-  if (!ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return { ok: false, error: "ADMIN_BOT_DISABLED" };
+  const adminToken = getAdminBotToken();
+  const adminChatId = getAdminChatId();
+  if (!adminToken || !adminChatId) return { ok: false, error: "ADMIN_BOT_DISABLED" };
   try {
     const blob = new Blob([imageBuffer], { type: "image/jpeg" });
     const formData = new FormData();
-    formData.append("chat_id", ADMIN_CHAT_ID);
+    formData.append("chat_id", adminChatId);
     formData.append("photo", blob, filename || "screenshot.jpg");
     if (caption) formData.append("caption", caption);
     formData.append("parse_mode", "HTML");
     if (replyMarkup) formData.append("reply_markup", JSON.stringify(replyMarkup));
 
-    const res = await fetch(`https://api.telegram.org/bot${ADMIN_BOT_TOKEN}/sendPhoto`, {
+    const res = await fetch(`https://api.telegram.org/bot${adminToken}/sendPhoto`, {
       method: "POST",
       body: formData
     });
@@ -904,13 +888,14 @@ async function createSupportTicket({ chatId, userId, username, name, text, photo
 
   let sentOk = false;
 
-  if (photoFileId && MAIN_BOT_TOKEN) {
+  if (photoFileId && getMainBotToken()) {
     try {
-      const fileRes = await fetch(`https://api.telegram.org/bot${MAIN_BOT_TOKEN}/getFile?file_id=${photoFileId}`);
+      const mainToken = getMainBotToken();
+      const fileRes = await fetch(`https://api.telegram.org/bot${mainToken}/getFile?file_id=${photoFileId}`);
       if (fileRes.ok) {
         const fileData = await fileRes.json();
         if (fileData.ok && fileData.result && fileData.result.file_path) {
-          const downloadUrl = `https://api.telegram.org/file/bot${MAIN_BOT_TOKEN}/${fileData.result.file_path}`;
+          const downloadUrl = `https://api.telegram.org/file/bot${mainToken}/${fileData.result.file_path}`;
           const imgRes = await fetch(downloadUrl);
           if (imgRes.ok) {
             const buffer = Buffer.from(await imgRes.arrayBuffer());
@@ -989,7 +974,7 @@ async function handleAdminMessageText(msg) {
   let text = (msg.text || msg.caption || "").trim();
   let adminPhotoId = Array.isArray(msg.photo) && msg.photo.length > 0 ? msg.photo[msg.photo.length - 1].file_id : (msg.document ? msg.document.file_id : null);
 
-  if (chatId !== ADMIN_CHAT_ID) {
+  if (chatId !== getAdminChatId()) {
     sendAdminMessage("⛔ <b>Доступ запрещен.</b> Панель доступна только Администратору.");
     return;
   }
@@ -1060,8 +1045,9 @@ async function handleAdminMessageText(msg) {
       const userId = currentState.data.userId;
       const targetUser = userStore.findUser(userId);
       if (targetUser && targetUser.telegramChatId) {
-        if (!MAIN_BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
-        const mainBotApi = `https://api.telegram.org/bot${MAIN_BOT_TOKEN}/sendMessage`;
+        const mainToken = getMainBotToken();
+        if (!mainToken) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+        const mainBotApi = `https://api.telegram.org/bot${mainToken}/sendMessage`;
         await fetch(mainBotApi, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1337,7 +1323,7 @@ async function handleAdminCallbackQuery(query) {
   const messageId = query.message.message_id;
   const data = query.data;
 
-  if (chatId !== ADMIN_CHAT_ID) {
+  if (chatId !== getAdminChatId()) {
     await answerCallback(query.id, "⛔ Доступ запрещен.", true);
     return;
   }
@@ -1973,8 +1959,9 @@ async function handleAdminCallbackQuery(query) {
         let success = 0;
         let failed = 0;
 
-        if (!MAIN_BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
-        const mainBotApi = `https://api.telegram.org/bot${MAIN_BOT_TOKEN}/sendMessage`;
+        const mainToken = getMainBotToken();
+        if (!mainToken) throw new Error("TELEGRAM_BOT_TOKEN is not configured");
+        const mainBotApi = `https://api.telegram.org/bot${mainToken}/sendMessage`;
 
         for (const u of recipients) {
           try {

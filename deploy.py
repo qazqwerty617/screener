@@ -24,6 +24,7 @@ username = _env.get("DEPLOY_USER", os.environ.get("DEPLOY_USER", "root"))
 password = _env.get("DEPLOY_PASSWORD", os.environ.get("DEPLOY_PASSWORD", ""))
 remote_bases = ["/root/nother", "/root/cryptoscreen"]
 local_base = os.path.abspath(".")
+local_env_path = os.path.join(local_base, "node-server", ".env")
 
 ignore_dirs = {".git", ".vscode", "node_modules", "scratch", "knowledge", "__pycache__"}
 ignore_files = {
@@ -103,17 +104,29 @@ def deploy():
 
         print(f"Uploaded {uploaded_count} updated files to {remote_base}!")
 
-    sftp.close()
-
-    # Remove .env from server if it was accidentally uploaded before
-    print("\nCleaning up .env from remote servers...")
+    # Remove root-level .env if accidentally uploaded
+    print("\nCleaning up root .env from remote servers...")
     for remote_base in remote_bases:
         stdin, stdout, stderr = ssh.exec_command(f"rm -f {remote_base}/.env")
         stdout.read()
         print(f"  Removed {remote_base}/.env")
 
-    print("\nRestarting PM2 processes...")
-    stdin, stdout, stderr = ssh.exec_command("cd /root/nother/node-server && pm2 restart all && pm2 status")
+    # Upload node-server/.env to each remote (without displaying contents)
+    print("\nUploading node-server/.env to remote servers...")
+    if os.path.exists(local_env_path):
+        for remote_base in remote_bases:
+            remote_env = f"{remote_base}/node-server/.env"
+            sftp.put(local_env_path, remote_env)
+            sftp.chmod(remote_env, 0o600)  # owner-only read/write
+            print(f"  .env -> {remote_env} (chmod 600)")
+    else:
+        print("  WARNING: node-server/.env not found locally — skipping upload!")
+        print("  Create node-server/.env and fill in your tokens before deploying.")
+
+    sftp.close()
+
+    print("\nRestarting PM2 processes with fresh environment...")
+    stdin, stdout, stderr = ssh.exec_command("cd /root/nother/node-server && pm2 restart all --update-env && pm2 status")
     out = stdout.read().decode('utf-8', errors='ignore')
     err = stderr.read().decode('utf-8', errors='ignore')
     print("=== PM2 Output ===")

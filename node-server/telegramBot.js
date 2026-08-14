@@ -3,9 +3,10 @@
 const crypto = require("crypto");
 const userStore = require("./userStore");
 
-const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
-const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "ObsidianScreenerBot").trim();
-const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+function getBotToken() { return String(process.env.TELEGRAM_BOT_TOKEN || "").trim(); }
+function getAdminBotToken() { return String(process.env.ADMIN_BOT_TOKEN || "").trim(); }
+function getAdminChatId() { return String(process.env.ADMIN_CHAT_ID || "").trim(); }
+function getBotUsername() { return String(process.env.TELEGRAM_BOT_USERNAME || "ObsidianScreenerBot").trim(); }
 
 // Map of one-time deep-link tokens -> userId
 const linkTokens = new Map(); // token -> { userId, createdAt }
@@ -15,12 +16,13 @@ const regTokens = new Map();
 
 // Verify Telegram Widget Authorization payload cryptographically
 function verifyTelegramAuth(data) {
-  if (!BOT_TOKEN || !data || typeof data.hash !== "string" || !/^[a-fA-F0-9]{64}$/.test(data.hash)) return false;
+  const token = getBotToken();
+  if (!token || !data || typeof data.hash !== "string" || !/^[a-fA-F0-9]{64}$/.test(data.hash)) return false;
   const authDate = Number(data.auth_date);
   const nowSeconds = Math.floor(Date.now() / 1000);
   if (!Number.isInteger(authDate) || authDate > nowSeconds + 60 || nowSeconds - authDate > 24 * 60 * 60) return false;
 
-  const secretKey = crypto.createHash("sha256").update(BOT_TOKEN).digest();
+  const secretKey = crypto.createHash("sha256").update(token).digest();
   
   const checkArr = [];
   for (const key of Object.keys(data).sort()) {
@@ -38,7 +40,7 @@ function verifyTelegramAuth(data) {
 
 // Generate one-time deep link token for connecting Telegram bot to user account
 function createLinkToken(userId) {
-  if (!BOT_TOKEN) throw new Error("Telegram bot is not configured");
+  if (!getBotToken()) throw new Error("Telegram bot is not configured");
   const token = crypto.randomBytes(24).toString("base64url");
   linkTokens.set(token, { userId, createdAt: Date.now() });
   setTimeout(() => linkTokens.delete(token), 15 * 60 * 1000).unref();
@@ -47,7 +49,7 @@ function createLinkToken(userId) {
 
 // Generate registration/login start token
 function createRegToken() {
-  if (!BOT_TOKEN) throw new Error("Telegram bot is not configured");
+  if (!getBotToken()) throw new Error("Telegram bot is not configured");
   const token = "reg_" + crypto.randomBytes(24).toString("base64url");
   regTokens.set(token, { status: "pending", token: null, user: null, createdAt: Date.now() });
   setTimeout(() => regTokens.delete(token), 10 * 60 * 1000).unref();
@@ -91,44 +93,21 @@ const userHttpsAgent = new https.Agent({
   scheduling: "fifo"
 });
 
-// High-speed Telegram API Helper for User Bot with HTTP Keep-Alive Connection Pooling
-function userApiCall(method, payload) {
-  return new Promise((resolve) => {
-    if (!BOT_TOKEN) return resolve({ ok: false, error: "TELEGRAM_BOT_DISABLED" });
-    const postData = JSON.stringify(payload || {});
-    const req = https.request(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+async function userApiCall(method, payload) {
+  const token = getBotToken();
+  if (!token) return { ok: false, error: "TELEGRAM_BOT_DISABLED" };
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
       method: "POST",
-      agent: userHttpsAgent,
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(postData)
-      },
-      timeout: 10000
-    }, (res) => {
-      let raw = "";
-      res.on("data", (chunk) => { raw += chunk; });
-      res.on("end", () => {
-        try {
-          resolve(JSON.parse(raw));
-        } catch (e) {
-          resolve({ ok: false, error: e.message });
-        }
-      });
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+      signal: AbortSignal.timeout(10000)
     });
-
-    req.on("error", (err) => {
-      console.error(`[USER BOT ERROR] API Call ${method} failed:`, err.message);
-      resolve({ ok: false, error: err.message });
-    });
-
-    req.on("timeout", () => {
-      req.destroy();
-      resolve({ ok: false, error: "TIMEOUT" });
-    });
-
-    req.write(postData);
-    req.end();
-  });
+    return await res.json();
+  } catch (err) {
+    console.error(`[USER BOT ERROR] API Call ${method} failed:`, err.message);
+    return { ok: false, error: err.message };
+  }
 }
 
 // Send message to Telegram Chat
@@ -150,7 +129,7 @@ async function sendTelegramMessageWithKeyboard(chatId, text, replyMarkup) {
 }
 
 function answerCallbackQuery(callbackQueryId, text) {
-  if (!BOT_TOKEN || !callbackQueryId) return;
+  if (!getBotToken() || !callbackQueryId) return;
   userApiCall("answerCallbackQuery", { callback_query_id: callbackQueryId, text });
 }
 
@@ -166,31 +145,46 @@ async function editMessageText(chatId, messageId, text, replyMarkup) {
 
 // Long polling engine to process incoming Telegram Bot messages
 let offset = 0;
-async function pollUpdates() {
-  let hasUpdates = false;
-  try {
-    const res = await fetch(`${TELEGRAM_API}/getUpdates?offset=${offset}&timeout=20`, {
-      signal: AbortSignal.timeout(25000)
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
-        hasUpdates = true;
-        for (const update of data.result) {
-          offset = update.update_id + 1;
-          handleUpdate(update);
+function pollUpdates() {
+  const token = getBotToken();
+  console.log("[USER BOT POLL DEBUG] Token:", JSON.stringify(token));
+  if (!token) return;
+  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=20`;
+  const req = https.get(url, { timeout: 35000 }, (res) => {
+    let body = "";
+    res.on("data", (chunk) => body += chunk);
+    res.on("end", () => {
+      let hasUpdates = false;
+      try {
+        if (res.statusCode === 200) {
+          const data = JSON.parse(body);
+          if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+            hasUpdates = true;
+            for (const update of data.result) {
+              offset = update.update_id + 1;
+              try {
+                handleUpdate(update);
+              } catch (err) {
+                console.error("[USER BOT UPDATE ERROR]", err);
+              }
+            }
+          }
+        } else {
+          console.warn(`[USER BOT POLL WARN] HTTP ${res.statusCode}: ${body}`);
         }
+      } catch (err) {
+        console.error("[USER BOT JSON ERR]", err.message);
       }
-    }
-  } catch (e) {
-    // Ignore timeout / network aborts
-  } finally {
-    if (hasUpdates) {
-      setImmediate(pollUpdates);
-    } else {
-      setTimeout(pollUpdates, 10);
-    }
-  }
+      setTimeout(pollUpdates, hasUpdates ? 10 : 200);
+    });
+  });
+  req.on("error", (err) => {
+    console.error("[USER BOT POLL ERR]", err.message);
+    setTimeout(pollUpdates, 2000);
+  });
+  req.on("timeout", () => {
+    req.destroy();
+  });
 }
 
 function handleCallbackQuery(cb) {
@@ -262,7 +256,7 @@ function handleCallbackQuery(cb) {
 async function getTelegramFileUrl(botToken, fileId) {
   if (!botToken || !fileId) return null;
   try {
-    const res = await fetch(`${TELEGRAM_API}/getFile?file_id=${fileId}`);
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
     if (res.ok) {
       const data = await res.json();
       if (data.ok && data.result && data.result.file_path) {
@@ -287,6 +281,7 @@ async function handleUpdate(update) {
   const chatId = msg.chat.id;
   const tgUser = msg.from || {};
   let text = (msg.text || msg.caption || "").trim();
+  console.log(`[USER BOT MSG] From chatId=${chatId} (@${tgUser.username || "no_user"}): "${text}"`);
   let photoFileId = null;
 
   if (Array.isArray(msg.photo) && msg.photo.length > 0) {
@@ -299,7 +294,7 @@ async function handleUpdate(update) {
 
   let photoUrl = null;
   if (photoFileId) {
-    photoUrl = await getTelegramFileUrl(BOT_TOKEN, photoFileId);
+    photoUrl = await getTelegramFileUrl(getBotToken(), photoFileId);
   }
 
   if (text.startsWith("/start")) {
@@ -403,14 +398,12 @@ async function handleUpdate(update) {
   }
 }
 
-const ADMIN_BOT_TOKEN = String(process.env.ADMIN_BOT_TOKEN || "").trim();
-const ADMIN_CHAT_ID = String(process.env.ADMIN_CHAT_ID || "").trim();
-const ADMIN_TELEGRAM_API = `https://api.telegram.org/bot${ADMIN_BOT_TOKEN}`;
-
 let registrationCounter = 0;
 
 async function sendAdminNotification(user, details = {}) {
-  if (!user || !ADMIN_BOT_TOKEN || !ADMIN_CHAT_ID) return;
+  const adminToken = getAdminBotToken();
+  const adminChatId = getAdminChatId();
+  if (!user || !adminToken || !adminChatId) return;
   registrationCounter++;
 
   // Only send notification every 10 new user registrations
@@ -435,11 +428,11 @@ async function sendAdminNotification(user, details = {}) {
       `• Способ: ${method}\n` +
       `• Время: ${new Date().toLocaleString("ru-RU")}`;
 
-    await fetch(`${ADMIN_TELEGRAM_API}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${adminToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: ADMIN_CHAT_ID,
+        chat_id: adminChatId,
         text,
         parse_mode: "HTML"
       })
@@ -453,44 +446,62 @@ const adminBot = require("./adminBot");
 
 // Admin Bot Command Polling Engine
 let adminOffset = 0;
-async function pollAdminUpdates() {
-  let hasUpdates = false;
-  try {
-    const res = await fetch(`${ADMIN_TELEGRAM_API}/getUpdates?offset=${adminOffset}&timeout=20`, {
-      signal: AbortSignal.timeout(25000)
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
-        hasUpdates = true;
-        for (const update of data.result) {
-          adminOffset = update.update_id + 1;
-          handleAdminUpdate(update);
+function pollAdminUpdates() {
+  const adminToken = getAdminBotToken();
+  if (!adminToken) return;
+  const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=20`;
+  const req = https.get(url, { timeout: 35000 }, (res) => {
+    let body = "";
+    res.on("data", (chunk) => body += chunk);
+    res.on("end", () => {
+      let hasUpdates = false;
+      try {
+        if (res.statusCode === 200) {
+          const data = JSON.parse(body);
+          if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+            hasUpdates = true;
+            for (const update of data.result) {
+              adminOffset = update.update_id + 1;
+              try {
+                handleAdminUpdate(update);
+              } catch (err) {
+                console.error("[ADMIN BOT UPDATE ERROR]", err);
+              }
+            }
+          }
+        } else {
+          console.warn(`[ADMIN BOT POLL WARN] HTTP ${res.statusCode}: ${body}`);
         }
+      } catch (err) {
+        console.error("[ADMIN BOT JSON ERR]", err.message);
       }
-    }
-  } catch (e) {
-    // Ignore timeout / network aborts
-  } finally {
-    if (hasUpdates) {
-      setImmediate(pollAdminUpdates);
-    } else {
-      setTimeout(pollAdminUpdates, 10);
-    }
-  }
+      setTimeout(pollAdminUpdates, hasUpdates ? 10 : 200);
+    });
+  });
+  req.on("error", (err) => {
+    console.error("[ADMIN BOT POLL ERR]", err.message);
+    setTimeout(pollAdminUpdates, 2000);
+  });
+  req.on("timeout", () => {
+    req.destroy();
+  });
 }
 
 function handleAdminUpdate(update) {
   if (update.message) {
+    console.log(`[ADMIN BOT MSG] From chatId=${update.message.chat.id}: "${update.message.text || ""}"`);
     adminBot.handleAdminMessageText(update.message);
   } else if (update.callback_query) {
+    console.log(`[ADMIN BOT CB] From chatId=${update.callback_query.message ? update.callback_query.message.chat.id : ""}`);
     adminBot.handleAdminCallbackQuery(update.callback_query);
   }
 }
 
 async function sendAdminBotMessage(chatId, text) {
   try {
-    await fetch(`${ADMIN_TELEGRAM_API}/sendMessage`, {
+    const adminToken = getAdminBotToken();
+    if (!adminToken || !chatId) return;
+    await fetch(`https://api.telegram.org/bot${adminToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -645,7 +656,9 @@ async function sendDigestToAllUsers() {
 
   for (const u of recipients) {
     try {
-      const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      const token = getBotToken();
+      if (!token) break;
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -693,21 +706,21 @@ function scheduleDigest() {
   console.log("[DIGEST] Daily market digest scheduler active (09:00 & 21:00 MSK)");
 }
 
-if (process.env.DISABLE_TELEGRAM_BOT !== "true" && BOT_TOKEN) {
+if (process.env.DISABLE_TELEGRAM_BOT !== "true" && getBotToken()) {
   scheduleDigest();
 }
 
 // Start polling unless disabled
-if (process.env.DISABLE_TELEGRAM_BOT !== "true" && BOT_TOKEN) {
+if (process.env.DISABLE_TELEGRAM_BOT !== "true" && getBotToken()) {
   pollUpdates();
-  if (ADMIN_BOT_TOKEN && ADMIN_CHAT_ID) pollAdminUpdates();
-  console.log(`[TELEGRAM BOT] Engine initialized for @${BOT_USERNAME} & @ObsidianAdminBot`);
+  if (getAdminBotToken() && getAdminChatId()) pollAdminUpdates();
+  console.log(`[TELEGRAM BOT] Engine initialized for @${getBotUsername()} & @ObsidianAdminBot`);
 } else {
   console.log("[TELEGRAM BOT] Polling disabled or bot token is not configured");
 }
 
 module.exports = {
-  BOT_USERNAME,
+  get BOT_USERNAME() { return getBotUsername(); },
   verifyTelegramAuth,
   createLinkToken,
   createRegToken,

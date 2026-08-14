@@ -1,6 +1,37 @@
 "use strict";
+// ─── Load .env FIRST — before any other require() that reads process.env ───────
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
+// ─────────────────────────────────────────────────────────────────────────────
 process.on("uncaughtException", (err) => console.error("[SERVER EXCEPTION]", err ? err.message || err : err));
 process.on("unhandledRejection", (reason) => console.error("[SERVER REJECTION]", reason ? reason.message || reason : reason));
+
+// ─── Защита: проверка обязательных секретов ──────────────────────────────────
+(function checkRequiredEnv() {
+  const PLACEHOLDER_PATTERNS = /ВСТАВЬ|replace_with|YOUR_|<|>/i;
+  const required = [
+    "TELEGRAM_BOT_TOKEN",
+    "ADMIN_BOT_TOKEN",
+    "ADMIN_CHAT_ID",
+    "ADMIN_API_SECRET",
+  ];
+  const missing = [];
+  for (const key of required) {
+    const val = process.env[key];
+    if (!val || val.trim() === "" || PLACEHOLDER_PATTERNS.test(val)) {
+      missing.push(key);
+    }
+  }
+  if (missing.length > 0) {
+    console.error("═══════════════════════════════════════════════════════════");
+    console.error("  ❌ КРИТИЧЕСКАЯ ОШИБКА: Не заданы обязательные переменные!");
+    console.error("  Заполни node-server/.env файл:");
+    missing.forEach(k => console.error(`     • ${k}`));
+    console.error("═══════════════════════════════════════════════════════════");
+    process.exit(1);
+  }
+  console.log("[ENV] ✅ Все обязательные переменные окружения загружены");
+})();
+// ─────────────────────────────────────────────────────────────────────────────
 
 const express = require("express");
 const http = require("http");
@@ -1359,8 +1390,8 @@ app.get("/api/klines", async (req, res) => {
   const now = Date.now();
   
   const cached = klinesCache.get(key);
-  // TTL: 15 seconds for server-side cache so fresh exchange klines are fetched on timeframe change
-  const ttl = 15000;
+  // TTL: 5 minutes for server-side cache so unopened coins are served instantly from RAM
+  const ttl = 300000;
   
   if (cached && now - cached.at < ttl) {
     return res.json(cached.data);

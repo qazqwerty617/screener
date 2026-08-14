@@ -1,8 +1,15 @@
 # Dependencies
 node_modules/
+
+# ─── СЕКРЕТЫ — НИКОГДА НЕ КОММИТИТЬ ─────────────────────────────────────
 .env
 .env.*
+node-server/.env
+go-aggregator/.env
+go-scanner/.env
 !.env.example
+!node-server/.env.example
+
 
 # Logs and temp files
 *.log
