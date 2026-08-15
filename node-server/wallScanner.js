@@ -39,6 +39,18 @@ const MAX_PER_COIN = 5;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 
+// Per-exchange statistical admission bands.  Most books run softer bands so
+// small/medium walls surface; BingX thin books stay tighter to cut noise.
+const WALL_STAT_THRESHOLDS = {
+  DEFAULT: { minZ: 2.2, minPercentile: 0.90 },
+  HL: { minZ: 2.0, minPercentile: 0.90 },
+  BX: { minZ: 3.3, minPercentile: 0.955 },
+};
+
+function statThresholdsFor(ex) {
+  return WALL_STAT_THRESHOLDS[ex] || WALL_STAT_THRESHOLDS.DEFAULT;
+}
+
 // Base liquidity limits per exchange
 const EX_LIMITS = {
   BN: 600000, BB: 400000, OX: 300000, BG: 250000,
@@ -318,18 +330,17 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     // independent signal. This adapts to each coin instead of using $ buckets.
     const Z = (Math.log1p(bin.usd) - stats.center) / stats.sigma;
     const percentile = percentileRank(stats.values, bin.usd);
-    const minZ = ex === "HL" ? 2.0 : 2.7;
-    const minPercentile = ex === "HL" ? 0.90 : 0.935;
-    if (Z < minZ || percentile < minPercentile) return;
+    const th = statThresholdsFor(ex);
+    if (Z < th.minZ || percentile < th.minPercentile) return;
 
-    let minDust = 30000;
-    if (ex === "BN" || ex === "BB") minDust = 50000;
-    if (ex === "BX") minDust = 250000;
+    let minDust = 20000;
+    if (ex === "BN" || ex === "BB") minDust = 35000;
+    if (ex === "BX") minDust = 300000;
 
     if (coin.v && coin.v > 0) {
       const volReq = ex === "BX"
-        ? Math.min(3000000, coin.v * 0.0015)
-        : Math.min(3000000, coin.v * 0.0005);
+        ? Math.min(3000000, coin.v * 0.002)
+        : Math.min(3000000, coin.v * 0.0004);
       minDust = Math.max(minDust, volReq);
     }
 
@@ -493,7 +504,8 @@ function buildWallSnapshot(allWalls, options = {}) {
     if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 3) continue;
     const relSize = Number(w.relSize);
     const percentile = Number(w.percentile);
-    if (rank === 3 && (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 2.7 || percentile < 93.5)) continue;
+    const statTh = statThresholdsFor(w.ex);
+    if (rank === 3 && (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < statTh.minZ || percentile < statTh.minPercentile * 100)) continue;
     if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 &&
       (rank < 7 || !Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 5.5 || percentile < 98.5)) continue;
 
