@@ -32,6 +32,7 @@ node-server/payment_invoices.json
 node-server/users.json
 node-server/sessions.json
 node-server/auth_logs.json
+node-server/journal_credentials.json
 node-server/users_database.csv
 node-server/data/
 
@@ -43,4 +44,3 @@ go-scanner/*.tmp
 # Scratch python scripts
 check_remote*.py
 scratch_digest.py
-

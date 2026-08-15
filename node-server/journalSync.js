@@ -1,7 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { aggregateExecutionsIntoTrades } = require("./journalAggregator");
+const { aggregateExecutionsIntoTrades, normalizeExecution } = require("./journalAggregator");
 
 function hmacHex(secret, payload) {
   return crypto.createHmac("sha256", secret).update(payload).digest("hex");
@@ -83,7 +83,10 @@ async function syncJournal({ exchange, apiKey, apiSecret, passphrase }) {
   else if (exchange === "BN" || exchange === "Binance") executions = await fetchBinance(apiKey, apiSecret);
   else if (exchange === "OX" || exchange === "OKX") executions = await fetchOkx(apiKey, apiSecret, passphrase);
   else throw new Error("Эта биржа пока не поддерживает безопасную синхронизацию журнала");
-  return { executions: executions.length, trades: aggregateExecutionsIntoTrades(executions) };
+  const items = executions.map(normalizeExecution)
+    .filter(item => item.id && item.symbol && item.price > 0 && item.qty > 0 && item.time > 0)
+    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+  return { executions: items.length, items, trades: aggregateExecutionsIntoTrades(items) };
 }
 
 module.exports = { syncJournal };

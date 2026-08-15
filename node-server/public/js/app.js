@@ -6,6 +6,7 @@ var currentUser = null;
 window.currentUser = null;
 var authToken = localStorage.getItem("obsidian_auth_token") || "";
 const coins = new Map();
+window.coins = coins;
 const dirty = new Set();
 const rowEls = new Map();
 const priceHistories = new Map();
@@ -173,6 +174,8 @@ setInterval(updatePriceHistory, 5000);
 let activeEx = "BN",
   activeSym = "BTCUSDT",
   activeTf = "4h";
+window.getActiveMarket = () => ({ ex: activeEx, sym: activeSym, tf: activeTf });
+window.requestMainChartDraw = () => requestAnimationFrame(drawChart);
 let listEx = "BN",
   searchQ = ""; // listEx tracks dropdown, default = BN
 
@@ -2810,6 +2813,19 @@ function drawChart() {
     PH,
     TOP,
   });
+
+  if (window.TradeOverlay) {
+    window.TradeOverlay.draw(ctx, {
+      candles,
+      xForIndex: index => (index - viewStart) * candleW + candleW / 2,
+      yForPrice: toY,
+      width: PW,
+      height: PH,
+      currentPrice: candles[candles.length - 1]?.c,
+      symbol: activeSym,
+      exchange: activeEx,
+    });
+  }
 
   // тФАтФА Drawings тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const getX = (t) => {

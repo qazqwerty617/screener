@@ -34,8 +34,8 @@ const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
 const MIN_DIST_PCT = 0.05;
 const MAX_DIST_PCT = 5.0;
 
-const MAX_OUTPUT = 1000;
-const MAX_PER_COIN = 4;
+const MAX_OUTPUT = 450;
+const MAX_PER_COIN = 5;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 
@@ -318,8 +318,8 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     // independent signal. This adapts to each coin instead of using $ buckets.
     const Z = (Math.log1p(bin.usd) - stats.center) / stats.sigma;
     const percentile = percentileRank(stats.values, bin.usd);
-    const minZ = ex === "HL" ? 2.25 : 3.35;
-    const minPercentile = ex === "HL" ? 0.92 : 0.96;
+    const minZ = ex === "HL" ? 2.0 : 2.7;
+    const minPercentile = ex === "HL" ? 0.90 : 0.935;
     if (Z < minZ || percentile < minPercentile) return;
 
     let minDust = 30000;
@@ -383,8 +383,8 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
 
     // Weak one-scan anomalies are usually spoof/noise.  Exception: publish a
     // genuinely large, statistically exceptional wall immediately.
-    const strongImmediate = relSize >= (ex === "HL" ? 8.0 : 12.0) && percentile >= 0.99;
-    const needsPersistence = relSize < 6.5 || percentile < 0.99 || ex === "BX";
+    const strongImmediate = relSize >= (ex === "HL" ? 5.5 : 7.5) && percentile >= 0.985;
+    const needsPersistence = relSize < 5.5 || percentile < 0.985 || ex === "BX";
     if (needsPersistence && h.consecutivePresent < 2 && !strongImmediate) return;
 
     const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
@@ -490,8 +490,12 @@ function buildWallSnapshot(allWalls, options = {}) {
 
     const rank = Number(w.rank) || 0;
     const confirmations = Number(w.confirmations) || 0;
-    if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 4) continue;
-    if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 && rank < 8) continue;
+    if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 3) continue;
+    const relSize = Number(w.relSize);
+    const percentile = Number(w.percentile);
+    if (rank === 3 && (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 2.7 || percentile < 93.5)) continue;
+    if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 &&
+      (rank < 7 || !Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 5.5 || percentile < 98.5)) continue;
 
     validWalls.push({
       ...w,

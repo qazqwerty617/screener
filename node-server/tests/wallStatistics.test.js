@@ -24,6 +24,15 @@ test("snapshot rejects weak and unconfirmed statistical noise", () => {
   assert.deepEqual(result.map(item => item.base), ["Z"]);
 });
 
+test("snapshot keeps persistent top-percentile rank-three walls", () => {
+  const result = buildWallSnapshot([{
+    base: "X", ex: "BN", sym: "XUSDT", side: "bid", price: 1,
+    S: 150000, pct: 1, rtwi: 2, market: "futures", rank: 3,
+    relSize: 2.9, percentile: 95.2, confirmations: 2,
+  }]);
+  assert.equal(result.length, 1);
+});
+
 test("Z ranks retain useful small, medium and large bands", () => {
   assert.equal(rankWallByStatistics(3.9, 0.97), 4);
   assert.equal(rankWallByStatistics(6.5, 0.98), 6);

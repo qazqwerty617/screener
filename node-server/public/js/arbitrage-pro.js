@@ -3,9 +3,9 @@
 (function () {
   const $ = id => document.getElementById(id);
   const pro = {
-    row: null, isFunding: false, tf: '5m', mode: 'best', depth: null, klines: null,
+    row: null, isFunding: false, tf: 'live', mode: 'best', depth: null, klines: null,
     depthLoading: false, requestId: 0, initialized: false, unsubs: [], drawQueued: false,
-    livePoints: [], liveTimer: null, lastBuyPrice: 0, lastSellPrice: 0
+    livePoints: [], liveTimer: null, historyTimer: null, lastBuyPrice: 0, lastSellPrice: 0
   };
 
   function pct(n, d = 3) { return `${Number(n) >= 0 ? '+' : ''}${Number(n || 0).toFixed(d)}%`; }
@@ -66,9 +66,9 @@
       sPrice = pro.lastSellPrice || l.sellPrice;
       if (coins) {
         const bCoin = coins.get(`${l.buyEx}:${l.buySymbol}`);
-        if (bCoin && bCoin.p > 0) bPrice = bCoin.p;
+        if (bCoin && (bCoin.ask > 0 || bCoin.p > 0)) bPrice = bCoin.ask || bCoin.p;
         const sCoin = coins.get(`${l.sellEx}:${l.sellSymbol}`);
-        if (sCoin && sCoin.p > 0) sPrice = sCoin.p;
+        if (sCoin && (sCoin.bid > 0 || sCoin.p > 0)) sPrice = sCoin.bid || sCoin.p;
       }
     }
 
@@ -89,7 +89,7 @@
   }
 
   function open(row, isFunding) {
-    init(); pro.row = row; pro.isFunding = isFunding; pro.depth = null; pro.klines = null; pro.mode = 'best'; pro.requestId++;
+    init(); pro.row = row; pro.isFunding = isFunding; pro.depth = null; pro.klines = null; pro.mode = 'best'; pro.tf = 'live'; pro.requestId++;
     pro.livePoints = []; pro.lastBuyPrice = 0; pro.lastSellPrice = 0;
     if (pro.liveTimer) clearInterval(pro.liveTimer);
     pro.liveTimer = setInterval(() => recordLivePoint(Date.now()), 1000);
@@ -97,6 +97,7 @@
     $('arb-drawer').scrollTop = 0;
     $('arb-execution').style.display = isFunding ? 'none' : 'block';
     document.querySelectorAll('[data-spread-mode]').forEach(x => x.classList.toggle('on', x.dataset.spreadMode === 'best'));
+    document.querySelectorAll('[data-arb-tf]').forEach(x => x.classList.toggle('on', x.dataset.arbTf === 'live'));
     const l = legs(row);
     $('arb-buy-chart-title').textContent = `${l.buyName} · ${row.base}`; $('arb-sell-chart-title').textContent = `${l.sellName} · ${row.base}`;
     $('arb-buy-chart-price').textContent = price(l.buyPrice); $('arb-sell-chart-price').textContent = price(l.sellPrice);
@@ -109,14 +110,36 @@
     const titleEl = $('arb-chart-title');
     if (titleEl) titleEl.textContent = pro.tf === 'live' ? 'Спред в реальном времени (Live ⚡)' : 'Исторический спред';
 
+    loadServerHistory(row.key);
+    if (pro.historyTimer) clearInterval(pro.historyTimer);
+    pro.historyTimer = setInterval(() => { if (pro.row) loadServerHistory(pro.row.key); }, 2000);
     loadCharts(); if (!isFunding) loadDepth();
+  }
+
+  async function loadServerHistory(key) {
+    const requestId = pro.requestId;
+    try {
+      const response = await fetch(`/api/arbitrage/history?key=${encodeURIComponent(key)}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || requestId !== pro.requestId) return;
+      const points = (data.points || []).map(point => ({
+        t: Number(point[0]) || 0, spread: Number(point[1]) || 0,
+        buyP: Number(point[2]) || 0, sellP: Number(point[3]) || 0
+      })).filter(point => point.t > 0 && point.buyP > 0 && point.sellP > 0);
+      if (points.length) pro.livePoints = points.slice(-500);
+      if (pro.livePoints.length > 1) { $('arb-chart-empty').hidden = true; renderCharts(); }
+    } catch (_) {}
   }
 
   function closeStreams() {
     pro.unsubs.splice(0).forEach(fn => { try { fn(); } catch (_) { } });
     if (pro.liveTimer) { clearInterval(pro.liveTimer); pro.liveTimer = null; }
   }
-  function close() { closeStreams(); pro.row = null; pro.depth = null; pro.klines = null; pro.livePoints = []; pro.requestId++; }
+  function close() {
+    closeStreams();
+    if (pro.historyTimer) { clearInterval(pro.historyTimer); pro.historyTimer = null; }
+    pro.row = null; pro.depth = null; pro.klines = null; pro.livePoints = []; pro.requestId++;
+  }
 
   async function loadDepth() {
     const r = pro.row; if (!r || pro.isFunding || pro.depthLoading) return; const requestId = pro.requestId;
@@ -223,6 +246,11 @@
     }
     catch (_) {
       if (pro.requestId === requestId) {
+        if (pro.livePoints.length > 1) {
+          $('arb-chart-empty').hidden = true;
+          renderCharts();
+          return;
+        }
         $('arb-chart-empty').textContent = 'Данные одной из бирж временно недоступны';
         $('arb-chart-empty').hidden = false;
       }
@@ -230,9 +258,9 @@
   }
 
   function renderCharts() {
-    const r = pro.row, k = pro.klines; if (!r || !k) return;
+    const r = pro.row, k = pro.klines; if (!r) return;
     let points = [];
-    if (pro.tf === 'live') {
+    if (pro.tf === 'live' || !k) {
       points = pro.livePoints.slice(-200);
     } else {
       const sm = new Map(k.sell.map(c => [c.t, c]));
@@ -250,10 +278,10 @@
 
     drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live', r);
 
-    if (pro.tf === 'live' && pro.livePoints.length > 1) {
+    if ((pro.tf === 'live' || !k) && pro.livePoints.length > 1) {
       drawLiveLegChart($('arb-buy-chart'), pro.livePoints.map(p => ({ t: p.t, c: p.buyP })), '#2bd98a');
       drawLiveLegChart($('arb-sell-chart'), pro.livePoints.map(p => ({ t: p.t, c: p.sellP })), '#ef647a');
-    } else {
+    } else if (k) {
       drawCandles($('arb-buy-chart'), k.buy, '#2bd98a');
       drawCandles($('arb-sell-chart'), k.sell, '#ef647a');
     }
@@ -337,7 +365,6 @@
 
     // 3. Spread Curve (Bright Purple/White)
     ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), ySpread(spreadVal[i])) : ctx.moveTo(x(p.p.t || p.t), ySpread(spreadVal[i])));
     points.forEach((p, i) => i ? ctx.lineTo(x(p.t), ySpread(spreadVal[i])) : ctx.moveTo(x(p.t), ySpread(spreadVal[i])));
     if (isLive) ctx.lineTo(x(tMax), ySpread(spreadVal.at(-1)));
     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2.4 * dpr; ctx.stroke();

@@ -96,7 +96,12 @@ function buildRows(tickers, now = Date.now()) {
     if (!groups.has(quote.base)) groups.set(quote.base, new Map());
     const byExchange = groups.get(quote.base);
     const current = byExchange.get(quote.ex);
-    if (!current || quote.volume > current.volume) byExchange.set(quote.ex, quote);
+    if (!current ||
+      (quote.executable && !current.executable) ||
+      (quote.executable === current.executable && quote.ageMs < current.ageMs) ||
+      (quote.executable === current.executable && quote.ageMs === current.ageMs && quote.volume > current.volume)) {
+      byExchange.set(quote.ex, quote);
+    }
   }
 
   const spreads = [];
@@ -176,16 +181,16 @@ function createArbitrageEngine(tickers, exStatus) {
   function refresh() {
     const generatedAt = Date.now();
     snapshot = { generatedAt, ...buildRows(tickers, generatedAt) };
-    for (const row of snapshot.spreads.slice(0, 600)) record(row.key, generatedAt, row.net);
-    for (const row of snapshot.funding.slice(0, 600)) record(row.key, generatedAt, row.daily);
+    for (const row of snapshot.spreads.slice(0, 1200)) record(row.key, generatedAt, row.net, row.buyAsk, row.sellBid);
+    for (const row of snapshot.funding.slice(0, 1200)) record(row.key, generatedAt, row.daily, row.longPrice, row.shortPrice);
     for (const [key, points] of history) {
       if (!points.length || generatedAt - points[points.length - 1][0] > 3600000) history.delete(key);
     }
   }
 
-  function record(key, ts, value) {
+  function record(key, ts, value, buyPrice = 0, sellPrice = 0) {
     const points = history.get(key) || [];
-    points.push([ts, value]);
+    points.push([ts, value, buyPrice, sellPrice]);
     if (points.length > 900) points.splice(0, points.length - 900);
     history.set(key, points);
   }

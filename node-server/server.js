@@ -59,6 +59,9 @@ const { createArbitrageEngine } = require("./arbitrageEngine");
 const { createDepthAnalyzer } = require("./depthAnalyzer");
 const marketDataCore = require("./marketDataCore");
 const { syncJournal } = require("./journalSync");
+const { createJournalCredentialStore } = require("./journalCredentialStore");
+const journalCredentials = createJournalCredentialStore();
+const journalSyncCache = new Map();
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 const cachedTfMaps = Object.create(null); // tf -> { "EX:SYM": levels[] }
 let currentWallsCache = [];
@@ -411,9 +414,9 @@ app.use((_req, res, next) => {
   next();
 });
 const apiIpLimit = createSlidingWindowLimiter({ windowMs: 60_000, max: 1200, key: req => req.ip });
-const journalSyncLimit = createSlidingWindowLimiter({ windowMs: 60 * 60_000, max: 20, key: req => req.ip });
+const journalSyncLimit = createSlidingWindowLimiter({ windowMs: 60 * 60_000, max: 2000, key: req => req.ip });
 app.use("/api", apiIpLimit);
-app.use("/api/journal/sync", journalSyncLimit);
+app.use(["/api/journal/sync", "/api/journal/live", "/api/journal/credentials"], journalSyncLimit);
 const server = http.createServer(app);
 server.requestTimeout = 30_000;
 server.headersTimeout = 15_000;
@@ -1601,8 +1604,11 @@ app.get("/api/arbitrage/snapshot", (req, res) => {
   const minVolume = Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0));
   const exchanges = new Set(String(req.query.exchanges || "").split(",").filter(Boolean).slice(0, 11));
   const limit = Math.max(25, Math.min(500, parseInt(req.query.limit, 10) || 250));
-  const includesExchange = row => !exchanges.size ||
-    exchanges.has(row.buyEx) || exchanges.has(row.sellEx) || exchanges.has(row.longEx) || exchanges.has(row.shortEx);
+  const includesExchange = row => {
+    if (!exchanges.size) return true;
+    const legs = [row.buyEx || row.longEx, row.sellEx || row.shortEx].filter(Boolean);
+    return legs.length === 2 && legs.every(exchange => exchanges.has(exchange));
+  };
   const matches = row => (!search || row.base.includes(search) || row.symbol.includes(search)) &&
     row.liquidity >= minVolume && includesExchange(row);
   const spreads = full.spreads.filter(row => matches(row) && row.net >= minNet).slice(0, limit);
@@ -1715,9 +1721,104 @@ app.get("/api/kucoin-token", async (req, res) => {
 });
 
 // тФАтФАтФА Traders Journal API Sync тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+function getJournalUser(req) {
+  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  return userStore.getUserByToken(token);
+}
+
+async function runJournalSync(userId, exchangeInput, options = {}) {
+  const exchange = journalCredentials.canonicalExchange(exchangeInput);
+  if (!exchange) throw Object.assign(new Error("Биржа не поддерживается"), { statusCode: 400 });
+  const credentials = options.credentials || journalCredentials.get(userId, exchange);
+  if (!credentials) throw Object.assign(new Error("API-ключи для биржи не подключены"), { statusCode: 404 });
+  const cacheKey = `${userId}:${exchange}`;
+  const current = journalSyncCache.get(cacheKey);
+  if (!options.force && current?.result && Date.now() - current.at < 8000) return current.result;
+  if (!options.force && current?.pending) return current.pending;
+  const pending = syncJournal({ exchange, ...credentials }).then(result => {
+    journalSyncCache.set(cacheKey, { at: Date.now(), result });
+    return result;
+  }).catch(error => {
+    journalSyncCache.delete(cacheKey);
+    throw error;
+  });
+  journalSyncCache.set(cacheKey, { at: current?.at || 0, result: current?.result, pending });
+  return pending;
+}
+
+function journalPayload(result, symbol = "") {
+  const normalizedSymbol = String(symbol || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const items = normalizedSymbol ? result.items.filter(item => String(item.symbol).replace(/[^A-Z0-9]/g, "") === normalizedSymbol) : result.items;
+  return { success: true, count: result.trades.length, executionCount: result.executions, executions: items.slice(-600), trades: result.trades, syncedAt: Date.now() };
+}
+
+app.get("/api/journal/credentials", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const user = getJournalUser(req);
+  if (!user) return res.status(401).json({ error: "Необходима авторизация" });
+  return res.json({ success: true, exchanges: journalCredentials.list(user.id) });
+});
+
+app.put("/api/journal/credentials/:exchange", express.json(), async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const user = getJournalUser(req);
+  if (!user) return res.status(401).json({ error: "Необходима авторизация" });
+  const exchange = journalCredentials.canonicalExchange(req.params.exchange);
+  const credentials = { apiKey: String(req.body?.apiKey || "").trim(), apiSecret: String(req.body?.apiSecret || "").trim(), passphrase: String(req.body?.passphrase || "").trim() };
+  if (!exchange || !credentials.apiKey || !credentials.apiSecret || credentials.apiKey.length > 256 || credentials.apiSecret.length > 256 || credentials.passphrase.length > 256) return res.status(400).json({ error: "Некорректные API-ключи" });
+  try {
+    const result = await runJournalSync(user.id, exchange, { credentials, force: true });
+    const credential = journalCredentials.save(user.id, exchange, credentials);
+    journalSyncCache.set(`${user.id}:${exchange}`, { at: Date.now(), result });
+    return res.json({ ...journalPayload(result), credential });
+  } catch (error) {
+    return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка проверки API-ключей").slice(0, 300) });
+  }
+});
+
+app.delete("/api/journal/credentials/:exchange", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const user = getJournalUser(req);
+  if (!user) return res.status(401).json({ error: "Необходима авторизация" });
+  const exchange = journalCredentials.canonicalExchange(req.params.exchange);
+  if (!exchange) return res.status(400).json({ error: "Биржа не поддерживается" });
+  journalSyncCache.delete(`${user.id}:${exchange}`);
+  return res.json({ success: true, removed: journalCredentials.remove(user.id, exchange) });
+});
+
+app.get("/api/journal/live", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const user = getJournalUser(req);
+  if (!user) return res.status(401).json({ error: "Необходима авторизация" });
+  const exchange = journalCredentials.canonicalExchange(req.query.exchange);
+  if (!exchange) return res.status(400).json({ error: "Биржа не поддерживается" });
+  try {
+    return res.json(journalPayload(await runJournalSync(user.id, exchange), req.query.symbol));
+  } catch (error) {
+    return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
+  }
+});
+
 app.post("/api/journal/sync", express.json(), async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const { exchange, apiKey, apiSecret, passphrase } = req.body || {};
+
+  const journalUser = getJournalUser(req);
+  if (!journalUser) return res.status(401).json({ error: "Необходима авторизация" });
+  const storedExchange = journalCredentials.canonicalExchange(exchange);
+  if (!storedExchange) return res.status(400).json({ error: "Биржа не поддерживается" });
+  try {
+    if (apiKey || apiSecret) {
+      const suppliedCredentials = { apiKey, apiSecret, passphrase: passphrase || "" };
+      const suppliedResult = await runJournalSync(journalUser.id, storedExchange, { credentials: suppliedCredentials, force: true });
+      journalCredentials.save(journalUser.id, storedExchange, suppliedCredentials);
+      journalSyncCache.set(`${journalUser.id}:${storedExchange}`, { at: Date.now(), result: suppliedResult });
+      return res.json(journalPayload(suppliedResult));
+    }
+    return res.json(journalPayload(await runJournalSync(journalUser.id, storedExchange)));
+  } catch (error) {
+    return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
+  }
 
   const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
   if (!userStore.getUserByToken(token)) return res.status(401).json({ error: "Необходима авторизация" });

@@ -21,6 +21,7 @@
 
   let trades = [];
   let apiKeys = {};
+  let configuredExchanges = new Set();
   let currentTab = "overview";
   let dateRange = "ALL";
   let filterSearch = "";
@@ -65,8 +66,41 @@
 
   function saveApiKeys() {
     try {
-      localStorage.setItem(API_KEYS_KEY, JSON.stringify(apiKeys));
+      if (Object.keys(apiKeys).length) localStorage.setItem(API_KEYS_KEY, JSON.stringify(apiKeys));
+      else localStorage.removeItem(API_KEYS_KEY);
     } catch (e) {}
+  }
+
+  function journalAuthHeaders(json = false) {
+    const token = localStorage.getItem("obsidian_auth_token") || "";
+    return { ...(json ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  }
+
+  function markApiConnected(ex) {
+    const statusEl = document.getElementById(`j-api-status-${ex}`);
+    if (statusEl) { statusEl.textContent = "Подключено"; statusEl.className = "j-api-status connected"; }
+  }
+
+  async function hydrateServerCredentials() {
+    if (!localStorage.getItem("obsidian_auth_token")) return;
+    try {
+      const response = await fetch("/api/journal/credentials", { cache: "no-store", headers: journalAuthHeaders() });
+      if (!response.ok) return;
+      const data = await response.json();
+      configuredExchanges = new Set((data.exchanges || []).map(item => item.exchange));
+      configuredExchanges.forEach(markApiConnected);
+
+      for (const [ex, keys] of Object.entries(apiKeys)) {
+        if (!keys?.key || configuredExchanges.has(ex)) continue;
+        const migration = await fetch(`/api/journal/credentials/${encodeURIComponent(ex)}`, {
+          method: "PUT", headers: journalAuthHeaders(true),
+          body: JSON.stringify({ apiKey: keys.key, apiSecret: keys.secret, passphrase: keys.passphrase || "" })
+        });
+        if (migration.ok) { configuredExchanges.add(ex); delete apiKeys[ex]; markApiConnected(ex); }
+      }
+      for (const ex of configuredExchanges) delete apiKeys[ex];
+      saveApiKeys();
+    } catch (_) {}
   }
 
   function formatDuration(ms) {
@@ -907,8 +941,11 @@
     // Store executions for chart rendering
     chartState.executions = relatedExecs.map(t => ({
       side: t.side,
+      positionSide: t.positionSide || trade.side || "BOTH",
       price: t.entry || t.exit,
       size: t.size,
+      qty: t.size,
+      time: Number(t.time) || Date.parse(String(t.date || "").replace(" ", "T") + ":00Z"),
       date: t.date,
       pnl: t.pnl,
       fee: t.fee
@@ -1258,7 +1295,7 @@
     }
 
     // ── DRAW TMM-STYLE EXECUTIONS & PRICE LINES (FULL TMM CLONE) ──────────────
-    if (trade) {
+    if (trade && !window.TradeOverlay) {
       const isWin = trade.pnl >= 0;
       const executions = chartState.executions || [];
       const avgEntry = chartState.avgEntry || trade.entry || 0;
@@ -1611,6 +1648,18 @@
       }
     }
 
+    if (trade && window.TradeOverlay) {
+      window.TradeOverlay.draw(ctx, {
+        executions: chartState.executions || [],
+        candles,
+        xForIndex: index => index * chartState.candleWidth - chartState.scrollOffset + chartState.candleWidth / 2,
+        yForPrice: getY,
+        width: CHART_W,
+        height: H - BOTTOM_MARGIN,
+        currentPrice: candles[candles.length - 1]?.c,
+      });
+    }
+
     // Watermark Top Right
     ctx.fillStyle = "rgba(255,255,255,0.06)";
     ctx.font = "bold 14px Inter";
@@ -1805,7 +1854,8 @@
     const btnSync = document.getElementById("journal-btn-api");
     if (btnSync && !silent) btnSync.textContent = "Синхронизация...";
 
-    const targetKeys = targetEx ? [targetEx] : Object.keys(apiKeys);
+    const available = new Set([...configuredExchanges, ...Object.keys(apiKeys)]);
+    const targetKeys = targetEx ? [targetEx] : [...available];
     if (!targetKeys.length && !silent) {
       alert("Пожалуйста, сначала сохраните API Key в разделе 'API Интеграция'");
       switchTab("apikeys");
@@ -1817,7 +1867,7 @@
 
     for (const ex of targetKeys) {
       const keys = apiKeys[ex];
-      if (!keys || !keys.key) continue;
+      if (!configuredExchanges.has(ex) && (!keys || !keys.key)) continue;
 
       const statusEl = document.getElementById(`j-api-status-${ex}`);
 
@@ -1825,22 +1875,21 @@
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 45000);
 
-        const token = localStorage.getItem("obsidian_auth_token") || "";
         const res = await fetch("/api/journal/sync", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "Authorization": token ? `Bearer ${token}` : "" },
+          headers: journalAuthHeaders(true),
           signal: controller.signal,
           body: JSON.stringify({
             exchange: ex,
-            apiKey: keys.key,
-            apiSecret: keys.secret,
-            passphrase: keys.passphrase
+            ...(configuredExchanges.has(ex) ? {} : { apiKey: keys.key, apiSecret: keys.secret, passphrase: keys.passphrase })
           })
         });
         clearTimeout(timer);
 
         const data = await res.json();
         if (data.success && Array.isArray(data.trades)) {
+          configuredExchanges.add(ex);
+          if (apiKeys[ex]) { delete apiKeys[ex]; saveApiKeys(); }
           const exchangeName = ex === "BN" ? "Binance" : ex === "BB" ? "Bybit" : ex === "OX" ? "OKX" : ex;
           const existingById = new Map(trades.map(t => [t.id, t]));
           trades = trades.filter(t => !(t.source === "api" && t.exchange === exchangeName));
@@ -1887,15 +1936,6 @@
     }
 
     if (btnSync) btnSync.textContent = "Синхронизация API";
-  }
-
-  function startAutoSyncTimer() {
-    if (autoSyncInterval) clearInterval(autoSyncInterval);
-    autoSyncInterval = setInterval(() => {
-      if (Object.keys(apiKeys).length > 0) {
-        syncExchangeApi(true);
-      }
-    }, 60000);
   }
 
   // ── CSV EXPORT & IMPORT ───────────────────────────────────────────────────
@@ -2196,6 +2236,7 @@
     });
 
     startAutoSyncTimer();
+    hydrateServerCredentials().then(() => syncExchangeApi(true));
     updateUI();
   }
 
@@ -2203,13 +2244,13 @@
     if (autoSyncInterval) clearInterval(autoSyncInterval);
     // Real-time background sync every 10 seconds
     autoSyncInterval = setInterval(() => {
-      if (Object.keys(apiKeys).length > 0) {
+      if (configuredExchanges.size > 0 || Object.keys(apiKeys).length > 0) {
         syncExchangeApi(true);
       }
     }, 10000);
   }
 
-  function saveApiKey(ex) {
+  async function saveApiKey(ex) {
     const keyEl = document.getElementById(`j-api-key-${ex}`);
     const secretEl = document.getElementById(`j-api-secret-${ex}`);
     const passEl = document.getElementById(`j-api-pass-${ex}`);
@@ -2223,21 +2264,28 @@
       return alert("Пожалуйста, заполните API Key и API Secret");
     }
 
-    apiKeys[ex] = {
-      exchange: ex,
-      key: kVal,
-      secret: sVal,
-      passphrase: pVal
-    };
-    saveApiKeys();
-
-    const statusEl = document.getElementById(`j-api-status-${ex}`);
-    if (statusEl) {
-      statusEl.textContent = "Соединение...";
-      statusEl.className = "j-api-status connected";
+    const connectingStatus = document.getElementById(`j-api-status-${ex}`);
+    if (connectingStatus) { connectingStatus.textContent = "Проверка..."; connectingStatus.className = "j-api-status connected"; }
+    try {
+      const response = await fetch(`/api/journal/credentials/${encodeURIComponent(ex)}`, {
+        method: "PUT", headers: journalAuthHeaders(true),
+        body: JSON.stringify({ apiKey: kVal, apiSecret: sVal, passphrase: pVal })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      configuredExchanges.add(ex);
+      delete apiKeys[ex]; saveApiKeys(); markApiConnected(ex);
+      keyEl.value = ""; secretEl.value = ""; if (passEl) passEl.value = "";
+      await syncExchangeApi(true, ex);
+      window.TradeOverlay?.refresh(true);
+      alert("API-ключи проверены и защищённо сохранены на сервере.");
+      return;
+    } catch (error) {
+      if (connectingStatus) { connectingStatus.textContent = "Ошибка API"; connectingStatus.className = "j-api-status disconnected"; }
+      alert(`Не удалось подключить API: ${error.message}`);
+      return;
     }
 
-    syncExchangeApi(false, ex);
   }
 
   window.switchJournalTab = switchTab;
@@ -2263,7 +2311,7 @@
 
       initJournal();
       // Immediate background sync on activate
-      syncExchangeApi(true);
+      hydrateServerCredentials().then(() => syncExchangeApi(true));
       setTimeout(drawEquityChart, 60);
     }
   };
@@ -2272,7 +2320,7 @@
     initJournal();
     // Immediate background sync when window regains focus after trading
     window.addEventListener("focus", () => {
-      if (Object.keys(apiKeys).length > 0) {
+      if (configuredExchanges.size > 0 || Object.keys(apiKeys).length > 0) {
         syncExchangeApi(true);
       }
     });

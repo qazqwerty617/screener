@@ -1096,7 +1096,7 @@
                     <label class="arb-search"><span>⌕</span><input id="arb-search" type="search" placeholder="BTC, ETH, PEPE…" autocomplete="off"></label>
                     <div class="arb-field-row">
                         <label><span>Мин. чистый %</span><input id="arb-min-net" type="number" min="-1" max="20" step="0.01" value="0"></label>
-                        <label><span>Мин. объём 24ч</span><select id="arb-min-volume"><option value="0">Любой</option><option value="100000" selected>$100K</option><option value="1000000">$1M</option><option value="10000000">$10M</option><option value="100000000">$100M</option></select></label>
+                        <label><span>Мин. объём 24ч</span><select id="arb-min-volume"><option value="0" selected>Любой</option><option value="100000">$100K</option><option value="1000000">$1M</option><option value="10000000">$10M</option><option value="100000000">$100M</option></select></label>
                     </div>
                     <div class="arb-filter-label"><span>Биржи</span><button id="arb-all-exchanges">Все 11</button></div>
                     <div class="arb-exchanges" id="arb-exchanges"></div>
@@ -1132,7 +1132,7 @@
                 <div class="arb-depth-grid"><div><span>Средний BUY</span><strong id="arb-depth-buy">—</strong><small id="arb-depth-buy-impact">—</small></div><div><span>Средний SELL</span><strong id="arb-depth-sell">—</strong><small id="arb-depth-sell-impact">—</small></div><div><span>Чистый спред</span><strong id="arb-depth-net">—</strong><small>после комиссий</small></div><div><span>+ фандинг / сутки</span><strong id="arb-depth-funded">—</strong><small id="arb-depth-pnl">—</small></div></div>
             </section>
             <section class="arb-detail-chart">
-                <div class="arb-chart-toolbar"><strong id="arb-chart-title">Исторический спред</strong><div class="arb-chart-modes"><button class="on" data-spread-mode="best">Лучшая цена</button><button data-spread-mode="volume">На мой объём</button></div><div class="arb-chart-tfs"><button data-arb-tf="live">Live ⚡</button><button data-arb-tf="1m">1м</button><button class="on" data-arb-tf="5m">5м</button><button data-arb-tf="15m">15м</button><button data-arb-tf="1h">1ч</button><button data-arb-tf="4h">4ч</button></div></div>
+                <div class="arb-chart-toolbar"><strong id="arb-chart-title">Спред в реальном времени</strong><div class="arb-chart-modes"><button class="on" data-spread-mode="best">Лучшая цена</button><button data-spread-mode="volume">На мой объём</button></div><div class="arb-chart-tfs"><button class="on" data-arb-tf="live">Live ⚡</button><button data-arb-tf="1m">1м</button><button data-arb-tf="5m">5м</button><button data-arb-tf="15m">15м</button><button data-arb-tf="1h">1ч</button><button data-arb-tf="4h">4ч</button></div></div>
                 <div class="arb-chart-legend"><span><i class="buy-leg" style="background:#2bd98a; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px;"></i><b id="arb-chart-buy-label" style="color:#2bd98a; font-weight:600;">Buy</b></span><span><i class="sell-leg" style="background:#ef647a; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px;"></i><b id="arb-chart-sell-label" style="color:#ef647a; font-weight:600;">Sell</b></span><span><i class="net" style="background:#cbd5e1; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px;"></i>Спред <b id="arb-chart-current">—</b></span><span><i class="funding"></i>Funding/day <b id="arb-chart-funding">—</b></span></div>
                 <canvas id="arb-detail-canvas"></canvas><div class="arb-chart-empty" id="arb-chart-empty">Загружаем историю обеих бирж…</div>
             </section>
@@ -2675,11 +2675,12 @@
     <div id="toast-container" class="toast-container"></div>
 
     <script src="/js/formationEngine.js?v=1"></script>
-    <script src="/js/app.js?v=1035"></script>
+    <script src="/js/tradeOverlay.js?v=1"></script>
+    <script src="/js/app.js?v=1036"></script>
     <script src="/js/arbitrage.js?v=1"></script>
-    <script src="/js/arbitrage-pro.js?v=2"></script>
+    <script src="/js/arbitrage-pro.js?v=3"></script>
     <script src="/js/backtest.js?v=999"></script>
-    <script src="/js/journal.js?v=1000"></script>
+    <script src="/js/journal.js?v=1001"></script>
 </body>
 
 </html>
