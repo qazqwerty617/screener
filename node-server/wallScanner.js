@@ -538,9 +538,19 @@ function buildWallSnapshot(allWalls, options = {}) {
 
   clustered.sort((a, b) => b.rtwi - a.rtwi || b.S - a.S);
 
+  // BingX books are saturated with multi-million spoof walls that pass any
+  // statistical band, so its output gets a hard strongest-first cap.
+  const EX_WALL_CAPS = { BX: 15 };
   const coinCount = new Map();
+  const exCount = new Map();
   const limited = [];
   for (const w of clustered) {
+    const exCap = EX_WALL_CAPS[w.ex];
+    if (Number.isInteger(exCap)) {
+      const ec = exCount.get(w.ex) || 0;
+      if (ec >= exCap) continue;
+      exCount.set(w.ex, ec + 1);
+    }
     // Limit noisy ladders per exchange/coin, not globally.  A global limit hid
     // the same asset on several of the 11 exchanges.
     const coinKey = `${w.ex}:${w.base}`;
