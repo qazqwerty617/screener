@@ -44,7 +44,7 @@ const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 const WALL_STAT_THRESHOLDS = {
   DEFAULT: { minZ: 2.2, minPercentile: 0.90 },
   HL: { minZ: 2.0, minPercentile: 0.90 },
-  BX: { minZ: 4.0, minPercentile: 0.97 },
+  BX: { minZ: 5.0, minPercentile: 0.985 },
 };
 
 function statThresholdsFor(ex) {
@@ -337,11 +337,11 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
 
     let minDust = 20000;
     if (ex === "BN" || ex === "BB") minDust = 35000;
-    if (ex === "BX") minDust = 500000;
+    if (ex === "BX") minDust = 1000000;
 
     if (coin.v && coin.v > 0) {
       const volReq = ex === "BX"
-        ? Math.min(3000000, coin.v * 0.003)
+        ? Math.min(3000000, coin.v * 0.005)
         : Math.min(3000000, coin.v * 0.0004);
       minDust = Math.max(minDust, volReq);
     }
