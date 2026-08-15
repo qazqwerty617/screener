@@ -184,12 +184,32 @@ let chartDensitySide = "all";
 let chartDensitySizes = new Set(["small", "medium", "large"]);
 let chartDensityMarket = "all";
 let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
+const CHART_DENSITY_STORAGE_KEY = "chart_density_settings_v2";
+try {
+  const savedChartDensity = JSON.parse(localStorage.getItem(CHART_DENSITY_STORAGE_KEY) || "{}");
+  if (typeof savedChartDensity.enabled === "boolean") chartDensityEnabled = savedChartDensity.enabled;
+  if (["all", "bid", "ask"].includes(savedChartDensity.side)) chartDensitySide = savedChartDensity.side;
+  if (["all", "spot", "futures"].includes(savedChartDensity.market)) chartDensityMarket = savedChartDensity.market;
+  if (Array.isArray(savedChartDensity.sizes)) chartDensitySizes = new Set(savedChartDensity.sizes);
+  if (Array.isArray(savedChartDensity.exchanges)) chartDensityExes = new Set(savedChartDensity.exchanges);
+} catch (_) {}
+function saveChartDensitySettings() {
+  try {
+    localStorage.setItem(CHART_DENSITY_STORAGE_KEY, JSON.stringify({
+      enabled: chartDensityEnabled,
+      side: chartDensitySide,
+      market: chartDensityMarket,
+      sizes: Array.from(chartDensitySizes),
+      exchanges: Array.from(chartDensityExes),
+    }));
+  } catch (_) {}
+}
 let chartActiveIndicators = new Set([]);
 let chartActiveFormations = new Set([]);
 let chartActiveSmc = new Set([]);
 // ═══ Formations Overlay on Main Chart ═══
 let chartFormationsOnChart = false;          // master switch (OFF by default)
-let chartFovTypes = new Set();               // active types (empty set by default)
+let chartFovTypes = new Set(["cascades"]);   // first enable always produces a visible result
 let chartFovCascadesMin = 1;                 // min levels for cascades (1..5)
 let chartFovBreakoutMin = 1;                 // min touches for horiz levels (1..5)
 let chartFovTrendlineMin = 1;                // min touches for trendlines (1..5)
@@ -1651,6 +1671,136 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
 }
 
 // ════════════════════════════════════════════════════════════
+const CHART_EXCHANGE_NAMES = {
+  BN: "Binance", BB: "Bybit", OX: "OKX", BG: "Bitget", GT: "Gate",
+  MX: "MEXC", KC: "KuCoin", BX: "BingX", HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
+};
+
+function drawDensityTimelineOnChart(ctx, options) {
+  if (!chartDensityEnabled) return [];
+  const { candles: chartCandles, base, candleWidth, viewStart, toY, PW, PH, TOP = 0 } = options;
+  if (!chartCandles || !chartCandles.length || !base) return [];
+
+  const source = densityHistoryData.length
+    ? densityHistoryData
+    : densityData.map(wall => ({ ...wall, active: true, endedAt: null }));
+  const rangeStart = chartCandles[0].t;
+  const observedTf = chartCandles.length > 1
+    ? Math.max(1, chartCandles[chartCandles.length - 1].t - chartCandles[chartCandles.length - 2].t)
+    : 60000;
+  const rangeEnd = chartCandles[chartCandles.length - 1].t + observedTf;
+
+  const walls = source.filter(w => {
+    if (w.base !== base) return false;
+    if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
+    if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
+    if (!chartDensityExes.has(w.ex)) return false;
+    const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
+    if (!chartDensitySizes.has(sizeType)) return false;
+    const startedAt = Number(w.firstSeenAt) || Date.now();
+    const endedAt = Number(w.endedAt) || rangeEnd;
+    return startedAt <= rangeEnd && endedAt >= rangeStart;
+  }).sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)) || (b.S || 0) - (a.S || 0));
+
+  const badges = [];
+  const occupiedLabelY = [];
+  const visibleWalls = walls.slice(0, 80);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, TOP, PW, PH);
+  ctx.clip();
+
+  for (const wall of visibleWalls) {
+    const y = toY(Number(wall.price));
+    if (!Number.isFinite(y) || y < TOP || y > TOP + PH) continue;
+
+    const startIdx = getIdxFromTime(Number(wall.firstSeenAt) || rangeStart, chartCandles);
+    const endIdx = wall.active || !wall.endedAt
+      ? getIdxFromTime(rangeEnd, chartCandles)
+      : getIdxFromTime(Number(wall.endedAt), chartCandles);
+    const rawStartX = (startIdx - viewStart) * candleWidth + candleWidth / 2;
+    const rawEndX = wall.active || !wall.endedAt
+      ? PW
+      : (endIdx - viewStart) * candleWidth + candleWidth / 2;
+    if (rawEndX < 0 || rawStartX > PW) continue;
+
+    const startX = Math.max(0, rawStartX);
+    const endX = Math.max(startX + 1, Math.min(PW, rawEndX));
+    const isBid = wall.side === "bid";
+    const active = wall.active !== false && !wall.endedAt;
+    const rgb = isBid ? [45, 212, 191] : [251, 113, 133];
+    const strength = Math.max(0, Math.min(1, Math.log10(Math.max(10000, Number(wall.S) || 0)) / 7));
+    const bandH = 3 + strength * 7;
+
+    const gradient = ctx.createLinearGradient(startX, 0, endX, 0);
+    gradient.addColorStop(0, `rgba(${rgb.join(',')},${active ? 0.42 : 0.18})`);
+    gradient.addColorStop(0.12, `rgba(${rgb.join(',')},${active ? 0.2 : 0.1})`);
+    gradient.addColorStop(1, `rgba(${rgb.join(',')},${active ? 0.05 : 0.025})`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(startX, y - bandH / 2, Math.max(1, endX - startX), bandH);
+
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(${rgb.join(',')},${active ? 0.9 : 0.38})`;
+    ctx.lineWidth = active ? 1.4 : 1;
+    ctx.setLineDash(active ? [] : [4, 3]);
+    ctx.moveTo(startX, y);
+    ctx.lineTo(endX, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Exact placement/removal markers make the wall lifetime readable.
+    if (rawStartX >= 0 && rawStartX <= PW) {
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(${rgb.join(',')},.95)`;
+      ctx.lineWidth = 1.2;
+      ctx.moveTo(rawStartX, y - 6);
+      ctx.lineTo(rawStartX, y + 6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.fillStyle = `rgb(${rgb.join(',')})`;
+      ctx.arc(rawStartX, y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (!active && rawEndX >= 0 && rawEndX <= PW) {
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(${rgb.join(',')},.6)`;
+      ctx.lineWidth = 1;
+      ctx.moveTo(rawEndX, y - 5);
+      ctx.lineTo(rawEndX, y + 5);
+      ctx.stroke();
+    }
+
+    if (active && rawStartX >= -80 && rawStartX <= PW - 30) {
+      const timeText = new Date(Number(wall.firstSeenAt) || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const usd = Number(wall.S) || Number(wall.maxSizeUsd) || 0;
+      const sizeText = usd >= 1000000 ? `$${(usd / 1000000).toFixed(1).replace(/\.0$/, "")}M` : `$${Math.round(usd / 1000)}K`;
+      const label = `${timeText}  ${CHART_EXCHANGE_NAMES[wall.ex] || wall.ex}  ${sizeText}`;
+      ctx.font = "700 9px Inter";
+      const labelW = ctx.measureText(label).width + 12;
+      let labelY = y - 18;
+      while (occupiedLabelY.some(existing => Math.abs(existing - labelY) < 16)) labelY += 16;
+      labelY = Math.max(TOP + 2, Math.min(TOP + PH - 17, labelY));
+      occupiedLabelY.push(labelY);
+      const labelX = Math.max(3, Math.min(PW - labelW - 3, Math.max(3, rawStartX + 5)));
+      roundRect(ctx, labelX, labelY, labelW, 16, 5);
+      ctx.fillStyle = "rgba(9,12,17,.9)";
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb.join(',')},.55)`;
+      ctx.stroke();
+      ctx.fillStyle = `rgb(${rgb.join(',')})`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, labelX + labelW / 2, labelY + 8);
+    }
+
+    if (active) badges.push({ y, price: wall.price, isBid, baseColorArr: rgb });
+  }
+
+  ctx.restore();
+  return badges;
+}
+
 // Formations Overlay – renders formation levels on main chart
 // ════════════════════════════════════════════════════════════
 function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
@@ -1660,10 +1810,36 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const lastPrice = candles[N - 1].c;
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
 
+  const drawFormationTag = (text, y, color) => {
+    if (!chartFovShowLabels) return;
+    ctx.save();
+    ctx.font = "700 9px Inter";
+    const width = ctx.measureText(text).width + 12;
+    const x = Math.max(4, PW - width - 6);
+    const top = Math.max(TOP + 2, Math.min(TOP + PH - 18, y - 9));
+    roundRect(ctx, x, top, width, 17, 5);
+    ctx.fillStyle = "rgba(10,13,18,.88)";
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x + width / 2, top + 8.5);
+    ctx.restore();
+  };
+
 
   // ─── 1. CASCADES / LEVELS (Same level detection engine as Formations tab) ───
   if (chartFovTypes.has('cascades')) {
     let levels = window.detectChartLevelsAndTouches ? window.detectChartLevelsAndTouches(candles) : [];
+
+    const directionCounts = levels.reduce((acc, level) => {
+      acc[level.direction] = (acc[level.direction] || 0) + 1;
+      return acc;
+    }, {});
+    levels = levels.filter(level => (directionCounts[level.direction] || 0) >= chartFovCascadesMin);
 
     if (chartFovNearest && levels.length > 0) {
       levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
@@ -1678,8 +1854,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = 'rgba(180, 190, 205, 0.4)';
-      ctx.lineWidth = 1.5;
+      const color = lv.direction === 'up' ? '#f59e0b' : '#2dd4bf';
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.72;
+      ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
@@ -1687,7 +1865,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       // Touch circle at swingIdx
       if (chartFovShowTouches && lv.swingIdx !== undefined) {
-        ctx.fillStyle = 'rgba(180, 190, 205, 0.6)';
+        ctx.fillStyle = color;
         const tx = getCandleX(lv.swingIdx);
         if (tx >= 0 && tx <= PW) {
           ctx.beginPath();
@@ -1696,6 +1874,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+      drawFormationTag(`Каскад ${lv.direction === 'up' ? '↑' : '↓'} ${directionCounts[lv.direction] || 1}`, y, color);
     }
   }
 
@@ -1717,15 +1896,17 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = 'rgba(180, 190, 205, 0.4)';
-      ctx.lineWidth = 1.5;
+      const color = lv.direction === 'up' ? '#fb7185' : '#34d399';
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.78;
+      ctx.lineWidth = 1.45;
       ctx.beginPath();
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
 
       if (chartFovShowTouches && lv.touchIndices) {
-        ctx.fillStyle = 'rgba(180, 190, 205, 0.6)';
+        ctx.fillStyle = color;
         for (const ti of lv.touchIndices) {
           const tx = getCandleX(ti);
           if (tx < 0 || tx > PW) continue;
@@ -1735,6 +1916,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+      drawFormationTag(`Уровень ${lv.direction === 'up' ? '↑' : '↓'} · ${lv.touches || 1}`, y, color);
     }
   }
 
@@ -1757,14 +1939,16 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = 'rgba(180, 190, 205, 0.45)';
+      const color = tl.direction === 'up' ? '#c084fc' : '#60a5fa';
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.8;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
       if (chartFovShowTouches && tl.swingIndices) {
-        ctx.fillStyle = 'rgba(180, 190, 205, 0.6)';
+        ctx.fillStyle = color;
         for (const ti of tl.swingIndices) {
           const tx = getCandleX(ti);
           const ty = toY(tl.p1.price + tl.slope * (ti - tl.p1.idx));
@@ -1775,6 +1959,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+      drawFormationTag(`Тренд ${tl.direction === 'up' ? '↑' : '↓'} · ${tl.touches || 1}`, y2, color);
     }
   }
 
@@ -1800,13 +1985,16 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = 'rgba(180, 190, 205, 0.4)';
+      const color = rt.direction === 'up' ? '#f472b6' : '#22d3ee';
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.8;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
       ctx.restore();
+      drawFormationTag(`${rt.isApproachingRetest ? 'Подход' : 'Ретест'} ${rt.direction === 'up' ? '↑' : '↓'}`, y, color);
     }
   }
 }
@@ -2452,7 +2640,7 @@ function drawChart() {
 
   // тФАтФА Draw Walls (Density) on Chart тФАтФА
   let wallBadges = [];
-  if (chartDensityEnabled) {
+  if (false && chartDensityEnabled) {
     const ticker = coins.get(activeEx + ":" + activeSym);
     const activeBase = ticker ? ticker.base : activeSym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
 
@@ -2530,6 +2718,20 @@ function drawChart() {
       ctx.restore();
     }
   }
+  const activeDensityTicker = coins.get(activeEx + ":" + activeSym);
+  const activeDensityBase = activeDensityTicker
+    ? activeDensityTicker.base
+    : activeSym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
+  wallBadges = drawDensityTimelineOnChart(ctx, {
+    candles,
+    base: activeDensityBase,
+    candleWidth: candleW,
+    viewStart,
+    toY,
+    PW,
+    PH,
+    TOP,
+  });
 
   // тФАтФА Drawings тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const getX = (t) => {
@@ -3158,13 +3360,14 @@ function getTimeFromIdx(idx) {
 
 function getIdxFromTime(t, customCandles = candles) {
   if (!customCandles.length) return 0;
+  const observedTf = customCandles.length > 1
+    ? Math.max(1, customCandles[customCandles.length - 1].t - customCandles[customCandles.length - 2].t)
+    : (TF_MS[activeTf] || 60000);
   if (t <= customCandles[0].t) {
-    const tf = TF_MS[activeTf] || 60000;
-    return (t - customCandles[0].t) / tf;
+    return (t - customCandles[0].t) / observedTf;
   }
   if (t >= customCandles[customCandles.length - 1].t) {
-    const tf = TF_MS[activeTf] || 60000;
-    return (customCandles.length - 1) + (t - customCandles[customCandles.length - 1].t) / tf;
+    return (customCandles.length - 1) + (t - customCandles[customCandles.length - 1].t) / observedTf;
   }
   // Binary search for the correct candle gap
   let low = 0, high = customCandles.length - 2;
@@ -5020,6 +5223,7 @@ function connectWS() {
         if (incomingWalls.length > 0 || !densityData.length || (meta && !meta.partial)) {
           densityData = incomingWalls;
         }
+        if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
         densityLastUpdate = (meta && meta.updatedAt) || Date.now();
         if (typeof updateDensityStatusUI === "function") updateDensityStatusUI(meta);
         if (activeView === "map") {
@@ -6151,12 +6355,21 @@ if (densitySwitch) {
   densitySwitch.onclick = () => {
     densitySwitch.classList.toggle("on");
     chartDensityEnabled = densitySwitch.classList.contains("on");
+    saveChartDensitySettings();
     requestAnimationFrame(drawChart);
   };
 }
 
 // Filter buttons inside density settings panel (toggle active states)
 document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forEach(btn => {
+  const savedSide = btn.dataset.chartDensitySide;
+  const savedMarket = btn.dataset.chartDensityMarket;
+  const savedSize = btn.id && btn.id.startsWith("chart-density-")
+    ? btn.id.replace("chart-density-", "")
+    : null;
+  if (savedSide) btn.classList.toggle("on", savedSide === chartDensitySide);
+  else if (savedMarket) btn.classList.toggle("on", savedMarket === chartDensityMarket);
+  else if (savedSize) btn.classList.toggle("on", chartDensitySizes.has(savedSize));
   btn.onclick = () => {
     const side = btn.dataset.chartDensitySide;
     const market = btn.dataset.chartDensityMarket;
@@ -6186,6 +6399,7 @@ document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forE
         }
       }
     }
+    saveChartDensitySettings();
     requestAnimationFrame(drawChart);
   };
 });
@@ -6349,6 +6563,7 @@ function updateChartDexDropdownUI() {
     cDexCbs.forEach(cb => cb.checked = chartDensityExes.has(cb.value));
   }
 }
+updateChartDexDropdownUI();
 
 if (cDexCbAll) {
   cDexCbAll.addEventListener("change", (e) => {
@@ -6356,6 +6571,7 @@ if (cDexCbAll) {
     if (e.target.checked) chartDensityExes = new Set(allExes);
     else chartDensityExes.clear();
     updateChartDexDropdownUI();
+    saveChartDensitySettings();
     requestAnimationFrame(drawChart);
   });
 }
@@ -6365,6 +6581,7 @@ cDexCbs.forEach(cb => {
     if (e.target.checked) chartDensityExes.add(cb.value);
     else chartDensityExes.delete(cb.value);
     updateChartDexDropdownUI();
+    saveChartDensitySettings();
     requestAnimationFrame(drawChart);
   });
 });
@@ -6439,6 +6656,9 @@ if (settingsBtn && settingsOverlay) {
       if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
       if (typeof saved.showTouches === 'boolean') chartFovShowTouches = saved.showTouches;
     } catch(e) {}
+    // Older saved settings could leave the master switch enabled with no
+    // formation selected, which looked like a broken feature.
+    if (chartFovTypes.size === 0) chartFovTypes.add('cascades');
 
     function saveSettings() {
       localStorage.setItem(LS_KEY, JSON.stringify({
@@ -7417,7 +7637,8 @@ document.addEventListener("contextmenu", (e) => {
 
 // тХРтХРтХР Density Map v2 тАФ Bubble Map тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 let densityCanvas, densityCtx, densityW, densityH;
-let densityData = [];     // raw wall objects from server
+let densityData = [];     // active wall objects from server
+let densityHistoryData = []; // active + recently completed wall lifecycles
 let densityBubbles = [];  // layout objects with {x,y,vx,vy,r,...}
 let densityFilter = "all";
 let densityMarket = "all";
@@ -8307,6 +8528,12 @@ class ChartInstance {
       ctx.textAlign = 'left';
     }
 
+    // Keep formation overlays consistent between the single chart and the
+    // screener's multi-chart grid.
+    if (activeView !== "formations" && chartFormationsOnChart) {
+      renderFormationsOnChart(ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart);
+    }
+
     // тФАтФА Last price dashed line + label тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
     ctx.setLineDash([3, 3]);
     ctx.strokeStyle = "rgba(255,255,255,0.15)";
@@ -8475,7 +8702,7 @@ class ChartInstance {
 
     // тФАтФА Draw Walls (Density) on Chart тФАтФА
     let gridBadges = [];
-    if (chartDensityEnabled) {
+    if (false && chartDensityEnabled) {
       const ticker = coins.get(this.ex + ":" + this.sym);
       const activeBase = ticker ? ticker.base : this.sym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
 
@@ -8552,6 +8779,21 @@ class ChartInstance {
         ctx.restore();
       }
     }
+
+    const densityTicker = coins.get(this.ex + ":" + this.sym);
+    const densityBase = densityTicker
+      ? densityTicker.base
+      : this.sym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
+    gridBadges = drawDensityTimelineOnChart(ctx, {
+      candles: this.candles,
+      base: densityBase,
+      candleWidth,
+      viewStart,
+      toY,
+      PW,
+      PH,
+      TOP: 0,
+    });
 
     // Draw price badges on the right price scale of this grid cell
     if (gridBadges.length > 0) {
@@ -9135,7 +9377,14 @@ function updateDensityStatusUI(meta) {
   if (!statusEl) return;
   if (meta && typeof meta.exchangesReady === "number" && typeof meta.exchangesTotal === "number") {
     statusEl.textContent = `Биржи: ${meta.exchangesReady}/${meta.exchangesTotal}`;
-    statusEl.style.color = meta.partial ? "#f59e0b" : "#10b981";
+    const statuses = Object.values(meta.exchangeStatuses || {});
+    const symbolTotal = statuses.reduce((sum, item) => sum + (Number(item.symbolsTotal) || 0), 0);
+    const weightedCoverage = symbolTotal > 0
+      ? Math.round(statuses.reduce((sum, item) => sum + (Number(item.coveragePct) || 0) * (Number(item.symbolsTotal) || 0), 0) / symbolTotal)
+      : 0;
+    const coverageText = symbolTotal > 0 ? ` · охват ${weightedCoverage}%` : "";
+    statusEl.textContent = `Биржи: ${meta.exchangesReady}/${meta.exchangesTotal}${coverageText}`;
+    statusEl.style.color = (meta.partial || (symbolTotal > 0 && weightedCoverage < 100)) ? "#f59e0b" : "#10b981";
   } else {
     statusEl.textContent = "Обновлено";
     statusEl.style.color = "#10b981";
@@ -9160,6 +9409,7 @@ async function fetchWalls() {
         if (incomingWalls.length > 0 || !densityData.length || (meta && !meta.partial)) {
           densityData = incomingWalls;
         }
+        if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
         densityLastUpdate = (meta && meta.updatedAt) || Date.now();
         updateDensityStatusUI(meta);
         if (activeView === "map") {
@@ -9213,7 +9463,9 @@ function layoutDensityBadges() {
     age: (a, b) => (b.age || 0) - (a.age || 0),
   };
   filtered.sort(sorters[densitySort] || sorters.score);
-  densityVisibleData = filtered.slice(0, 240);
+  // The server already applies anti-noise quality gates.  Keep every filtered
+  // result visible instead of silently hiding everything after item 240.
+  densityVisibleData = filtered;
 
   // Update count badge
   const countEl = $("density-count");

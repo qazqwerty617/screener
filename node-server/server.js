@@ -59,6 +59,7 @@ const { createArbitrageEngine } = require("./arbitrageEngine");
 const { createDepthAnalyzer } = require("./depthAnalyzer");
 const marketDataCore = require("./marketDataCore");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
+const cachedTfMaps = Object.create(null); // tf -> { "EX:SYM": levels[] }
 let currentWallsCache = [];
 let currentWallsMeta = { walls: [], updatedAt: 0, partial: false, exchangesReady: 0, exchangesTotal: 11, exchangeStatuses: {} };
 global.__obsidianWallsMeta = currentWallsMeta;
@@ -2218,6 +2219,15 @@ app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), a
 // Payment routes must be registered before the static catch-all route.
 registerPaymentRoutes(app, { userStore, paymentGateway });
 
+// Formation data is consumed by the screener, so this API route must be
+// registered before the SPA catch-all below.
+app.get("/api/formations/map", compression(), (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "public, max-age=5");
+  const { tf = "15m" } = req.query;
+  res.json(cachedTfMaps[tf] || {});
+});
+
 app.use(express.static(path.join(__dirname, "public"), {
   maxAge: 0,
   etag: false,
@@ -2397,13 +2407,6 @@ server.listen(PORT, () => {
       setTimeout(scanAllPatterns, 2000);
     }
   }
-
-  app.get("/api/formations/map", compression(), (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "public, max-age=5");
-    const { tf = "15m" } = req.query;
-    res.json(cachedTfMaps[tf] || {});
-  });
 
   app.post("/api/notifications/telegram", express.json(), (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");

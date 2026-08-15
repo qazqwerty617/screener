@@ -82,3 +82,30 @@ test("respects per-coin limit and max output", () => {
   const result = buildWallSnapshot(input, { maxPerCoin: 3, maxOutput: 5 });
   assert.equal(result.length, 3); // Max per coin capped at 3
 });
+
+test("per-coin limit does not hide the same asset on other exchanges", () => {
+  const input = [];
+  for (const ex of ["BN", "BB", "OX"]) {
+    for (let i = 0; i < 3; i++) {
+      input.push({
+        base: "BTC", ex, sym: `${ex}-BTCUSDT`, side: i % 2 ? "ask" : "bid",
+        price: 50000 + i * 500, S: 200000 + i * 10000, pct: 0.5 + i * 0.1, rtwi: 9 - i,
+      });
+    }
+  }
+
+  const result = buildWallSnapshot(input, { maxPerCoin: 2, maxOutput: 20 });
+  assert.equal(result.length, 6);
+  assert.deepEqual(new Set(result.map(w => w.ex)), new Set(["BN", "BB", "OX"]));
+});
+
+test("cluster preserves the complete first-seen to last-seen lifetime", () => {
+  const input = [
+    { base: "SOL", ex: "BB", sym: "SOLUSDT", side: "bid", market: "futures", price: 100, S: 100000, pct: 1, rtwi: 6, count: 1, firstSeenAt: 1000, lastSeenAt: 4000 },
+    { base: "SOL", ex: "BB", sym: "SOLUSDT", side: "bid", market: "futures", price: 100.05, S: 120000, pct: 1.05, rtwi: 7, count: 1, firstSeenAt: 2000, lastSeenAt: 5000 },
+  ];
+  const [wall] = buildWallSnapshot(input);
+  assert.equal(wall.firstSeenAt, 1000);
+  assert.equal(wall.lastSeenAt, 5000);
+  assert.equal(wall.lifeMs, 4000);
+});

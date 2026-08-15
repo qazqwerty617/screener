@@ -16,10 +16,17 @@
 
 const DEFAULT_SCAN_GAP_MS = 1000;
 const DEFAULT_API_TIMEOUT = 8000;
-const DEFAULT_POOL_EX = 4;
+const DEFAULT_POOL_EX = 11;
 const POOL_COIN = 32;
 const COIN_DELAY_MS = 5;
-const DEFAULT_MAX_COINS_PER_EX = 40;
+// A scan cycle processes a bounded batch per exchange.  The batch contains the
+// most liquid markets plus a rotating window through every remaining symbol,
+// so coverage is complete without creating a rate-limit storm.
+const DEFAULT_SCAN_BATCH_PER_EX = 200;
+const DEFAULT_PRIORITY_SYMBOLS = 20;
+const DEFAULT_SYMBOL_CACHE_TTL_MS = 20 * 60 * 1000;
+const DEFAULT_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_HISTORY_LIMIT = 2500;
 
 const BIN_STEP_PCT = 0.001; // 0.1% price bins
 const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
@@ -27,7 +34,7 @@ const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
 const MIN_DIST_PCT = 0.05;
 const MAX_DIST_PCT = 5.0;
 
-const MAX_OUTPUT = 500;
+const MAX_OUTPUT = 1000;
 const MAX_PER_COIN = 5;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
@@ -42,7 +49,7 @@ const EX_LIMITS = {
 const OB_DEPTH = {
   BN: 100, BB: 500, OX: 400, BG: 150,
   GT: 100, MX: 500, KC: 100, BX: 100,
-  HT: 150, HL: 50, AD: 500,
+  HT: 150, HL: 50, AD: 100,
 };
 
 const EXCLUDED_BASES = new Set([
@@ -55,6 +62,11 @@ const EXCLUDED_BASES = new Set([
 
 const levelHistory = new Map(); // "EX:SYM:PRICE8" → {firstSeen,lastSeen,scanId,consecutivePresent,misses}
 const latestWallsByExchange = new Map();
+const symbolWallsByExchange = new Map(); // EX -> Map(sym -> { walls, updatedAt })
+const scanCursorByExchange = new Map();
+const coverageByExchange = new Map();
+const wallTimeline = new Map(); // stable wall id -> lifecycle record
+let nextWallTimelineId = 1;
 
 let detectedWalls = [];
 let detectedMetadata = {
@@ -70,8 +82,10 @@ let detectedMetadata = {
 let scanRunning = false;
 let scanCount = 0;
 let onUpdateCb = null;
-let lastBinanceScanTime = 0;
-let lastRawBinanceWalls = [];
+
+function isLeveragedOrSyntheticBase(base) {
+  return /(?:UP|DOWN|BULL|BEAR|HALF|HEDGE|[235]L|[235]S)$/i.test(String(base || ""));
+}
 
 // ═══ Helpers ═════════════════════════════════════════════════════════════════
 
@@ -318,7 +332,12 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       levelHistory.set(lk, h);
     } else {
       const timeSinceLastSeen = now - h.lastSeen;
-      const maxMissGapMs = 10000;
+      // Rotating full-market coverage revisits long-tail symbols less often
+      // than the former top-40 loop, so persistence follows the revisit window.
+      const maxMissGapMs = Math.max(
+        60000,
+        parseInt(process.env.WALL_REVISIT_MAX_GAP_MS, 10) || (DEFAULT_SYMBOL_CACHE_TTL_MS + 5 * 60 * 1000)
+      );
 
       if (h.scanId === currentScanId - 1) {
         h.consecutivePresent++;
@@ -335,7 +354,12 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       h.lastSeen = now;
     }
 
-    if (ex === "BX" && h.consecutivePresent < 2) return;
+    // Weak one-scan anomalies are usually spoof/noise.  Exception: publish a
+    // genuinely large, statistically exceptional wall immediately.
+    const strongImmediate = bin.usd >= Math.max(250000, minDust * 2)
+      && relSize >= (ex === "HL" ? 2.0 : 5.0);
+    const needsPersistence = ex === "BX" || bin.usd < 100000;
+    if (needsPersistence && h.consecutivePresent < 2 && !strongImmediate) return;
 
     const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
     let wallRank = 1;
@@ -379,6 +403,8 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       lifeMs: now - h.firstSeen,
       count: bin.count,
       rank: wallRank,
+      confirmations: h.consecutivePresent,
+      qualityScore: +(wallRank * 10 + Math.min(20, Math.log10(Math.max(1, bin.usd)) * 2) + Math.min(20, h.consecutivePresent * 2)).toFixed(1),
     });
   };
 
@@ -486,19 +512,162 @@ function buildWallSnapshot(allWalls, options = {}) {
   const coinCount = new Map();
   const limited = [];
   for (const w of clustered) {
-    const cnt = coinCount.get(w.base) || 0;
+    // Limit noisy ladders per exchange/coin, not globally.  A global limit hid
+    // the same asset on several of the 11 exchanges.
+    const coinKey = `${w.ex}:${w.base}`;
+    const cnt = coinCount.get(coinKey) || 0;
     if (cnt >= maxPerCoin) continue;
-    coinCount.set(w.base, cnt + 1);
+    coinCount.set(coinKey, cnt + 1);
     limited.push(w);
   }
 
   return limited.slice(0, maxOutput);
 }
 
+function reconcileSymbolTimeline(ex, sym, walls, now) {
+  const active = [];
+  for (const record of wallTimeline.values()) {
+    if (record.active && record.ex === ex && record.sym === sym) active.push(record);
+  }
+
+  const matched = new Set();
+  const enriched = [];
+  for (const source of walls) {
+    let best = null;
+    let bestDistance = Infinity;
+    for (const record of active) {
+      if (matched.has(record.id) || record.side !== source.side || record.market !== source.market) continue;
+      const distance = Math.abs(record.price - source.price) / Math.max(record.price, source.price);
+      if (distance <= 0.0015 && distance < bestDistance) {
+        best = record;
+        bestDistance = distance;
+      }
+    }
+
+    if (!best) {
+      const id = `wall-${nextWallTimelineId++}`;
+      best = {
+        id,
+        ex,
+        sym,
+        base: source.base,
+        side: source.side,
+        market: source.market,
+        price: source.price,
+        startedAt: Number(source.firstSeenAt) || now,
+        lastSeenAt: now,
+        endedAt: null,
+        active: true,
+        maxSizeUsd: Number(source.S) || 0,
+        maxRtwi: Number(source.rtwi) || 0,
+        observations: 0,
+      };
+      wallTimeline.set(id, best);
+    }
+
+    matched.add(best.id);
+    best.active = true;
+    best.endedAt = null;
+    best.lastSeenAt = now;
+    best.base = source.base;
+    best.price = Number(source.price) || best.price;
+    best.S = Number(source.S) || 0;
+    best.wallK = Math.round(best.S / 1000);
+    best.rtwi = Number(source.rtwi) || 0;
+    best.rank = Number(source.rank) || 0;
+    best.pct = Number(source.pct) || 0;
+    best.relSize = Number(source.relSize) || 0;
+    best.maxSizeUsd = Math.max(best.maxSizeUsd || 0, best.S);
+    best.maxRtwi = Math.max(best.maxRtwi || 0, best.rtwi);
+    best.observations++;
+
+    enriched.push({
+      ...source,
+      wallId: best.id,
+      firstSeenAt: best.startedAt,
+      lastSeenAt: best.lastSeenAt,
+      lifeMs: Math.max(0, best.lastSeenAt - best.startedAt),
+      age: Math.round(Math.max(0, best.lastSeenAt - best.startedAt) / 1000),
+      active: true,
+    });
+  }
+
+  for (const record of active) {
+    if (!matched.has(record.id)) {
+      record.active = false;
+      record.endedAt = now;
+      record.lastSeenAt = Math.min(record.lastSeenAt || now, now);
+      record.endReason = "removed_or_filled";
+    }
+  }
+  return enriched;
+}
+
+function mergeExchangeSymbolWalls(ex, result, now) {
+  let cache = symbolWallsByExchange.get(ex);
+  if (!cache) {
+    cache = new Map();
+    symbolWallsByExchange.set(ex, cache);
+  }
+
+  const successfulSymbols = result.successfulSymbols || [];
+  const wallsBySymbol = result.wallsBySymbol || new Map();
+  for (const sym of successfulSymbols) {
+    const tracked = reconcileSymbolTimeline(ex, sym, wallsBySymbol.get(sym) || [], now);
+    cache.set(sym, { walls: tracked, updatedAt: now });
+  }
+
+  const ttlMs = Math.max(60000, parseInt(process.env.WALL_SYMBOL_CACHE_TTL_MS, 10) || DEFAULT_SYMBOL_CACHE_TTL_MS);
+  for (const [sym, entry] of cache) {
+    if (now - entry.updatedAt > ttlMs) {
+      reconcileSymbolTimeline(ex, sym, [], now);
+      cache.delete(sym);
+    }
+  }
+
+  const merged = [];
+  for (const entry of cache.values()) merged.push(...entry.walls);
+  return merged;
+}
+
+function getWallHistorySnapshot(now = Date.now()) {
+  const ttlMs = Math.max(60 * 60 * 1000, parseInt(process.env.WALL_HISTORY_TTL_MS, 10) || DEFAULT_HISTORY_TTL_MS);
+  const limit = Math.max(100, Math.min(10000, parseInt(process.env.WALL_HISTORY_LIMIT, 10) || DEFAULT_HISTORY_LIMIT));
+  for (const [id, record] of wallTimeline) {
+    if (!record.active && record.endedAt && now - record.endedAt > ttlMs) wallTimeline.delete(id);
+  }
+
+  return Array.from(wallTimeline.values())
+    .sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+    .slice(0, limit)
+    .map(record => ({
+      wallId: record.id,
+      base: record.base,
+      ex: record.ex,
+      sym: record.sym,
+      side: record.side,
+      market: record.market,
+      price: record.price,
+      S: record.S || record.maxSizeUsd || 0,
+      wallK: record.wallK || Math.round((record.maxSizeUsd || 0) / 1000),
+      rtwi: record.rtwi || record.maxRtwi || 0,
+      rank: record.rank || 0,
+      pct: record.pct || 0,
+      relSize: record.relSize || 0,
+      firstSeenAt: record.startedAt,
+      lastSeenAt: record.lastSeenAt,
+      endedAt: record.endedAt,
+      active: record.active,
+      endReason: record.endReason || null,
+      maxSizeUsd: record.maxSizeUsd || 0,
+      observations: record.observations || 0,
+    }));
+}
+
 // ═══ Progressive Snapshot Assembly & Callback ════════════════════════════════
 
 function refreshSnapshotAndPublish(currentScanId, exchangesTotal) {
-  const ttlMs = Math.max(10000, parseInt(process.env.WALL_EXCHANGE_CACHE_TTL_MS, 10) || 90000);
+  const ttlMs = Math.max(60000, parseInt(process.env.WALL_EXCHANGE_CACHE_TTL_MS, 10) || 5 * 60 * 1000);
   const now = Date.now();
   const allActiveWalls = [];
   const exchangeStatuses = {};
@@ -514,6 +683,11 @@ function refreshSnapshotAndPublish(currentScanId, exchangesTotal) {
         updatedAt: cached.updatedAt,
         durationMs: cached.durationMs,
         count: cached.walls ? cached.walls.length : 0,
+        symbolsScanned: cached.symbolsScanned || 0,
+        symbolsTotal: cached.symbolsTotal || 0,
+        coveragePct: cached.coveragePct || 0,
+        coverageCycles: cached.coverageCycles || 0,
+        lastFullCoverageAt: cached.lastFullCoverageAt || 0,
         error: cached.error || null
       };
       if (!isStale && cached.walls && cached.walls.length > 0) {
@@ -536,6 +710,7 @@ function refreshSnapshotAndPublish(currentScanId, exchangesTotal) {
   detectedWalls = buildWallSnapshot(allActiveWalls);
   detectedMetadata = {
     walls: detectedWalls,
+    history: getWallHistorySnapshot(now),
     updatedAt: now,
     scanId: currentScanId,
     partial: exchangesReady < exchangesTotal,
@@ -556,54 +731,107 @@ function refreshSnapshotAndPublish(currentScanId, exchangesTotal) {
 // ═══ Scan one exchange ═══════════════════════════════════════════════════════
 
 async function scanExchange(ex, tickers, apiFetch, currentScanId, symbolLimit, requestTimeoutMs) {
-  const maxCoins = symbolLimit || Math.max(5, Math.min(200, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_MAX_COINS_PER_EX));
+  const maxCoins = symbolLimit || Math.max(10, Math.min(250, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_SCAN_BATCH_PER_EX));
 
   const exCoins = [];
   for (const [, t] of tickers) {
-    if (t.ex === ex && t.p > 0 && t.v >= 1000000) {
+    if (t.ex === ex && t.p > 0 && t.v > 0) {
       if (EXCLUDED_BASES.has(t.base)) continue;
+      if (isLeveragedOrSyntheticBase(t.base)) continue;
       if (ex === "BX" && t.sym.endsWith("_SPOT")) continue;
       exCoins.push(t);
     }
   }
 
-  exCoins.sort((a, b) => (b.v || 0) - (a.v || 0));
-  if (exCoins.length > maxCoins) exCoins.length = maxCoins;
+  exCoins.sort((a, b) => (b.v || 0) - (a.v || 0) || a.sym.localeCompare(b.sym));
 
-  const chunkSize = ex === "MX" ? 2 : (ex === "BG" ? 4 : ((ex === "KC" || ex === "OX") ? 3 : POOL_COIN));
-  const delayMs = ex === "MX" ? 380 : (ex === "BG" ? 250 : ((ex === "KC" || ex === "OX") ? 200 : COIN_DELAY_MS));
+  if (exCoins.length === 0) {
+    throw new Error("no active symbols available");
+  }
+
+  // AsterDEX applies a stricter Binance-compatible request-weight limit.
+  // A smaller rotating batch keeps it healthy while still covering its full universe.
+  const scanBudget = ex === "AD" ? Math.min(maxCoins, 100) : maxCoins;
+
+  const priorityCount = Math.min(
+    exCoins.length,
+    Math.max(0, Math.min(scanBudget - 1, parseInt(process.env.WALL_PRIORITY_SYMBOLS, 10) || DEFAULT_PRIORITY_SYMBOLS))
+  );
+  const priority = exCoins.slice(0, priorityCount);
+  const rotationPool = exCoins.slice(priorityCount).sort((a, b) => a.sym.localeCompare(b.sym));
+  const rotationBudget = Math.max(0, scanBudget - priority.length);
+  let cursor = scanCursorByExchange.get(ex) || 0;
+  if (rotationPool.length > 0) cursor %= rotationPool.length;
+
+  const rotating = [];
+  for (let i = 0; i < Math.min(rotationBudget, rotationPool.length); i++) {
+    rotating.push(rotationPool[(cursor + i) % rotationPool.length]);
+  }
+  if (rotationPool.length > 0) {
+    scanCursorByExchange.set(ex, (cursor + rotating.length) % rotationPool.length);
+  }
+  const selectedCoins = priority.concat(rotating);
+
+  const chunkSize = ex === "AD" ? 1 : (ex === "MX" ? 2 : (ex === "BG" ? 4 : ((ex === "KC" || ex === "OX") ? 3 : POOL_COIN)));
+  const delayMs = ex === "AD" ? 450 : (ex === "MX" ? 380 : (ex === "BG" ? 250 : ((ex === "KC" || ex === "OX") ? 200 : COIN_DELAY_MS)));
 
   const walls = [];
+  const wallsBySymbol = new Map();
+  const successfulSymbols = [];
   let ok = 0, fail = 0;
 
-  for (let i = 0; i < exCoins.length; i += chunkSize) {
-    const batch = exCoins.slice(i, i + chunkSize);
+  for (let i = 0; i < selectedCoins.length; i += chunkSize) {
+    const batch = selectedCoins.slice(i, i + chunkSize);
     const results = await Promise.allSettled(
       batch.map(async (coin) => {
         try {
           const coinIdx = exCoins.indexOf(coin);
           const useMaxDepth = coinIdx < 20 || (coin.v || 0) >= 50000000;
           const { bids, asks } = await fetchOB(ex, coin, apiFetch, useMaxDepth, requestTimeoutMs);
-          if (!bids.length && !asks.length) { fail++; return []; }
+          if (!bids.length && !asks.length) { fail++; return { sym: coin.sym, success: false, walls: [] }; }
           ok++;
-          return processOrderbook(ex, coin, bids, asks, currentScanId);
+          return { sym: coin.sym, success: true, walls: processOrderbook(ex, coin, bids, asks, currentScanId) };
         } catch (e) {
           if (ex === "MX" || ex === "BG") console.warn(`[WALL ERROR] ${ex}:${coin.sym} failed: ${e.message}`);
           fail++;
-          return [];
+          return { sym: coin.sym, success: false, walls: [] };
         }
       })
     );
     for (const r of results) {
-      if (r.status === "fulfilled" && r.value) walls.push(...r.value);
+      if (r.status !== "fulfilled" || !r.value || !r.value.success) continue;
+      successfulSymbols.push(r.value.sym);
+      wallsBySymbol.set(r.value.sym, r.value.walls);
+      walls.push(...r.value.walls);
     }
-    if (i + chunkSize < exCoins.length) {
+    if (i + chunkSize < selectedCoins.length) {
       await new Promise(r => setTimeout(r, delayMs));
     }
   }
 
-  console.log(`[WALL] ${ex}: ${exCoins.length} coins, ${ok} OK, ${fail} fail, ${walls.length} raw walls`);
-  walls.symbolsScanned = exCoins.length;
+  let coverage = coverageByExchange.get(ex);
+  const symbolUniverseKey = exCoins.map(c => c.sym).sort().join("|");
+  if (!coverage || coverage.symbolUniverseKey !== symbolUniverseKey) {
+    coverage = { seen: new Set(), cycles: 0, lastFullCoverageAt: 0, symbolUniverseKey };
+    coverageByExchange.set(ex, coverage);
+  }
+  successfulSymbols.forEach(sym => coverage.seen.add(sym));
+  let coveragePct = exCoins.length ? Math.min(100, Math.round(coverage.seen.size / exCoins.length * 100)) : 100;
+  if (coverage.seen.size >= exCoins.length && exCoins.length > 0) {
+    coverage.cycles++;
+    coverage.lastFullCoverageAt = Date.now();
+    coveragePct = 100;
+    coverage.seen = new Set(priority.map(c => c.sym));
+  }
+
+  console.log(`[WALL] ${ex}: batch ${selectedCoins.length}/${exCoins.length}, ${ok} OK, ${fail} fail, coverage ${coveragePct}%, ${walls.length} raw walls`);
+  walls.symbolsScanned = successfulSymbols.length;
+  walls.symbolsTotal = exCoins.length;
+  walls.coveragePct = coveragePct;
+  walls.coverageCycles = coverage.cycles;
+  walls.lastFullCoverageAt = coverage.lastFullCoverageAt;
+  walls.successfulSymbols = successfulSymbols;
+  walls.wallsBySymbol = wallsBySymbol;
   return walls;
 }
 
@@ -616,7 +844,7 @@ async function runFullScan(tickers, apiFetch) {
   scanCount++;
   const currentScanId = scanCount;
 
-  const symbolLimit = Math.max(5, Math.min(200, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_MAX_COINS_PER_EX));
+  const symbolLimit = Math.max(10, Math.min(250, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_SCAN_BATCH_PER_EX));
   const reqTimeout = Math.max(1000, Math.min(30000, parseInt(process.env.WALL_REQUEST_TIMEOUT_MS, 10) || DEFAULT_API_TIMEOUT));
   const concurrency = Math.max(1, Math.min(11, parseInt(process.env.WALL_SCAN_CONCURRENCY, 10) || DEFAULT_POOL_EX));
 
@@ -632,35 +860,25 @@ async function runFullScan(tickers, apiFetch) {
         chunk.map(async (ex) => {
           const exT0 = Date.now();
           try {
-            let res = [];
-            if (ex === "BN") {
-              const now = Date.now();
-              if (now - lastBinanceScanTime < 45000 && lastRawBinanceWalls.length > 0) {
-                for (const w of lastRawBinanceWalls) {
-                  const t = tickers.get(`BN:${w.sym}`);
-                  if (t && t.p > 0) {
-                    const dist = Math.abs(w.price - t.p) / t.p * 100;
-                    w.pct = +dist.toFixed(3);
-                  }
-                }
-                res = lastRawBinanceWalls;
-              } else {
-                lastBinanceScanTime = now;
-                res = await scanExchange(ex, tickers, apiFetch, currentScanId, symbolLimit, reqTimeout);
-                lastRawBinanceWalls = res;
-              }
-            } else {
-              res = await scanExchange(ex, tickers, apiFetch, currentScanId, symbolLimit, reqTimeout);
-            }
+            const res = await scanExchange(ex, tickers, apiFetch, currentScanId, symbolLimit, reqTimeout);
 
             const durationMs = Date.now() - exT0;
+            const mergedWalls = mergeExchangeSymbolWalls(ex, res, Date.now());
+            const freshSymbolCount = symbolWallsByExchange.get(ex)?.size || 0;
+            const freshCoveragePct = res.symbolsTotal > 0
+              ? Math.min(100, Math.round(freshSymbolCount / res.symbolsTotal * 100))
+              : 100;
             latestWallsByExchange.set(ex, {
-              walls: res,
+              walls: mergedWalls,
               updatedAt: Date.now(),
               durationMs,
               status: "ok",
               error: null,
-              symbolsScanned: res.symbolsScanned || symbolLimit
+              symbolsScanned: res.symbolsScanned || 0,
+              symbolsTotal: res.symbolsTotal || 0,
+              coveragePct: freshCoveragePct,
+              coverageCycles: res.coverageCycles || 0,
+              lastFullCoverageAt: res.lastFullCoverageAt || 0,
             });
             okCount++;
 
@@ -677,7 +895,11 @@ async function runFullScan(tickers, apiFetch) {
               durationMs,
               status: e.name === "AbortError" || e.message?.includes("timeout") ? "timeout" : "error",
               error: e.message,
-              symbolsScanned: 0
+              symbolsScanned: 0,
+              symbolsTotal: prev ? prev.symbolsTotal : 0,
+              coveragePct: prev ? prev.coveragePct : 0,
+              coverageCycles: prev ? prev.coverageCycles : 0,
+              lastFullCoverageAt: prev ? prev.lastFullCoverageAt : 0,
             });
 
             refreshSnapshotAndPublish(currentScanId, exchanges.length);
@@ -829,7 +1051,7 @@ module.exports = {
   clusterWalls,
   startScanning: (tickers, apiFetch, onUpdate) => {
     console.log("[WALL] Starting Wall Scanner v3 — Statistical Z-Score Engine with Progressive Publication");
-    console.log("[WALL] Config: Limit=" + DEFAULT_MAX_COINS_PER_EX + ", Z_THRESHOLD=" + Z_THRESHOLD + ", dist=" + MIN_DIST_PCT + "%-" + MAX_DIST_PCT + "%");
+    console.log("[WALL] Config: Batch=" + DEFAULT_SCAN_BATCH_PER_EX + ", full rotating coverage, Z_THRESHOLD=" + Z_THRESHOLD + ", dist=" + MIN_DIST_PCT + "%-" + MAX_DIST_PCT + "%");
     onUpdateCb = onUpdate || null;
 
     updateSpotTickers(tickers).catch(e => console.error("[SPOT] Initial load error:", e.message));
