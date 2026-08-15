@@ -147,7 +147,6 @@ async function editMessageText(chatId, messageId, text, replyMarkup) {
 let offset = 0;
 function pollUpdates() {
   const token = getBotToken();
-  console.log("[USER BOT POLL DEBUG] Token:", JSON.stringify(token));
   if (!token) return;
   const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=20`;
   const req = https.get(url, { timeout: 35000 }, (res) => {

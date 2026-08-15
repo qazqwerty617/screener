@@ -5,6 +5,23 @@
  */
 module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) {
   let adSyms = [];
+  let initRetryAttempt = 0;
+  let initRetryTimer = null;
+  let fundingTimer = null;
+
+  function getInitRetryDelay(error) {
+    const message = String(error && error.message || "");
+    const banMatch = message.match(/banned until\s+(\d{10,13})/i);
+    if (banMatch) {
+      const bannedUntil = Number(banMatch[1]);
+      if (Number.isFinite(bannedUntil) && bannedUntil > Date.now()) {
+        return Math.min(24 * 60 * 60 * 1000, bannedUntil - Date.now() + 5000);
+      }
+    }
+
+    const exponentialDelay = 5000 * Math.pow(2, Math.min(initRetryAttempt, 6));
+    return Math.min(5 * 60 * 1000, exponentialDelay);
+  }
 
   async function init() {
     try {
@@ -15,6 +32,9 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         apiFetch("https://fapi.asterdex.com/fapi/v1/premiumIndex", 15000, 2),
       ]);
       if (!infoResp?.symbols || !Array.isArray(tickerResp)) throw new Error("Asterdex API error");
+
+      initRetryAttempt = 0;
+      adSyms = [];
 
       const fundingBySymbol = new Map(Array.isArray(premiumResp) ? premiumResp.map(i => [i.symbol, i]) : []);
       const tradingSet = new Set(
@@ -40,13 +60,20 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       connectWs();
       startPolling();
     } catch (e) {
-      console.error("[AD] Init error:", e.message);
-      setTimeout(init, 5000);
+      const retryDelay = getInitRetryDelay(e);
+      initRetryAttempt++;
+      if (updateExStatus) updateExStatus("AD", "offline", e.message);
+      console.error(`[AD] Init error: ${e.message}. Retry in ${Math.ceil(retryDelay / 1000)}s`);
+      clearTimeout(initRetryTimer);
+      initRetryTimer = setTimeout(init, retryDelay);
     }
   }
 
   function startPolling() {
-      setInterval(async () => {
+      if (fundingTimer) return;
+      // Funding does not need a 2-second full-market REST poll. A slower poll
+      // leaves request capacity for order books and prevents HTTP 418 IP bans.
+      fundingTimer = setInterval(async () => {
           try {
               const premiumResp = await apiFetch("https://fapi.asterdex.com/fapi/v1/premiumIndex", 5000, 0);
               if (Array.isArray(premiumResp)) {
@@ -60,7 +87,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
                   }
               }
           } catch (_) {}
-      }, 2000);
+      }, 30000);
   }
 
   function connectWs() {

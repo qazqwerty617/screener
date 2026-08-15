@@ -5275,6 +5275,7 @@ function connectWS() {
         if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
         densityLastUpdate = (meta && meta.updatedAt) || Date.now();
         if (typeof updateDensityStatusUI === "function") updateDensityStatusUI(meta);
+        if (typeof updateDensityExchangeCounts === "function") updateDensityExchangeCounts();
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
@@ -9440,6 +9441,23 @@ function updateDensityStatusUI(meta) {
   }
 }
 
+function updateDensityExchangeCounts() {
+  const counts = new Map();
+  for (const wall of densityData) {
+    counts.set(wall.ex, (counts.get(wall.ex) || 0) + 1);
+  }
+
+  document.querySelectorAll(".density-exc-item[data-dex]").forEach(item => {
+    const ex = item.dataset.dex;
+    const nameEl = item.querySelector(".dex-name");
+    if (!nameEl) return;
+    const exchangeName = EX_NAMES[ex] || ex;
+    const count = counts.get(ex) || 0;
+    nameEl.textContent = `${exchangeName} · ${count}`;
+    item.title = `${exchangeName}: активных плотностей ${count}`;
+  });
+}
+
 async function fetchWalls() {
   try {
     const res = await fetch("/api/walls?format=full");
@@ -9461,6 +9479,7 @@ async function fetchWalls() {
         if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
         densityLastUpdate = (meta && meta.updatedAt) || Date.now();
         updateDensityStatusUI(meta);
+        updateDensityExchangeCounts();
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
@@ -10181,7 +10200,22 @@ function loadDensityFilters() {
       if (typeof parsed.densityMinUsd === "number") densityMinUsd = parsed.densityMinUsd;
       if (typeof parsed.densityMaxDistance === "number") densityMaxDistance = parsed.densityMaxDistance;
       if (typeof parsed.densityMinAge === "number") densityMinAge = parsed.densityMinAge;
-      if (Array.isArray(parsed.densityExFilter)) densityExFilter = new Set(parsed.densityExFilter);
+      if (Array.isArray(parsed.densityExFilter)) {
+        densityExFilter = new Set(parsed.densityExFilter);
+
+        // Profiles saved before AsterDEX was added contain all ten legacy
+        // exchanges but no AD. Migrate that old "all exchanges" selection once.
+        const migrationKey = "density_filter_ad_migrated_v1";
+        if (!localStorage.getItem(migrationKey)) {
+          const legacyExchanges = ["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL"];
+          if (!densityExFilter.has("AD") && legacyExchanges.every(ex => densityExFilter.has(ex))) {
+            densityExFilter.add("AD");
+            parsed.densityExFilter = Array.from(densityExFilter);
+            localStorage.setItem("density_filters_v1", JSON.stringify(parsed));
+          }
+          localStorage.setItem(migrationKey, "1");
+        }
+      }
 
       syncDensityFilterUI();
     }
