@@ -86,10 +86,13 @@ function getDefaultKeyboard(chatId, tgUser) {
 }
 
 const https = require("https");
-const userHttpsAgent = new https.Agent({
+// Shared keep-alive agent for both poll loops. Reusing TLS connections plus
+// TCP keepalive probes keeps the 20s Telegram long-poll alive through NATs
+// that silently drop idle sockets (the source of constant read ETIMEDOUT).
+const tgPollAgent = new https.Agent({
   keepAlive: true,
-  keepAliveMsecs: 60000,
-  maxSockets: 100,
+  keepAliveMsecs: 15000,
+  maxSockets: 8,
   scheduling: "fifo"
 });
 
@@ -149,7 +152,7 @@ function pollUpdates() {
   const token = getBotToken();
   if (!token) return;
   const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=20`;
-  const req = https.get(url, { timeout: 35000 }, (res) => {
+  const req = https.get(url, { agent: tgPollAgent, timeout: 35000 }, (res) => {
     let body = "";
     res.on("data", (chunk) => body += chunk);
     res.on("end", () => {
@@ -174,12 +177,13 @@ function pollUpdates() {
       } catch (err) {
         console.error("[USER BOT JSON ERR]", err.message);
       }
-      setTimeout(pollUpdates, hasUpdates ? 10 : 200);
+      setTimeout(pollUpdates, hasUpdates ? 0 : 200);
     });
   });
+  req.on("socket", (socket) => socket.setKeepAlive(true, 10000));
   req.on("error", (err) => {
     console.error("[USER BOT POLL ERR]", err.message);
-    setTimeout(pollUpdates, 2000);
+    setTimeout(pollUpdates, 400);
   });
   req.on("timeout", () => {
     req.destroy();
@@ -449,7 +453,7 @@ function pollAdminUpdates() {
   const adminToken = getAdminBotToken();
   if (!adminToken) return;
   const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=20`;
-  const req = https.get(url, { timeout: 35000 }, (res) => {
+  const req = https.get(url, { agent: tgPollAgent, timeout: 35000 }, (res) => {
     let body = "";
     res.on("data", (chunk) => body += chunk);
     res.on("end", () => {
@@ -474,12 +478,13 @@ function pollAdminUpdates() {
       } catch (err) {
         console.error("[ADMIN BOT JSON ERR]", err.message);
       }
-      setTimeout(pollAdminUpdates, hasUpdates ? 10 : 200);
+      setTimeout(pollAdminUpdates, hasUpdates ? 0 : 200);
     });
   });
+  req.on("socket", (socket) => socket.setKeepAlive(true, 10000));
   req.on("error", (err) => {
     console.error("[ADMIN BOT POLL ERR]", err.message);
-    setTimeout(pollAdminUpdates, 2000);
+    setTimeout(pollAdminUpdates, 400);
   });
   req.on("timeout", () => {
     req.destroy();
