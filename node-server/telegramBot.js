@@ -151,8 +151,8 @@ let offset = 0;
 function pollUpdates() {
   const token = getBotToken();
   if (!token) return;
-  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=20`;
-  const req = https.get(url, { agent: tgPollAgent, timeout: 35000 }, (res) => {
+  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=10`;
+  const req = https.get(url, { agent: tgPollAgent, timeout: 15000 }, (res) => {
     let body = "";
     res.on("data", (chunk) => body += chunk);
     res.on("end", () => {
@@ -452,8 +452,8 @@ let adminOffset = 0;
 function pollAdminUpdates() {
   const adminToken = getAdminBotToken();
   if (!adminToken) return;
-  const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=20`;
-  const req = https.get(url, { agent: tgPollAgent, timeout: 35000 }, (res) => {
+  const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=10`;
+  const req = https.get(url, { agent: tgPollAgent, timeout: 15000 }, (res) => {
     let body = "";
     res.on("data", (chunk) => body += chunk);
     res.on("end", () => {
