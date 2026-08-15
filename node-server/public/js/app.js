@@ -2682,21 +2682,21 @@ function drawChart() {
   vCtx.stroke();
 
   if (mv > 0) {
-    const renderVols = vis.map(c => Number.isFinite(c.v) && c.v > 0 ? c.v : 0);
-    const validVols = renderVols.filter(v => v > 0);
-    if (validVols.length > 0) {
-      const minV = Math.min(...validVols);
-      const maxV = Math.max(...validVols);
-      const rangeV = maxV - minV;
+      const renderVols = vis.map(c => Number.isFinite(c.v) && c.v > 0 ? c.v : 0);
+      const validVols = renderVols.filter(v => v > 0);
+      if (validVols.length > 0) {
+        const maxV = Math.max(...validVols);
 
-      const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
-      for (let i = 0; i < vis.length; i++) {
-        const c = vis[i];
-        const x = (s + i - viewStart) * candleW + candleW / 2;
-        const up = c.c >= c.o;
-        const val = renderVols[i];
-        const vRatio = rangeV > 0 ? Math.min(1, Math.max(0, (val - minV) / rangeV)) : 0.5;
-        const vh = val > 0 ? Math.max(3, vRatio * (volumeHeight - 10) + 3) : 0;
+        const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
+        for (let i = 0; i < vis.length; i++) {
+          const c = vis[i];
+          const x = (s + i - viewStart) * candleW + candleW / 2;
+          const up = c.c >= c.o;
+          const val = renderVols[i];
+          // Scale bars 0..max: min-max normalization hid the forming candle
+          // whenever visible volumes were flat (constant-rate bots on BingX).
+          const vRatio = maxV > 0 ? Math.min(1, val / maxV) : 0;
+          const vh = val > 0 ? Math.max(3, vRatio * (volumeHeight - 10) + 3) : 0;
         vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
         if (vh > 0) vCtx.fillRect(x - volW / 2, volumeYStart + volumeHeight - vh, volW, vh);
       }
