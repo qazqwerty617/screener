@@ -10076,13 +10076,14 @@ document.addEventListener("click", (e) => {
     densitySelectedKey = null;
     let c = coins.get(currentKey);
 
-    // If coin is spot or not found in our futures-only list, look up equivalent futures coin
+    // Spot walls must open the equivalent futures chart: spot symbols have no
+    // kline feed in the screener, so a spot-only coin must never be selected.
     if (!c || !isUsdtFutures(c)) {
-      const matches = Array.from(coins.values()).filter(x => x.base === d.base && isUsdtFutures(x));
-      if (matches.length > 0) {
-        const dExClean = d.ex.replace("_SPOT", "");
-        c = matches.find(x => x.ex === dExClean) || matches[0];
-      }
+      const matches = Array.from(coins.values())
+        .filter(x => x.base === d.base && isUsdtFutures(x))
+        .sort((a, b) => (b.v || 0) - (a.v || 0));
+      const dExClean = d.ex.replace("_SPOT", "");
+      c = matches.find(x => x.ex === dExClean) || matches[0] || null;
     }
 
     if (c) {
@@ -10091,6 +10092,8 @@ document.addEventListener("click", (e) => {
         t.classList.toggle("on", i === 0);
       });
       selectCoin(c);
+    } else if (d.market === "spot" || String(d.sym || "").includes("_SPOT")) {
+      showToast({ type: "info", title: "Плотность", message: `У ${d.base} нет фьючерсной пары — график недоступен`, durationMs: 4000 });
     }
   } else {
     // 1st tap/click on a bubble — select it and show info card
