@@ -219,42 +219,38 @@
     const r = pro.row; if (!r) return; const requestId = pro.requestId, tf = pro.tf, l = legs(r);
     $('arb-chart-empty').hidden = false; $('arb-chart-empty').textContent = 'Загружаем данные обеих бирж…';
     const fetchTf = tf === 'live' ? '1m' : tf;
-    try {
-      const [br, sr] = await Promise.all([
-        fetch(`/api/klines?ex=${encodeURIComponent(l.buyEx)}&sym=${encodeURIComponent(l.buySymbol)}&tf=${encodeURIComponent(fetchTf)}&lite=1`, { cache: 'no-store' }),
-        fetch(`/api/klines?ex=${encodeURIComponent(l.sellEx)}&sym=${encodeURIComponent(l.sellSymbol)}&tf=${encodeURIComponent(fetchTf)}&lite=1`, { cache: 'no-store' })
-      ]);
-      if (!br.ok || !sr.ok) throw new Error('klines');
-      const [bf, sf] = await Promise.all([br.json(), sr.json()]);
-      if (pro.requestId !== requestId || pro.tf !== tf) return;
-      pro.klines = { buy: flatCandles(bf), sell: flatCandles(sf) };
-      $('arb-chart-empty').hidden = pro.klines.buy.length > 1 && pro.klines.sell.length > 1;
+    // Legs load independently: some venues (e.g. Hyperliquid perps without
+    // candle history) must not blank out the whole drawer.
+    const fetchLeg = (ex, sym) => fetch(`/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(fetchTf)}&lite=1`, { cache: 'no-store' })
+      .then(res => { if (!res.ok) throw new Error('klines'); return res.json(); });
+    const [br, sr] = await Promise.allSettled([fetchLeg(l.buyEx, l.buySymbol), fetchLeg(l.sellEx, l.sellSymbol)]);
+    if (pro.requestId !== requestId || pro.tf !== tf) return;
+    const prev = pro.klines;
+    const pick = (res, side) => {
+      const candles = res.status === 'fulfilled' ? flatCandles(res.value) : [];
+      if (candles.length > 1) return candles;
+      return prev && prev[side] && prev[side].length > 1 ? prev[side] : candles;
+    };
+    pro.klines = { buy: pick(br, 'buy'), sell: pick(sr, 'sell') };
+    const haveBoth = pro.klines.buy.length > 1 && pro.klines.sell.length > 1;
 
-      // Seed live points from 1m klines if switching to Live mode
-      if (tf === 'live' && pro.klines.buy.length > 0 && pro.klines.sell.length > 0) {
-        const sm = new Map(pro.klines.sell.map(c => [c.t, c]));
-        const seeded = pro.klines.buy.map(b => {
-          const s = sm.get(b.t);
-          if (!s || b.c <= 0 || s.c <= 0) return null;
-          return { t: b.t, buyP: b.c, sellP: s.c, spread: ((s.c - b.c) / b.c) * 100 - (pro.isFunding ? 0 : r.fees) };
-        }).filter(Boolean);
-        pro.livePoints = seeded.slice(-180);
-      }
+    // Seed live points from 1m klines only while the server spread history
+    // has not delivered richer 2s-resolution points yet.
+    if (tf === 'live' && haveBoth && pro.livePoints.length < 2) {
+      const sm = new Map(pro.klines.sell.map(c => [c.t, c]));
+      const seeded = pro.klines.buy.map(b => {
+        const s = sm.get(b.t);
+        if (!s || b.c <= 0 || s.c <= 0) return null;
+        return { t: b.t, buyP: b.c, sellP: s.c, spread: ((s.c - b.c) / b.c) * 100 - (pro.isFunding ? 0 : r.fees) };
+      }).filter(Boolean);
+      pro.livePoints = seeded.slice(-180);
+    }
 
-      subscribeCharts(l, tf);
-      renderCharts();
-    }
-    catch (_) {
-      if (pro.requestId === requestId) {
-        if (pro.livePoints.length > 1) {
-          $('arb-chart-empty').hidden = true;
-          renderCharts();
-          return;
-        }
-        $('arb-chart-empty').textContent = 'Данные одной из бирж временно недоступны';
-        $('arb-chart-empty').hidden = false;
-      }
-    }
+    subscribeCharts(l, tf);
+    renderCharts();
+    const hasData = haveBoth || pro.livePoints.length > 1;
+    $('arb-chart-empty').hidden = hasData;
+    if (!hasData) $('arb-chart-empty').textContent = 'Данные одной из бирж временно недоступны';
   }
 
   function renderCharts() {
@@ -278,13 +274,22 @@
 
     drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live', r);
 
-    if ((pro.tf === 'live' || !k) && pro.livePoints.length > 1) {
-      drawLiveLegChart($('arb-buy-chart'), pro.livePoints.map(p => ({ t: p.t, c: p.buyP })), '#2bd98a');
-      drawLiveLegChart($('arb-sell-chart'), pro.livePoints.map(p => ({ t: p.t, c: p.sellP })), '#ef647a');
-    } else if (k) {
-      drawCandles($('arb-buy-chart'), k.buy, '#2bd98a');
-      drawCandles($('arb-sell-chart'), k.sell, '#ef647a');
-    }
+    // Per-leg rendering: real candles when the venue has them, otherwise the
+    // live price line recorded from the server spread history.
+    const drawLeg = (canvas, side, accent, priceKey) => {
+      const candles = k && k[side];
+      const liveLine = () => drawLiveLegChart(canvas, pro.livePoints.map(p => ({ t: p.t, c: p[priceKey] })), accent);
+      if (pro.tf === 'live') {
+        if (pro.livePoints.length > 1) liveLine();
+        else if (candles && candles.length > 1) drawCandles(canvas, candles, accent);
+      } else if (candles && candles.length > 1) {
+        drawCandles(canvas, candles, accent);
+      } else {
+        liveLine();
+      }
+    };
+    drawLeg($('arb-buy-chart'), 'buy', '#2bd98a', 'buyP');
+    drawLeg($('arb-sell-chart'), 'sell', '#ef647a', 'sellP');
   }
 
   function fit(canvas, height) {
