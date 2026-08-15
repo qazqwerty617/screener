@@ -135,12 +135,12 @@ function percentileRank(sortedValues, value) {
 function rankWallByStatistics(zScore, percentile) {
   const score = zScore + Math.max(0, percentile - 0.95) * 10;
   if (score < 3.7) return 3;
-  if (score < 4.25) return 4;
-  if (score < 4.9) return 5;
-  if (score < 5.65) return 6;
-  if (score < 6.55) return 7;
-  if (score < 7.6) return 8;
-  if (score < 8.9) return 9;
+  if (score < 4.2) return 4;
+  if (score < 6.2) return 5;
+  if (score < 8.5) return 6;
+  if (score < 12) return 7;
+  if (score < 17) return 8;
+  if (score < 24) return 9;
   return 10;
 }
 
@@ -383,7 +383,7 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
 
     // Weak one-scan anomalies are usually spoof/noise.  Exception: publish a
     // genuinely large, statistically exceptional wall immediately.
-    const strongImmediate = relSize >= (ex === "HL" ? 5.5 : 7.5) && percentile >= 0.99;
+    const strongImmediate = relSize >= (ex === "HL" ? 8.0 : 12.0) && percentile >= 0.99;
     const needsPersistence = relSize < 6.5 || percentile < 0.99 || ex === "BX";
     if (needsPersistence && h.consecutivePresent < 2 && !strongImmediate) return;
 
@@ -491,7 +491,7 @@ function buildWallSnapshot(allWalls, options = {}) {
     const rank = Number(w.rank) || 0;
     const confirmations = Number(w.confirmations) || 0;
     if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 4) continue;
-    if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 && rank < 9) continue;
+    if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 && rank < 8) continue;
 
     validWalls.push({
       ...w,
