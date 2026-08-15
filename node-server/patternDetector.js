@@ -386,6 +386,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
 
   const signals = [];
   const now     = Date.now();
+  const last    = candles.length - 1;
   const lastC   = candles[candles.length - 1];
   const { ex, sym, base, tf } = meta;
   const priceNow = lastC.c;
@@ -438,7 +439,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
       type: 'breakout', ex, sym, base, tf, price: +br.breakPrice.toFixed(4),
       direction: br.direction === 'up' ? 'long' : 'short',
       confidence: br.volConfirmed ? 5 : 3, ts: lastC.t || now,
-      meta: { sourceType: br.sourceType, volConfirmed: br.volConfirmed }
+      meta: { sourceType: br.sourceType, volConfirmed: br.volConfirmed, barIdx: br.barIdx }
     });
   }
 
@@ -450,7 +451,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
       type: 'retest', ex, sym, base, tf, price: +rt.event.breakPrice.toFixed(4),
       direction: rt.event.direction === 'up' ? 'long' : 'short',
       confidence: rt.status === 'confirmed' ? 5 : 2, ts: lastC.t || now,
-      meta: { status: rt.status, sourceType: rt.event.sourceType }
+      meta: { status: rt.status, sourceType: rt.event.sourceType, barIdx: rt.event.barIdx, retestBar: rt.retestBar }
     });
   }
 

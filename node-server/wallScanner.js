@@ -22,11 +22,11 @@ const COIN_DELAY_MS = 5;
 // A scan cycle processes a bounded batch per exchange.  The batch contains the
 // most liquid markets plus a rotating window through every remaining symbol,
 // so coverage is complete without creating a rate-limit storm.
-const DEFAULT_SCAN_BATCH_PER_EX = 200;
+const DEFAULT_SCAN_BATCH_PER_EX = 240;
 const DEFAULT_PRIORITY_SYMBOLS = 20;
-const DEFAULT_SYMBOL_CACHE_TTL_MS = 20 * 60 * 1000;
+const DEFAULT_SYMBOL_CACHE_TTL_MS = 45 * 60 * 1000;
 const DEFAULT_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_HISTORY_LIMIT = 2500;
+const DEFAULT_HISTORY_LIMIT = 5000;
 
 const BIN_STEP_PCT = 0.001; // 0.1% price bins
 const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
@@ -34,8 +34,8 @@ const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
 const MIN_DIST_PCT = 0.05;
 const MAX_DIST_PCT = 5.0;
 
-const MAX_OUTPUT = 1000;
-const MAX_PER_COIN = 5;
+const MAX_OUTPUT = 2500;
+const MAX_PER_COIN = 8;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 
@@ -268,14 +268,13 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     const vals = arr.filter(b => b.usd > 0).map(b => b.usd);
     if (!vals.length) return { mu: 0, sigma: 1 };
 
-    const sum = vals.reduce((a, b) => a + b, 0);
-    const mu = sum / vals.length;
-
-    const sqDiffSum = vals.reduce((a, b) => a + Math.pow(b - mu, 2), 0);
-    const variance = sqDiffSum / vals.length;
-    let sigma = Math.sqrt(variance);
-
-    if (sigma < 1) sigma = 1;
+    // Median/MAD is resistant to the very outliers we are trying to detect.
+    // Mean/std let one giant order inflate sigma and hide other real walls in
+    // the same book. IQR and a small scale floor keep flat books stable.
+    const mu = median(vals);
+    const mad = median(vals.map(v => Math.abs(v - mu)));
+    const iqrSigma = (quantile(vals, 0.75) - quantile(vals, 0.25)) / 1.349;
+    const sigma = Math.max(1, mad * 1.4826, iqrSigma, mu * 0.035);
     return { mu, sigma };
   };
 
@@ -460,7 +459,7 @@ function buildWallSnapshot(allWalls, options = {}) {
 
   const maxOutput = Number.isInteger(options.maxOutput) && options.maxOutput > 0
     ? options.maxOutput
-    : Math.max(50, Math.min(1000, parseInt(process.env.WALL_MAX_RESULTS, 10) || MAX_OUTPUT));
+    : Math.max(50, Math.min(5000, parseInt(process.env.WALL_MAX_RESULTS, 10) || MAX_OUTPUT));
   const maxPerCoin = Number.isInteger(options.maxPerCoin) && options.maxPerCoin > 0
     ? options.maxPerCoin
     : MAX_PER_COIN;
@@ -731,7 +730,7 @@ function refreshSnapshotAndPublish(currentScanId, exchangesTotal) {
 // ═══ Scan one exchange ═══════════════════════════════════════════════════════
 
 async function scanExchange(ex, tickers, apiFetch, currentScanId, symbolLimit, requestTimeoutMs) {
-  const maxCoins = symbolLimit || Math.max(10, Math.min(250, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_SCAN_BATCH_PER_EX));
+  const maxCoins = symbolLimit || Math.max(10, Math.min(300, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_SCAN_BATCH_PER_EX));
 
   const exCoins = [];
   for (const [, t] of tickers) {
@@ -844,7 +843,7 @@ async function runFullScan(tickers, apiFetch) {
   scanCount++;
   const currentScanId = scanCount;
 
-  const symbolLimit = Math.max(10, Math.min(250, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_SCAN_BATCH_PER_EX));
+  const symbolLimit = Math.max(10, Math.min(300, parseInt(process.env.WALL_SCAN_SYMBOL_LIMIT, 10) || DEFAULT_SCAN_BATCH_PER_EX));
   const reqTimeout = Math.max(1000, Math.min(30000, parseInt(process.env.WALL_REQUEST_TIMEOUT_MS, 10) || DEFAULT_API_TIMEOUT));
   const concurrency = Math.max(1, Math.min(11, parseInt(process.env.WALL_SCAN_CONCURRENCY, 10) || DEFAULT_POOL_EX));
 

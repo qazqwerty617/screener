@@ -267,6 +267,29 @@ let chartFovNearest = false;                 // show nearest level only
 let chartFovShowLabels = true;               // show Resistance / Support labels
 let chartFovShowTouches = true;              // show touch circles on level
 
+// Formation detection is substantially more expensive than drawing. Cache a
+// result until the current candle materially changes, so live charts can keep
+// moving at 60 fps without running O(n²/O(n³)) detectors every frame.
+const formationDetectionCache = new WeakMap();
+function getCachedFormationDetection(candles, key, detector, ttlMs = 900) {
+  if (!Array.isArray(candles) || candles.length === 0) return [];
+  let cache = formationDetectionCache.get(candles);
+  if (!cache) {
+    cache = new Map();
+    formationDetectionCache.set(candles, cache);
+  }
+  const last = candles[candles.length - 1];
+  const signature = `${candles.length}|${last?.t || 0}|${last?.c || 0}|${last?.h || 0}|${last?.l || 0}`;
+  const now = performance.now();
+  const previous = cache.get(key);
+  if (previous && (previous.signature === signature || now - previous.at < ttlMs)) {
+    return previous.value;
+  }
+  const value = detector() || [];
+  cache.set(key, { signature, at: now, value });
+  return value;
+}
+
 
 const TAG_PALETTE = [
   "#ff4560",
@@ -1882,7 +1905,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
   // ─── 1. CASCADES / LEVELS (Same level detection engine as Formations tab) ───
   if (chartFovTypes.has('cascades')) {
-    let levels = window.detectChartLevelsAndTouches ? window.detectChartLevelsAndTouches(candles) : [];
+    let levels = window.detectChartLevelsAndTouches
+      ? getCachedFormationDetection(candles, 'overlay:cascades', () => window.detectChartLevelsAndTouches(candles))
+      : [];
 
     const directionCounts = levels.reduce((acc, level) => {
       acc[level.direction] = (acc[level.direction] || 0) + 1;
@@ -1929,7 +1954,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
   // ─── 2. BREAKOUT horizontal levels ───────────────────────
   if (chartFovTypes.has('breakout')) {
-    let levels = window.detectChartBreakoutLevels ? window.detectChartBreakoutLevels(candles, chartFovBreakoutMin) : [];
+    let levels = window.detectChartBreakoutLevels
+      ? getCachedFormationDetection(candles, `overlay:breakout:${chartFovBreakoutMin}`, () => window.detectChartBreakoutLevels(candles, chartFovBreakoutMin))
+      : [];
     levels = levels.filter(lv => (lv.touches || 1) >= chartFovBreakoutMin);
 
     if (chartFovNearest && levels.length > 0) {
@@ -1972,7 +1999,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
   // ─── 3. TRENDLINES ───────────────────────────────────────
   if (chartFovTypes.has('trendline')) {
-    let trendlines = window.detectChartTrendlines ? window.detectChartTrendlines(candles, chartFovTrendlineMin) : [];
+    let trendlines = window.detectChartTrendlines
+      ? getCachedFormationDetection(candles, `overlay:trendline:${chartFovTrendlineMin}`, () => window.detectChartTrendlines(candles, chartFovTrendlineMin))
+      : [];
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= chartFovTrendlineMin);
 
     if (chartFovNearest && trendlines.length > 0) {
@@ -2016,9 +2045,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   if (chartFovTypes.has('retest')) {
     let retests = [];
     if (chartFovRetestApproaching && window.detectChartApproachingRetests) {
-      retests = window.detectChartApproachingRetests(candles);
+      retests = getCachedFormationDetection(candles, 'overlay:retest:approaching', () => window.detectChartApproachingRetests(candles));
     } else if (window.detectChartRetests) {
-      retests = window.detectChartRetests(candles);
+      retests = getCachedFormationDetection(candles, 'overlay:retest', () => window.detectChartRetests(candles));
     }
 
     if (chartFovNearest && retests.length > 0) {
@@ -7704,6 +7733,9 @@ let densityHover = -1;
 let densityMouseX = -1, densityMouseY = -1;
 let densityAnimFrame = null;
 let densityLastUpdate = 0;
+const densityBubbleSpriteCache = new Map();
+const DENSITY_SPRITE_W = 84;
+const DENSITY_SPRITE_H = 92;
 
 const EX_COLORS = {
   BN: "#f59e0b", BB: "#6366f1", OX: "#94a3b8", BG: "#22d3ee",
@@ -7735,6 +7767,8 @@ class ChartInstance {
     this.candleW = 8;
     this.lastDrawTs = 0;
     this.dirty = true;
+    this.levels = [];
+    this._lastFormationDetectAt = 0;
 
     this.isDrag = false;
     this.isDragY = false;
@@ -8021,6 +8055,21 @@ class ChartInstance {
     }
   }
 
+  refreshFormationLevels(force = false) {
+    if (activeView !== 'formations' || this.loadingKlines || this.candles.length < 30) return;
+    const now = performance.now();
+    if (!force && now - this._lastFormationDetectAt < 900) return;
+    this._lastFormationDetectAt = now;
+    const next = window.detectChartLevelsFn?.(this.candles) || [];
+    // During a live candle an intermediate wick can temporarily invalidate a
+    // setup. Keep the last confirmed drawing until a positive replacement is
+    // available; full history loads still establish the authoritative state.
+    if (next.length > 0) {
+      this.levels = next;
+      window.registerFormationsCoinLevels?.(this.ex, this.sym, next);
+    }
+  }
+
   subscribeLive() {
     if (!this.ex || !this.sym || !this.tf || location.protocol === "file:") return;
     const nextKey = marketKey(this.ex, this.sym, this.tf);
@@ -8048,6 +8097,7 @@ class ChartInstance {
     } else return;
     this.headerPrice.textContent = fP(clean.c);
     this.dirty = true;
+    this.refreshFormationLevels();
     this.draw();
   }
 
@@ -8068,6 +8118,7 @@ class ChartInstance {
     } else return;
     this.headerPrice.textContent = fP(p);
     this.dirty = true;
+    this.refreshFormationLevels();
     this.draw();
   }
 
@@ -8275,6 +8326,7 @@ class ChartInstance {
         }
       }
     }
+    this.refreshFormationLevels();
 
     const dpr = window.devicePixelRatio || 1;
     const cw = this.canvas.clientWidth;
@@ -8538,7 +8590,8 @@ class ChartInstance {
           if (y < 2 || y > ch - 2) return;
 
           // тФАтФА Solid horizontal line: from first swing тЖТ right edge (PW) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-          const x0 = Math.max(0, getX(setup.swingIdx));
+          const originIdx = Number.isFinite(setup.swingIdx) ? setup.swingIdx : (Number.isFinite(setup.startIdx) ? setup.startIdx : 0);
+          const x0 = Math.max(0, getX(originIdx));
           ctx.strokeStyle = lineColor;
           ctx.lineWidth = 1.5;
           ctx.setLineDash([]);
@@ -9714,10 +9767,15 @@ function drawDensityMap() {
     if (d.rx === undefined) continue;
     const dx = densityMouseX - d.rx;
     const dy = densityMouseY - d.ry;
-    const isHover = Math.sqrt(dx * dx + dy * dy) < 45;
+    const isHover = dx * dx + dy * dy < 2025;
     if (isHover) densityHover = i;
     const isSelected = densitySelectedKey && (d.ex + ":" + d.sym === densitySelectedKey);
-    drawDensityBubble(ctx, d, d.rx, d.ry, isHover || isSelected);
+    if (isHover || isSelected) {
+      drawDensityBubble(ctx, d, d.rx, d.ry, true);
+    } else {
+      const sprite = getDensityBubbleSprite(d);
+      ctx.drawImage(sprite, d.rx - DENSITY_SPRITE_W / 2, d.ry - 40, DENSITY_SPRITE_W, DENSITY_SPRITE_H);
+    }
   }
 
   // Active item for tooltip / line (hovered or explicitly selected on tap)
@@ -9927,12 +9985,39 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
     "KC": "#22c55e", // Kucoin Green
     "HT": "#ec4899", // HTX Pink
     "BX": "#a855f7", // BingX Purple
-    "HL": "#fb923c"  // HyperLiquid Orange
+    "HL": "#fb923c", // HyperLiquid Orange
+    "AD": "#fb923c"  // AsterDEX Orange
   };
   ctx.fillStyle = EX_COLORS[d.ex] || "#a1a1aa";
   ctx.fillText(pctStr, x, y + R * 0.45);
 
   ctx.restore();
+}
+
+function getDensityBubbleSprite(d) {
+  const stableId = d.wallId || `${d.ex}:${d.sym}:${d.side}:${Number(d.price).toPrecision(8)}`;
+  const scale = Math.min(2, window.devicePixelRatio || 1);
+  const key = `${stableId}|${d.wallK}|${Number(d.rtwi || 0).toFixed(1)}|${Number(d.pct || 0).toFixed(2)}|${scale}`;
+  const cached = densityBubbleSpriteCache.get(key);
+  if (cached) return cached;
+
+  const sprite = document.createElement("canvas");
+  sprite.width = DENSITY_SPRITE_W * scale;
+  sprite.height = DENSITY_SPRITE_H * scale;
+  const spriteCtx = sprite.getContext("2d", { alpha: true });
+  spriteCtx.scale(scale, scale);
+  drawDensityBubble(spriteCtx, d, DENSITY_SPRITE_W / 2, 40, false);
+  densityBubbleSpriteCache.set(key, sprite);
+
+  // Keep the cache bounded while retaining most stable walls between updates.
+  if (densityBubbleSpriteCache.size > 6000) {
+    let removeCount = 1500;
+    for (const oldKey of densityBubbleSpriteCache.keys()) {
+      densityBubbleSpriteCache.delete(oldKey);
+      if (--removeCount <= 0) break;
+    }
+  }
+  return sprite;
 }
 
 
@@ -10758,15 +10843,22 @@ window.addEventListener("resize", () => {
       if (!departed) continue;
 
       // тФАтФА 4. UNMITIGATED: price must NOT have pierced the level тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+      // One wick is noise, not a confirmed mitigation. Waiting for two closes
+      // also keeps a live level from flickering while the candle is forming.
       let mitigated = false;
+      let closesBeyond = 0;
+      const touchIndices = [sw.idx];
       for (let i = sw.idx + 1; i < N; i++) {
-        if (sw.type === 'high') {
-          // High level is pierced/mitigated if any later candle high goes ABOVE the level
-          if (candles[i].h > lvl) { mitigated = true; break; }
-        } else {
-          // Low level is pierced/mitigated if any later candle low goes BELOW the level
-          if (candles[i].l < lvl) { mitigated = true; break; }
-        }
+        const c = candles[i];
+        const beyond = sw.type === 'high'
+          ? c.c > lvl + tol * 0.45
+          : c.c < lvl - tol * 0.45;
+        closesBeyond = beyond ? closesBeyond + 1 : 0;
+        if (closesBeyond >= 2) { mitigated = true; break; }
+        const visited = sw.type === 'high'
+          ? Math.abs(c.h - lvl) <= tol
+          : Math.abs(c.l - lvl) <= tol;
+        if (visited && i - touchIndices[touchIndices.length - 1] > 1) touchIndices.push(i);
       }
       if (mitigated) continue;
 
@@ -10800,6 +10892,8 @@ window.addEventListener("resize", () => {
         direction,
         swingIdx: sw.idx,
         departureIdx,
+        touchIndices,
+        touches: touchIndices.length,
         strength,
         atr
       });
@@ -10809,10 +10903,10 @@ window.addEventListener("resize", () => {
     candidates.sort((a, b) => b.strength - a.strength);
     const kept = [];
     for (const c of candidates) {
-      // Skip if already have a level within 0.5% price of this one
-      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.005);
+      const adaptiveDedupe = Math.max(0.0025, Math.min(0.008, atr / Math.max(lastPrice, 1e-12) * 0.6));
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < adaptiveDedupe);
       if (!near) kept.push(c);
-      if (kept.length >= 8) break;  // show all relevant levels, not just top-3
+      if (kept.length >= 12) break;
     }
 
     return kept;
@@ -10840,7 +10934,14 @@ window.addEventListener("resize", () => {
 
     const highSwings = swings.filter(s => s.type === 'high');
     const lowSwings = swings.filter(s => s.type === 'low');
-    const tol = 0.0012; // 0.12% clustering tolerance for solid levels
+    let atrSum = 0;
+    const atrStart = Math.max(1, N - 24);
+    for (let i = atrStart; i < N; i++) {
+      atrSum += Math.max(candles[i].h - candles[i].l, Math.abs(candles[i].h - candles[i - 1].c), Math.abs(candles[i].l - candles[i - 1].c));
+    }
+    const atrPct = (atrSum / Math.max(1, N - atrStart)) / Math.max(lastPrice, 1e-12);
+    const tol = Math.max(0.0012, Math.min(0.005, atrPct * 0.22));
+    const breakTol = Math.max(0.002, Math.min(0.008, tol * 1.8));
     const candidates = [];
 
     // Resistance (breaks UP)
@@ -10850,7 +10951,7 @@ window.addEventListener("resize", () => {
       for (const cl of resClusters) {
         if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
           cl.prices.push(sw.price);
-          cl.price = Math.max(...cl.prices); // Resistance line is at the HIGHEST peak of cluster
+          cl.price = cl.prices.reduce((sum, price) => sum + price, 0) / cl.prices.length;
           cl.touches++;
           cl.swingIndices.push(sw.idx);
           cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
@@ -10869,12 +10970,13 @@ window.addEventListener("resize", () => {
       const firstIdx = Math.min(...cl.swingIndices);
 
       let active = true;
+      let closesBeyond = 0;
       let touchIndices = new Set(cl.swingIndices);
       let lastTouchIndex = cl.lastTouch;
 
-      for (let i = firstIdx; i < N; i++) {
-        // Level is broken if candle closes > 0.2% above or spikes > 0.4% above
-        if (candles[i].c > cl.price * 1.002 || candles[i].h > cl.price * 1.004) {
+      for (let i = cl.lastTouch + 1; i < N; i++) {
+        closesBeyond = candles[i].c > cl.price * (1 + breakTol) ? closesBeyond + 1 : 0;
+        if (closesBeyond >= 2) {
           active = false;
           break;
         }
@@ -10912,7 +11014,7 @@ window.addEventListener("resize", () => {
       for (const cl of supClusters) {
         if (Math.abs(sw.price - cl.price) / cl.price <= tol) {
           cl.prices.push(sw.price);
-          cl.price = Math.min(...cl.prices); // Support line is at the LOWEST trough of cluster
+          cl.price = cl.prices.reduce((sum, price) => sum + price, 0) / cl.prices.length;
           cl.touches++;
           cl.swingIndices.push(sw.idx);
           cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
@@ -10931,12 +11033,13 @@ window.addEventListener("resize", () => {
       const firstIdx = Math.min(...cl.swingIndices);
 
       let active = true;
+      let closesBeyond = 0;
       let touchIndices = new Set(cl.swingIndices);
       let lastTouchIndex = cl.lastTouch;
 
-      for (let i = firstIdx; i < N; i++) {
-        // Level is broken if candle closes > 0.2% below or spikes > 0.4% below
-        if (candles[i].c < cl.price * 0.998 || candles[i].l < cl.price * 0.996) {
+      for (let i = cl.lastTouch + 1; i < N; i++) {
+        closesBeyond = candles[i].c < cl.price * (1 - breakTol) ? closesBeyond + 1 : 0;
+        if (closesBeyond >= 2) {
           active = false;
           break;
         }
@@ -10970,14 +11073,14 @@ window.addEventListener("resize", () => {
     // Sort by relevance (highest relevance first)
     candidates.sort((a, b) => b.relevance - a.relevance);
 
-    // Deduplicate: min distance 0.4%
+    // Deduplicate using current volatility instead of a one-size-fits-all value.
     const kept = [];
     for (const c of candidates) {
-      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < 0.004);
+      const near = kept.find(k => Math.abs(k.price - c.price) / c.price < Math.max(0.0025, tol * 1.5));
       if (!near) kept.push(c);
     }
 
-    return kept.slice(0, 8);
+    return kept.slice(0, 12);
   };
 
 
@@ -10987,11 +11090,20 @@ window.addEventListener("resize", () => {
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
     const minTouches = (typeof minTouchesOverride === 'number') ? minTouchesOverride : formationsMinCascade;
+    let atrSum = 0;
+    const atrStart = Math.max(1, N - 24);
+    for (let i = atrStart; i < N; i++) {
+      atrSum += Math.max(candles[i].h - candles[i].l, Math.abs(candles[i].h - candles[i - 1].c), Math.abs(candles[i].l - candles[i - 1].c));
+    }
+    const atrPct = (atrSum / Math.max(1, N - atrStart)) / Math.max(lastPrice, 1e-12);
+    const tol = Math.max(0.0012, Math.min(0.006, atrPct * 0.18));
 
-    // 1. Swing Highs & Lows (window=3)
+    // Old history adds quadratic work and produces irrelevant lines. A rolling
+    // 320-bar window is enough for all supported intraday formation modes.
     const W = 3;
     const swings = [];
-    for (let i = W; i < N - W; i++) {
+    const scanStart = Math.max(W, N - 320);
+    for (let i = scanStart; i < N - W; i++) {
       let isH = true, isL = true;
       for (let j = i - W; j <= i + W; j++) {
         if (j === i) continue;
@@ -11002,112 +11114,58 @@ window.addEventListener("resize", () => {
       if (isL) swings.push({ idx: i, price: candles[i].l, type: 'low' });
     }
 
-    const highSwings = swings.filter(s => s.type === 'high');
-    const lowSwings = swings.filter(s => s.type === 'low');
-    const tol = 0.00015; // 0.015%
+    const highSwings = swings.filter(s => s.type === 'high').slice(-36);
+    const lowSwings = swings.filter(s => s.type === 'low').slice(-36);
     const candidates = [];
 
-    // Resistance Trendlines (downward sloping, price below line, breaks UP)
-    for (let i = 0; i < highSwings.length - 1; i++) {
-      for (let j = i + 1; j < highSwings.length; j++) {
-        const s1 = highSwings[i];
-        const s2 = highSwings[j];
-        if (s2.price >= s1.price) continue; // must be downward sloping
+    function collectTrendlines(sideSwings, resistance) {
+      for (let i = 0; i < sideSwings.length - 1; i++) {
+        for (let j = i + 1; j < sideSwings.length; j++) {
+          const s1 = sideSwings[i], s2 = sideSwings[j];
+          if (s2.idx - s1.idx < 5) continue;
+          if (resistance ? s2.price >= s1.price : s2.price <= s1.price) continue;
+          const slope = (s2.price - s1.price) / (s2.idx - s1.idx);
+          let consecutiveBroken = 0;
+          const swingIndices = [s1.idx, s2.idx];
 
-        const slope = (s2.price - s1.price) / (s2.idx - s1.idx);
+          for (let k = s1.idx; k < N; k++) {
+            const lineVal = s1.price + slope * (k - s1.idx);
+            if (!(lineVal > 0)) { consecutiveBroken = 2; break; }
+            const closeBeyond = resistance
+              ? candles[k].c > lineVal * (1 + tol * 1.25)
+              : candles[k].c < lineVal * (1 - tol * 1.25);
+            consecutiveBroken = closeBeyond ? consecutiveBroken + 1 : 0;
+            if (consecutiveBroken >= 2) break;
+            const wick = resistance ? candles[k].h : candles[k].l;
+            if (Math.abs(wick - lineVal) / lineVal <= tol && k - swingIndices[swingIndices.length - 1] > 1) {
+              swingIndices.push(k);
+            }
+          }
+          if (consecutiveBroken >= 2) continue;
 
-        // Check if unbroken and count touches
-        let broken = false;
-        const swingIndices = [];
-        for (let k = s1.idx; k < N; k++) {
-          const lineVal = s1.price + slope * (k - s1.idx);
-          if (candles[k].h > lineVal) {
-            broken = true;
-            break;
-          }
-          if (candles[k].h <= lineVal && (lineVal - candles[k].h) / lineVal <= tol) {
-            swingIndices.push(k);
-          }
+          const uniqueTouches = Array.from(new Set(swingIndices)).sort((a, b) => a - b);
+          if (uniqueTouches.length < minTouches) continue;
+          const lineLastVal = s1.price + slope * (N - 1 - s1.idx);
+          const wrongSide = resistance ? lastPrice > lineLastVal * (1 + tol) : lastPrice < lineLastVal * (1 - tol);
+          if (wrongSide || !(lineLastVal > 0)) continue;
+          const dist = Math.abs(lineLastVal - lastPrice) / lastPrice;
+          if (dist > 0.035) continue;
+
+          candidates.push({
+            p1: s1, p2: s2, slope,
+            direction: resistance ? 'up' : 'down',
+            swingIndices: uniqueTouches,
+            touches: uniqueTouches.length,
+            isTrendline: true,
+            strength: uniqueTouches.length * 2.5 - dist * 100 - (N - 1 - s2.idx) / 80,
+            endPrice: lineLastVal
+          });
         }
-        if (broken) continue;
-
-        // Ensure both original swings are counted
-        if (!swingIndices.includes(s1.idx)) swingIndices.push(s1.idx);
-        if (!swingIndices.includes(s2.idx)) swingIndices.push(s2.idx);
-        swingIndices.sort((a, b) => a - b);
-        const uniqueTouches = Array.from(new Set(swingIndices));
-
-        if (uniqueTouches.length < minTouches) continue;
-
-        const lineLastVal = s1.price + slope * ((N - 1) - s1.idx);
-        if (lastPrice > lineLastVal) continue;
-        const dist = (lineLastVal - lastPrice) / lastPrice;
-        if (dist > 0.015) continue;
-
-        candidates.push({
-          p1: s1,
-          p2: s2,
-          slope,
-          direction: 'up',
-          swingIndices: uniqueTouches,
-          touches: uniqueTouches.length,
-          isTrendline: true,
-          strength: uniqueTouches.length * 2 - dist * 100,
-          endPrice: lineLastVal
-        });
       }
     }
 
-    // Support Trendlines (upward sloping, price above line, breaks DOWN)
-    for (let i = 0; i < lowSwings.length - 1; i++) {
-      for (let j = i + 1; j < lowSwings.length; j++) {
-        const s1 = lowSwings[i];
-        const s2 = lowSwings[j];
-        if (s2.price <= s1.price) continue; // must be upward sloping
-
-        const slope = (s2.price - s1.price) / (s2.idx - s1.idx);
-
-        // Check if unbroken and count touches
-        let broken = false;
-        const swingIndices = [];
-        for (let k = s1.idx; k < N; k++) {
-          const lineVal = s1.price + slope * (k - s1.idx);
-          if (candles[k].l < lineVal) {
-            broken = true;
-            break;
-          }
-          if (candles[k].l >= lineVal && (candles[k].l - lineVal) / lineVal <= tol) {
-            swingIndices.push(k);
-          }
-        }
-        if (broken) continue;
-
-        if (!swingIndices.includes(s1.idx)) swingIndices.push(s1.idx);
-        if (!swingIndices.includes(s2.idx)) swingIndices.push(s2.idx);
-        swingIndices.sort((a, b) => a - b);
-        const uniqueTouches = Array.from(new Set(swingIndices));
-
-        if (uniqueTouches.length < minTouches) continue;
-
-
-        const lineLastVal = s1.price + slope * ((N - 1) - s1.idx);
-        if (lastPrice < lineLastVal) continue;
-        const dist = (lastPrice - lineLastVal) / lineLastVal;
-        if (dist > 0.015) continue;
-
-        candidates.push({
-          p1: s1,
-          p2: s2,
-          slope,
-          direction: 'down',
-          swingIndices: uniqueTouches,
-          touches: uniqueTouches.length,
-          isTrendline: true,
-          strength: uniqueTouches.length * 2 - dist * 100,
-          endPrice: lineLastVal
-        });
-      }
-    }
+    collectTrendlines(highSwings, true);
+    collectTrendlines(lowSwings, false);
 
     // Deduplicate trendlines that are too similar
     candidates.sort((a, b) => b.strength - a.strength);
@@ -11115,7 +11173,7 @@ window.addEventListener("resize", () => {
     for (const c of candidates) {
       const near = kept.find(k => k.direction === c.direction && Math.abs(k.endPrice - c.endPrice) / c.endPrice < 0.005);
       if (!near) kept.push(c);
-      if (kept.length >= 8) break;
+      if (kept.length >= 12) break;
     }
 
     return kept;
@@ -11572,21 +11630,21 @@ window.addEventListener("resize", () => {
 
     if (typeof activeFormation !== 'undefined') {
       if (activeFormation === 'breakout') {
-        return window.detectChartBreakoutLevels(candles) || [];
+        return getCachedFormationDetection(candles, `view:breakout:${formationsMinCascade}`, () => window.detectChartBreakoutLevels(candles));
       } else if (activeFormation === 'trendline') {
-        return window.detectChartTrendlines(candles) || [];
+        return getCachedFormationDetection(candles, `view:trendline:${formationsMinCascade}`, () => window.detectChartTrendlines(candles));
       } else if (activeFormation === 'retest') {
         const showApproaching = $("formations-approaching-toggle")?.checked;
-        return (showApproaching
+        return getCachedFormationDetection(candles, `view:retest:${showApproaching ? 1 : 0}`, () => showApproaching
           ? window.detectChartApproachingRetests(candles)
-          : window.detectChartRetests(candles)) || [];
+          : window.detectChartRetests(candles));
       } else {
         // 'cascades' or 'levels': horizontal levels and cascades only
-        return window.detectChartLevelsAndTouches(candles) || [];
+        return getCachedFormationDetection(candles, `view:cascades:${formationsMinCascade}`, () => window.detectChartLevelsAndTouches(candles));
       }
     }
 
-    return window.detectChartLevelsAndTouches(candles) || [];
+    return getCachedFormationDetection(candles, 'view:cascades:default', () => window.detectChartLevelsAndTouches(candles));
   };
 
   // тФАтФАтФА Formations View Logic v2 (Simplified Multi-Charts) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -11762,9 +11820,11 @@ window.addEventListener("resize", () => {
 
   function preloadFormationsInBackground() {
     const tf = typeof formationsTf !== 'undefined' ? formationsTf : '15m';
-    fetch(`/api/formations/map?tf=${tf}`)
+    const type = typeof activeFormation !== 'undefined' ? activeFormation : 'cascades';
+    fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=${encodeURIComponent(type)}`)
       .then(r => r.ok ? r.json() : null)
       .then(mapData => {
+        if (type !== activeFormation) return;
         if (mapData && Object.keys(mapData).length > 0) {
           for (const coinKey in mapData) {
             formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
@@ -11886,6 +11946,7 @@ window.addEventListener("resize", () => {
         fgSelectBtn.classList.remove("open");
         // Clear cached formations level map because we changed the active formation type
         formationsCoinsLevelsMap.clear();
+        formationMissesByCoin.clear();
         window.loadFormations(true);
       };
     });
@@ -11955,12 +12016,14 @@ window.addEventListener("resize", () => {
   let formationsPage = 0;
   // Map of key => levels array for coins that have detected levels
   const formationsCoinsLevelsMap = new Map();
+  const formationMissesByCoin = new Map();
   // Full sorted list rebuilt on loadFormations, used for paging
   let formationsAllCoins = [];
 
   let activeScanId = 0;
   let scanProgressText = "";
   let lastScanKey = "";
+  let formationsScanAbortController = null;
 
   let lastLoadFormationsTs = 0;
   let loadFormationsTimeout = null;
@@ -11987,26 +12050,31 @@ window.addEventListener("resize", () => {
 
   async function startFormationsScan(checkedEx, tf) {
     const scanId = ++activeScanId;
+    formationsScanAbortController?.abort();
+    formationsScanAbortController = new AbortController();
+    const signal = formationsScanAbortController.signal;
     scanProgressText = "Загрузка с сервера...";
-    formationsCoinsLevelsMap.clear();
     updateFormationsPagination();
 
     try {
-      const r = await fetch(`/api/formations/map?tf=${tf}`);
+      const r = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=${encodeURIComponent(activeFormation)}`, { signal });
       if (r.ok) {
         const mapData = await r.json();
         if (scanId !== activeScanId) return;
-        if (mapData) {
+        if (mapData && Object.keys(mapData).length > 0) {
           for (const coinKey in mapData) {
-            formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
+            if (checkedEx.includes(coinKey.split(':')[0])) {
+              formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
+              formationMissesByCoin.delete(coinKey);
+            }
           }
-          scanProgressText = "";
           updateFormationsPagination();
           window.loadFormations();
-          return;
         }
       }
-    } catch (_) {}
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+    }
 
     const eligibleCoins = [];
     for (const ex of checkedEx) {
@@ -12014,7 +12082,12 @@ window.addEventListener("resize", () => {
         .filter(c => c.ex === ex && isUsdtFutures(c) && c.v >= 80000 && !isStablecoinBase(c));
       eligibleCoins.push(...exCoins);
     }
-    eligibleCoins.sort((a, b) => b.v - a.v);
+    eligibleCoins.sort((a, b) => {
+      const aSeeded = formationsCoinsLevelsMap.has(a.ex + ':' + a.sym) ? 1 : 0;
+      const bSeeded = formationsCoinsLevelsMap.has(b.ex + ':' + b.sym) ? 1 : 0;
+      return bSeeded - aSeeded || b.v - a.v;
+    });
+    if (eligibleCoins.length > 1200) eligibleCoins.length = 1200;
 
     let index = 0;
     const total = eligibleCoins.length;
@@ -12058,7 +12131,7 @@ window.addEventListener("resize", () => {
             klinesData = cached.data;
           } else {
             try {
-              const r = await fetch(`/api/klines?ex=${c.ex}&sym=${c.sym}&tf=${tf}&lite=1`);
+              const r = await fetch(`/api/klines?ex=${c.ex}&sym=${c.sym}&tf=${tf}&lite=1`, { signal });
               if (r.ok) {
                 const rawKlines = await r.json();
                 if (Array.isArray(rawKlines) && rawKlines.length > 0) {
@@ -12100,17 +12173,21 @@ window.addEventListener("resize", () => {
             const hasLevel = detectedLevels && detectedLevels.length > 0;
             if (hasLevel) {
               formationsCoinsLevelsMap.set(coinKey, detectedLevels);
+              formationMissesByCoin.delete(coinKey);
             } else {
-              formationsCoinsLevelsMap.delete(coinKey);
+              const misses = (formationMissesByCoin.get(coinKey) || 0) + 1;
+              formationMissesByCoin.set(coinKey, misses);
+              if (misses >= 3) formationsCoinsLevelsMap.delete(coinKey);
             }
 
             let isEligible = false;
-            if (hasLevel) {
+            if (hasLevel || formationsCoinsLevelsMap.has(coinKey)) {
               if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
                 isEligible = true;
               } else {
                 let upC = 0, downC = 0;
-                for (const l of detectedLevels) {
+                const effectiveLevels = hasLevel ? detectedLevels : (formationsCoinsLevelsMap.get(coinKey) || []);
+                for (const l of effectiveLevels) {
                   if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
                 }
                 isEligible = Math.max(upC, downC) >= formationsMinCascade;
@@ -12141,7 +12218,7 @@ window.addEventListener("resize", () => {
 
       await Promise.all(promises);
 
-      setTimeout(nextBatch, 5);
+      setTimeout(nextBatch, 10);
     }
 
     nextBatch();
@@ -12169,17 +12246,21 @@ window.addEventListener("resize", () => {
     const hasL = levels && levels.length > 0;
     if (hasL) {
       formationsCoinsLevelsMap.set(key, levels);
+      formationMissesByCoin.delete(key);
     } else {
-      formationsCoinsLevelsMap.delete(key);
+      const misses = (formationMissesByCoin.get(key) || 0) + 1;
+      formationMissesByCoin.set(key, misses);
+      if (misses >= 3) formationsCoinsLevelsMap.delete(key);
     }
 
+    const effectiveLevels = hasL ? levels : (formationsCoinsLevelsMap.get(key) || []);
     let isEligible = false;
-    if (hasL) {
+    if (effectiveLevels.length > 0) {
       if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
         isEligible = true;
       } else {
         let upC = 0, downC = 0;
-        for (const l of levels) {
+        for (const l of effectiveLevels) {
           if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
         }
         isEligible = Math.max(upC, downC) >= formationsMinCascade;
@@ -12286,7 +12367,13 @@ window.addEventListener("resize", () => {
       formationsAllCoins.sort((a, b) => b.v - a.v);
     }
 
-    const currentScanKey = checkedEx.sort().join(",") + "|" + formationsTf;
+    const currentScanKey = [
+      activeFormation,
+      formationsTf,
+      formationsMinCascade,
+      $("formations-approaching-toggle")?.checked ? 1 : 0,
+      checkedEx.sort().join(",")
+    ].join("|");
     if (resetPage || currentScanKey !== lastScanKey) {
       lastScanKey = currentScanKey;
       startFormationsScan(checkedEx, formationsTf);

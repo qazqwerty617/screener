@@ -2224,8 +2224,46 @@ registerPaymentRoutes(app, { userStore, paymentGateway });
 app.get("/api/formations/map", compression(), (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "public, max-age=5");
-  const { tf = "15m" } = req.query;
-  res.json(cachedTfMaps[tf] || {});
+  const tf = String(req.query.tf || "15m");
+  const type = String(req.query.type || "cascades");
+
+  if (type === "cascades" || type === "levels") {
+    return res.json(cachedTfMaps[tf] || {});
+  }
+
+  const map = Object.create(null);
+  for (const signal of patternsCache) {
+    if (!signal || signal.tf !== tf || signal.type !== type) continue;
+    const key = `${signal.ex}:${signal.sym}`;
+    if (!map[key]) map[key] = [];
+    if (map[key].length >= 8) continue;
+    const meta = signal.meta || {};
+
+    if (type === "trendline" && Number.isFinite(meta.p1Idx) && Number.isFinite(meta.p2Idx)) {
+      map[key].push({
+        p1: { idx: meta.p1Idx, price: meta.p1Price },
+        p2: { idx: meta.p2Idx, price: meta.p2Price },
+        slope: Number(meta.p2Price - meta.p1Price) / Math.max(1, meta.p2Idx - meta.p1Idx),
+        endPrice: signal.price,
+        direction: signal.direction === "long" ? "down" : "up",
+        touches: meta.touches || 2,
+        swingIndices: [meta.p1Idx, meta.p2Idx],
+        isTrendline: true,
+      });
+    } else {
+      map[key].push({
+        price: signal.price,
+        endPrice: signal.price,
+        swingIdx: Number.isFinite(meta.barIdx) ? meta.barIdx : 0,
+        touchIdx: Number.isFinite(meta.retestBar) ? meta.retestBar : undefined,
+        direction: signal.direction === "long" ? "up" : "down",
+        touches: meta.touches || 1,
+        isRetest: type === "retest",
+        outcome: meta.status || "confirmed",
+      });
+    }
+  }
+  res.json(map);
 });
 
 app.use(express.static(path.join(__dirname, "public"), {
@@ -2326,9 +2364,12 @@ server.listen(PORT, () => {
   // Start Wall Scanner Engine
   wallScanner.startScanning(tickers, apiFetch, (payload) => {
     const walls = Array.isArray(payload) ? payload : (payload.walls || []);
-    const meta = payload;
+    const meta = Array.isArray(payload) ? {} : { ...payload };
+    // The full payload already contains `walls`; do not send the same large
+    // array twice in every WebSocket message.
+    delete meta.walls;
     currentWallsCache = walls;
-    currentWallsMeta = meta;
+    currentWallsMeta = Array.isArray(payload) ? { walls, updatedAt: Date.now() } : payload;
     const msg = JSON.stringify({ type: "walls", data: walls, meta });
     for (const ws of clients) {
       if (ws.readyState === WebSocket.OPEN) {
@@ -2348,13 +2389,15 @@ server.listen(PORT, () => {
       const list = Array.from(tickers.values())
         .filter(t => t.v > 0)
         .sort((a, b) => b.v - a.v)
-        .slice(0, 300); // Scan top 300 active coins
+        .slice(0, 400);
 
-      const timeframes = ["5m", "15m", "1h", "4h", "1d"];
+      // Populate the default formations timeframe first so the tab becomes
+      // useful early in the cycle instead of waiting for four other histories.
+      const timeframes = ["4h", "15m", "1h", "5m", "1d"];
       let newSignalsCount = 0;
 
       // Safe concurrency batching
-      const BATCH_SIZE = 5;
+      const BATCH_SIZE = 10;
       for (let i = 0; i < list.length; i += BATCH_SIZE) {
         const batch = list.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (t) => {
@@ -2404,9 +2447,11 @@ server.listen(PORT, () => {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      setTimeout(scanAllPatterns, 2000);
+      setTimeout(scanAllPatterns, 30000);
     }
   }
+
+  setTimeout(scanAllPatterns, 1500);
 
   app.post("/api/notifications/telegram", express.json(), (req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");

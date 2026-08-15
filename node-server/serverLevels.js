@@ -71,42 +71,44 @@ function detectChartLevelsAndTouches(rawCandles) {
       if (!departed) continue;
 
       let mitigated = false;
+      let closesBeyond = 0;
+      const touchIndices = [sw.idx];
       for (let i = sw.idx + 1; i < N; i++) {
-        if (sw.type === 'high') {
-          if (candles[i].h > lvl) { mitigated = true; break; }
-        } else {
-          if (candles[i].l < lvl) { mitigated = true; break; }
-        }
+        const c = candles[i];
+        const beyond = sw.type === 'high'
+          ? c.c > lvl + tol * 0.45
+          : c.c < lvl - tol * 0.45;
+        closesBeyond = beyond ? closesBeyond + 1 : 0;
+        if (closesBeyond >= 2) { mitigated = true; break; }
+        const visited = sw.type === 'high'
+          ? Math.abs(c.h - lvl) <= tol
+          : Math.abs(c.l - lvl) <= tol;
+        if (visited && i - touchIndices[touchIndices.length - 1] > 1) touchIndices.push(i);
       }
       if (mitigated) continue;
 
-      let touches = 0;
-      for (let i = sw.idx + 1; i < N; i++) {
-        const c = candles[i];
-        if (sw.type === 'high') {
-          if (c.h >= lvl - tol && c.h <= lvl) touches++;
-        } else {
-          if (c.l <= lvl + tol && c.l >= lvl) touches++;
-        }
-      }
-
       const direction = sw.type === 'high' ? 'up' : 'down';
+      if ((direction === 'up' && lvl <= lastPrice) || (direction === 'down' && lvl >= lastPrice)) continue;
+      if (N - 1 - sw.idx > 200) continue;
       const distPct = ((lvl - lastPrice) / lastPrice) * 100;
 
       candidates.push({
         price: lvl,
         endPrice: lvl,
         startIdx: sw.idx,
+        swingIdx: sw.idx,
+        departureIdx,
         type: sw.type,
         direction: direction,
-        touches: touches,
+        touchIndices,
+        touches: touchIndices.length,
         distPct: distPct,
         age: N - 1 - sw.idx
       });
     }
 
     const merged = [];
-    const distTol = 0.003;
+    const distTol = Math.max(0.0025, Math.min(0.008, atr / lastPrice * 0.6));
     for (const cand of candidates) {
       let match = null;
       for (const existing of merged) {
@@ -120,16 +122,19 @@ function detectChartLevelsAndTouches(rawCandles) {
           match.price = cand.price;
           match.endPrice = cand.price;
           match.startIdx = cand.startIdx;
+          match.swingIdx = cand.swingIdx;
+          match.departureIdx = cand.departureIdx;
           match.age = cand.age;
         }
-        match.touches += cand.touches + 1;
+        match.touchIndices = Array.from(new Set([...(match.touchIndices || []), ...(cand.touchIndices || [])])).sort((a, b) => a - b);
+        match.touches = match.touchIndices.length;
       } else {
         merged.push({ ...cand });
       }
     }
 
     merged.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
-    return merged.slice(0, 10);
+    return merged.slice(0, 12);
   } catch (e) {
     return [];
   }
