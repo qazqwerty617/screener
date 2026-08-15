@@ -7740,7 +7740,7 @@ let densityMarket = "all";
 let densitySize = "all";
 let densitySort = "score"; // "score" | "size" | "dist"
 let densitySearch = "";
-let densityMinUsd = 100000;
+let densityMinUsd = 0; // show every wall the scanner publishes by default
 let densityMaxDistance = 3;
 let densityMinAge = 0;
 let densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
@@ -10283,13 +10283,13 @@ function saveDensityFilters() {
       densityMinAge,
       densityExFilter: Array.from(densityExFilter)
     };
-    localStorage.setItem("density_filters_v1", JSON.stringify(payload));
+    localStorage.setItem("density_filters_v2", JSON.stringify(payload));
   } catch (_) {}
 }
 
 function loadDensityFilters() {
   try {
-    const raw = localStorage.getItem("density_filters_v1");
+    const raw = localStorage.getItem("density_filters_v2");
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
@@ -10312,7 +10312,7 @@ function loadDensityFilters() {
           if (!densityExFilter.has("AD") && legacyExchanges.every(ex => densityExFilter.has(ex))) {
             densityExFilter.add("AD");
             parsed.densityExFilter = Array.from(densityExFilter);
-            localStorage.setItem("density_filters_v1", JSON.stringify(parsed));
+            localStorage.setItem("density_filters_v2", JSON.stringify(parsed));
           }
           localStorage.setItem(migrationKey, "1");
         }
@@ -10361,7 +10361,7 @@ function resetDensityFilters() {
   densitySize = "all";
   densitySort = "score";
   densitySearch = "";
-  densityMinUsd = 100000;
+  densityMinUsd = 0;
   densityMaxDistance = 3;
   densityMinAge = 0;
   densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
