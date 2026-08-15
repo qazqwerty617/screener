@@ -5121,7 +5121,7 @@ let lastWsMsg = 0;
 // Watchdog: if no data for 4s while connected тАФ force auto-reconnect instantly
 setInterval(() => {
   if (lastWsMsg > 0 && Date.now() - lastWsMsg > 4000) {
-    console.warn("[WS] Quiet for 4s тАФ auto-reconnecting...");
+    console.warn("[WS] Quiet for 4s - auto-reconnecting...");
     $("cd-label").textContent = "Reconnecting...";
     if (ws) { ws.onclose = null; ws.onerror = null; try { ws.close(); } catch (_) { } }
     ws = null;
@@ -5363,7 +5363,7 @@ function connectWS() {
     $("cd-label").textContent = "Reconnecting...";
     // Reset idToKey тАФ server may have restarted with new indices
     idToKey = {};
-    console.log("[WS] Closed, code:", e.code, "тАФ reconnecting in 2s");
+    console.log("[WS] Closed, code:", e.code, "- reconnecting in 2s");
     wsReconnectTimer = setTimeout(connectWS, 2000);
   };
   ws.onerror = (e) => {
@@ -5379,7 +5379,7 @@ function unfreezeAndResync() {
   const isHealthy = ws && ws.readyState === WebSocket.OPEN && (lastWsMsg > 0 && Date.now() - lastWsMsg < 4000);
 
   if (!isHealthy) {
-    console.log("[WS] Tab / Window active тАФ socket quiet or closed, reconnecting...");
+    console.log("[WS] Tab / Window active - socket quiet or closed, reconnecting...");
     connectWS();
   } else if (activeEx && activeSym && activeTf) {
     fetchKlines(activeEx, activeSym, activeTf);
@@ -9764,7 +9764,7 @@ function drawDensityMap() {
 
     // 1. Header (TRADOOR.S — СОПРОТИВЛЕНИЕ)
     const suffix = d.market === "spot" ? ".S" : ".F";
-    const headerTitle = `${d.base}${suffix} тАФ `;
+    const headerTitle = `${d.base}${suffix} - `;
     const headerType = isBid ? "ПОДДЕРЖКА" : "СОПРОТИВЛЕНИЕ";
     const headerTypeColor = isBid ? "#16c784" : "#ff4560";
 
