@@ -145,14 +145,16 @@ function percentileRank(sortedValues, value) {
 }
 
 function rankWallByStatistics(zScore, percentile) {
+  // Bands calibrated on live 11-exchange score distribution (p33 ≈ 8.8,
+  // p66 ≈ 12) so the small/medium/large UI buckets stay roughly balanced.
   const score = zScore + Math.max(0, percentile - 0.95) * 10;
-  if (score < 3.7) return 3;
-  if (score < 4.2) return 4;
-  if (score < 6.2) return 5;
-  if (score < 8.5) return 6;
-  if (score < 12) return 7;
-  if (score < 17) return 8;
-  if (score < 24) return 9;
+  if (score < 6.5) return 3;
+  if (score < 8.8) return 4;
+  if (score < 10.2) return 5;
+  if (score < 12) return 6;
+  if (score < 16) return 7;
+  if (score < 22) return 8;
+  if (score < 30) return 9;
   return 10;
 }
 
@@ -507,7 +509,7 @@ function buildWallSnapshot(allWalls, options = {}) {
     const statTh = statThresholdsFor(w.ex);
     if (rank === 3 && (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < statTh.minZ || percentile < statTh.minPercentile * 100)) continue;
     if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 &&
-      (rank < 7 || !Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 5.5 || percentile < 98.5)) continue;
+      (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 5.5 || percentile < 98.5)) continue;
 
     validWalls.push({
       ...w,

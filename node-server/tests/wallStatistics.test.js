@@ -34,7 +34,7 @@ test("snapshot keeps persistent top-percentile rank-three walls", () => {
 });
 
 test("Z ranks retain useful small, medium and large bands", () => {
-  assert.equal(rankWallByStatistics(3.9, 0.97), 4);
-  assert.equal(rankWallByStatistics(6.5, 0.98), 6);
-  assert.ok(rankWallByStatistics(13, 0.99) >= 8);
+  assert.equal(rankWallByStatistics(3.9, 0.97), 3);
+  assert.equal(rankWallByStatistics(9.5, 0.90), 5);
+  assert.equal(rankWallByStatistics(13, 0.99), 7);
 });
