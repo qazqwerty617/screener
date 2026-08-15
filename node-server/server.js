@@ -1590,7 +1590,7 @@ app.get("/api/walls/status", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
-  const { walls: _walls, ...status } = currentWallsMeta || {};
+  const { walls: _walls, history: _history, ...status } = currentWallsMeta || {};
   res.json({ ...status, count: currentWallsCache.length });
 });
 
