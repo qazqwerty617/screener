@@ -4,7 +4,8 @@
  */
 
 (function () {
-  const STORAGE_KEY = "cryptoscreen_journal_trades_v3";
+  const STORAGE_KEY = "cryptoscreen_journal_trades_v4";
+  const LEGACY_STORAGE_KEY = "cryptoscreen_journal_trades_v3";
   const API_KEYS_KEY = "cryptoscreen_journal_apikeys_v2";
 
   const MISTAKE_TAGS = [
@@ -33,7 +34,17 @@
     try {
       // Purge any old v2 demo trades from localStorage
       localStorage.removeItem("cryptoscreen_journal_trades_v2");
-      const raw = localStorage.getItem(STORAGE_KEY);
+      let raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || "[]");
+        trades = Array.isArray(legacy) ? legacy.filter(t => {
+          const tags = Array.isArray(t.tags) ? t.tags.join(" ") : "";
+          const note = String(t.note || "");
+          return !/API/i.test(tags) && !/Binance Futures PnL|OKX fill|Ордер\s*#/i.test(note);
+        }) : [];
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(trades));
+        raw = localStorage.getItem(STORAGE_KEY);
+      }
       if (raw) {
         trades = JSON.parse(raw);
       } else {
@@ -56,6 +67,15 @@
     try {
       localStorage.setItem(API_KEYS_KEY, JSON.stringify(apiKeys));
     } catch (e) {}
+  }
+
+  function formatDuration(ms) {
+    const totalSeconds = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours) return `${hours}ч ${minutes}м`;
+    return `${minutes}м ${seconds}с`;
   }
 
   function getFilteredTrades() {
@@ -499,14 +519,14 @@
           <td style="font-weight:700; color:#fff;">${t.symbol}</td>
           <td style="font-size:11px; color:var(--t3);">${t.exchange}</td>
           <td style="font-size:11px;">
-            <div style="color:var(--t2); font-size:10px;">${t.date}</div>
+            <div style="color:var(--t2); font-size:10px;">${t.entryTime ? new Date(t.entryTime).toISOString().slice(0, 16).replace("T", " ") : t.date}</div>
             <div style="font-family:monospace; font-weight:600;">$${t.entry}</div>
           </td>
           <td style="font-size:11px;">
-            <div style="color:var(--t2); font-size:10px;">${t.date}</div>
+            <div style="color:var(--t2); font-size:10px;">${t.exitTime ? new Date(t.exitTime).toISOString().slice(0, 16).replace("T", " ") : t.date}</div>
             <div style="font-family:monospace; font-weight:600;">$${t.exit}</div>
           </td>
-          <td style="font-size:11px; color:var(--t2);">15м 30с</td>
+          <td style="font-size:11px; color:var(--t2);">${formatDuration(t.durationMs)}</td>
           <td><span class="j-side-badge ${sideClass}">${t.side}</span></td>
           <td class="${pnlClass}" style="font-family:monospace; font-weight:700;">
             ${pnlSign}${t.pnlPercent}%
@@ -848,20 +868,29 @@
     chartState.canvas = canvas;
     chartState.trade = trade;
 
-    // ── FIND ALL RELATED EXECUTIONS for the same symbol (±4 hours) ────────
-    const tradeTs = trade.date ? new Date(trade.date.replace(" ", "T") + ":00Z").getTime() : 0;
-    const WINDOW = 4 * 60 * 60 * 1000; // 4 hours
-
-    const relatedExecs = trades.filter(t => {
-      if (t.symbol !== trade.symbol || t.exchange !== trade.exchange) return false;
-      if (!t.date) return t.id === trade.id;
-      const ts = new Date(t.date.replace(" ", "T") + ":00Z").getTime();
-      return Math.abs(ts - tradeTs) <= WINDOW;
-    });
+    // Executions are attached to one round trip by the server aggregator.
+    const relatedExecs = (Array.isArray(trade.executions) ? trade.executions : []).map(item => ({
+      ...item,
+      side: String(item.side || "").toUpperCase(),
+      entry: Number(item.price) || 0,
+      exit: Number(item.price) || 0,
+      size: Number(item.qty || item.size) || 0,
+      date: item.date || new Date(Number(item.time) || Date.now()).toISOString().slice(0, 16).replace("T", " "),
+      pnl: Number(item.pnl) || 0,
+      fee: Number(item.fee) || 0,
+    }));
+    if (!relatedExecs.length) {
+      const openingSide = trade.side === "SHORT" ? "SELL" : "BUY";
+      const closingSide = openingSide === "BUY" ? "SELL" : "BUY";
+      relatedExecs.push(
+        { side: openingSide, entry: +trade.entry, exit: +trade.entry, size: +trade.size, date: trade.date, pnl: 0, fee: 0 },
+        { side: closingSide, entry: +trade.exit, exit: +trade.exit, size: +trade.size, date: trade.date, pnl: +trade.pnl || 0, fee: +trade.fee || 0 }
+      );
+    }
 
     // Separate buys and sells
-    const buys = relatedExecs.filter(t => t.side === "LONG" || t.side === "BUY");
-    const sells = relatedExecs.filter(t => t.side === "SHORT" || t.side === "SELL");
+    const buys = relatedExecs.filter(t => t.side === "BUY");
+    const sells = relatedExecs.filter(t => t.side === "SELL");
 
     // If no separation found, use the primary trade
     if (buys.length === 0 && sells.length === 0) {
@@ -869,23 +898,16 @@
     }
 
     // Compute weighted average entry
-    let totalQty = 0, totalCost = 0;
-    buys.forEach(b => {
-      const qty = parseFloat(b.size) || 0;
-      const px = parseFloat(b.entry) || 0;
-      totalQty += qty;
-      totalCost += qty * px;
-    });
-    const avgEntry = totalQty > 0 ? totalCost / totalQty : (trade.entry || 0);
+    const totalQty = Number(trade.size) || 0;
+    const avgEntry = Number(trade.entry) || 0;
 
     // Total PnL
-    let totalPnl = 0;
-    relatedExecs.forEach(t => totalPnl += (t.pnl || 0));
+    const totalPnl = Number(trade.pnl) || 0;
 
     // Store executions for chart rendering
     chartState.executions = relatedExecs.map(t => ({
       side: t.side,
-      price: t.side === "LONG" || t.side === "BUY" ? t.entry : t.exit,
+      price: t.entry || t.exit,
       size: t.size,
       date: t.date,
       pnl: t.pnl,
@@ -965,7 +987,9 @@
 
     try {
       const exCode = trade.exchange === "Binance" ? "BN" : (trade.exchange === "Bybit" ? "BB" : "OX");
-      const res = await fetch(`/api/klines?ex=${exCode}&sym=${trade.symbol}&tf=15m&lite=1`);
+      const duration = Math.max(0, Number(trade.durationMs) || ((Number(trade.exitTime) || 0) - (Number(trade.entryTime) || 0)));
+      const tf = duration <= 20 * 60_000 ? "1m" : duration <= 2 * 3600_000 ? "5m" : duration <= 12 * 3600_000 ? "15m" : "1h";
+      const res = await fetch(`/api/klines?ex=${exCode}&sym=${encodeURIComponent(trade.symbol)}&tf=${tf}&lite=1`);
       if (res.ok) {
         const flatKlines = await res.json();
         const candles = [];
@@ -1799,11 +1823,12 @@
 
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 7000);
+        const timer = setTimeout(() => controller.abort(), 45000);
 
+        const token = localStorage.getItem("obsidian_auth_token") || "";
         const res = await fetch("/api/journal/sync", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Authorization": token ? `Bearer ${token}` : "" },
           signal: controller.signal,
           body: JSON.stringify({
             exchange: ex,
@@ -1816,13 +1841,15 @@
 
         const data = await res.json();
         if (data.success && Array.isArray(data.trades)) {
-          let addedCount = 0;
-          data.trades.forEach(newTrade => {
-            if (!trades.some(t => t.id === newTrade.id)) {
-              trades.unshift(newTrade);
-              addedCount++;
-            }
+          const exchangeName = ex === "BN" ? "Binance" : ex === "BB" ? "Bybit" : ex === "OX" ? "OKX" : ex;
+          const existingById = new Map(trades.map(t => [t.id, t]));
+          trades = trades.filter(t => !(t.source === "api" && t.exchange === exchangeName));
+          const fresh = data.trades.map(newTrade => {
+            const previous = existingById.get(newTrade.id);
+            return previous ? { ...newTrade, note: previous.note || newTrade.note, tags: previous.tags || newTrade.tags } : newTrade;
           });
+          trades.unshift(...fresh);
+          const addedCount = fresh.length;
           totalAdded += addedCount;
 
           if (statusEl) {
@@ -1849,10 +1876,10 @@
       }
     }
 
-    if (totalAdded > 0) {
+    if (targetKeys.length > 0) {
       saveTrades();
       updateUI();
-      if (!silent) {
+      if (!silent && totalAdded > 0) {
         alert(`Авто-синхронизация завершена! Добавлено новых сделок: ${totalAdded}`);
       }
     } else if (!silent && targetKeys.length > 0) {

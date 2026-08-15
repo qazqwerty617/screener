@@ -11625,6 +11625,16 @@ window.addEventListener("resize", () => {
     return kept.slice(0, 3);
   };
 
+  // Replace the legacy detectors with the shared, server-tested geometry
+  // engine. Keeping the public names avoids touching the rendering layer.
+  if (window.FormationEngine) {
+    window.detectChartLevelsAndTouches = (items) => window.FormationEngine.detectCascades(items, formationsMinCascade);
+    window.detectChartBreakoutLevels = (items) => window.FormationEngine.detectHorizontals(items, formationsMinCascade);
+    window.detectChartTrendlines = (items) => window.FormationEngine.detectTrendlines(items, formationsMinCascade);
+    window.detectChartRetests = (items) => window.FormationEngine.detectRetests(items);
+    window.detectChartApproachingRetests = (items) => window.FormationEngine.detectApproachingRetests(items);
+  }
+
   window.detectChartLevelsFn = function (candles) {
     if (!candles || candles.length < 30) return [];
 
@@ -12087,7 +12097,9 @@ window.addEventListener("resize", () => {
       const bSeeded = formationsCoinsLevelsMap.has(b.ex + ':' + b.sym) ? 1 : 0;
       return bSeeded - aSeeded || b.v - a.v;
     });
-    if (eligibleCoins.length > 1200) eligibleCoins.length = 1200;
+    // The server seed is rendered immediately. A bounded local verification
+    // pass keeps it live without downloading thousands of histories per tab.
+    if (eligibleCoins.length > 500) eligibleCoins.length = 500;
 
     let index = 0;
     const total = eligibleCoins.length;
@@ -12118,7 +12130,7 @@ window.addEventListener("resize", () => {
         return;
       }
 
-      const batch = eligibleCoins.slice(index, index + 30);
+      const batch = eligibleCoins.slice(index, index + 50);
       index += batch.length;
 
       const promises = batch.map(async (c) => {

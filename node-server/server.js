@@ -58,6 +58,7 @@ const wallScanner = require("./wallScanner");
 const { createArbitrageEngine } = require("./arbitrageEngine");
 const { createDepthAnalyzer } = require("./depthAnalyzer");
 const marketDataCore = require("./marketDataCore");
+const { syncJournal } = require("./journalSync");
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 const cachedTfMaps = Object.create(null); // tf -> { "EX:SYM": levels[] }
 let currentWallsCache = [];
@@ -390,25 +391,57 @@ app.use((req, res, next) => {
     }
   })(req, res, next);
 });
+app.use((error, _req, res, next) => {
+  if (error && (error.type === "entity.parse.failed" || error.type === "entity.too.large")) {
+    return res.status(error.type === "entity.too.large" ? 413 : 400).json({ error: "Некорректное тело запроса" });
+  }
+  next(error);
+});
 app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: https:; connect-src 'self' wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'");
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
   next();
 });
+const apiIpLimit = createSlidingWindowLimiter({ windowMs: 60_000, max: 1200, key: req => req.ip });
+const journalSyncLimit = createSlidingWindowLimiter({ windowMs: 60 * 60_000, max: 20, key: req => req.ip });
+app.use("/api", apiIpLimit);
+app.use("/api/journal/sync", journalSyncLimit);
 const server = http.createServer(app);
+server.requestTimeout = 30_000;
+server.headersTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
+server.maxRequestsPerSocket = 1000;
 const wss = new WebSocketServer({
   server,
   path: "/ws",
   perMessageDeflate: false,
-  maxPayload: 64 * 1024 * 1024,
+  maxPayload: 16 * 1024,
 });
 
-wss.on("connection", (ws) => {
+const wsClientsByIp = new Map();
+wss.on("connection", (ws, req) => {
+  const ip = String(req.socket.remoteAddress || "unknown");
+  const origin = String(req.headers.origin || "");
+  const host = String(req.headers.host || "");
+  try {
+    if (origin && new URL(origin).host !== host) return ws.close(1008, "origin rejected");
+  } catch (_) { return ws.close(1008, "origin rejected"); }
+  const ipCount = wsClientsByIp.get(ip) || 0;
+  if (ipCount >= 12) return ws.close(1013, "connection limit");
+  wsClientsByIp.set(ip, ipCount + 1);
+  ws._clientIp = ip;
+  ws._messagesInWindow = 0;
+  ws._messageWindowAt = Date.now();
+  ws.isAlive = true;
+  ws.on("pong", () => { ws.isAlive = true; });
   clients.add(ws);
   klineClients.add(ws);
   ws._klineSubs = new Set();
@@ -433,6 +466,9 @@ wss.on("connection", (ws) => {
   }
   ws.on("message", (data) => {
     try {
+      const now = Date.now();
+      if (now - ws._messageWindowAt >= 60_000) { ws._messageWindowAt = now; ws._messagesInWindow = 0; }
+      if (++ws._messagesInWindow > 180) return ws.close(1008, "message rate limit");
       const msg = JSON.parse(data.toString());
       if (msg.type === "subscribe_kline") {
         subscribeKline(ws, msg.ex, msg.sym, msg.tf);
@@ -458,6 +494,11 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     clients.delete(ws);
     klineClients.delete(ws);
+    const clientIp = ws._clientIp;
+    if (clientIp) {
+      const remaining = Math.max(0, (wsClientsByIp.get(clientIp) || 1) - 1);
+      if (remaining) wsClientsByIp.set(clientIp, remaining); else wsClientsByIp.delete(clientIp);
+    }
     if (ws._klineSubs) {
       for (const subKey of ws._klineSubs) {
         const [ex, sym, tf] = subKey.split("|");
@@ -473,6 +514,15 @@ wss.on("connection", (ws) => {
     try { ws.terminate(); } catch (_) {}
   });
 });
+
+const wsHeartbeat = setInterval(() => {
+  for (const ws of clients) {
+    if (!ws.isAlive) { try { ws.terminate(); } catch (_) {} continue; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch (_) {}
+  }
+}, 30_000);
+wsHeartbeat.unref?.();
 
 // Application heartbeat keeps browser watchdogs honest even when a market is quiet.
 const browserHeartbeat = setInterval(() => {
@@ -1540,7 +1590,8 @@ app.get("/api/walls/status", (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
-  res.json(currentWallsMeta);
+  const { walls: _walls, ...status } = currentWallsMeta || {};
+  res.json({ ...status, count: currentWallsCache.length });
 });
 
 app.get("/api/arbitrage/snapshot", (req, res) => {
@@ -1665,8 +1716,26 @@ app.get("/api/kucoin-token", async (req, res) => {
 
 // тФАтФАтФА Traders Journal API Sync тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 app.post("/api/journal/sync", express.json(), async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Cache-Control", "no-store");
   const { exchange, apiKey, apiSecret, passphrase } = req.body || {};
+
+  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  if (!userStore.getUserByToken(token)) return res.status(401).json({ error: "Необходима авторизация" });
+  const supported = new Set(["BN", "Binance", "BB", "Bybit", "OX", "OKX"]);
+  if (!supported.has(exchange)) return res.status(400).json({ error: "Биржа не поддерживается" });
+  if (typeof apiKey !== "string" || typeof apiSecret !== "string" || !apiKey || !apiSecret || apiKey.length > 256 || apiSecret.length > 256) {
+    return res.status(400).json({ error: "Некорректные API-ключи" });
+  }
+  if (passphrase != null && (typeof passphrase !== "string" || passphrase.length > 256)) {
+    return res.status(400).json({ error: "Некорректная passphrase" });
+  }
+
+  try {
+    const result = await syncJournal({ exchange, apiKey, apiSecret, passphrase: passphrase || "" });
+    return res.json({ success: true, count: result.trades.length, executionCount: result.executions, trades: result.trades });
+  } catch (error) {
+    return res.status(502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
+  }
 
   if (!apiKey || !apiSecret) {
     return res.status(400).json({ error: "Укажите API Key и API Secret" });
@@ -2267,9 +2336,12 @@ app.get("/api/formations/map", compression(), (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, "public"), {
-  maxAge: 0,
-  etag: false,
-  setHeaders: (res) => res.setHeader("Cache-Control", "no-store, max-age=0")
+  maxAge: "1d",
+  etag: true,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store, max-age=0");
+    else res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+  }
 }));
 app.get("*", (req, res) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");

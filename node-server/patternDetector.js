@@ -130,7 +130,9 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
     if (angle < minAngle) return null;
 
     let touches = 2;
-    for (let i = p1.idx + 1; i < p2.idx; i++) {
+    // A trendline is valid only while it remains a tangent to every closed
+    // candle after the first anchor. A single wick through it invalidates it.
+    for (let i = p1.idx + 1; i < candles.length - 1; i++) {
       const lp = linePrice(p1, p2, i);
       if (type === 'asc'  && candles[i].l < lp * (1 - cfg.levelTolerance)) return null;
       if (type === 'desc' && candles[i].h > lp * (1 + cfg.levelTolerance)) return null;

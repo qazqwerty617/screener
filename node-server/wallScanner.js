@@ -34,8 +34,8 @@ const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
 const MIN_DIST_PCT = 0.05;
 const MAX_DIST_PCT = 5.0;
 
-const MAX_OUTPUT = 2500;
-const MAX_PER_COIN = 8;
+const MAX_OUTPUT = 1000;
+const MAX_PER_COIN = 4;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 
@@ -104,6 +104,44 @@ function quantile(arr, q) {
   const hi = Math.ceil(pos);
   if (lo === hi) return s[lo];
   return s[lo] * (hi - pos) + s[hi] * (pos - lo);
+}
+
+function calculateRobustBookStats(bins) {
+  const values = bins.filter(bin => Number(bin.usd) > 0).map(bin => Number(bin.usd)).sort((a, b) => a - b);
+  if (!values.length) return { center: 0, sigma: 1, values, q95: 0, q97: 0 };
+  const logs = values.map(value => Math.log1p(value));
+  const center = median(logs);
+  const mad = median(logs.map(value => Math.abs(value - center)));
+  const iqrSigma = (quantile(logs, 0.75) - quantile(logs, 0.25)) / 1.349;
+  return {
+    center,
+    sigma: Math.max(0.14, mad * 1.4826, iqrSigma),
+    values,
+    q95: quantile(values, 0.95),
+    q97: quantile(values, 0.97),
+  };
+}
+
+function percentileRank(sortedValues, value) {
+  let lo = 0, hi = sortedValues.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedValues[mid] <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return sortedValues.length ? lo / sortedValues.length : 0;
+}
+
+function rankWallByStatistics(zScore, percentile) {
+  const score = zScore + Math.max(0, percentile - 0.95) * 10;
+  if (score < 3.7) return 3;
+  if (score < 4.25) return 4;
+  if (score < 4.9) return 5;
+  if (score < 5.65) return 6;
+  if (score < 6.55) return 7;
+  if (score < 7.6) return 8;
+  if (score < 8.9) return 9;
+  return 10;
 }
 
 // ═══ Fetch orderbook ═════════════════════════════════════════════════════════
@@ -264,22 +302,8 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
   const binnedBids = binOrders(bids.slice(2), price, "bid");
   const binnedAsks = binOrders(asks.slice(2), price, "ask");
 
-  const calculateZStats = (arr) => {
-    const vals = arr.filter(b => b.usd > 0).map(b => b.usd);
-    if (!vals.length) return { mu: 0, sigma: 1 };
-
-    // Median/MAD is resistant to the very outliers we are trying to detect.
-    // Mean/std let one giant order inflate sigma and hide other real walls in
-    // the same book. IQR and a small scale floor keep flat books stable.
-    const mu = median(vals);
-    const mad = median(vals.map(v => Math.abs(v - mu)));
-    const iqrSigma = (quantile(vals, 0.75) - quantile(vals, 0.25)) / 1.349;
-    const sigma = Math.max(1, mad * 1.4826, iqrSigma, mu * 0.035);
-    return { mu, sigma };
-  };
-
-  const bidStats = calculateZStats(binnedBids);
-  const askStats = calculateZStats(binnedAsks);
+  const bidStats = calculateRobustBookStats(binnedBids);
+  const askStats = calculateRobustBookStats(binnedAsks);
 
   const walls = [];
 
@@ -290,9 +314,13 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     if (dist < MIN_DIST_PCT || dist > MAX_DIST_PCT) return;
 
     const stats = side === "bid" ? bidStats : askStats;
-    const Z = (bin.usd - stats.mu) / stats.sigma;
-    const minZ = ex === "HL" ? 1.0 : Z_THRESHOLD;
-    if (Z < minZ) return;
+    // Score in log-space, then require a top-book percentile as a second
+    // independent signal. This adapts to each coin instead of using $ buckets.
+    const Z = (Math.log1p(bin.usd) - stats.center) / stats.sigma;
+    const percentile = percentileRank(stats.values, bin.usd);
+    const minZ = ex === "HL" ? 2.25 : 3.35;
+    const minPercentile = ex === "HL" ? 0.92 : 0.96;
+    if (Z < minZ || percentile < minPercentile) return;
 
     let minDust = 30000;
     if (ex === "BN" || ex === "BB") minDust = 50000;
@@ -355,34 +383,12 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
 
     // Weak one-scan anomalies are usually spoof/noise.  Exception: publish a
     // genuinely large, statistically exceptional wall immediately.
-    const strongImmediate = bin.usd >= Math.max(250000, minDust * 2)
-      && relSize >= (ex === "HL" ? 2.0 : 5.0);
-    const needsPersistence = ex === "BX" || bin.usd < 100000;
+    const strongImmediate = relSize >= (ex === "HL" ? 5.5 : 7.5) && percentile >= 0.99;
+    const needsPersistence = relSize < 6.5 || percentile < 0.99 || ex === "BX";
     if (needsPersistence && h.consecutivePresent < 2 && !strongImmediate) return;
 
     const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
-    let wallRank = 1;
-    if (ex === "HL") {
-      if (relSize <= 1.2) wallRank = 2;
-      else if (relSize <= 1.5) wallRank = 3;
-      else if (relSize <= 1.8) wallRank = 4;
-      else if (relSize <= 2.2) wallRank = 5;
-      else if (relSize <= 2.5) wallRank = 6;
-      else if (relSize <= 3.2) wallRank = 7;
-      else if (relSize <= 4.0) wallRank = 8;
-      else if (relSize <= 5.0) wallRank = 9;
-      else wallRank = 10;
-    } else {
-      if (relSize <= 3.8) wallRank = 2;
-      else if (relSize <= 4.5) wallRank = 3;
-      else if (relSize <= 5.0) wallRank = 4;
-      else if (relSize <= 5.5) wallRank = 5;
-      else if (relSize <= 6.0) wallRank = 6;
-      else if (relSize <= 7.0) wallRank = 7;
-      else if (relSize <= 8.5) wallRank = 8;
-      else if (relSize <= 11.0) wallRank = 9;
-      else wallRank = 10;
-    }
+    const wallRank = rankWallByStatistics(relSize, percentile);
 
     walls.push({
       base: coin.base,
@@ -395,6 +401,7 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       rtwi: +wallScore.toFixed(2),
       pct: +dist.toFixed(3),
       relSize: +relSize.toFixed(1),
+      percentile: +(percentile * 100).toFixed(1),
       market: coin.sym.endsWith("_SPOT") ? "spot" : "futures",
       age: Math.round((now - h.firstSeen) / 1000),
       firstSeenAt: h.firstSeen,
@@ -403,7 +410,7 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       count: bin.count,
       rank: wallRank,
       confirmations: h.consecutivePresent,
-      qualityScore: +(wallRank * 10 + Math.min(20, Math.log10(Math.max(1, bin.usd)) * 2) + Math.min(20, h.consecutivePresent * 2)).toFixed(1),
+      qualityScore: +(wallRank * 10 + Math.min(12, relSize) + Math.min(12, h.consecutivePresent * 2)).toFixed(1),
     });
   };
 
@@ -480,6 +487,11 @@ function buildWallSnapshot(allWalls, options = {}) {
     if (!w.ex || typeof w.ex !== "string") continue;
     if (!w.sym || typeof w.sym !== "string") continue;
     if (w.side !== "bid" && w.side !== "ask") continue;
+
+    const rank = Number(w.rank) || 0;
+    const confirmations = Number(w.confirmations) || 0;
+    if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 4) continue;
+    if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 && rank < 9) continue;
 
     validWalls.push({
       ...w,
@@ -1048,6 +1060,8 @@ module.exports = {
   getMetadata: () => detectedMetadata,
   buildWallSnapshot,
   clusterWalls,
+  calculateRobustBookStats,
+  rankWallByStatistics,
   startScanning: (tickers, apiFetch, onUpdate) => {
     console.log("[WALL] Starting Wall Scanner v3 — Statistical Z-Score Engine with Progressive Publication");
     console.log("[WALL] Config: Batch=" + DEFAULT_SCAN_BATCH_PER_EX + ", full rotating coverage, Z_THRESHOLD=" + Z_THRESHOLD + ", dist=" + MIN_DIST_PCT + "%-" + MAX_DIST_PCT + "%");
