@@ -1065,18 +1065,6 @@
 
         <!-- Cross-exchange futures and funding arbitrage -->
         <div id="arbitrage-view" class="arb-view" style="display:none">
-            <header class="arb-hero">
-                <div class="arb-hero-copy">
-                    <div class="arb-eyebrow"><span class="arb-live-dot"></span> LIVE · 11 FUTURES EXCHANGES</div>
-                    <h1>Арбитражный терминал <span>Obsidian Edge</span></h1>
-                    <p>Исполнимые межбиржевые спреды по bid/ask, комиссии, ликвидность и фандинг в одном рабочем пространстве.</p>
-                </div>
-                <div class="arb-health" id="arb-health">
-                    <div><span>Биржи онлайн</span><strong id="arb-online">— / 11</strong></div>
-                    <div><span>Рынки</span><strong id="arb-markets">—</strong></div>
-                    <div><span>Обновлено</span><strong id="arb-latency">—</strong></div>
-                </div>
-            </header>
             <section class="arb-kpis">
                 <article><span>Чистых возможностей</span><strong id="arb-kpi-count">—</strong><small>после двух комиссий</small></article>
                 <article><span>Лучший чистый спред</span><strong class="positive" id="arb-kpi-net">—</strong><small id="arb-kpi-route">ожидание данных</small></article>
@@ -1088,7 +1076,6 @@
                     <button class="on" data-arb-mode="spreads" role="tab">Фьючерсные спреды <b id="arb-spread-badge">0</b></button>
                     <button data-arb-mode="funding" role="tab">Арбитраж фандинга <b id="arb-funding-badge">0</b></button>
                 </div>
-                <div class="arb-update-state"><span></span><b id="arb-update-text">Синхронизация…</b></div>
             </div>
             <section class="arb-workspace">
                 <aside class="arb-filters">
@@ -2677,7 +2664,7 @@
     <script src="/js/formationEngine.js?v=1"></script>
     <script src="/js/tradeOverlay.js?v=1"></script>
     <script src="/js/app.js?v=1040"></script>
-    <script src="/js/arbitrage.js?v=1"></script>
+    <script src="/js/arbitrage.js?v=2"></script>
     <script src="/js/arbitrage-pro.js?v=3"></script>
     <script src="/js/backtest.js?v=999"></script>
     <script src="/js/journal.js?v=1001"></script>

@@ -84,7 +84,7 @@
 
   async function fetchData(force) {
     if (!state.active || state.loading) return;
-    state.loading = true; $("arb-update-text").textContent = "Синхронизация…";
+    state.loading = true;
     try {
       const q = new URLSearchParams({ search: $("arb-search").value, minNet: $("arb-min-net").value, minVolume: $("arb-min-volume").value, exchanges: [...state.selectedExchanges].join(","), limit: "500" });
       if (force) q.set("_", Date.now());
@@ -93,9 +93,7 @@
       state.data = await res.json();
       updateTrails(state.data.spreads, "net"); updateTrails(state.data.funding, "daily");
       render();
-      $("arb-update-text").textContent = "Потоки синхронизированы";
     } catch (err) {
-      $("arb-update-text").textContent = "Ошибка потока · повторяем";
       console.warn("[Arbitrage]", err.message);
     } finally { state.loading = false; }
   }
@@ -111,9 +109,7 @@
 
   function render() {
     if (!state.data) return;
-    const data = state.data, online = Object.values(data.exchanges || {}).filter(x => x.status === "online").length;
-    $("arb-online").textContent = `${online} / ${data.exchangeCount || 11}`; $("arb-markets").textContent = Number(data.marketCount || 0).toLocaleString("ru-RU");
-    $("arb-latency").textContent = `${Math.max(0, Date.now() - data.generatedAt)} мс`;
+    const data = state.data;
     const positive = (data.spreads || []).filter(x => x.net > 0);
     $("arb-kpi-count").textContent = positive.length.toLocaleString("ru-RU");
     const best = positive[0]; $("arb-kpi-net").textContent = best ? pct(best.net) : "—"; $("arb-kpi-route").textContent = best ? `${best.base} · ${best.buyName} → ${best.sellName}` : "рынок эффективен";
