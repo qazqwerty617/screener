@@ -1815,37 +1815,6 @@ function drawDensityTimelineOnChart(ctx, options) {
     ctx.fillStyle = gradient;
     ctx.fillRect(startX, y - bandH / 2, Math.max(1, endX - startX), bandH);
 
-    ctx.beginPath();
-    ctx.strokeStyle = `rgba(${rgb.join(',')},${active ? 0.9 : 0.38})`;
-    ctx.lineWidth = active ? 1.4 : 1;
-    ctx.setLineDash(active ? [] : [4, 3]);
-    ctx.moveTo(startX, y);
-    ctx.lineTo(endX, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Exact placement/removal markers make the wall lifetime readable.
-    if (rawStartX >= 0 && rawStartX <= PW) {
-      ctx.beginPath();
-      ctx.strokeStyle = `rgba(${rgb.join(',')},.95)`;
-      ctx.lineWidth = 1.2;
-      ctx.moveTo(rawStartX, y - 6);
-      ctx.lineTo(rawStartX, y + 6);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.fillStyle = `rgb(${rgb.join(',')})`;
-      ctx.arc(rawStartX, y, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    if (!active && rawEndX >= 0 && rawEndX <= PW) {
-      ctx.beginPath();
-      ctx.strokeStyle = `rgba(${rgb.join(',')},.6)`;
-      ctx.lineWidth = 1;
-      ctx.moveTo(rawEndX, y - 5);
-      ctx.lineTo(rawEndX, y + 5);
-      ctx.stroke();
-    }
-
     if (active && rawStartX >= -80 && rawStartX <= PW - 30) {
       const timeText = new Date(Number(wall.firstSeenAt) || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const usd = Number(wall.S) || Number(wall.maxSizeUsd) || 0;
