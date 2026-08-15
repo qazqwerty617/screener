@@ -185,6 +185,55 @@ let chartDensitySizes = new Set(["small", "medium", "large"]);
 let chartDensityMarket = "all";
 let chartDensityExes = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
 const CHART_DENSITY_STORAGE_KEY = "chart_density_settings_v2";
+const DENSITY_SIZE_LABELS = {
+  all: "Все размеры",
+  small: "Мелкие",
+  medium: "Средние",
+  large: "Крупные",
+};
+
+function getDensityRelativeRank(wall) {
+  // `rank` is calculated by the scanner from the wall's Z-score inside this
+  // exact coin/exchange order book.  It deliberately does not use fixed USD
+  // limits: the same $1m order can be huge for an altcoin and ordinary for BTC.
+  const rank = Number(wall && wall.rank);
+  if (Number.isFinite(rank) && rank > 0) return Math.max(1, Math.min(10, rank));
+
+  // Compatibility with older/history records that predate `rank`.
+  const relSize = Number(wall && wall.relSize);
+  if (Number.isFinite(relSize) && relSize > 0) {
+    if (wall && wall.ex === "HL") {
+      if (relSize > 3.2) return 7;
+      if (relSize > 2.2) return 6;
+      if (relSize > 1.5) return 5;
+      return 3;
+    }
+    if (relSize > 6.0) return 7;
+    if (relSize > 5.0) return 6;
+    if (relSize > 4.2) return 5;
+    return 3;
+  }
+
+  // Last-resort fallback for legacy cached objects. `rtwi` is still relative
+  // to the local book, unlike an absolute USD wall size.
+  const rtwi = Number(wall && wall.rtwi) || 0;
+  if (rtwi >= 7) return 7;
+  if (rtwi >= 4.5) return 5;
+  return 3;
+}
+
+function getDensitySizeType(wall) {
+  const rank = getDensityRelativeRank(wall);
+  if (rank >= 7) return "large";
+  if (rank >= 5) return "medium";
+  return "small";
+}
+
+function passesDensitySizeFilter(wall, selectedSize) {
+  if (!selectedSize || selectedSize === "all") return true;
+  return getDensitySizeType(wall) === selectedSize;
+}
+
 try {
   const savedChartDensity = JSON.parse(localStorage.getItem(CHART_DENSITY_STORAGE_KEY) || "{}");
   if (typeof savedChartDensity.enabled === "boolean") chartDensityEnabled = savedChartDensity.enabled;
@@ -1695,7 +1744,7 @@ function drawDensityTimelineOnChart(ctx, options) {
     if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
     if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
     if (!chartDensityExes.has(w.ex)) return false;
-    const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
+    const sizeType = getDensitySizeType(w);
     if (!chartDensitySizes.has(sizeType)) return false;
     const startedAt = Number(w.firstSeenAt) || Date.now();
     const endedAt = Number(w.endedAt) || rangeEnd;
@@ -2650,7 +2699,7 @@ function drawChart() {
       if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
       if (!chartDensityExes.has(w.ex)) return false;
 
-      const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
+      const sizeType = getDensitySizeType(w);
       if (!chartDensitySizes.has(sizeType)) return false;
 
       return true;
@@ -8712,7 +8761,7 @@ class ChartInstance {
         if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
         if (!chartDensityExes.has(w.ex)) return false;
 
-        const sizeType = w.rtwi < 10 ? "small" : (w.rtwi < 20 ? "medium" : "large");
+        const sizeType = getDensitySizeType(w);
         if (!chartDensitySizes.has(sizeType)) return false;
 
         return true;
@@ -9433,14 +9482,9 @@ setInterval(() => {
 }, 12000);
 
 // тФАтФА Filter тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-function getFilteredDensity() {
-  return densityData.filter(d => {
+function passesDensityBaseFilters(d) {
     if (densityFilter !== "all" && d.side !== densityFilter) return false;
     if (densityMarket !== "all" && d.market !== densityMarket) return false;
-    if (densitySize !== "all") {
-      const sizeType = d.rtwi < 10 ? "small" : (d.rtwi < 20 ? "medium" : "large");
-      if (sizeType !== densitySize) return false;
-    }
     if (!densityExFilter.has(d.ex)) return false;
     if ((Number(d.S) || 0) < densityMinUsd) return false;
     if ((Number(d.pct) || 0) > densityMaxDistance) return false;
@@ -9450,7 +9494,31 @@ function getFilteredDensity() {
       if (!d.base.toLowerCase().includes(q) && !d.sym.toLowerCase().includes(q)) return false;
     }
     return true;
+}
+
+function updateDensitySizeCounts(baseFiltered) {
+  const counts = { all: baseFiltered.length, small: 0, medium: 0, large: 0 };
+  for (const wall of baseFiltered) {
+    const type = getDensitySizeType(wall);
+    if (Object.prototype.hasOwnProperty.call(counts, type)) counts[type]++;
+  }
+
+  document.querySelectorAll(".density-filter-btn[data-dsize]").forEach(btn => {
+    const type = btn.dataset.dsize;
+    const label = DENSITY_SIZE_LABELS[type] || btn.textContent.trim();
+    const count = Number(counts[type]) || 0;
+    btn.textContent = `${label} ${count}`;
+    btn.title = type === "all"
+      ? "Все стены после остальных фильтров"
+      : `${label}: относительный размер для каждой монеты (${count})`;
   });
+}
+
+function getFilteredDensity() {
+  const baseFiltered = densityData.filter(passesDensityBaseFilters);
+  updateDensitySizeCounts(baseFiltered);
+  if (densitySize === "all") return baseFiltered;
+  return baseFiltered.filter(d => passesDensitySizeFilter(d, densitySize));
 }
 
 // тФАтФА Layout: distribute badges radially by pct тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
