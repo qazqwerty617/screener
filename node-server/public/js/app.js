@@ -2130,13 +2130,11 @@ function drawChart() {
   const autoPad = (autoMx - autoMn) * 0.15 || autoMx * 0.01 || 0.01;
   autoMn = Math.max(0, autoMn - autoPad);
   autoMx += autoPad;
-  if (viewMn == null || viewMx == null || !Number.isFinite(viewMn) || !Number.isFinite(viewMx)) {
+  if (viewMn == null || viewMx == null || !Number.isFinite(viewMn) || !Number.isFinite(viewMx) || autoFitY) {
+    // Snap the scale instead of easing: switching coin/TF or replacing the
+    // candle set must not look like the chart slowly melts into place.
     viewMn = autoMn;
     viewMx = autoMx;
-  } else if (autoFitY) {
-    const ease = 0.2;
-    viewMn += (autoMn - viewMn) * ease;
-    viewMx += (autoMx - viewMx) * ease;
   }
   curPH = PH;
 
@@ -8376,13 +8374,9 @@ class ChartInstance {
     autoMn = Math.max(0, autoMn - autoPad);
     autoMx += autoPad;
 
-    if (this.viewMn === null || this.viewMx === null || !Number.isFinite(this.viewMn) || !Number.isFinite(this.viewMx)) {
+    if (this.viewMn === null || this.viewMx === null || !Number.isFinite(this.viewMn) || !Number.isFinite(this.viewMx) || this.autoFitY || !this.isManualYScale) {
       this.viewMn = autoMn;
       this.viewMx = autoMx;
-    } else if (this.autoFitY || !this.isManualYScale) {
-      const ease = 0.2;
-      this.viewMn += (autoMn - this.viewMn) * ease;
-      this.viewMx += (autoMx - this.viewMx) * ease;
     }
 
     const mn = this.viewMn,
