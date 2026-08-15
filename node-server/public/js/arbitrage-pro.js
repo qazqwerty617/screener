@@ -298,7 +298,8 @@
     return { ctx: canvas.getContext('2d'), w: canvas.width, h: canvas.height, dpr };
   }
 
-  // Multi-curve dual Y-axis chart rendering with time-proportional X axis
+  // Spread-first chart: bright spread curve with trend pill and break-even
+  // line; leg price curves stay as dim background context.
   function drawSpread(canvas, points, funding, isLive = false, row = null) {
     const { ctx, w, h, dpr } = fit(canvas, 220); ctx.clearRect(0, 0, w, h);
     if (!points || points.length < 2) return;
@@ -306,112 +307,86 @@
 
     const firstBuy = points[0].buyP || 1;
     const firstSell = points[0].sellP || 1;
-
     const buyPct = points.map(p => ((p.buyP - firstBuy) / firstBuy) * 100);
     const sellPct = points.map(p => ((p.sellP - firstSell) / firstSell) * 100);
     const spreadVal = points.map(p => p.spread);
 
-    // Price scale (Left Y-Axis)
-    const priceVals = [...buyPct, ...sellPct];
-    const pMn = Math.min(...priceVals, 0);
-    const pMx = Math.max(...priceVals, 0);
-    const pRange = (pMx - pMn) || 0.01;
+    // Padded spread scale so a quiet spread does not collapse to a razor line.
+    let sMn = Math.min(...spreadVal), sMx = Math.max(...spreadVal);
+    const span = (sMx - sMn) || Math.max(Math.abs(sMx) * 0.002, 0.05);
+    sMn -= span * 0.3; sMx += span * 0.3;
+    const sRange = sMx - sMn;
 
-    // Spread scale (Right Y-Axis) - dedicated full height scaling for spread!
-    const sMn = Math.min(...spreadVal);
-    const sMx = Math.max(...spreadVal);
-    const sRange = (sMx - sMn) || 0.01;
+    let pMn = Math.min(...buyPct, ...sellPct, 0), pMx = Math.max(...buyPct, ...sellPct, 0);
+    const pPad = (pMx - pMn) * 0.1 || 0.05;
+    pMn -= pPad; pMx += pPad;
 
-    const pad = { l: 48 * dpr, r: 48 * dpr, t: 18 * dpr, b: 24 * dpr };
-
-    // Time-proportional X axis mapping
+    const pad = { l: 8 * dpr, r: 58 * dpr, t: 18 * dpr, b: 24 * dpr };
     const tMin = points[0].t;
     const tMax = isLive ? Math.max(Date.now(), points.at(-1).t) : points.at(-1).t;
     const tRange = Math.max(5000, tMax - tMin);
     const x = time => pad.l + (time - tMin) * (w - pad.l - pad.r) / tRange;
-
-    const yPrice = v => pad.t + (pMx - v) * (h - pad.t - pad.b) / pRange;
     const ySpread = v => pad.t + (sMx - v) * (h - pad.t - pad.b) / sRange;
+    const yPrice = v => pad.t + (pMx - v) * (h - pad.t - pad.b) / (pMx - pMn);
 
-    // Grid lines & Y-Axis
-    ctx.font = `${8 * dpr}px Inter`; ctx.strokeStyle = '#1e2430'; ctx.lineWidth = dpr;
-
-    // Left Y Axis (Price % change)
-    ctx.fillStyle = '#697382'; ctx.textAlign = 'left';
-    for (let i = 0; i < 5; i++) {
-      const v = pMx - pRange * i / 4, yy = yPrice(v);
-      ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
-      ctx.fillText(`${v.toFixed(2)}%`, 3 * dpr, yy + 3 * dpr);
-    }
-
-    // Right Y Axis (Spread %) - Purple high contrast axis labels!
-    ctx.fillStyle = '#a78bfa'; ctx.textAlign = 'right';
-    for (let i = 0; i < 5; i++) {
+    ctx.font = `${8 * dpr}px Inter`;
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
       const v = sMx - sRange * i / 4, yy = ySpread(v);
-      ctx.fillText(`${v.toFixed(2)}%`, w - 3 * dpr, yy + 3 * dpr);
+      ctx.strokeStyle = '#1e2430'; ctx.lineWidth = dpr;
+      ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
+      ctx.fillStyle = '#a78bfa'; ctx.fillText(`${v.toFixed(2)}%`, w - 6 * dpr, yy + 3 * dpr);
     }
-    ctx.textAlign = 'left';
 
-    // Zero dashed line for price %
-    const zy = yPrice(0); ctx.strokeStyle = '#3b4354'; ctx.setLineDash([4 * dpr, 4 * dpr]);
-    ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(w - pad.r, zy); ctx.stroke(); ctx.setLineDash([]);
+    if (sMn < 0 && sMx > 0) {
+      const zy = ySpread(0);
+      ctx.strokeStyle = '#4b5566'; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.lineWidth = dpr;
+      ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(w - pad.r, zy); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#6b7686'; ctx.fillText('0%', w - 6 * dpr, zy - 4 * dpr);
+    }
 
-    // 1. Buy Exchange Price % Curve (Green)
-    ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(buyPct[i])) : ctx.moveTo(x(p.t), yPrice(buyPct[i])));
-    if (isLive) ctx.lineTo(x(tMax), yPrice(buyPct.at(-1)));
-    ctx.strokeStyle = '#2bd98a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
+    ctx.lineWidth = dpr;
+    ctx.globalAlpha = 0.3;
+    ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(buyPct[i])) : ctx.moveTo(x(p.t), yPrice(buyPct[i]))); if (isLive) ctx.lineTo(x(tMax), yPrice(buyPct.at(-1))); ctx.strokeStyle = '#2bd98a'; ctx.stroke();
+    ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(sellPct[i])) : ctx.moveTo(x(p.t), yPrice(sellPct[i]))); if (isLive) ctx.lineTo(x(tMax), yPrice(sellPct.at(-1))); ctx.strokeStyle = '#ef647a'; ctx.stroke();
+    ctx.globalAlpha = 1;
 
-    // 2. Sell Exchange Price % Curve (Red)
-    ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(sellPct[i])) : ctx.moveTo(x(p.t), yPrice(sellPct[i])));
-    if (isLive) ctx.lineTo(x(tMax), yPrice(sellPct.at(-1)));
-    ctx.strokeStyle = '#ef647a'; ctx.lineWidth = 1.8 * dpr; ctx.stroke();
-
-    // 3. Spread Curve (Bright Purple/White)
     ctx.beginPath();
     points.forEach((p, i) => i ? ctx.lineTo(x(p.t), ySpread(spreadVal[i])) : ctx.moveTo(x(p.t), ySpread(spreadVal[i])));
     if (isLive) ctx.lineTo(x(tMax), ySpread(spreadVal.at(-1)));
-    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2.4 * dpr; ctx.stroke();
-
-    // Gradient fill under spread curve
-    ctx.lineTo(x(isLive ? tMax : points.at(-1).t), h - pad.b);
-    ctx.lineTo(x(tMin), h - pad.b);
-    ctx.closePath();
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2.6 * dpr; ctx.stroke();
+    ctx.lineTo(x(tMax), h - pad.b); ctx.lineTo(x(tMin), h - pad.b); ctx.closePath();
     const fill = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
-    fill.addColorStop(0, 'rgba(167, 139, 250, 0.22)'); fill.addColorStop(1, 'rgba(167, 139, 250, 0)');
+    fill.addColorStop(0, 'rgba(167, 139, 250, 0.25)'); fill.addColorStop(1, 'rgba(167, 139, 250, 0)');
     ctx.fillStyle = fill; ctx.fill();
 
-    // Time labels on X axis
-    ctx.fillStyle = '#677181';
+    // Trend: last point vs the mean of the preceding window.
+    const trendWin = spreadVal.slice(0, -1).slice(-40);
+    const trend = trendWin.length ? spreadVal.at(-1) - trendWin.reduce((a, b) => a + b, 0) / trendWin.length : 0;
+    const eps = span * 0.02;
+    const trendTxt = trend > eps ? '▲ расширяется' : trend < -eps ? '▼ сужается' : '→ стабилен';
+    const trendCol = trend > eps ? '#2bd98a' : trend < -eps ? '#ef647a' : '#8b93a5';
+    const label = `${trendTxt}  ${trend >= 0 ? '+' : ''}${trend.toFixed(3)}%`;
+    ctx.font = `700 ${10 * dpr}px Inter`; ctx.textAlign = 'left';
+    const lw = ctx.measureText(label).width + 14 * dpr;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(8 * dpr, 6 * dpr, lw, 18 * dpr, 9 * dpr); else ctx.rect(8 * dpr, 6 * dpr, lw, 18 * dpr);
+    ctx.fillStyle = 'rgba(10,13,18,.85)'; ctx.fill();
+    ctx.strokeStyle = trendCol; ctx.lineWidth = dpr; ctx.stroke();
+    ctx.fillStyle = trendCol; ctx.fillText(label, 15 * dpr, 17.5 * dpr);
+
+    ctx.font = `${8 * dpr}px Inter`; ctx.fillStyle = '#677181';
     const timeFmt = isLive ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
-    const tMid = tMin + tRange / 2;
-    [tMin, tMid, tMax].forEach((tVal, idx) => {
-      const px = pad.l + (idx / 2) * (w - pad.l - pad.r);
-      ctx.fillText(new Date(tVal).toLocaleTimeString('ru-RU', timeFmt), px - 18 * dpr, h - 6 * dpr);
+    [tMin, tMin + tRange / 2, tMax].forEach((tVal, idx) => {
+      ctx.fillText(new Date(tVal).toLocaleTimeString('ru-RU', timeFmt), pad.l + (idx / 2) * (w - pad.l - pad.r) - 18 * dpr, h - 6 * dpr);
     });
 
-    // Pulse live dot indicators on latest points at right edge (tMax)
     if (isLive) {
-      const lastIdx = points.length - 1;
-      const lastX = x(tMax);
-
-      // Buy tip dot
-      ctx.beginPath(); ctx.arc(lastX, yPrice(buyPct[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = '#2bd98a'; ctx.fill();
-
-      // Sell tip dot
-      ctx.beginPath(); ctx.arc(lastX, yPrice(sellPct[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = '#ef647a'; ctx.fill();
-
-      // Spread tip dot
-      ctx.beginPath(); ctx.arc(lastX, ySpread(spreadVal[lastIdx]), 6.5 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(226, 232, 240, 0.4)'; ctx.fill();
-      ctx.beginPath(); ctx.arc(lastX, ySpread(spreadVal[lastIdx]), 3.5 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = '#e2e8f0'; ctx.fill();
+      const lastX = x(tMax), lastY = ySpread(spreadVal.at(-1));
+      ctx.beginPath(); ctx.arc(lastX, lastY, 6.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = 'rgba(226,232,240,.35)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(lastX, lastY, 3.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = '#e2e8f0'; ctx.fill();
     }
 
-    // Legend updates
     const l = row ? legs(row) : null;
     if (l) {
       if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = `${l.buyName} (${pct(buyPct.at(-1), 2)})`;
@@ -425,7 +400,10 @@
     const { ctx, w, h, dpr } = fit(canvas, 130); ctx.clearRect(0, 0, w, h);
     const list = ticks.slice(-100); if (list.length < 2) return;
     const vals = list.map(c => c.c);
-    const mn = Math.min(...vals), mx = Math.max(...vals), range = (mx - mn) || (mn * 0.001) || 1;
+    let mn = Math.min(...vals), mx = Math.max(...vals);
+    // A frozen price line sits mid-chart instead of hugging the edge.
+    if (mx === mn) { const bump = Math.abs(mx) * 0.001 || 0.5; mx += bump; mn -= bump; }
+    const range = (mx - mn) || 1;
     const pad = 10 * dpr;
 
     const tMin = list[0].t;
@@ -450,9 +428,19 @@
     fill.addColorStop(1, 'transparent');
     ctx.fillStyle = fill; ctx.fill();
 
+    // Last price marker + readable price scale
+    const lastY = y(vals.at(-1));
+    ctx.strokeStyle = accent; ctx.globalAlpha = .45; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = dpr;
+    ctx.beginPath(); ctx.moveTo(pad, lastY); ctx.lineTo(w - pad, lastY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.font = `${8 * dpr}px Inter`;
+    ctx.fillStyle = 'rgba(200,208,220,.5)'; ctx.textAlign = 'left';
+    ctx.fillText(price(mx), 4 * dpr, 12 * dpr);
+    ctx.fillText(price(mn), 4 * dpr, h - 4 * dpr);
+    ctx.fillStyle = accent; ctx.textAlign = 'right';
+    ctx.fillText(price(vals.at(-1)), w - 6 * dpr, lastY - 4 * dpr);
+
     // Pulsing tip dot at tMax
     const lastX = x(tMax);
-    const lastY = y(vals.at(-1));
     ctx.beginPath(); ctx.arc(lastX, lastY, 6 * dpr, 0, 2 * Math.PI);
     ctx.fillStyle = accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.35)' : 'rgba(239, 100, 122, 0.35)'; ctx.fill();
     ctx.beginPath(); ctx.arc(lastX, lastY, 3 * dpr, 0, 2 * Math.PI);
@@ -462,7 +450,9 @@
   function drawCandles(canvas, candles, accent) {
     const { ctx, w, h, dpr } = fit(canvas, 130); ctx.clearRect(0, 0, w, h);
     const list = candles.slice(-70); if (list.length < 2) return;
-    const mn = Math.min(...list.map(c => c.l)), mx = Math.max(...list.map(c => c.h)), range = mx - mn || 1, pad = 8 * dpr,
+    let mn = Math.min(...list.map(c => c.l)), mx = Math.max(...list.map(c => c.h));
+    if (mx === mn) { const bump = Math.abs(mx) * 0.001 || 0.5; mx += bump; mn -= bump; }
+    const range = mx - mn, pad = 8 * dpr,
       cw = (w - pad * 2) / list.length, y = v => pad + (mx - v) * (h - pad * 2) / range;
     ctx.strokeStyle = '#1d2330'; ctx.lineWidth = dpr;
     for (let i = 1; i < 4; i++) { const yy = h * i / 4; ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke(); }
@@ -472,6 +462,16 @@
       ctx.fillStyle = col; const top = Math.min(y(c.o), y(c.c)), bh = Math.max(1.5 * dpr, Math.abs(y(c.o) - y(c.c)));
       ctx.fillRect(xx - Math.max(1, cw * .3), top, Math.max(2, cw * .6), bh);
     });
+    // Price scale labels + last close marker
+    const last = list.at(-1), lastY = y(last.c);
+    ctx.strokeStyle = accent; ctx.globalAlpha = .45; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = dpr;
+    ctx.beginPath(); ctx.moveTo(pad, lastY); ctx.lineTo(w - pad, lastY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.font = `${8 * dpr}px Inter`;
+    ctx.fillStyle = 'rgba(200,208,220,.5)'; ctx.textAlign = 'left';
+    ctx.fillText(price(mx), 4 * dpr, 12 * dpr);
+    ctx.fillText(price(mn), 4 * dpr, h - 4 * dpr);
+    ctx.fillStyle = accent; ctx.textAlign = 'right';
+    ctx.fillText(price(last.c), w - 6 * dpr, lastY - 4 * dpr);
     ctx.fillStyle = accent; ctx.fillRect(w - 3 * dpr, 0, 3 * dpr, h);
   }
 
