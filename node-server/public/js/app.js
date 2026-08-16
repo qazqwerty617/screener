@@ -6422,6 +6422,32 @@ if (densitySwitch) {
   };
 }
 
+// ════ Screener fullscreen toggle ════
+const fullscreenToggleBtn = $("fullscreen-toggle");
+if (fullscreenToggleBtn) {
+  fullscreenToggleBtn.onclick = () => {
+    if (document.fullscreenElement) {
+      const p = document.exitFullscreen && document.exitFullscreen();
+      if (p && p.catch) p.catch(() => {});
+    } else {
+      const root = document.documentElement;
+      try {
+        const p = root.requestFullscreen
+          ? root.requestFullscreen()
+          : (root.webkitRequestFullscreen && root.webkitRequestFullscreen());
+        if (p && p.catch) p.catch(() => {});
+      } catch (_) {}
+    }
+  };
+  document.addEventListener("fullscreenchange", () => {
+    const on = !!document.fullscreenElement;
+    fullscreenToggleBtn.classList.toggle("on", on);
+    fullscreenToggleBtn.title = on ? "Выйти из полного экрана (Esc)" : "Скринер на весь экран";
+    // Let canvases re-fit the new viewport size.
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 120);
+  });
+}
+
 // Filter buttons inside density settings panel (toggle active states)
 document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forEach(btn => {
   const savedSide = btn.dataset.chartDensitySide;
