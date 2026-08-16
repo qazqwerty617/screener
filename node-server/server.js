@@ -889,6 +889,7 @@ function connectKlineWs(sub) {
       sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub, 2000); });
     }).catch(() => startKlinePolling(sub));
   } else if (ex === "BX") {
+    const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
     sub.ws = new WebSocket("wss://open-api-swap.bingx.com/swap-market", { perMessageDeflate: false });
     sub.ws.on("error", (e) => {
       console.warn(`[KL ERROR] BX:${sym}:`, e.message);
@@ -897,8 +898,8 @@ function connectKlineWs(sub) {
     sub.ws.on("open", () => {
       markMarketOpen(sub);
       // BingX expects symbol WITH hyphen (e.g. BTC-USDT@kline_1m)
-      sub.ws.send(JSON.stringify({ id: "id1", reqType: "sub", dataType: `${sym}@kline_${tf}` }));
-      sub.ws.send(JSON.stringify({ id: "id2", reqType: "sub", dataType: `${sym}@trade` }));
+      sub.ws.send(JSON.stringify({ id: "id1", reqType: "sub", dataType: `${bxSym}@kline_${tf}` }));
+      sub.ws.send(JSON.stringify({ id: "id2", reqType: "sub", dataType: `${bxSym}@trade` }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ ping: Date.now() })); }, 20000);
     });
     sub.ws.on("message", (raw) => {
@@ -1162,7 +1163,8 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
     return `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${TF_MAP.KC[tf] || "60"}` + (before ? `&to=${before}` : "");
   }
   if (ex === "BX") {
-    return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}` + (before ? `&endTime=${before}` : "");
+    const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
+    return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}` + (before ? `&endTime=${before}` : "");
   }
   if (ex === "HT") {
     return `https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;

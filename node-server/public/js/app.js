@@ -3078,7 +3078,7 @@ function drawChart() {
     });
   }
 
-  // Draw Volume (Clean Histogram, Project Colors, Robust Scaling)
+  // Draw Volume (Clean Histogram, Project Colors, Linear Proportional Scaling, Subpixel Aligned)
   const volumeYStart = indicatorsHeight;
   vCtx.save();
   vCtx.beginPath();
@@ -3098,40 +3098,32 @@ function drawChart() {
   vCtx.stroke();
 
   if (vis.length > 0) {
-    const renderVols = vis.map(c => (Number.isFinite(c.v) && c.v > 0) ? c.v : 0);
-    const validVols = renderVols.filter(v => v > 0);
+    let maxV = 0;
+    for (let i = 0; i < vis.length; i++) {
+      const val = Number(vis[i].v) || 0;
+      if (val > maxV) maxV = val;
+    }
 
-    if (validVols.length > 0) {
-      const rawMaxV = Math.max(...validVols, 1);
-
-      // 95th percentile clamp to prevent single huge spikes from flattening regular bars
-      let effectiveMaxV = rawMaxV;
-      if (validVols.length >= 8) {
-        const sorted = [...validVols].sort((a, b) => a - b);
-        const p95 = sorted[Math.floor(sorted.length * 0.95)] || rawMaxV;
-        if (rawMaxV > p95 * 3.5 && p95 > 0) {
-          effectiveMaxV = p95 * 2.2;
-        }
-      }
-
-      const scaleCeiling = effectiveMaxV * 1.12;
-      const usableHeight = volumeHeight - 8;
-      const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
+    if (maxV > 0) {
+      const usableHeight = volumeHeight - 6;
 
       for (let i = 0; i < vis.length; i++) {
         const c = vis[i];
-        const val = renderVols[i];
+        const val = Number(c.v) || 0;
         if (val <= 0) continue;
 
-        const x = (s + i - viewStart) * candleW + candleW / 2;
-        const up = c.c >= c.o;
-        const vRatio = Math.min(1.0, val / scaleCeiling);
-        const vh = Math.max(2, vRatio * usableHeight);
-        const barX = Math.round(x - volW / 2);
-        const barY = Math.round(volumeYStart + volumeHeight - vh);
+        const rawX = (s + i - viewStart) * candleW + candleW / 2;
+        const leftX = Math.round((rawX - hw) * dpr);
+        const rightX = Math.round((rawX + hw) * dpr);
+        const fillX = leftX / dpr;
+        const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
 
+        const vh = Math.max(1, (val / maxV) * usableHeight);
+        const fillY = volumeYStart + volumeHeight - vh;
+
+        const up = c.c >= c.o;
         vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
-        vCtx.fillRect(barX, barY, volW, vh);
+        vCtx.fillRect(fillX, fillY, fillW, vh);
       }
     }
   }
@@ -6115,8 +6107,9 @@ async function fetchDirectKlines(ex, sym, tf) {
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "BX") {
+      const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
-      const r = await fetch(`https://open-api-swap.bingx.com/openApi/swap/v2/quote/klines?symbol=${sym}&interval=${bxTfMap[tf] || "1h"}&limit=300`);
+      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=300`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
