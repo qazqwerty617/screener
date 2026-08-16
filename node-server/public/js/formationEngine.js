@@ -82,21 +82,21 @@
     if (candles.length < 40) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const clusterTol = Math.max(0.0008, Math.min(0.0045, range / lastPrice * 0.28));
-    const epsilon = range * 0.035;
+    const clusterTol = Math.max(0.0012, Math.min(0.006, (range / lastPrice) * 0.35));
+    const epsilon = range * 0.12;
     const points = swings(candles, 3);
+    const minT = Math.max(1, Number(minTouches) || 1);
     const candidates = [];
 
     for (const resistance of [true, false]) {
       const side = points.filter(item => item.type === (resistance ? "high" : "low"));
       for (const cluster of makeClusters(side, clusterTol, resistance)) {
-        if (cluster.touches < Math.max(2, Number(minTouches) || 2)) continue;
+        if (cluster.touches < minT) continue;
         const first = Math.min(...cluster.swingIndices);
         const last = Math.max(...cluster.swingIndices);
         if (!cleanHorizontal(candles, cluster.price, last + 1, resistance, epsilon)) continue;
-        if (resistance ? cluster.price <= lastPrice : cluster.price >= lastPrice) continue;
         const distanceAtr = Math.abs(cluster.price - lastPrice) / range;
-        if (distanceAtr > 8) continue;
+        if (distanceAtr > 12) continue;
         candidates.push({
           price: cluster.price,
           endPrice: cluster.price,
@@ -111,7 +111,7 @@
       }
     }
     candidates.sort((a, b) => b.strength - a.strength);
-    return candidates.slice(0, 10);
+    return candidates.slice(0, 12);
   }
 
   function detectCascades(raw, minTouches) {
@@ -119,12 +119,13 @@
     if (candles.length < 40) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const epsilon = range * 0.035;
+    const epsilon = range * 0.12;
+    const minT = Math.max(1, Number(minTouches) || 1);
     const candidates = [];
     for (const sw of swings(candles, 3)) {
       let departed = false;
-      for (let i = sw.idx + 1; i <= Math.min(sw.idx + 6, candles.length - 1); i++) {
-        if (sw.type === "high" ? sw.price - candles[i].c >= range * 0.75 : candles[i].c - sw.price >= range * 0.75) {
+      for (let i = sw.idx + 1; i <= Math.min(sw.idx + 10, candles.length - 1); i++) {
+        if (sw.type === "high" ? sw.price - candles[i].c >= range * 0.25 : candles[i].c - sw.price >= range * 0.25) {
           departed = true;
           break;
         }
@@ -132,16 +133,15 @@
       if (!departed) continue;
       const resistance = sw.type === "high";
       if (!cleanHorizontal(candles, sw.price, sw.idx + 1, resistance, epsilon)) continue;
-      if (resistance ? sw.price <= lastPrice : sw.price >= lastPrice) continue;
       const touchIndices = [sw.idx];
-      const touchTol = range * 0.18;
+      const touchTol = range * 0.25;
       for (let i = sw.idx + 2; i < candles.length - 1; i++) {
         const wick = resistance ? candles[i].h : candles[i].l;
         if (Math.abs(wick - sw.price) <= touchTol && i - touchIndices[touchIndices.length - 1] > 1) touchIndices.push(i);
       }
-      if (touchIndices.length < Math.max(1, Number(minTouches) || 1)) continue;
+      if (touchIndices.length < minT) continue;
       const age = candles.length - 1 - sw.idx;
-      if (age > 220) continue;
+      if (age > 350) continue;
       candidates.push({
         price: sw.price, endPrice: sw.price, swingIdx: sw.idx,
         direction: resistance ? "up" : "down", touchIndices,
@@ -152,8 +152,8 @@
     candidates.sort((a, b) => b.strength - a.strength);
     const kept = [];
     for (const item of candidates) {
-      if (!kept.some(other => other.direction === item.direction && Math.abs(other.price - item.price) <= range * 0.2)) kept.push(item);
-      if (kept.length >= 10) break;
+      if (!kept.some(other => other.direction === item.direction && Math.abs(other.price - item.price) <= range * 0.15)) kept.push(item);
+      if (kept.length >= 12) break;
     }
     return kept;
   }
