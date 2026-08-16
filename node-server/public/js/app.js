@@ -3389,16 +3389,27 @@ function drawChart() {
 
         // Bars count
         let bars = 0;
+        const diffMs = (d.t1 && d.t2) ? Math.abs(d.t2 - d.t1) : 0;
+        const tfMs = (typeof TF_MS !== 'undefined' && TF_MS[activeTf])
+          ? TF_MS[activeTf]
+          : (typeof candles !== 'undefined' && candles && candles.length > 1
+              ? Math.max(1, candles[candles.length - 1].t - candles[candles.length - 2].t)
+              : 60000);
+
         if (typeof candles !== 'undefined' && candles && candles.length > 0) {
-          const idx1 = (d.t1 > 1000000000) ? candles.findIndex(c => c.t >= d.t1) : Math.round(d.t1);
-          const idx2 = (d.t2 > 1000000000) ? candles.findIndex(c => c.t >= d.t2) : Math.round(d.t2);
-          if (idx1 >= 0 && idx2 >= 0) bars = Math.abs(idx2 - idx1);
+          const idx1 = (d.t1 > 1000000000) ? getIdxFromTime(d.t1, candles) : d.t1;
+          const idx2 = (d.t2 > 1000000000) ? getIdxFromTime(d.t2, candles) : d.t2;
+          if (typeof idx1 === 'number' && typeof idx2 === 'number' && Number.isFinite(idx1) && Number.isFinite(idx2)) {
+            bars = Math.round(Math.abs(idx2 - idx1));
+          }
+        }
+        if (bars <= 0 && diffMs > 0 && tfMs > 0) {
+          bars = Math.max(1, Math.round(diffMs / tfMs));
         }
 
         // Time duration
         let timeStr = "";
-        const diffMs = Math.abs(d.t2 - d.t1);
-        if (d.t1 > 1000000000 && d.t2 > 1000000000) {
+        if (diffMs > 0) {
           if (diffMs < 60000) {
             timeStr = Math.round(diffMs / 1000) + "с";
           } else if (diffMs < 3600000) {
@@ -3406,19 +3417,29 @@ function drawChart() {
           } else if (diffMs < 86400000) {
             const hours = Math.floor(diffMs / 3600000);
             const mins = Math.round((diffMs % 3600000) / 60000);
-            timeStr = hours + "ч " + mins + "м";
+            timeStr = hours + "ч" + (mins > 0 ? " " + mins + "м" : "");
           } else {
             const days = Math.floor(diffMs / 86400000);
             const hours = Math.round((diffMs % 86400000) / 3600000);
-            timeStr = days + "д " + hours + "ч";
+            timeStr = days + "д" + (hours > 0 ? " " + hours + "ч" : "");
           }
+        }
+
+        function formatCandlesCount(count) {
+          const n = Math.abs(Math.round(count));
+          const mod10 = n % 10;
+          const mod100 = n % 100;
+          if (mod100 >= 11 && mod100 <= 19) return `${n} свечей`;
+          if (mod10 === 1) return `${n} свеча`;
+          if (mod10 >= 2 && mod10 <= 4) return `${n} свечи`;
+          return `${n} свечей`;
         }
 
         // Info box at center
         const pctSign = pct >= 0 ? "+" : "";
         const formattedDeltaPrice = deltaPrice >= 0 ? ("+" + fP(deltaPrice)) : fP(deltaPrice);
         const text1 = pctSign + pct.toFixed(2) + "% (" + formattedDeltaPrice + ")";
-        const text2 = timeStr ? (bars + " свечей, " + timeStr) : (bars + " свечей");
+        const text2 = timeStr ? (formatCandlesCount(bars) + ", " + timeStr) : formatCandlesCount(bars);
 
         ctx.font = "bold 13px Inter";
         const w1 = ctx.measureText(text1).width;
@@ -9585,10 +9606,20 @@ class ChartInstance {
       const midX = (xStart + xEnd) / 2;
       const midY = (yStart + yEnd) / 2;
 
+      function formatCandlesCountGrid(count) {
+        const n = Math.abs(Math.round(count));
+        const mod10 = n % 10;
+        const mod100 = n % 100;
+        if (mod100 >= 11 && mod100 <= 19) return `${n} свечей`;
+        if (mod10 === 1) return `${n} свеча`;
+        if (mod10 >= 2 && mod10 <= 4) return `${n} свечи`;
+        return `${n} свечей`;
+      }
+
       const pctSign = pct >= 0 ? "+" : "";
       const formattedDeltaPrice = deltaPrice >= 0 ? ("+" + fP(deltaPrice)) : fP(deltaPrice);
       const text1 = `${pctSign}${pct.toFixed(2)}% (${formattedDeltaPrice})`;
-      const text2 = `${bars} свечей, ${timeStr}`;
+      const text2 = timeStr ? `${formatCandlesCountGrid(bars)}, ${timeStr}` : formatCandlesCountGrid(bars);
 
       ctx.font = "bold 9px Inter";
       const w1 = ctx.measureText(text1).width;
