@@ -584,92 +584,7 @@
                             </div>
                         </div>
 
-                        <div class="chart-density-panel-section" id="chart-fov-section">
-                            <span class="chart-density-section-label" style="display:flex;align-items:center;justify-content:space-between;">
-                                Формации на графике
-                                <label class="switch" style="margin:0;">
-                                    <input type="checkbox" id="fov-enabled">
-                                    <span class="slider"></span>
-                                </label>
-                            </span>
-
-                            <div id="fov-controls-body" style="display:none; margin-top:8px;">
-                                <!-- Types Buttons -->
-                                <div style="display:flex;flex-wrap:wrap;gap:4px;">
-                                    <button class="chart-indicator-grid-btn fov-type-btn" data-fov="cascades"
-                                        data-desc="Каскады уровней — кластеры горизонтальных уровней с несколькими уровнями каскада.">Каскады</button>
-                                    <button class="chart-indicator-grid-btn fov-type-btn" data-fov="breakout"
-                                        data-desc="Горизонтальный уровень — уровни поддержки и сопротивления с несколькими касаниями.">Горизонт.</button>
-                                    <button class="chart-indicator-grid-btn fov-type-btn" data-fov="trendline"
-                                        data-desc="Наклонный уровень — трендовые линии по свинг-точкам.">Наклонный</button>
-                                    <button class="chart-indicator-grid-btn fov-type-btn" data-fov="retest"
-                                        data-desc="Ретест уровня — возвращение цены к пробитому уровню.">Ретест</button>
-                                </div>
-
-                                <!-- Granular Sub-Settings per Formation -->
-                                <div id="fov-sub-settings" style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
-                                    <!-- Cascades settings -->
-                                    <div id="fov-sub-cascades" class="fov-sub-block" style="display:none;">
-                                        <span style="font-size:10px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Мин. уровней каскада</span>
-                                        <div style="display:flex;gap:4px;margin-top:3px;">
-                                            <button class="fov-cascades-touch-btn fov-touch-btn active" data-val="1">1+</button>
-                                            <button class="fov-cascades-touch-btn fov-touch-btn" data-val="2">2+</button>
-                                            <button class="fov-cascades-touch-btn fov-touch-btn" data-val="3">3+</button>
-                                            <button class="fov-cascades-touch-btn fov-touch-btn" data-val="4">4+</button>
-                                            <button class="fov-cascades-touch-btn fov-touch-btn" data-val="5">5+</button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Breakout (Horiz level) settings -->
-                                    <div id="fov-sub-breakout" class="fov-sub-block" style="display:none;">
-                                        <span style="font-size:10px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Мин. касаний уровня</span>
-                                        <div style="display:flex;gap:4px;margin-top:3px;">
-                                            <button class="fov-breakout-touch-btn fov-touch-btn active" data-val="1">1+</button>
-                                            <button class="fov-breakout-touch-btn fov-touch-btn" data-val="2">2+</button>
-                                            <button class="fov-breakout-touch-btn fov-touch-btn" data-val="3">3+</button>
-                                            <button class="fov-breakout-touch-btn fov-touch-btn" data-val="4">4+</button>
-                                            <button class="fov-breakout-touch-btn fov-touch-btn" data-val="5">5+</button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Trendline settings -->
-                                    <div id="fov-sub-trendline" class="fov-sub-block" style="display:none;">
-                                        <span style="font-size:10px;color:var(--t3);font-weight:700;text-transform:uppercase;letter-spacing:.5px;">Мин. касаний</span>
-                                        <div style="display:flex;gap:4px;margin-top:3px;">
-                                            <button class="fov-trendline-touch-btn fov-touch-btn active" data-val="1">1+</button>
-                                            <button class="fov-trendline-touch-btn fov-touch-btn" data-val="2">2+</button>
-                                            <button class="fov-trendline-touch-btn fov-touch-btn" data-val="3">3+</button>
-                                            <button class="fov-trendline-touch-btn fov-touch-btn" data-val="4">4+</button>
-                                            <button class="fov-trendline-touch-btn fov-touch-btn" data-val="5">5+</button>
-                                        </div>
-                                    </div>
-
-                                    <!-- Retest settings -->
-                                    <div id="fov-sub-retest" class="fov-sub-block" style="display:none;">
-                                        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--t2);cursor:pointer;">
-                                            <input type="checkbox" id="fov-retest-approaching" class="beautiful-checkbox">
-                                            <span>Подход к ретесту</span>
-                                        </label>
-                                    </div>
-                                </div>
-
-                                <!-- Common Toggles (Compact single row) -->
-                                <div style="margin-top:6px;padding-top:6px;border-top:1px dashed rgba(255,255,255,0.08);display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                                    <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--t2);cursor:pointer;">
-                                        <input type="checkbox" id="fov-nearest" class="beautiful-checkbox">
-                                        <span>Ближайшие</span>
-                                    </label>
-                                    <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--t2);cursor:pointer;">
-                                        <input type="checkbox" id="fov-show-touches" checked class="beautiful-checkbox">
-                                        <span>Точки</span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-
-
-
-                        <div class="chart-indicator-info-box" id="chart-indicator-info-box">
+                                                <div class="chart-indicator-info-box" id="chart-indicator-info-box">
                             Наведите на индикатор, чтобы прочитать его описание.
                         </div>
                     </div>
@@ -2663,7 +2578,7 @@
 
     <script src="/js/formationEngine.js?v=1"></script>
     <script src="/js/tradeOverlay.js?v=1"></script>
-    <script src="/js/app.js?v=1043"></script>
+    <script src="/js/app.js?v=1044"></script>
     <script src="/js/arbitrage.js?v=2"></script>
     <script src="/js/arbitrage-pro.js?v=4"></script>
     <script src="/js/backtest.js?v=999"></script>

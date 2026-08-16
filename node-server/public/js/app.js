@@ -6705,10 +6705,10 @@ if (settingsBtn && settingsOverlay) {
   (function initFormationsOverlay() {
     const LS_KEY = 'fov_settings';
 
-    // Load saved settings
+    // Load saved settings. The overlay toggle was removed from the screener
+    // settings panel, so the master switch stays off regardless of old state.
     try {
       const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-      if (typeof saved.enabled === 'boolean') chartFormationsOnChart = saved.enabled;
       if (Array.isArray(saved.types)) { chartFovTypes = new Set(saved.types); }
       if (typeof saved.cascadesMin === 'number') chartFovCascadesMin = saved.cascadesMin;
       if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
