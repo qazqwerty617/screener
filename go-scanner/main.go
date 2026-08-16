@@ -563,6 +563,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/klines", klinesHandler)
 
-	log.Println("Go Server listening on :8082")
-	log.Fatal(http.ListenAndServe(":8082", mux))
+	// Bind loopback by default: the scanner is an internal backend for the
+	// Node server, not a public API. Override with SCANNER_ADDR if needed.
+	scannerAddr := os.Getenv("SCANNER_ADDR")
+	if scannerAddr == "" {
+		scannerAddr = "127.0.0.1:8082"
+	}
+	log.Println("Go Server listening on " + scannerAddr)
+	log.Fatal(http.ListenAndServe(scannerAddr, mux))
 }
