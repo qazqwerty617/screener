@@ -913,6 +913,22 @@
       if (o.type === "h-ray") {
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(m.plot.w, y1); ctx.stroke();
         ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, Math.PI * 2); ctx.fill();
+        const badgeW = m.axisR.w - 6;
+        const badgeH = 18;
+        const badgeX = m.plot.w + 3;
+        const badgeY = y1 - badgeH / 2;
+        ctx.save();
+        ctx.fillStyle = "#151722";
+        ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+        ctx.strokeStyle = o.color || "#a78bfa";
+        ctx.lineWidth = 1.4;
+        ctx.strokeRect(badgeX, badgeY, badgeW, badgeH);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 9px Inter";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(formatPrice(o.a.p), badgeX + badgeW / 2, y1);
+        ctx.restore();
       } else if (o.type === "brush" && o.points?.length) {
         ctx.lineWidth = o.lineWidth || 2; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.beginPath();
         o.points.forEach((point, index) => { const x = timeToX(point.t), y = m.yForPrice(point.p); index ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });

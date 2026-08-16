@@ -2880,6 +2880,12 @@ function drawChart() {
   };
   const getY = (p) => TOP + ((mx - p) / pr) * PH;
 
+  const drawingScaleBadges = [];
+  function queuePriceTagOnScale(p, color, isHovered) {
+    if (typeof p !== "number" || !Number.isFinite(p)) return;
+    drawingScaleBadges.push({ price: p, color, isHovered: !!isHovered });
+  }
+
   function drawHandle(x, y, col, r = 4) {
     ctx.beginPath();
     ctx.fillStyle = getCanvasBgColor();
@@ -2891,25 +2897,7 @@ function drawChart() {
   }
 
   function drawPriceTagOnScale(p, color, isHovered) {
-    const y = getY(p);
-    if (y < TOP || y > TOP + PH) return;
-    const tH = 24,
-      tW = PR - 4,
-      tX = PW + 2,
-      tY = y - tH / 2;
-    ctx.save();
-    roundRect(ctx, tX, tY, tW, tH, 5);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = isHovered ? 2 : 1;
-    ctx.stroke();
-    ctx.fillStyle = "#0b0d12";
-    ctx.font = "bold 12px Inter";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(fP(p), PW + PR / 2, y + 1);
-    ctx.restore();
+    queuePriceTagOnScale(p, color, isHovered);
   }
 
   function drawPill(text, x, y, col) {
@@ -2992,7 +2980,7 @@ function drawChart() {
       ctx.lineTo(PW, y1);
       ctx.stroke();
       drawHandle(x1, y1, col, 4);
-      drawPriceTagOnScale(d.p1, col, isHovered);
+      queuePriceTagOnScale(d.p1, baseCol, isHovered);
     } else if (d.type === "alert") {
       ctx.save();
       ctx.setLineDash([5, 4]);
@@ -3019,7 +3007,7 @@ function drawChart() {
       ctx.fillText("🔔 " + fP(d.p1), pillX + pillW / 2, y1);
       ctx.restore();
       
-      drawPriceTagOnScale(d.p1, col || "#2bd98a", isHovered);
+      queuePriceTagOnScale(d.p1, col || "#2bd98a", isHovered);
     } else if (d.type === "rect") {
       const left = Math.min(x1, x2);
       const top = Math.min(y1, y2);
@@ -3239,6 +3227,27 @@ function drawChart() {
     }
   }
 
+  // Real-time hover preview for horizontal level tool (h-ray / alert)
+  if ((activeTool === "h-ray" || activeTool === "alert") && drawingPhase === 0 && mX >= 0 && mX < PW && mY >= TOP && mY <= TOP + PH) {
+    const previewP = (magnetSnap && Number.isFinite(magnetSnap.p)) ? magnetSnap.p : (mx - ((mY - TOP) / PH) * pr);
+    const previewY = toY(previewP);
+    const toolCol = getToolColor(activeTool) || (activeTool === "alert" ? "#2bd98a" : "#a78bfa");
+
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = toolCol;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, previewY);
+    ctx.lineTo(PW, previewY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawHandle(mX, previewY, toolCol, 4);
+    ctx.restore();
+
+    queuePriceTagOnScale(previewP, toolCol, true);
+  }
+
   // Draw saved drawings
   chartDrawings.forEach((d, idx) => {
     const isHovered = (dragDrawing?.idx === idx || hoverDrawingIdx === idx);
@@ -3261,7 +3270,7 @@ function drawChart() {
   // Restore clipping for candles and drawings area before rendering Price Axis labels
   ctx.restore();
 
-  // тФАтФА Price Axis (Right) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+  // ── Price Axis (Right) ─────────────────────────────────────────────────────────────
   gridPrice = Math.ceil(mn / gridStep) * gridStep;
   ctx.font = "10px Inter";
   ctx.textAlign = "left";
@@ -3273,6 +3282,39 @@ function drawChart() {
       ctx.fillText(fP(gridPrice), PW + 6, y + 4);
     }
     gridPrice += gridStep;
+  }
+
+  // Draw price badges on the right price scale for horizontal drawings / levels
+  if (drawingScaleBadges.length > 0) {
+    const badgeH = 20;
+    const badgeW = PR - 8;
+    const badgeX = PW + 4;
+
+    for (const badge of drawingScaleBadges) {
+      const by = toY(badge.price);
+      if (by < TOP - 10 || by > TOP + PH + 10) continue;
+
+      const badgeY = Math.round(by - badgeH / 2);
+
+      ctx.save();
+      // Draw badge background
+      roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4.5);
+      ctx.fillStyle = "#151722";
+      ctx.fill();
+
+      // Draw border in drawing color
+      ctx.strokeStyle = badge.color || "#8b5cf6";
+      ctx.lineWidth = badge.isHovered ? 2 : 1.4;
+      ctx.stroke();
+
+      // Draw exact price
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10.5px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(fP(badge.price), badgeX + badgeW / 2, by);
+      ctx.restore();
+    }
   }
 
   const lc = candles[candles.length - 1];
@@ -9017,6 +9059,7 @@ class ChartInstance {
         if (rawSaved) {
           const drawingsList = JSON.parse(rawSaved);
           if (Array.isArray(drawingsList) && drawingsList.length > 0) {
+            const mcDrawingBadges = [];
             ctx.save();
             try {
               ctx.beginPath();
@@ -9052,6 +9095,10 @@ class ChartInstance {
                   }
                 } else if (d.type === "h-ray") {
                   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(PW, y1); ctx.stroke();
+                  mcDrawingBadges.push({ y: y1, price: d.p1, color: baseCol });
+                } else if (d.type === "alert") {
+                  ctx.beginPath(); ctx.moveTo(0, y1); ctx.lineTo(PW, y1); ctx.stroke();
+                  mcDrawingBadges.push({ y: y1, price: d.p1, color: baseCol || "#2bd98a" });
                 } else if (d.type === "rect") {
                   const left = Math.min(x1, x2), top = Math.min(y1, y2);
                   const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
@@ -9079,6 +9126,29 @@ class ChartInstance {
               });
             } finally {
               ctx.restore();
+            }
+
+            if (mcDrawingBadges.length > 0) {
+              const PR = 60;
+              const badgeH = 18;
+              const badgeW = PR - 8;
+              const badgeX = PW + 4;
+              for (const b of mcDrawingBadges) {
+                if (b.y < 0 || b.y > ch) continue;
+                ctx.save();
+                roundRect(ctx, badgeX, b.y - badgeH / 2, badgeW, badgeH, 4);
+                ctx.fillStyle = "#151722";
+                ctx.fill();
+                ctx.strokeStyle = b.color || "#8b5cf6";
+                ctx.lineWidth = 1.4;
+                ctx.stroke();
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "bold 9.5px Inter";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(fP(b.price), badgeX + badgeW / 2, b.y);
+                ctx.restore();
+              }
             }
           }
         }
