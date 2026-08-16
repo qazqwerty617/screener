@@ -69,8 +69,54 @@ let currentWallsMeta = { walls: [], updatedAt: 0, partial: false, exchangesReady
 global.__obsidianWallsMeta = currentWallsMeta;
 let patternsCache = []; // Global in-memory patterns/signals cache
 
-// тФАтФАтФА In-memory store тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ═══ Global Non-Crypto / Stock & Commodity Filter ═══
+const EXCLUDED_NON_CRYPTO_BASES = new Set([
+  // Popular US Stocks & Equities:
+  "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "COIN",
+  "MSTR", "BAC", "AMD", "INTC", "PLTR", "BABA", "DIS", "PYPL", "UBER", "SPY",
+  "QQQ", "IWM", "DIA", "V", "MA", "JPM", "WMT", "XOM", "CVX", "LLY",
+  "UNH", "JNJ", "AVGO", "ORCL", "CRM", "CSCO", "ABT", "MRK", "PEP", "KO",
+  "COST", "TMO", "MCD", "NKE", "ABBV", "DHR", "TXN", "NEE", "PM", "QCOM",
+  "HON", "UNP", "LIN", "BMY", "AMGN", "LOW", "IBM", "SBUX", "GE", "CAT",
+  "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
+  "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
+  "OXY", "SQ", "SHOP", "SE", "SNOW", "AFRM", "COINBASE", "MICROSTRATEGY",
+  "SPOT", "TWTR", "PFE", "MRNA", "ZM", "DOCU", "ROKU", "SNAP", "BIDU", "JD", "PDD",
+  "NIO", "XPEV", "LI", "BILI", "TME", "F", "GM", "RIVN", "LCID", "NKLA", "PLUG",
+  // Tokenized Stocks & Synthetics (Gate x-stocks, OKX, Bitget):
+  "AVGOX", "AAPLX", "TSLAX", "NVDAX", "MSFTX", "AMZNX", "GOOGX", "GOOGLX", "METAX",
+  "NFLXX", "COINX", "MSTRX", "BACX", "AMDX", "INTCX", "PLTRX", "BABAX", "DISX",
+  "PYPLX", "UBERX", "SPYX", "QQQX", "ARMX", "SMCX", "HOODX",
+  // Commodities & Indices:
+  "XAU", "XAG", "GOLD", "SILVER", "OIL", "WTI", "BRENT", "COPPER", "NATGAS",
+  "DOW", "SPX", "NDX", "US30", "US500", "USTECH", "DE40", "UK100", "JP225",
+  "XAUT", "PAXG"
+]);
+
+function isNonCryptoOrStock(base, sym) {
+  if (!base && !sym) return false;
+  const b = String(base || "").trim().toUpperCase().replace(/[-_/]?(USDT|USD|PERP)$/i, "");
+  const s = String(sym || "").trim().toUpperCase().replace(/_SPOT$/i, "").replace(/[-_]/g, "");
+  if (EXCLUDED_NON_CRYPTO_BASES.has(b) || EXCLUDED_NON_CRYPTO_BASES.has(s)) return true;
+  if (b.endsWith("X") && b.length >= 4) {
+    const root = b.slice(0, -1);
+    if (EXCLUDED_NON_CRYPTO_BASES.has(root)) return true;
+  }
+  return false;
+}
+
+// ─── In-memory store ────────────────────────────────────────────────────────
 const tickers = new Map();
+const originalTickersSet = tickers.set.bind(tickers);
+tickers.set = function(key, value) {
+  if (value) {
+    const base = value.base || (value.sym ? value.sym.replace(/[-_/]?(USDT|USD|PERP)$/i, "") : "");
+    if (isNonCryptoOrStock(base, value.sym || key)) {
+      return this;
+    }
+  }
+  return originalTickersSet(key, value);
+};
 global.__obsidianTickers = tickers; // expose for telegramBot digest engine
 const dirtyKeys = new Set();
 const clients = new Set();
