@@ -1398,7 +1398,7 @@ function getSmcData(candles) {
     orderBlocks.push({
       type: isBull ? "bull" : "bear",
       startIdx: obCandleIdx,
-      endIdx: numCandles - 1 + 7,
+      endIdx: numCandles - 1 + 12,
       high: obC.h,
       low: obC.l,
       score
@@ -1426,7 +1426,7 @@ function getSmcData(candles) {
           fvgs.push({
             type: "bull",
             startIdx: i - 2,
-            endIdx: numCandles - 1 + 7,
+            endIdx: numCandles - 1 + 12,
             topPrice: c3.l,
             botPrice: c1.h
           });
@@ -1449,7 +1449,7 @@ function getSmcData(candles) {
           fvgs.push({
             type: "bear",
             startIdx: i - 2,
-            endIdx: numCandles - 1 + 7,
+            endIdx: numCandles - 1 + 12,
             topPrice: c1.l,
             botPrice: c3.h
           });
@@ -1546,7 +1546,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   };
 
   // 1. UNMITIGATED ORDER BLOCKS (OB) - Ranked by Quality Score (0-100 pts)
-  // Always projected 7 candles forward ahead of the chart right edge
+  // Always projected 12 candles forward ahead of the chart right edge
   if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
     const bullOBs = smcData.orderBlocks
       .filter(ob => ob.type === "bull" && ob.high <= lastPrice)
@@ -1562,7 +1562,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
     for (const ob of activeOBs) {
       const rawX1 = getCandleX(ob.startIdx);
-      const targetEndIdx = ob.endIdx != null ? Math.max(ob.endIdx, candles.length - 1 + 7) : (candles.length - 1 + 7);
+      const targetEndIdx = ob.endIdx != null ? Math.max(ob.endIdx, candles.length - 1 + 12) : (candles.length - 1 + 12);
       const rawX2 = getCandleX(targetEndIdx);
       const x1 = Math.max(0, rawX1);
       const x2 = Math.min(PW, rawX2);
@@ -1593,7 +1593,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   }
 
   // 2. UNFILLED FAIR VALUE GAPS (FVG) - Filter to 2 closest Bull & 2 closest Bear
-  // Always projected 7 candles forward ahead of the chart right edge
+  // Always projected 12 candles forward ahead of the chart right edge
   if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
     const bullFVGs = smcData.fvgs
       .filter(fvg => fvg.type === "bull" && fvg.topPrice <= lastPrice)
@@ -1609,7 +1609,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
     for (const fvg of activeFVGs) {
       const rawX1 = getCandleX(fvg.startIdx);
-      const targetEndIdx = fvg.endIdx != null ? Math.max(fvg.endIdx, candles.length - 1 + 7) : (candles.length - 1 + 7);
+      const targetEndIdx = fvg.endIdx != null ? Math.max(fvg.endIdx, candles.length - 1 + 12) : (candles.length - 1 + 12);
       const rawX2 = getCandleX(targetEndIdx);
       const x1 = Math.max(0, rawX1);
       const x2 = Math.min(PW, rawX2);
