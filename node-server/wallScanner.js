@@ -51,7 +51,7 @@ const WALL_STAT_THRESHOLDS = {
   MX: { minZ: 1.4, minPercentile: 0.78 },
   KC: { minZ: 1.4, minPercentile: 0.78 },
   HT: { minZ: 1.4, minPercentile: 0.78 },
-  BX: { minZ: 2.2, minPercentile: 0.88 },
+  BX: { minZ: 1.5, minPercentile: 0.80 },
 };
 
 function statThresholdsFor(ex) {
@@ -331,8 +331,7 @@ function getMinWallUsdForCoin(coin, ex) {
   else if (vol >= 2000000)   dynamicFloor = 50000;    // $2M+ volume: $50K+ wall
   else dynamicFloor = 25000;
 
-  if (ex === "BX") dynamicFloor = Math.max(dynamicFloor, 75000);
-  if (ex === "BN" || ex === "BB") dynamicFloor = Math.max(dynamicFloor, 35000);
+  if (ex === "BX" || ex === "BN" || ex === "BB") dynamicFloor = Math.max(dynamicFloor, 35000);
 
   return dynamicFloor;
 }
@@ -411,9 +410,6 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       h.scanId = currentScanId;
       h.lastSeen = now;
     }
-
-    // BingX spoof check: require 2 confirmations for small/mid BingX walls to cut fake spoof fences
-    if (ex === "BX" && relSize < 3.8 && h.consecutivePresent < 2) return;
 
     const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
     const wallRank = rankWallByStatistics(relSize, percentile);
