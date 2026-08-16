@@ -1512,8 +1512,11 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
   const lastPrice = candles[candles.length - 1].c;
 
+  // X mapping must match the candle renderer exactly ((idx - viewStart) with
+  // the fractional part). Using floor(viewStart) here made every SMC zone
+  // drift up to a full candle width away from its origin while dragging.
   const getCandleX = (idx) => {
-    return Math.round((idx - s + futureGap) * candleW + candleW / 2);
+    return Math.round((idx - viewStart) * candleW + candleW / 2);
   };
 
   const drawSmcPill = (text, cx, cy, bg, border, textCol) => {
