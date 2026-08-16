@@ -6062,7 +6062,7 @@ function sanitizeCandles(list) {
     if (out.length && out[out.length - 1].t === clean.t) out[out.length - 1] = clean;
     else out.push(clean);
   }
-  return out.slice(-1500);
+  return out.slice(-3000);
 }
 
 let currentLoadedEx = null;
@@ -6071,33 +6071,44 @@ let currentLoadedTf = null;
 
 async function fetchDirectKlines(ex, sym, tf) {
   try {
-    let data, resultCandles = [];
+    let resultCandles = [];
+    const tfMs = TF_MS[tf] || 60000;
+    const now = Date.now();
+
     if (ex === "BN" || ex === "AD") {
       const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
-      const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000`);
-      data = await r.json();
-      if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] })));
+      const [r1, r2] = await Promise.all([
+        fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000`).then(r => r.json()).catch(() => []),
+        fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${now - 1000 * tfMs}`).then(r => r.json()).catch(() => [])
+      ]);
+      const merged = [...(Array.isArray(r2) ? r2 : []), ...(Array.isArray(r1) ? r1 : [])];
+      if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] })));
     } else if (ex === "BB") {
-      const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000`);
-      data = await r.json();
-      if (data.result?.list) resultCandles = sanitizeCandles(data.result.list.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
+      const [r1, r2] = await Promise.all([
+        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000`).then(r => r.json()).catch(() => null),
+        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${now - 1000 * tfMs}`).then(r => r.json()).catch(() => null)
+      ]);
+      const l1 = r1?.result?.list || [];
+      const l2 = r2?.result?.list || [];
+      const merged = [...l2, ...l1];
+      if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "OX") {
       const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TFOK[tf] || "1H"}&limit=300`);
-      data = await r.json();
+      const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[6] || +k[5] })));
     } else if (ex === "BG") {
       const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=1000`);
-      data = await r.json();
+      const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "GT") {
       const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000`);
-      data = await r.json();
+      const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
       const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
       const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
       const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${mxTfMap[tf] || "Min60"}`);
-      data = await r.json();
+      const data = await r.json();
       if (data.data?.time) resultCandles = sanitizeCandles(data.data.time.map((t, i) => {
         const c = +data.data.close[i];
         const v = data.data.amount ? +data.data.amount[i] : (+data.data.vol[i] * c);
@@ -6106,23 +6117,27 @@ async function fetchDirectKlines(ex, sym, tf) {
     } else if (ex === "KC") {
       const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
       const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${kcTfMap[tf] || 60}`);
-      data = await r.json();
+      const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "BX") {
       const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
-      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000`);
-      data = await r.json();
-      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
+      const [r1, r2] = await Promise.all([
+        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000`).then(r => r.json()).catch(() => null),
+        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000&endTime=${now - 1000 * tfMs}`).then(r => r.json()).catch(() => null)
+      ]);
+      const l1 = r1?.data || [];
+      const l2 = r2?.data || [];
+      const merged = [...l2, ...l1];
+      if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
       const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day" };
       const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${htTfMap[tf] || "60min"}&size=1000`);
-      data = await r.json();
+      const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
     } else if (ex === "HL") {
-      const tfMs = TF_MS[tf] || 60000;
-      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (1000 * tfMs), endTime: Date.now() } }) });
-      data = await r.json();
+      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (2000 * tfMs), endTime: Date.now() } }) });
+      const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c })));
     }
     return resultCandles;

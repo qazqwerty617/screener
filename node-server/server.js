@@ -1261,11 +1261,11 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     for (let p = 0; p < maxP; p++) {
       const before = nowTs - (p * limit * tfMs);
       if (fetchEx === "HL") {
-        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 5000, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }))).catch(() => []));
+        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 3500, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }))).catch(() => []));
       } else {
         const url = getKlinesUrl(fetchEx, fetchSym, tf, limit, before);
         if (url) {
-          promises.push(apiFetch(url, 5000, 0).then(data => parseKlines(fetchEx, data)).catch(() => []));
+          promises.push(apiFetch(url, 3500, 0).then(data => parseKlines(fetchEx, data)).catch(() => []));
         }
       }
     }
