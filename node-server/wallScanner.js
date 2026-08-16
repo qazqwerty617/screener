@@ -44,7 +44,7 @@ const WALL_STAT_THRESHOLDS = {
   DEFAULT: { minZ: 1.5, minPercentile: 0.80 },
   BN: { minZ: 1.4, minPercentile: 0.78 },
   BB: { minZ: 1.4, minPercentile: 0.78 },
-  OX: { minZ: 1.4, minPercentile: 0.78 },
+  OX: { minZ: 2.4, minPercentile: 0.90 },
   BG: { minZ: 1.4, minPercentile: 0.78 },
   GT: { minZ: 1.4, minPercentile: 0.78 },
   HL: { minZ: 1.3, minPercentile: 0.75 },
@@ -60,7 +60,7 @@ function statThresholdsFor(ex) {
 
 // Base liquidity limits per exchange
 const EX_LIMITS = {
-  BN: 400000, BB: 300000, OX: 250000, BG: 200000,
+  BN: 400000, BB: 300000, OX: 450000, BG: 200000,
   KC: 150000, BX: 200000, MX: 800000, GT: 150000,
   HT: 800000, HL: 200000, AD: 100000
 };
@@ -400,6 +400,7 @@ function getMinWallUsdForCoin(coin, ex) {
   else dynamicFloor = 25000;
 
   if (ex === "BX") dynamicFloor = Math.max(dynamicFloor, 50000);
+  if (ex === "OX") dynamicFloor = Math.max(dynamicFloor, 60000);
   if (ex === "BN" || ex === "BB") dynamicFloor = Math.max(dynamicFloor, 35000);
 
   return dynamicFloor;
@@ -433,6 +434,7 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     if (Z < th.minZ || percentile < th.minPercentile) return;
 
     if (ex === "BX" && coin.v && coin.v < 250000) return; // filter dead phantom pairs on BingX
+    if (ex === "OX" && coin.v && coin.v < 350000) return; // filter noisy low-volume pairs on OKX
     const minDust = getMinWallUsdForCoin(coin, ex);
     if (bin.usd < minDust) return;
 
@@ -618,9 +620,8 @@ function buildWallSnapshot(allWalls, options = {}) {
 
   clustered.sort((a, b) => b.rtwi - a.rtwi || b.S - a.S);
 
-  // BingX books are saturated with multi-million spoof walls that pass any
-  // statistical band, so its output gets a hard strongest-first cap.
-  const EX_WALL_CAPS = { BX: 20 };
+  // BingX and OKX orderbooks get a hard strongest-first cap to prevent flooding.
+  const EX_WALL_CAPS = { BX: 20, OX: 20 };
   const coinCount = new Map();
   const exCount = new Map();
   const limited = [];

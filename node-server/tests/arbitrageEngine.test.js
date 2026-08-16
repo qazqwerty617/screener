@@ -48,3 +48,27 @@ test("normalizes funding intervals before comparing venues", () => {
   assert.equal(row.shortEx, "HL");
   assert.equal(row.daily, 0.06);
 });
+
+test("filters out zero and dead liquidity pairs (<$5,000)", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["GT:CAT_USDT", { ex: "GT", sym: "CAT_USDT", base: "CAT", p: 0.000321, bid: 0.000320, ask: 0.000321, v: 100, quoteTs: now }],
+    ["HL:CAT", { ex: "HL", sym: "CAT", base: "CAT", p: 0.002321, bid: 0.002320, ask: 0.002321, v: 0, quoteTs: now }],
+  ]);
+  const result = buildRows(map, now);
+  assert.equal(result.spreads.length, 0);
+});
+
+test("auto-normalizes power-of-10 contract multiplier discrepancy", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["BN:1000PEPEUSDT", { ex: "BN", sym: "1000PEPEUSDT", base: "1000PEPE", p: 0.0100, bid: 0.0099, ask: 0.0100, v: 5e6, quoteTs: now }],
+    ["MX:PEPE_USDT", { ex: "MX", sym: "PEPE_USDT", base: "PEPE", p: 0.0000101, bid: 0.0000101, ask: 0.0000102, v: 2e6, quoteTs: now }],
+  ]);
+  const result = buildRows(map, now);
+  assert.equal(result.spreads.length, 1);
+  const row = result.spreads[0];
+  assert.equal(row.base, "PEPE");
+  assert.equal(row.gross > 0, true);
+});
+

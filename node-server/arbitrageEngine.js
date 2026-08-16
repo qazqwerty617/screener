@@ -144,11 +144,15 @@ function quoteFor(ticker, now) {
   const rawMid = finitePositive(ticker.p);
   const rawBid = finitePositive(ticker.bid) || rawMid;
   const rawAsk = finitePositive(ticker.ask) || rawMid;
-  if (!rawMid || !rawBid || !rawAsk || rawAsk < rawBid * 0.95) return null;
+  if (!rawMid || !rawBid || !rawAsk || rawAsk < rawBid * 0.90) return null;
 
   const quoteTs = Number(ticker.quoteTs) || now;
   const ageMs = Math.max(0, now - quoteTs);
-  if (ageMs > 300000) return null; // 5m freshness
+  if (ageMs > 180000) return null; // 3m freshness
+
+  const volume = finitePositive(ticker.v);
+  // Exclude dead phantom markets with zero or sub-$1000 24h volume
+  if (volume < 1000) return null;
 
   const factor = multiplier > 1 ? multiplier : 1;
   const mid = rawMid / factor;
@@ -167,7 +171,7 @@ function quoteFor(ticker, now) {
     bid,
     ask,
     mid,
-    volume: finitePositive(ticker.v),
+    volume,
     oi: finitePositive(ticker.oi),
     funding: Number.isFinite(Number(ticker.funding)) ? Number(ticker.funding) : 0,
     nextFunding: finitePositive(ticker.nextFunding),
@@ -200,6 +204,18 @@ function tradeUrl(ex, sym) {
   return urls[ex] || "#";
 }
 
+// Check if ratio between two prices represents an unhandled power-of-10 contract multiplier
+function detectDynamicMultiplier(pA, pB) {
+  if (pA <= 0 || pB <= 0) return 1;
+  const rawRatio = pA / pB;
+  const candidatePowers = [10, 100, 1000, 10000, 100000, 1000000, 1000000000];
+  for (const pow of candidatePowers) {
+    if (Math.abs(rawRatio - pow) / pow < 0.08) return pow;
+    if (Math.abs(rawRatio - (1 / pow)) / (1 / pow) < 0.08) return 1 / pow;
+  }
+  return 1;
+}
+
 function buildRows(tickers, now = Date.now(), history = null) {
   const groups = new Map();
   const seenObjects = new Set();
@@ -226,31 +242,56 @@ function buildRows(tickers, now = Date.now(), history = null) {
     if (quotes.length < 2) continue;
     for (let i = 0; i < quotes.length; i++) {
       for (let j = i + 1; j < quotes.length; j++) {
-        const a = quotes[i];
-        const b = quotes[j];
+        let a = quotes[i];
+        let b = quotes[j];
+
+        // Auto-detect dynamic multiplier mismatch (e.g. 1000x on one venue)
+        const dynMult = detectDynamicMultiplier(a.mid, b.mid);
+        if (dynMult !== 1) {
+          if (dynMult > 1) {
+            a = { ...a, mid: a.mid / dynMult, bid: a.bid / dynMult, ask: a.ask / dynMult, multiplier: a.multiplier * dynMult };
+          } else {
+            const inv = 1 / dynMult;
+            b = { ...b, mid: b.mid / inv, bid: b.bid / inv, ask: b.ask / inv, multiplier: b.multiplier * inv };
+          }
+        }
+
         const ratio = a.mid / b.mid;
-        if (ratio < 0.4 || ratio > 2.5) continue;
+        // In crypto arbitrage, genuine price ratio between venues for the same asset is tightly bounded
+        if (ratio < 0.70 || ratio > 1.45) continue;
 
         const buy = a.ask <= b.ask ? a : b;
         const sell = a.ask <= b.ask ? b : a;
         if (sell.bid <= 0 || buy.ask <= 0) continue;
+
         const gross = ((sell.bid - buy.ask) / buy.ask) * 100;
-        if (gross < -0.5 || gross > 80) continue;
-        const fee = (EXCHANGES[buy.ex]?.fee || 0.06) + (EXCHANGES[sell.ex]?.fee || 0.06);
+        // Plausible gross spread range: -0.5% to +30% (spreads > 30% are ticker collisions on unverified tokens)
+        if (gross < -0.5 || gross > 30) continue;
+
+        const fee = (EXCHANGES[buy.ex]?.fee || 0.055) + (EXCHANGES[sell.ex]?.fee || 0.055);
         const net = gross - fee;
         const liquidity = Math.min(buy.volume || 0, sell.volume || 0);
+
+        // Require minimum tradable liquidity ($5,000) to eliminate phantom zero-volume rows
+        if (liquidity < 5000) continue;
+
+        // If spread is abnormally high (>10%), require solid liquidity to filter out stale illiquid pairs
+        if (gross > 10 && liquidity < 25000) continue;
+
         const freshness = Math.max(buy.ageMs, sell.ageMs);
         const quality = buy.executable && sell.executable ? "bbo" : "indicative";
 
-        // Score formula balances net yield, real market liquidity, and freshness
-        const logVol = Math.log10(Math.max(1, liquidity));
-        const volBonus = Math.min(25, logVol * 3.8);
-        const score = Math.max(0, Math.min(100,
-          32 + Math.min(50, net * 12) + volBonus - (freshness / 2000) - (quality === "bbo" ? 0 : 12)
+        // Balanced Edge Score (0 - 100)
+        const volBonus = Math.min(25, Math.max(0, Math.log10(liquidity / 1000)) * 6.5);
+        const netBonus = Math.min(45, Math.max(0, net) * 15);
+        const qualBonus = quality === "bbo" ? 10 : 0;
+        const freshPenalty = Math.min(15, (freshness / 1000) * 1.2);
+        const score = Math.max(5, Math.min(99,
+          25 + netBonus + volBonus + qualBonus - freshPenalty
         ));
 
         const rKey = routeKey("spread", base, buy.ex, sell.ex);
-        const histPoints = history ? (history.get(rKey) || []).slice(-25).map(pt => pt[1]) : [];
+        const histPoints = history ? (history.get(rKey) || []).slice(-30).map(pt => pt[1]) : [];
 
         spreads.push({
           key: rKey, base, symbol: `${base}/USDT`,
@@ -267,37 +308,44 @@ function buildRows(tickers, now = Date.now(), history = null) {
           buyUrl: tradeUrl(buy.ex, buy.sym), sellUrl: tradeUrl(sell.ex, sell.sym),
         });
 
+        // Funding rate arbitrage comparison
         const long = a.funding / a.interval <= b.funding / b.interval ? a : b;
         const short = long === a ? b : a;
         const hourlyEdge = short.funding / short.interval - long.funding / long.interval;
         const daily = hourlyEdge * 24;
         const basis = ((short.mid - long.mid) / long.mid) * 100;
-        if (Math.abs(hourlyEdge) <= 2 || Math.abs(basis) <= 40) {
-          const fundingLiquidity = Math.min(long.volume || 0, short.volume || 0);
-          const fundingLogVol = Math.log10(Math.max(1, fundingLiquidity));
-          const fundingScore = Math.max(0, Math.min(100,
-            30 + Math.min(45, daily * 25) + Math.min(25, fundingLogVol * 3.8) - Math.min(15, Math.abs(basis) * 3)
-          ));
-          const fKey = routeKey("funding", base, long.ex, short.ex);
-          const fHistPoints = history ? (history.get(fKey) || []).slice(-25).map(pt => pt[1]) : [];
 
-          funding.push({
-            key: fKey, base, symbol: `${base}/USDT`,
-            longEx: long.ex, longName: EXCHANGES[long.ex].name, longSymbol: long.sym,
-            longFunding: round(long.funding, 6), longInterval: long.interval,
-            longPrice: round(long.rawMid, 8), longMultiplier: long.multiplier,
-            shortEx: short.ex, shortName: EXCHANGES[short.ex].name, shortSymbol: short.sym,
-            shortFunding: round(short.funding, 6), shortInterval: short.interval,
-            shortPrice: round(short.rawMid, 8), shortMultiplier: short.multiplier,
-            hourly: round(hourlyEdge, 6), daily: round(daily, 4), monthly: round(daily * 30, 3), apr: round(daily * 365, 2),
-            basis: round(basis, 4), liquidity: round(fundingLiquidity, 2),
-            openInterest: round(Math.min(long.oi || 0, short.oi || 0), 2),
-            nextFunding: Math.min(long.nextFunding || Infinity, short.nextFunding || Infinity),
-            ageMs: Math.max(long.ageMs, short.ageMs), quality: long.executable && short.executable ? "bbo" : "indicative",
-            score: round(fundingScore, 1),
-            history: fHistPoints,
-            longUrl: tradeUrl(long.ex, long.sym), shortUrl: tradeUrl(short.ex, short.sym),
-          });
+        // Discard absurd basis differences (>15%) which create uncontrollable price risk
+        if (Math.abs(hourlyEdge) <= 1.5 && Math.abs(basis) <= 15) {
+          const fundingLiquidity = Math.min(long.volume || 0, short.volume || 0);
+          if (fundingLiquidity >= 5000) {
+            const fundingVolBonus = Math.min(25, Math.max(0, Math.log10(fundingLiquidity / 1000)) * 6.5);
+            const dailyBonus = Math.min(50, Math.max(0, daily) * 35);
+            const basisPenalty = Math.min(20, Math.abs(basis) * 3.5);
+            const fundingScore = Math.max(5, Math.min(99,
+              25 + dailyBonus + fundingVolBonus + (long.executable && short.executable ? 8 : 0) - basisPenalty
+            ));
+            const fKey = routeKey("funding", base, long.ex, short.ex);
+            const fHistPoints = history ? (history.get(fKey) || []).slice(-30).map(pt => pt[1]) : [];
+
+            funding.push({
+              key: fKey, base, symbol: `${base}/USDT`,
+              longEx: long.ex, longName: EXCHANGES[long.ex].name, longSymbol: long.sym,
+              longFunding: round(long.funding, 6), longInterval: long.interval,
+              longPrice: round(long.rawMid, 8), longMultiplier: long.multiplier,
+              shortEx: short.ex, shortName: EXCHANGES[short.ex].name, shortSymbol: short.sym,
+              shortFunding: round(short.funding, 6), shortInterval: short.interval,
+              shortPrice: round(short.rawMid, 8), shortMultiplier: short.multiplier,
+              hourly: round(hourlyEdge, 6), daily: round(daily, 4), monthly: round(daily * 30, 3), apr: round(daily * 365, 2),
+              basis: round(basis, 4), liquidity: round(fundingLiquidity, 2),
+              openInterest: round(Math.min(long.oi || 0, short.oi || 0), 2),
+              nextFunding: Math.min(long.nextFunding || Infinity, short.nextFunding || Infinity),
+              ageMs: Math.max(long.ageMs, short.ageMs), quality: long.executable && short.executable ? "bbo" : "indicative",
+              score: round(fundingScore, 1),
+              history: fHistPoints,
+              longUrl: tradeUrl(long.ex, long.sym), shortUrl: tradeUrl(short.ex, short.sym),
+            });
+          }
         }
       }
     }
