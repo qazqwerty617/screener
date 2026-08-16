@@ -6074,11 +6074,11 @@ async function fetchDirectKlines(ex, sym, tf) {
     let data, resultCandles = [];
     if (ex === "BN" || ex === "AD") {
       const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
-      const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=300`);
+      const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000`);
       data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] })));
     } else if (ex === "BB") {
-      const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=300`);
+      const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000`);
       data = await r.json();
       if (data.result?.list) resultCandles = sanitizeCandles(data.result.list.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "OX") {
@@ -6086,11 +6086,11 @@ async function fetchDirectKlines(ex, sym, tf) {
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[6] || +k[5] })));
     } else if (ex === "BG") {
-      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=300`);
+      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=1000`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "GT") {
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=300`);
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000`);
       data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
@@ -6111,17 +6111,17 @@ async function fetchDirectKlines(ex, sym, tf) {
     } else if (ex === "BX") {
       const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
-      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=300`);
+      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
       const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day" };
-      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${htTfMap[tf] || "60min"}&size=300`);
+      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${htTfMap[tf] || "60min"}&size=1000`);
       data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
     } else if (ex === "HL") {
       const tfMs = TF_MS[tf] || 60000;
-      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (300 * tfMs), endTime: Date.now() } }) });
+      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (1000 * tfMs), endTime: Date.now() } }) });
       data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c })));
     }
