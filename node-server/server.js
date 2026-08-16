@@ -413,6 +413,20 @@ app.use((_req, res, next) => {
   }
   next();
 });
+
+// Public market-data endpoints opt into CORS only for origins explicitly
+// listed in CORS_ORIGINS (comma-separated). Without the variable browsers
+// stay same-origin, which is all this deployment needs.
+const corsOrigins = String(process.env.CORS_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
+function setPublicCors(req, res) {
+  if (!corsOrigins.length) return;
+  const origin = req.headers.origin;
+  if (origin && corsOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+}
+
 const apiIpLimit = createSlidingWindowLimiter({ windowMs: 60_000, max: 1200, key: req => req.ip });
 const journalSyncLimit = createSlidingWindowLimiter({ windowMs: 60 * 60_000, max: 2000, key: req => req.ip });
 app.use("/api", apiIpLimit);
@@ -1395,7 +1409,7 @@ setInterval(() => {
 const GO_SCANNER_URL = "http://127.0.0.1:8082";
 
 app.get("/api/go-status", async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   try {
     const r = await fetch(`${GO_SCANNER_URL}/api/klines?ex=BN&sym=BTCUSDT&tf=1m&limit=1`);
     if (r.ok) {
@@ -1409,7 +1423,7 @@ app.get("/api/go-status", async (req, res) => {
 });
 
 app.get("/api/go-klines", async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   const { ex = "BN", sym = "BTCUSDT", tf = "1h", limit = "200" } = req.query;
   try {
     const goUrl = `${GO_SCANNER_URL}/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&limit=${limit}`;
@@ -1435,7 +1449,7 @@ function cacheKey(ex, sym, tf, lite) {
 
 app.get("/api/klines", async (req, res) => {
   const { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0" } = req.query;
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   
@@ -1579,7 +1593,7 @@ app.post("/api/backtest/:id/reveal", (req, res) => {
 });
 
 app.get("/api/walls", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
   if (req.query.format === "full" || req.query.format === "object") {
@@ -1590,7 +1604,7 @@ app.get("/api/walls", (req, res) => {
 });
 
 app.get("/api/walls/status", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
   const { walls: _walls, history: _history, ...status } = currentWallsMeta || {};
@@ -1656,7 +1670,7 @@ app.get("/api/arbitrage/depth", async (req, res) => {
 });
 
 app.get("/api/tickers", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
   const flat = [];
@@ -1690,7 +1704,7 @@ app.get("/api/market-data/health", (req, res) => {
 });
 
 app.get("/api/patterns", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   res.setHeader("Cache-Control", "private, max-age=1");
   res.setHeader("Content-Type", "application/json");
 
@@ -2294,7 +2308,7 @@ function sendTextMessage(token, chatId, text, res) {
 }
 
 app.post("/api/notifications/telegram", express.json(), (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   const { chatId, message, botToken } = req.body || {};
   const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
 
@@ -2321,7 +2335,7 @@ app.post("/api/notifications/telegram", express.json(), (req, res) => {
 });
 
 app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   const { chatId, caption, photoDataUrl, botToken } = req.body || {};
   const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
 
@@ -2392,7 +2406,7 @@ registerPaymentRoutes(app, { userStore, paymentGateway });
 // Formation data is consumed by the screener, so this API route must be
 // registered before the SPA catch-all below.
 app.get("/api/formations/map", compression(), (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  setPublicCors(req, res);
   res.setHeader("Cache-Control", "public, max-age=5");
   const tf = String(req.query.tf || "15m");
   const type = String(req.query.type || "cascades");
@@ -2444,6 +2458,17 @@ app.use(express.static(path.join(__dirname, "public"), {
     else res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
   }
 }));
+// Unknown API paths answer with JSON, not the SPA shell.
+app.use("/api", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.status(404).json({ error: "Метод не найден" });
+});
+// Any unhandled error returns a generic message; details stay in the log.
+app.use((err, req, res, next) => {
+  console.error("[UNHANDLED]", req.method, req.originalUrl, err && err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: "Внутренняя ошибка сервера" });
+});
 app.get("*", (req, res) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   res.sendFile(path.join(__dirname, "public", "index.html"));
@@ -2627,7 +2652,7 @@ server.listen(PORT, () => {
   setTimeout(scanAllPatterns, 1500);
 
   app.post("/api/notifications/telegram", express.json(), (req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    setPublicCors(req, res);
     const { chatId, message, botToken } = req.body || {};
     const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
     if (!chatId || !message) return res.status(400).json({ error: "chatId and message are required" });
