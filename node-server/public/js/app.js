@@ -254,11 +254,63 @@ function saveChartDensitySettings() {
       sizes: Array.from(chartDensitySizes),
       exchanges: Array.from(chartDensityExes),
     }));
+function loadActiveIndicators() {
+  try {
+    const raw = localStorage.getItem("crypto_chart_indicators");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch (_) {}
+  return new Set([]);
+}
+
+function saveActiveIndicators() {
+  try {
+    localStorage.setItem("crypto_chart_indicators", JSON.stringify(Array.from(chartActiveIndicators)));
+    if (typeof schedulePreferencesSync === "function") schedulePreferencesSync();
   } catch (_) {}
 }
-let chartActiveIndicators = new Set([]);
-let chartActiveFormations = new Set([]);
-let chartActiveSmc = new Set([]);
+
+function loadActiveSmc() {
+  try {
+    const raw = localStorage.getItem("crypto_chart_smc");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch (_) {}
+  return new Set([]);
+}
+
+function saveActiveSmc() {
+  try {
+    localStorage.setItem("crypto_chart_smc", JSON.stringify(Array.from(chartActiveSmc)));
+    if (typeof schedulePreferencesSync === "function") schedulePreferencesSync();
+  } catch (_) {}
+}
+
+function loadActiveFormations() {
+  try {
+    const raw = localStorage.getItem("crypto_chart_formations");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch (_) {}
+  return new Set([]);
+}
+
+function saveActiveFormations() {
+  try {
+    localStorage.setItem("crypto_chart_formations", JSON.stringify(Array.from(chartActiveFormations)));
+    if (typeof schedulePreferencesSync === "function") schedulePreferencesSync();
+  } catch (_) {}
+}
+
+let chartActiveIndicators = loadActiveIndicators();
+let chartActiveFormations = loadActiveFormations();
+let chartActiveSmc = loadActiveSmc();
 // ═══ Formations Overlay on Main Chart ═══
 let chartFormationsOnChart = false;          // master switch (OFF by default)
 let chartFovTypes = new Set(["cascades"]);   // first enable always produces a visible result
@@ -581,6 +633,161 @@ let toolColors = (() => {
   }
 })();
 let pendingToolClick = null;
+
+function getSymbolsWithDrawings() {
+  try {
+    const raw = localStorage.getItem("crypto_symbols_with_drawings");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr);
+    }
+  } catch (_) {}
+  return new Set();
+}
+
+function trackSymbolWithDrawings(sym, hasDrawings) {
+  if (!sym) return;
+  try {
+    const set = getSymbolsWithDrawings();
+    if (hasDrawings) set.add(sym);
+    else set.delete(sym);
+    localStorage.setItem("crypto_symbols_with_drawings", JSON.stringify(Array.from(set)));
+  } catch (_) {}
+}
+
+function getAllDrawingsBySymbol() {
+  const map = {};
+  const symbols = getSymbolsWithDrawings();
+  if (activeSym) symbols.add(activeSym);
+  for (const sym of symbols) {
+    try {
+      const raw = localStorage.getItem("crypto_drawings_" + sym);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          map[sym] = parsed;
+        }
+      }
+    } catch (_) {}
+  }
+  return map;
+}
+
+let preferencesSyncTimer = null;
+function schedulePreferencesSync() {
+  const token = (typeof authToken === "string" && authToken) ? authToken : (localStorage.getItem("obsidian_auth_token") || "");
+  if (!token) return;
+  if (preferencesSyncTimer) clearTimeout(preferencesSyncTimer);
+  preferencesSyncTimer = setTimeout(syncPreferencesToServer, 800);
+}
+
+async function syncPreferencesToServer() {
+  const token = (typeof authToken === "string" && authToken) ? authToken : (localStorage.getItem("obsidian_auth_token") || "");
+  if (!token) return;
+  try {
+    const payload = {
+      activeIndicators: Array.from(chartActiveIndicators),
+      activeSmc: Array.from(chartActiveSmc),
+      activeFormations: Array.from(chartActiveFormations),
+      drawingsBySymbol: getAllDrawingsBySymbol(),
+      toolColors: typeof toolColors !== "undefined" ? toolColors : undefined,
+      candleSettings: typeof window.candleSettings !== "undefined" ? window.candleSettings : undefined,
+      volumeSettings: typeof window.volumeSettings !== "undefined" ? window.volumeSettings : undefined,
+      chartDensitySettings: {
+        enabled: chartDensityEnabled,
+        side: chartDensitySide,
+        market: chartDensityMarket,
+        sizes: Array.from(chartDensitySizes),
+        exchanges: Array.from(chartDensityExes),
+      },
+      fovSettings: {
+        enabled: chartFormationsOnChart,
+        types: Array.from(chartFovTypes),
+        cascadesMin: chartFovCascadesMin,
+        breakoutMin: chartFovBreakoutMin,
+        trendlineMin: chartFovTrendlineMin,
+        retestApproaching: chartFovRetestApproaching,
+        nearest: chartFovNearest,
+        showLabels: chartFovShowLabels,
+        showTouches: chartFovShowTouches
+      }
+    };
+
+    await fetch("/api/user/preferences", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({ preferences: payload })
+    });
+  } catch (err) {
+    console.warn("[Prefs] Sync error:", err);
+  }
+}
+
+function applyAccountPreferences(prefs) {
+  if (!prefs || typeof prefs !== "object") return;
+
+  let needChartRedraw = false;
+
+  if (Array.isArray(prefs.activeIndicators)) {
+    chartActiveIndicators = new Set(prefs.activeIndicators);
+    localStorage.setItem("crypto_chart_indicators", JSON.stringify(prefs.activeIndicators));
+    needChartRedraw = true;
+  }
+
+  if (Array.isArray(prefs.activeSmc)) {
+    chartActiveSmc = new Set(prefs.activeSmc);
+    localStorage.setItem("crypto_chart_smc", JSON.stringify(prefs.activeSmc));
+    needChartRedraw = true;
+  }
+
+  if (Array.isArray(prefs.activeFormations)) {
+    chartActiveFormations = new Set(prefs.activeFormations);
+    localStorage.setItem("crypto_chart_formations", JSON.stringify(prefs.activeFormations));
+    needChartRedraw = true;
+  }
+
+  if (prefs.drawingsBySymbol && typeof prefs.drawingsBySymbol === "object") {
+    for (const [sym, drawings] of Object.entries(prefs.drawingsBySymbol)) {
+      if (Array.isArray(drawings) && drawings.length > 0) {
+        localStorage.setItem("crypto_drawings_" + sym, JSON.stringify(drawings));
+        trackSymbolWithDrawings(sym, true);
+      }
+    }
+    loadDrawings();
+    needChartRedraw = true;
+  }
+
+  if (prefs.toolColors && typeof prefs.toolColors === "object") {
+    toolColors = { ...DEFAULT_TOOL_COLORS, ...prefs.toolColors };
+    localStorage.setItem("crypto_tool_colors", JSON.stringify(toolColors));
+    if (typeof applyToolButtonColors === "function") applyToolButtonColors();
+  }
+
+  if (prefs.candleSettings && typeof prefs.candleSettings === "object") {
+    if (window.candleSettings) Object.assign(window.candleSettings, prefs.candleSettings);
+    localStorage.setItem("screener-candle-settings", JSON.stringify(prefs.candleSettings));
+  }
+  if (prefs.volumeSettings && typeof prefs.volumeSettings === "object") {
+    if (window.volumeSettings) Object.assign(window.volumeSettings, prefs.volumeSettings);
+    localStorage.setItem("screener-volume-settings", JSON.stringify(prefs.volumeSettings));
+  }
+
+  if (typeof syncIndicatorButtonsUI === "function") {
+    syncIndicatorButtonsUI();
+  }
+
+  if (needChartRedraw) {
+    if (typeof requestDraw === "function") requestDraw();
+    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+  }
+}
+
+window.applyAccountPreferences = applyAccountPreferences;
+window.syncPreferencesToServer = syncPreferencesToServer;
+
 const loadDrawings = () => {
   try {
     chartDrawings = JSON.parse(
@@ -593,16 +800,24 @@ const loadDrawings = () => {
   }
 };
 const saveDrawings = () => {
-  localStorage.setItem(
-    "crypto_drawings_" + activeSym,
-    JSON.stringify(chartDrawings),
-  );
+  if (chartDrawings.length > 0) {
+    localStorage.setItem(
+      "crypto_drawings_" + activeSym,
+      JSON.stringify(chartDrawings),
+    );
+    trackSymbolWithDrawings(activeSym, true);
+  } else {
+    localStorage.removeItem("crypto_drawings_" + activeSym);
+    trackSymbolWithDrawings(activeSym, false);
+  }
   if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
     chartInstances.forEach(inst => { if (inst && inst.sym === activeSym) inst.draw(true); });
   }
+  schedulePreferencesSync();
 };
 const saveToolColors = () => {
   localStorage.setItem("crypto_tool_colors", JSON.stringify(toolColors));
+  schedulePreferencesSync();
 };
 
 // Y-axis: price-unit view range (null = auto-fit)
@@ -4820,6 +5035,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const token = localStorage.getItem("obsidian_auth_token") || "";
         user.notifications.forEach(n => processNotificationItem(n, token));
       }
+
+      if (user.preferences && typeof user.preferences === "object") {
+        applyAccountPreferences(user.preferences);
+      } else if (authToken || localStorage.getItem("obsidian_auth_token")) {
+        syncPreferencesToServer();
+      }
     }
   }
 
@@ -6763,20 +6984,21 @@ const smcIdToName = {
   "smc-bos": "bos",
   "smc-eqh": "eqh"
 };
+function syncIndicatorButtonsUI() {
+  document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
+    const indicatorName = indicatorIdToName[btn.id];
+    const formationName = formationIdToName[btn.id];
+    const smcName = smcIdToName[btn.id];
+    let isActive = false;
+    if (indicatorName && chartActiveIndicators.has(indicatorName)) isActive = true;
+    if (formationName && chartActiveFormations.has(formationName)) isActive = true;
+    if (smcName && chartActiveSmc.has(smcName)) isActive = true;
+    btn.classList.toggle("on", isActive);
+  });
+}
+window.syncIndicatorButtonsUI = syncIndicatorButtonsUI;
+
 document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
-  // Initialize button state based on chartActiveIndicators & chartActiveFormations & chartActiveSmc
-  const indicatorName = indicatorIdToName[btn.id];
-  const formationName = formationIdToName[btn.id];
-  const smcName = smcIdToName[btn.id];
-  if (indicatorName && chartActiveIndicators.has(indicatorName)) {
-    btn.classList.add("on");
-  }
-  if (formationName && chartActiveFormations.has(formationName)) {
-    btn.classList.add("on");
-  }
-  if (smcName && chartActiveSmc.has(smcName)) {
-    btn.classList.add("on");
-  }
   btn.onclick = () => {
     btn.classList.toggle("on");
     const indName = indicatorIdToName[btn.id];
@@ -6788,6 +7010,7 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
       } else {
         chartActiveIndicators.delete(indName);
       }
+      saveActiveIndicators();
     }
     if (smcName) {
       if (btn.classList.contains("on")) {
@@ -6795,6 +7018,7 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
       } else {
         chartActiveSmc.delete(smcName);
       }
+      saveActiveSmc();
     }
     if (fmtName) {
       if (btn.classList.contains("on")) {
@@ -6802,6 +7026,7 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
       } else {
         chartActiveFormations.delete(fmtName);
       }
+      saveActiveFormations();
       // Sync left panel button if present
       const leftBtn = $(`fmt-left-${fmtName}`);
       if (leftBtn) {
@@ -6821,10 +7046,12 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
   };
   btn.onmouseleave = () => {
     if (indInfoBox) {
-      indInfoBox.textContent = "Наведите   индикатор, чтобы прочитать   описание.";
+      indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
     }
   };
 });
+
+syncIndicatorButtonsUI();
 
 // Touches filter buttons inside main settings panel
 document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
@@ -10670,6 +10897,7 @@ window.addEventListener("resize", () => {
   loadTags();
   loadDrawings();
   loadDensityFilters();
+  if (typeof syncIndicatorButtonsUI === "function") syncIndicatorButtonsUI();
   fetchWalls();
 
   // Safety timeout: hide loading after 8s if still visible

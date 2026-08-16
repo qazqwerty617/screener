@@ -932,6 +932,29 @@ function markNotificationRead(userIdOrQuery, notifId) {
   return false;
 }
 
+function getUserPreferences(userIdOrQuery) {
+  let target = findUser(userIdOrQuery);
+  if (!target) return null;
+  return target.preferences || {};
+}
+
+function updateUserPreferences(userIdOrQuery, prefs) {
+  let target = findUser(userIdOrQuery);
+  if (!target) return null;
+  if (!target.preferences || typeof target.preferences !== "object") {
+    target.preferences = {};
+  }
+  if (prefs && typeof prefs === "object") {
+    target.preferences = {
+      ...target.preferences,
+      ...prefs,
+      updatedAt: new Date().toISOString()
+    };
+    saveJSON(USERS_FILE, users);
+  }
+  return target.preferences;
+}
+
 module.exports = {
   registerUser,
   loginUser,
@@ -961,5 +984,7 @@ module.exports = {
   touchUserActivity,
   getAllUsersRaw,
   addNotificationToUser,
-  markNotificationRead
+  markNotificationRead,
+  getUserPreferences,
+  updateUserPreferences
 };

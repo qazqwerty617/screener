@@ -2268,6 +2268,32 @@ app.post("/api/auth/update-profile", (req, res) => {
   }
 });
 
+app.get("/api/user/preferences", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  const preferences = userStore.getUserPreferences(user.id) || {};
+  res.json({ success: true, preferences });
+});
+
+app.post("/api/user/preferences", express.json({ limit: "5mb" }), (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  const { preferences } = req.body || {};
+  if (!preferences || typeof preferences !== "object") {
+    return res.status(400).json({ error: "Некорректные параметры preferences" });
+  }
+  const updated = userStore.updateUserPreferences(user.id, preferences);
+  res.json({ success: true, preferences: updated });
+});
+
 app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
   const { userId, plan } = req.body || {};
   if (!userId || !plan) {
