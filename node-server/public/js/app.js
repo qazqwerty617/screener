@@ -9811,14 +9811,6 @@ function drawDensityMap() {
       tipRows.push(["ПОДТВЕРЖДЕНИЙ", `${d.confirmations} скан.`, "#a78bfa"]);
     }
 
-    const wallRank = Number(d.rank) || 0;
-    if (wallRank > 0) {
-      tipRows.push(["СИЛА (РАНГ)", `${wallRank}/10`, wallRank >= 7 ? "#ff6b81" : wallRank >= 5 ? "#fbbf24" : "#9ca3af"]);
-    }
-    if (d.count > 1) {
-      tipRows.push(["КЛАСТЕР", `${d.count} ур.`, "#a78bfa"]);
-    }
-
     // тФАтФА Tooltip
     // Math to get tip width (adaptive on mobile)
     const tipW = Math.min(230, densityW - 20);
