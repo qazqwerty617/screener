@@ -3078,7 +3078,7 @@ function drawChart() {
     });
   }
 
-  // Draw Volume (TradingView 1-to-1 Standard)
+  // Draw Volume (Clean Histogram, Project Colors, Robust Scaling)
   const volumeYStart = indicatorsHeight;
   vCtx.save();
   vCtx.beginPath();
@@ -3090,26 +3090,21 @@ function drawChart() {
   vCtx.fillRect(0, volumeYStart, PW, volumeHeight);
 
   // Subtle top border divider
-  vCtx.strokeStyle = "rgba(255, 255, 255, 0.07)";
+  vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
   vCtx.lineWidth = 1;
   vCtx.beginPath();
   vCtx.moveTo(0, volumeYStart);
   vCtx.lineTo(PW, volumeYStart);
   vCtx.stroke();
 
-  // Calculate Volume Moving Average (SMA 20)
-  const volSmaArray = calcVolumeSMA(candles, 20);
-
   if (vis.length > 0) {
     const renderVols = vis.map(c => (Number.isFinite(c.v) && c.v > 0) ? c.v : 0);
     const validVols = renderVols.filter(v => v > 0);
-    const validSmas = vis.map((_, i) => (volSmaArray && volSmaArray[s + i] > 0) ? volSmaArray[s + i] : 0).filter(v => v > 0);
 
     if (validVols.length > 0) {
-      // Robust outlier-resistant max calculation (TradingView style)
-      const rawMaxV = Math.max(...validVols, ...validSmas, 1);
+      const rawMaxV = Math.max(...validVols, 1);
 
-      // Calculate 95th percentile to prevent single huge spikes from flattening regular bars
+      // 95th percentile clamp to prevent single huge spikes from flattening regular bars
       let effectiveMaxV = rawMaxV;
       if (validVols.length >= 8) {
         const sorted = [...validVols].sort((a, b) => a - b);
@@ -3119,12 +3114,9 @@ function drawChart() {
         }
       }
 
-      // 15% top headroom so highest bars don't touch the top border line
-      const scaleCeiling = effectiveMaxV * 1.15;
-      const usableHeight = volumeHeight - 12;
-
-      // 1. Draw Volume Bars (TradingView palette: semi-transparent bodies with crisp tops)
-      const barW = Math.max(1, candleW > 4 ? candleW - 2 : Math.max(1, candleW - 0.6));
+      const scaleCeiling = effectiveMaxV * 1.12;
+      const usableHeight = volumeHeight - 8;
+      const volW = Math.max(1, candleW > 3 ? candleW - 2 : candleW);
 
       for (let i = 0; i < vis.length; i++) {
         const c = vis[i];
@@ -3134,82 +3126,13 @@ function drawChart() {
         const x = (s + i - viewStart) * candleW + candleW / 2;
         const up = c.c >= c.o;
         const vRatio = Math.min(1.0, val / scaleCeiling);
-        const vh = Math.max(1.5, vRatio * usableHeight);
-        const barX = Math.round(x - barW / 2);
+        const vh = Math.max(2, vRatio * usableHeight);
+        const barX = Math.round(x - volW / 2);
         const barY = Math.round(volumeYStart + volumeHeight - vh);
 
-        // TradingView colors: Up = Emerald Green, Down = Crimson Red
-        vCtx.fillStyle = up ? "rgba(38, 166, 154, 0.52)" : "rgba(239, 83, 80, 0.52)";
-        vCtx.fillRect(barX, barY, barW, vh);
-
-        // Crisp border outline on top when candle width is wide enough
-        if (candleW >= 5) {
-          vCtx.fillStyle = up ? "rgba(38, 166, 154, 0.85)" : "rgba(239, 83, 80, 0.85)";
-          vCtx.fillRect(barX, barY, barW, 1);
-        }
+        vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+        vCtx.fillRect(barX, barY, volW, vh);
       }
-
-      // 2. Draw Volume MA (SMA 20) Line (TradingView Blue Line)
-      if (volSmaArray && volSmaArray.length > 0) {
-        vCtx.beginPath();
-        vCtx.strokeStyle = "rgba(41, 98, 255, 0.88)"; // #2962ff
-        vCtx.lineWidth = 1.5;
-        let started = false;
-
-        for (let i = 0; i < vis.length; i++) {
-          const smaVal = volSmaArray[s + i];
-          if (smaVal == null || !Number.isFinite(smaVal) || smaVal <= 0) continue;
-
-          const x = (s + i - viewStart) * candleW + candleW / 2;
-          const smaRatio = Math.min(1.0, smaVal / scaleCeiling);
-          const smaY = volumeYStart + volumeHeight - (smaRatio * usableHeight);
-
-          if (!started) {
-            vCtx.moveTo(x, smaY);
-            started = true;
-          } else {
-            vCtx.lineTo(x, smaY);
-          }
-        }
-        if (started) vCtx.stroke();
-      }
-
-      // 3. TradingView Volume Legend in Top-Left of volume pane
-      const hoverIndex = (mX >= 0 && mX < PW) ? clamp(Math.round((mX - candleW / 2) / candleW + viewStart), 0, candles.length - 1) : (candles.length - 1);
-      const activeCandle = candles[hoverIndex] || candles[candles.length - 1];
-      const activeVol = activeCandle ? (activeCandle.v || 0) : 0;
-      const activeSma = (volSmaArray && hoverIndex >= 0) ? (volSmaArray[hoverIndex] || 0) : 0;
-      const isUp = activeCandle ? (activeCandle.c >= activeCandle.o) : true;
-
-      vCtx.font = "bold 10px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
-      vCtx.textBaseline = "top";
-      vCtx.textAlign = "left";
-
-      // Title: "Объем 20"
-      vCtx.fillStyle = "rgba(255, 255, 255, 0.45)";
-      vCtx.fillText("Объем 20", 10, volumeYStart + 6);
-
-      const titleWidth = vCtx.measureText("Объем 20").width;
-      let currX = 10 + titleWidth + 8;
-
-      // Vol value: e.g. "1.24M" in green/red
-      vCtx.fillStyle = isUp ? "#26a69a" : "#ef5350";
-      const volText = fV(activeVol);
-      vCtx.fillText(volText, currX, volumeYStart + 6);
-
-      currX += vCtx.measureText(volText).width + 8;
-
-      // MA value: e.g. "1.10M" in blue
-      if (activeSma > 0) {
-        vCtx.fillStyle = "#2962ff";
-        vCtx.fillText(fV(activeSma), currX, volumeYStart + 6);
-      }
-
-      // Top right scale watermark indicator
-      vCtx.textAlign = "right";
-      vCtx.fillStyle = "rgba(255, 255, 255, 0.25)";
-      vCtx.font = "9px Inter, sans-serif";
-      vCtx.fillText(fV(rawMaxV), PW - 6, volumeYStart + 6);
     }
   }
   vCtx.restore();
@@ -9051,9 +8974,8 @@ class ChartInstance {
       gridPrice += gridStep;
     }
 
-    // TradingView Volume Histogram Overlay on multi-chart grid cell
-    const cellVolH = Math.min(42, Math.round(PH * 0.22));
-    const volSma = calcVolumeSMA(this.candles, 20);
+    // Volume Histogram Overlay on multi-chart grid cell (Project Colors, No Lines)
+    const cellVolH = Math.min(38, Math.round(PH * 0.22));
 
     if (vis.length > 0) {
       const renderVols = vis.map(c => (Number.isFinite(c.v) && c.v > 0) ? c.v : 0);
@@ -9066,9 +8988,9 @@ class ChartInstance {
           const p95 = sorted[Math.floor(sorted.length * 0.95)] || rawMaxV;
           if (rawMaxV > p95 * 3.5 && p95 > 0) effectiveMaxV = p95 * 2.2;
         }
-        const scaleCeiling = effectiveMaxV * 1.15;
+        const scaleCeiling = effectiveMaxV * 1.12;
         const usableH = cellVolH - 4;
-        const barW = Math.max(1, candleWidth > 4 ? candleWidth - 2 : Math.max(1, candleWidth - 0.6));
+        const barW = Math.max(1, candleWidth > 3 ? candleWidth - 2 : candleWidth);
 
         for (let i = 0; i < vis.length; i++) {
           const c = vis[i];
@@ -9078,35 +9000,12 @@ class ChartInstance {
           if (x > PW + candleWidth) continue;
           const up = c.c >= c.o;
           const vRatio = Math.min(1.0, val / scaleCeiling);
-          const vh = Math.max(1, vRatio * usableH);
+          const vh = Math.max(1.5, vRatio * usableH);
           const barX = Math.round(x - barW / 2);
           const barY = Math.round(PH - vh);
 
-          ctx.fillStyle = up ? "rgba(38, 166, 154, 0.38)" : "rgba(239, 83, 80, 0.38)";
+          ctx.fillStyle = up ? "rgba(38, 201, 122, 0.45)" : "rgba(255, 69, 96, 0.45)";
           ctx.fillRect(barX, barY, barW, vh);
-        }
-
-        // Draw Volume SMA Line
-        if (volSma && volSma.length > 0) {
-          ctx.beginPath();
-          ctx.strokeStyle = "rgba(41, 98, 255, 0.7)";
-          ctx.lineWidth = 1.2;
-          let started = false;
-          for (let i = 0; i < vis.length; i++) {
-            const smaVal = volSma[s + i];
-            if (smaVal == null || !Number.isFinite(smaVal) || smaVal <= 0) continue;
-            const x = (s + i - viewStart) * candleWidth + candleWidth / 2;
-            if (x > PW + candleWidth) continue;
-            const smaRatio = Math.min(1.0, smaVal / scaleCeiling);
-            const smaY = PH - (smaRatio * usableH);
-            if (!started) {
-              ctx.moveTo(x, smaY);
-              started = true;
-            } else {
-              ctx.lineTo(x, smaY);
-            }
-          }
-          if (started) ctx.stroke();
         }
       }
     }
