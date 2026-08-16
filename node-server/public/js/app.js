@@ -10509,6 +10509,15 @@ window.addEventListener("resize", () => {
   const customGridBtn = $("custom-grid-select-btn");
   const customGridMenu = $("custom-grid-select-menu");
   if (customGridBtn && customGridMenu) {
+    const positionGridMenu = () => {
+      // #ctbar is a horizontal scroll container, so any dropdown dropping
+      // below it gets clipped (overflow-y:visible is forced to auto). Pin the
+      // menu to the viewport at the button's coordinates to escape clipping.
+      const r = customGridBtn.getBoundingClientRect();
+      customGridMenu.style.position = "fixed";
+      customGridMenu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 150)) + "px";
+      customGridMenu.style.top = Math.min(r.bottom + 4, window.innerHeight - 280) + "px";
+    };
     customGridBtn.onclick = (e) => {
       e.stopPropagation();
       const open = customGridMenu.classList.contains("open");
@@ -10516,6 +10525,7 @@ window.addEventListener("resize", () => {
         customGridMenu.classList.remove("open");
         customGridBtn.classList.remove("open");
       } else {
+        positionGridMenu();
         customGridMenu.classList.add("open");
         customGridBtn.classList.add("open");
       }
