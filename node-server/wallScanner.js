@@ -22,8 +22,8 @@ const COIN_DELAY_MS = 5;
 // A scan cycle processes a bounded batch per exchange.  The batch contains the
 // most liquid markets plus a rotating window through every remaining symbol,
 // so coverage is complete without creating a rate-limit storm.
-const DEFAULT_SCAN_BATCH_PER_EX = 240;
-const DEFAULT_PRIORITY_SYMBOLS = 20;
+const DEFAULT_SCAN_BATCH_PER_EX = 360;
+const DEFAULT_PRIORITY_SYMBOLS = 30;
 const DEFAULT_SYMBOL_CACHE_TTL_MS = 45 * 60 * 1000;
 const DEFAULT_HISTORY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_HISTORY_LIMIT = 5000;
@@ -34,22 +34,24 @@ const Z_THRESHOLD = 3.5;   // mathematical Z-score (X - µ)/σ > 3.5
 const MIN_DIST_PCT = 0.05;
 const MAX_DIST_PCT = 5.0;
 
-const MAX_OUTPUT = 450;
-const MAX_PER_COIN = 5;
+const MAX_OUTPUT = 600;
+const MAX_PER_COIN = 6;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 
-// Per-exchange statistical admission bands. Most books run balanced bands so
-// authentic walls across all venues surface; BingX thin books stay strict to cut bot noise.
+// Per-exchange statistical admission bands calibrated for rich coverage
 const WALL_STAT_THRESHOLDS = {
-  DEFAULT: { minZ: 2.0, minPercentile: 0.88 },
-  BN: { minZ: 1.8, minPercentile: 0.85 },
-  BB: { minZ: 1.8, minPercentile: 0.85 },
-  OX: { minZ: 1.8, minPercentile: 0.85 },
-  BG: { minZ: 1.8, minPercentile: 0.85 },
-  GT: { minZ: 1.8, minPercentile: 0.85 },
-  HL: { minZ: 1.6, minPercentile: 0.82 },
-  BX: { minZ: 2.8, minPercentile: 0.92 },
+  DEFAULT: { minZ: 1.5, minPercentile: 0.80 },
+  BN: { minZ: 1.4, minPercentile: 0.78 },
+  BB: { minZ: 1.4, minPercentile: 0.78 },
+  OX: { minZ: 1.4, minPercentile: 0.78 },
+  BG: { minZ: 1.4, minPercentile: 0.78 },
+  GT: { minZ: 1.4, minPercentile: 0.78 },
+  HL: { minZ: 1.3, minPercentile: 0.75 },
+  MX: { minZ: 1.4, minPercentile: 0.78 },
+  KC: { minZ: 1.4, minPercentile: 0.78 },
+  HT: { minZ: 1.4, minPercentile: 0.78 },
+  BX: { minZ: 2.2, minPercentile: 0.88 },
 };
 
 function statThresholdsFor(ex) {
@@ -58,15 +60,15 @@ function statThresholdsFor(ex) {
 
 // Base liquidity limits per exchange
 const EX_LIMITS = {
-  BN: 600000, BB: 400000, OX: 300000, BG: 250000,
-  KC: 200000, BX: 250000, MX: 1200000, GT: 200000,
-  HT: 1200000, HL: 300000, AD: 150000
+  BN: 400000, BB: 300000, OX: 250000, BG: 200000,
+  KC: 150000, BX: 200000, MX: 800000, GT: 150000,
+  HT: 800000, HL: 200000, AD: 100000
 };
 
 const OB_DEPTH = {
-  BN: 100, BB: 500, OX: 400, BG: 150,
-  GT: 100, MX: 500, KC: 100, BX: 100,
-  HT: 150, HL: 50, AD: 100,
+  BN: 200, BB: 500, OX: 400, BG: 200,
+  GT: 200, MX: 500, KC: 200, BX: 200,
+  HT: 200, HL: 100, AD: 200,
 };
 
 const EXCLUDED_BASES = new Set([
@@ -340,16 +342,16 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     const th = statThresholdsFor(ex);
     if (Z < th.minZ || percentile < th.minPercentile) return;
 
-    let minDust = 25000;
-    if (ex === "BN" || ex === "BB") minDust = 40000;
-    if (ex === "BX") minDust = 75000;
-    if (ex === "HL") minDust = 20000;
+    let minDust = 20000;
+    if (ex === "BN" || ex === "BB") minDust = 30000;
+    if (ex === "BX") minDust = 50000;
+    if (ex === "HL" || ex === "KC" || ex === "AD") minDust = 15000;
 
     if (coin.v && coin.v > 0) {
-      if (ex === "BX" && coin.v < 200000) return; // filter dead phantom pairs on BingX
+      if (ex === "BX" && coin.v < 150000) return; // filter dead phantom pairs on BingX
       const volReq = ex === "BX"
-        ? Math.min(2000000, coin.v * 0.003)
-        : Math.min(2000000, coin.v * 0.0003);
+        ? Math.min(2000000, coin.v * 0.002)
+        : Math.min(2000000, coin.v * 0.0002);
       minDust = Math.max(minDust, volReq);
     }
 
@@ -542,7 +544,7 @@ function buildWallSnapshot(allWalls, options = {}) {
 
   // BingX books are saturated with multi-million spoof walls that pass any
   // statistical band, so its output gets a hard strongest-first cap.
-  const EX_WALL_CAPS = { BX: 15 };
+  const EX_WALL_CAPS = { BX: 35 };
   const coinCount = new Map();
   const exCount = new Map();
   const limited = [];
