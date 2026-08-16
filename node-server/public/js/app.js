@@ -2893,21 +2893,22 @@ function drawChart() {
   function drawPriceTagOnScale(p, color, isHovered) {
     const y = getY(p);
     if (y < TOP || y > TOP + PH) return;
-    const tH = 20,
-      tW = PR - 8,
-      tX = PW + 4,
+    const tH = 24,
+      tW = PR - 4,
+      tX = PW + 2,
       tY = y - tH / 2;
     ctx.save();
-    roundRect(ctx, tX, tY, tW, tH, 4);
-    ctx.fillStyle = "#1e1f2e";
+    roundRect(ctx, tX, tY, tW, tH, 5);
+    ctx.fillStyle = color;
     ctx.fill();
     ctx.strokeStyle = color;
     ctx.lineWidth = isHovered ? 2 : 1;
     ctx.stroke();
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 10px Inter";
+    ctx.fillStyle = "#0b0d12";
+    ctx.font = "bold 12px Inter";
     ctx.textAlign = "center";
-    ctx.fillText(fP(p), PW + PR / 2, y + 4);
+    ctx.textBaseline = "middle";
+    ctx.fillText(fP(p), PW + PR / 2, y + 1);
     ctx.restore();
   }
 
@@ -3089,11 +3090,12 @@ function drawChart() {
         const text1 = pctSign + pct.toFixed(2) + "% (" + priceSign + fP(deltaPrice) + ")";
         const text2 = timeStr ? (bars + " свечей, " + timeStr) : (bars + " свечей");
 
-        ctx.font = "bold 10px Inter";
+        ctx.font = "bold 13px Inter";
         const w1 = ctx.measureText(text1).width;
+        ctx.font = "12px Inter";
         const w2 = ctx.measureText(text2).width;
-        const boxW = Math.max(w1, w2) + 18;
-        const boxH = 36;
+        const boxW = Math.max(w1, w2) + 24;
+        const boxH = 46;
         const midX = (x1 + x2) / 2;
         const midY = (y1 + y2) / 2;
         const boxX = Math.max(4, Math.min(midX - boxW / 2, PW - boxW - 4));
@@ -3122,13 +3124,13 @@ function drawChart() {
         ctx.fillStyle = isBull ? "#26c97a" : "#ff4560";
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.font = "bold 10px Inter";
-        ctx.fillText(text1, boxX + boxW / 2, boxY + 6);
+        ctx.font = "bold 13px Inter";
+        ctx.fillText(text1, boxX + boxW / 2, boxY + 7);
 
         // Text line 2 (bars and time)
         ctx.fillStyle = "#ffffff";
-        ctx.font = "10px Inter";
-        ctx.fillText(text2, boxX + boxW / 2, boxY + 20);
+        ctx.font = "12px Inter";
+        ctx.fillText(text2, boxX + boxW / 2, boxY + 26);
       } catch (err) {
         console.error("Ruler error:", err);
       }
