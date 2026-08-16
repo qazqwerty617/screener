@@ -254,6 +254,9 @@ function saveChartDensitySettings() {
       sizes: Array.from(chartDensitySizes),
       exchanges: Array.from(chartDensityExes),
     }));
+  } catch (_) {}
+}
+
 function loadActiveIndicators() {
   try {
     const raw = localStorage.getItem("crypto_chart_indicators");
@@ -1067,22 +1070,26 @@ window.onerror = (m, s, l, c, e) => {
 const $ = (id) => document.getElementById(id);
 
 const fP = (n) => {
-  if (!n || isNaN(n)) return "тАУ";
-  if (n >= 1000) {
-    return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n === 0) return "0.00";
+  if (n == null || isNaN(n)) return "–";
+  const absN = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+
+  if (absN >= 1000) {
+    return sign + absN.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
-  // Dynamic precision based on value to avoid huge jumps
+  // Dynamic precision based on absolute value to avoid huge jumps and clean negative diffs
   let p = 2;
-  if (n < 0.00001) p = 9;
-  else if (n < 0.001) p = 7;
-  else if (n < 0.1) p = 6;
-  else if (n < 1) p = 5;
-  else if (n < 10) p = 4;
-  else if (n < 100) p = 3;
+  if (absN < 0.00001) p = 8;
+  else if (absN < 0.001) p = 7;
+  else if (absN < 0.1) p = 6;
+  else if (absN < 1) p = 5;
+  else if (absN < 10) p = 4;
+  else if (absN < 100) p = 3;
+  else p = 2;
 
-  // Do NOT strip trailing zeros. Traders want uniform length on the axis grids.
-  return n.toFixed(p);
+  return sign + absN.toFixed(p);
 };
 
 const fV = (n) => {
@@ -3409,8 +3416,8 @@ function drawChart() {
 
         // Info box at center
         const pctSign = pct >= 0 ? "+" : "";
-        const priceSign = deltaPrice >= 0 ? "+" : "";
-        const text1 = pctSign + pct.toFixed(2) + "% (" + priceSign + fP(deltaPrice) + ")";
+        const formattedDeltaPrice = deltaPrice >= 0 ? ("+" + fP(deltaPrice)) : fP(deltaPrice);
+        const text1 = pctSign + pct.toFixed(2) + "% (" + formattedDeltaPrice + ")";
         const text2 = timeStr ? (bars + " свечей, " + timeStr) : (bars + " свечей");
 
         ctx.font = "bold 13px Inter";
@@ -9579,8 +9586,8 @@ class ChartInstance {
       const midY = (yStart + yEnd) / 2;
 
       const pctSign = pct >= 0 ? "+" : "";
-      const priceSign = deltaPrice >= 0 ? "+" : "";
-      const text1 = `${pctSign}${pct.toFixed(2)}% (${priceSign}${fP(deltaPrice)})`;
+      const formattedDeltaPrice = deltaPrice >= 0 ? ("+" + fP(deltaPrice)) : fP(deltaPrice);
+      const text1 = `${pctSign}${pct.toFixed(2)}% (${formattedDeltaPrice})`;
       const text2 = `${bars} свечей, ${timeStr}`;
 
       ctx.font = "bold 9px Inter";
