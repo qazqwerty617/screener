@@ -2591,11 +2591,15 @@ app.get("/api/formations/map", compression(), (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, "public"), {
-  maxAge: "1d",
   etag: true,
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store, max-age=0");
-    else res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+    if (filePath.endsWith(".html")) {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
+    } else if (filePath.endsWith(".js") || filePath.endsWith(".css")) {
+      res.setHeader("Cache-Control", "no-cache, must-revalidate, max-age=0");
+    } else {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    }
   }
 }));
 // Unknown API paths answer with JSON, not the SPA shell.
