@@ -9773,10 +9773,56 @@ function drawDensityMap() {
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(d.rx, d.ry); ctx.stroke();
     ctx.setLineDash([]); ctx.restore();
 
+    // Build rows first so the card height always fits its content.
+    const marketText = d.market === "spot" ? "СПОТ" : "ФЬЮЧЕРСЫ";
+    const marketColor = d.market === "spot" ? "#16c784" : "#eab308";
+    const volText = d.wallK >= 1000 ? (d.wallK / 1000).toFixed(1) + "M$" : d.wallK + "K$";
+    const fmtPrice = d.price < 1 ? +d.price.toPrecision(4) : +d.price.toFixed(4);
+    const priceText = `${fmtPrice} (${d.pct.toFixed(2)}%)`;
+
+    const tipRows = [];
+    tipRows.push(["БИРЖА", (typeof CHART_EXCHANGE_NAMES !== "undefined" && CHART_EXCHANGE_NAMES[d.ex]) || d.ex, "#7dd3fc"]);
+    tipRows.push(["РЫНОК", marketText, marketColor]);
+    tipRows.push(["ОБЪЕМ", volText, "#fff"]);
+    tipRows.push(["ЦЕНА / ДИСТ", priceText, "#fff"]);
+
+    // Live lifetime: firstSeenAt keeps counting up while the wall exists,
+    // unlike the stale `age` snapshot from the scanner.
+    const seenAt = Number(d.firstSeenAt) || 0;
+    const liveAgeSec = seenAt > 0 ? Math.max(0, Math.round((Date.now() - seenAt) / 1000)) : (Number(d.age) || 0);
+    let formatAge = "-";
+    if (liveAgeSec > 0) {
+      if (liveAgeSec < 60) formatAge = `${liveAgeSec} сек`;
+      else if (liveAgeSec < 3600) formatAge = `${Math.floor(liveAgeSec / 60)} мин`;
+      else if (liveAgeSec < 86400) formatAge = `${Math.floor(liveAgeSec / 3600)} ч ${Math.floor((liveAgeSec % 3600) / 60)} мин`;
+      else formatAge = `${Math.floor(liveAgeSec / 86400)} д ${Math.floor((liveAgeSec % 86400) / 3600)} ч`;
+    }
+    tipRows.push(["ВРЕМЯ ЖИЗНИ", formatAge, "#fbbf24"]);
+
+    // Absorption: how much of the wall's peak size has been eaten.
+    const peakUsd = Number(d.maxSizeUsd) || 0;
+    if (peakUsd > Number(d.S) * 1.05) {
+      const eatenPct = Math.min(99, Math.round((1 - Number(d.S) / peakUsd) * 100));
+      tipRows.push(["СЪЕДЕНО ОТ ПИКА", `${eatenPct}%`, eatenPct >= 50 ? "#ff6b81" : "#fbbf24"]);
+    }
+
+    // Anti-spoof confirmations: scans in a row the wall survived.
+    if (Number(d.confirmations) > 0) {
+      tipRows.push(["ПОДТВЕРЖДЕНИЙ", `${d.confirmations} скан.`, "#a78bfa"]);
+    }
+
+    const wallRank = Number(d.rank) || 0;
+    if (wallRank > 0) {
+      tipRows.push(["СИЛА (РАНГ)", `${wallRank}/10`, wallRank >= 7 ? "#ff6b81" : wallRank >= 5 ? "#fbbf24" : "#9ca3af"]);
+    }
+    if (d.count > 1) {
+      tipRows.push(["КЛАСТЕР", `${d.count} ур.`, "#a78bfa"]);
+    }
+
     // тФАтФА Tooltip
     // Math to get tip width (adaptive on mobile)
     const tipW = Math.min(230, densityW - 20);
-    const tipH = 125 + (d.count > 1 ? 20 : 0);
+    const tipH = 62 + tipRows.length * 20;
     let tipX, tipY;
     if (densityW <= 500) {
       // Mobile: center tooltip horizontally or keep safely within bounds
@@ -9823,58 +9869,21 @@ function drawDensityMap() {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Rows helper
+    // Rows: market/volume/price rendered from the prebuilt list
     let currY = tipY + 50;
-    const drawRow = (leftText, rightText, rightColor = "#fff") => {
-      ctx.font = "11px Inter";
+    for (const [label, value, color] of tipRows) {
+      // The lifetime row is the key signal — draw it slightly larger.
+      const isAgeRow = label === "ВРЕМЯ ЖИЗНИ";
+      ctx.font = isAgeRow ? "600 12px Inter" : "11px Inter";
       ctx.fillStyle = "rgba(255,255,255,0.4)";
       ctx.textAlign = "left";
-      ctx.fillText(leftText, tipX + 16, currY);
+      ctx.fillText(label, tipX + 16, currY);
 
-      ctx.font = "bold 12px Inter";
-      ctx.fillStyle = rightColor;
+      ctx.font = isAgeRow ? "bold 14px Inter" : "bold 12px Inter";
+      ctx.fillStyle = color;
       ctx.textAlign = "right";
-      ctx.fillText(rightText, tipX + tipW - 16, currY);
+      ctx.fillText(String(value), tipX + tipW - 16, currY);
       currY += 20;
-    };
-
-    // 2. Рынок
-    const marketText = d.market === "spot" ? "СПОТ" : "ФЬЮЧЕРСЫ";
-    const marketColor = d.market === "spot" ? "#16c784" : "#eab308";
-    drawRow("РЫНОК", marketText, marketColor);
-
-    // 3. Объем
-    const volText = d.wallK >= 1000 ? (d.wallK / 1000).toFixed(1) + "M$" : d.wallK + "K$";
-    drawRow("ОБЪЕМ", volText);
-
-    // 4. Цена / Дист
-    const fmtPrice = d.price < 1 ? +d.price.toPrecision(4) : +d.price.toFixed(4);
-    const priceText = `${fmtPrice} (${d.pct.toFixed(2)}%)`;
-    drawRow("ЦЕНА / ДИСТ", priceText);
-
-    // Dotted separator
-    currY += 4;
-    ctx.beginPath();
-    ctx.moveTo(tipX + 16, currY);
-    ctx.lineTo(tipX + tipW - 16, currY);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
-    ctx.setLineDash([3, 4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    currY += 12;
-
-    // 5. Время  
-    let formatAge = "-";
-    if (d.age) {
-      if (d.age < 60) formatAge = `${d.age}с`;
-      else if (d.age < 3600) formatAge = `${Math.floor(d.age / 60)}м`;
-      else formatAge = `${Math.floor(d.age / 3600)}ч ${Math.floor((d.age % 3600) / 60)}м`;
-    }
-    drawRow("ВРЕМЯ ЖИЗНИ", formatAge, "#fbbf24");
-
-    // 6. Cluster
-    if (d.count > 1) {
-      drawRow("КЛАСТЕР", `${d.count} ур.`, "#a78bfa");
     }
 
     ctx.restore();
