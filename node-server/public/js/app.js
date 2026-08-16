@@ -1424,23 +1424,29 @@ function getSmcData(candles) {
     });
   }
 
-  // 4. TEXTBOOK ICT / SMC FAIR VALUE GAPS (FVG)
+  // 4. TEXTBOOK ICT / SMC FAIR VALUE GAPS (FVG - Hardcore Quality)
   const fvgs = [];
+
   for (let i = Math.max(2, startVisIdx); i < numCandles; i++) {
     const c1 = candles[i - 2];
-    const c2 = candles[i - 1]; // Middle displacement candle
+    const c2 = candles[i - 1]; // Central displacement candle
     const c3 = candles[i];
     const atr = atrAt(i);
+    const c2Range = c2.h - c2.l || 1e-9;
+    const c2Body = Math.abs(c2.c - c2.o);
 
-    // Bullish FVG (SIBI): c3.l > c1.h with strong bullish displacement in c2
-    if (c3.l > c1.h && c2.c > c2.o) {
+    // Bullish FVG (SIBI - Sell-Side Imbalance Buy-Side Inefficiency):
+    // 1. Structural gap: c3.l > c1.h
+    // 2. Middle candle MUST be a strong expansive bull candle (body >= 48% of its range and range >= 0.75 * ATR)
+    if (c3.l > c1.h && c2.c > c2.o && (c2Body / c2Range >= 0.48) && (c2Range >= 0.75 * atr)) {
       const gap = c3.l - c1.h;
-      const minGap = Math.max(candles[i].c * 0.001, 0.25 * atr);
+      const minGap = Math.max(candles[i].c * 0.0010, 0.25 * atr);
       if (gap >= minGap) {
         const topPrice = c3.l;
         const botPrice = c1.h;
-        const ce = (topPrice + botPrice) / 2; // Consequent Encroachment
+        const ce = (topPrice + botPrice) / 2; // Consequent Encroachment (50% midpoint)
 
+        // Mitigation check: if price wicks below botPrice or closes body below CE, it's invalidated
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
           const ck = candles[k];
@@ -1450,26 +1456,32 @@ function getSmcData(candles) {
           }
         }
         if (!filled) {
+          const dispRatio = c2Body / atr;
+          const score = Math.min(100, Math.round(dispRatio * 35 + (gap / atr) * 30 + 35));
+
           fvgs.push({
             type: "bull",
             startIdx: i - 2,
             endIdx: numCandles - 1 + 12,
             topPrice,
             botPrice,
-            ce
+            ce,
+            score
           });
         }
       }
     }
 
-    // Bearish FVG (BISI): c3.h < c1.l with strong bearish displacement in c2
-    if (c3.h < c1.l && c2.c < c2.o) {
+    // Bearish FVG (BISI - Buy-Side Imbalance Sell-Side Inefficiency):
+    // 1. Structural gap: c3.h < c1.l
+    // 2. Middle candle MUST be a strong expansive bear candle (body >= 48% of its range and range >= 0.75 * ATR)
+    if (c3.h < c1.l && c2.c < c2.o && (c2Body / c2Range >= 0.48) && (c2Range >= 0.75 * atr)) {
       const gap = c1.l - c3.h;
-      const minGap = Math.max(candles[i].c * 0.001, 0.25 * atr);
+      const minGap = Math.max(candles[i].c * 0.0010, 0.25 * atr);
       if (gap >= minGap) {
         const topPrice = c1.l;
         const botPrice = c3.h;
-        const ce = (topPrice + botPrice) / 2; // Consequent Encroachment
+        const ce = (topPrice + botPrice) / 2; // Consequent Encroachment (50% midpoint)
 
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
@@ -1480,13 +1492,17 @@ function getSmcData(candles) {
           }
         }
         if (!filled) {
+          const dispRatio = c2Body / atr;
+          const score = Math.min(100, Math.round(dispRatio * 35 + (gap / atr) * 30 + 35));
+
           fvgs.push({
             type: "bear",
             startIdx: i - 2,
             endIdx: numCandles - 1 + 12,
             topPrice,
             botPrice,
-            ce
+            ce,
+            score
           });
         }
       }
@@ -1613,7 +1629,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
   }
 
   function deduplicateFVGs(list, maxCount = 2) {
-    const sorted = list.slice().sort((a, b) => (b.topPrice - b.botPrice) - (a.topPrice - a.botPrice) || b.startIdx - a.startIdx);
+    const sorted = list.slice().sort((a, b) => (b.score || 0) - (a.score || 0) || b.startIdx - a.startIdx);
     const selected = [];
 
     for (const fvg of sorted) {
@@ -1630,7 +1646,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
             break;
           }
         }
-        if (Math.abs(fvg.startIdx - existing.startIdx) <= 8) {
+        if (Math.abs(fvg.startIdx - existing.startIdx) <= 10) {
           isOverlap = true;
           break;
         }
@@ -1693,6 +1709,7 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
   // 2. UNFILLED FAIR VALUE GAPS (FVG) - Deduped & Clean
   // Always projected 12 candles forward ahead of the chart right edge
+  // Label: strictly "FVG"
   if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
     const bullFVGs = deduplicateFVGs(
       smcData.fvgs.filter(fvg => fvg.type === "bull" && fvg.topPrice <= lastPrice),
@@ -1727,14 +1744,14 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
         ctx.strokeStyle = "rgba(6, 182, 212, 0.65)";
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(x1, yTop, boxW, h);
-        drawSmcPill("FVG (Bull)", x1 + 45, yTop + h / 2, "#164e63", "#06b6d4", "#67e8f9");
+        drawSmcPill("FVG", x1 + 25, yTop + h / 2, "#164e63", "#06b6d4", "#67e8f9");
       } else {
         ctx.fillStyle = "rgba(168, 85, 247, 0.14)";
         ctx.fillRect(x1, yTop, boxW, h);
         ctx.strokeStyle = "rgba(168, 85, 247, 0.65)";
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(x1, yTop, boxW, h);
-        drawSmcPill("FVG (Bear)", x1 + 45, yTop + h / 2, "#581c87", "#a855f7", "#e9d5ff");
+        drawSmcPill("FVG", x1 + 25, yTop + h / 2, "#581c87", "#a855f7", "#e9d5ff");
       }
       ctx.restore();
     }
