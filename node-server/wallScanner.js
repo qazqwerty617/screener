@@ -51,7 +51,7 @@ const WALL_STAT_THRESHOLDS = {
   MX: { minZ: 1.4, minPercentile: 0.78 },
   KC: { minZ: 1.4, minPercentile: 0.78 },
   HT: { minZ: 1.4, minPercentile: 0.78 },
-  BX: { minZ: 1.5, minPercentile: 0.80 },
+  BX: { minZ: 1.8, minPercentile: 0.85 },
 };
 
 function statThresholdsFor(ex) {
@@ -77,6 +77,33 @@ const EXCLUDED_BASES = new Set([
   "XAUT", "PAXG", "XAG", "XAU", "SILVER", "GOLD",
   "EUR", "GBP", "JPY", "AUD", "USD", "CHF", "TRY", "RUB", "BRL",
 ]);
+
+// ═══ Stock & Equity Token Filter ═══
+const KNOWN_STOCK_BASES = new Set([
+  "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "COIN",
+  "MSTR", "BAC", "AMD", "INTC", "PLTR", "BABA", "DIS", "PYPL", "UBER", "SPY",
+  "QQQ", "IWM", "DIA", "V", "MA", "JPM", "WMT", "XOM", "CVX", "LLY",
+  "UNH", "JNJ", "AVGO", "ORCL", "CRM", "CSCO", "ABT", "MRK", "PEP", "KO",
+  "COST", "TMO", "MCD", "NKE", "ABBV", "DHR", "TXN", "NEE", "PM", "QCOM",
+  "HON", "UNP", "LIN", "BMY", "AMGN", "LOW", "IBM", "SBUX", "GE", "CAT",
+  "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
+  "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
+  "OXY", "SQ", "SHOP", "SE", "SNOW", "AFRM",
+  "AVGOX", "AAPLX", "TSLAX", "NVDAX", "MSFTX", "AMZNX", "GOOGX", "GOOGLX", "METAX",
+  "NFLXX", "COINX", "MSTRX", "BACX", "AMDX", "INTCX", "PLTRX", "BABAX", "DISX",
+  "PYPLX", "UBERX", "SPYX", "QQQX", "ARMX", "SMCX", "HOODX"
+]);
+
+function isStockOrEquityBase(base) {
+  if (!base) return false;
+  const b = String(base).trim().toUpperCase();
+  if (KNOWN_STOCK_BASES.has(b)) return true;
+  if (b.endsWith("X") && b.length >= 4) {
+    const root = b.slice(0, -1);
+    if (KNOWN_STOCK_BASES.has(root)) return true;
+  }
+  return false;
+}
 
 // ═══ State ═══════════════════════════════════════════════════════════════════
 
@@ -104,6 +131,8 @@ let scanCount = 0;
 let onUpdateCb = null;
 
 function isLeveragedOrSyntheticBase(base) {
+  if (!base) return false;
+  if (isStockOrEquityBase(base)) return true;
   return /(?:UP|DOWN|BULL|BEAR|HALF|HEDGE|[235]L|[235]S)$/i.test(String(base || ""));
 }
 
@@ -332,7 +361,8 @@ function getMinWallUsdForCoin(coin, ex) {
   else if (vol >= 2000000)   dynamicFloor = 50000;    // $2M+ volume: $50K+ wall
   else dynamicFloor = 25000;
 
-  if (ex === "BX" || ex === "BN" || ex === "BB") dynamicFloor = Math.max(dynamicFloor, 35000);
+  if (ex === "BX") dynamicFloor = Math.max(dynamicFloor, 50000);
+  if (ex === "BN" || ex === "BB") dynamicFloor = Math.max(dynamicFloor, 35000);
 
   return dynamicFloor;
 }
@@ -340,7 +370,7 @@ function getMinWallUsdForCoin(coin, ex) {
 function processOrderbook(ex, coin, bids, asks, currentScanId) {
   const price = coin.p;
   if (!price || price <= 0) return [];
-  if (EXCLUDED_BASES.has(coin.base)) return [];
+  if (EXCLUDED_BASES.has(coin.base) || isLeveragedOrSyntheticBase(coin.base) || isStockOrEquityBase(coin.base)) return [];
 
   const binnedBids = binOrders(bids.slice(2), price, "bid");
   const binnedAsks = binOrders(asks.slice(2), price, "ask");
@@ -364,7 +394,7 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     const th = statThresholdsFor(ex);
     if (Z < th.minZ || percentile < th.minPercentile) return;
 
-    if (ex === "BX" && coin.v && coin.v < 150000) return; // filter dead phantom pairs on BingX
+    if (ex === "BX" && coin.v && coin.v < 250000) return; // filter dead phantom pairs on BingX
     const minDust = getMinWallUsdForCoin(coin, ex);
     if (bin.usd < minDust) return;
 
@@ -552,7 +582,7 @@ function buildWallSnapshot(allWalls, options = {}) {
 
   // BingX books are saturated with multi-million spoof walls that pass any
   // statistical band, so its output gets a hard strongest-first cap.
-  const EX_WALL_CAPS = { BX: 35 };
+  const EX_WALL_CAPS = { BX: 20 };
   const coinCount = new Map();
   const exCount = new Map();
   const limited = [];
@@ -1060,6 +1090,7 @@ async function updateSpotTickers(tickers) {
 
       for (const item of items) {
         if (!item.p || !item.v || isNaN(item.p) || isNaN(item.v)) continue;
+        if (EXCLUDED_BASES.has(item.base) || isLeveragedOrSyntheticBase(item.base) || isStockOrEquityBase(item.base)) continue;
         const key = `${ex}:${item.sym}`;
         tickers.set(key, {
           key,
