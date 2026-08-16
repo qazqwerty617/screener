@@ -25,6 +25,8 @@ node-server/check_*.js
 node-server/diag*.js
 node-server/test_*.js
 node-server/test-*.js
+tmp*.png
+
 
 # Runtime identity/payment data (never commit production records)
 node-server/payments.json
