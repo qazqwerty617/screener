@@ -1552,10 +1552,42 @@ function cacheKey(ex, sym, tf, lite) {
 }
 
 app.get("/api/klines", async (req, res) => {
-  const { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0" } = req.query;
+  const { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0", before } = req.query;
   setPublicCors(req, res);
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
+
+  if (before) {
+    const beforeTs = Number(before);
+    if (Number.isFinite(beforeTs) && beforeTs > 0) {
+      try {
+        if (ex === "HL") {
+          const tfMs = (() => {
+            const low = tf.toLowerCase();
+            const num = parseInt(low, 10) || 1;
+            if (low.endsWith("m")) return num * 60 * 1000;
+            if (low.endsWith("h")) return num * 60 * 60 * 1000;
+            if (low.endsWith("d")) return num * 24 * 60 * 60 * 1000;
+            return 60000;
+          })();
+          const data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", {
+            type: "candleSnapshot",
+            req: { coin: sym, interval: tf.toLowerCase(), startTime: beforeTs - (1000 * tfMs), endTime: beforeTs }
+          });
+          const parsed = (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }));
+          return res.json(parsed);
+        } else {
+          const url = getKlinesUrl(ex, sym, tf, 1000, beforeTs);
+          if (!url) return res.json([]);
+          const data = await apiFetch(url, 4000, 0);
+          const parsed = parseKlines(ex, data);
+          return res.json(parsed);
+        }
+      } catch (e) {
+        return res.json([]);
+      }
+    }
+  }
   
   const useLite = lite === "1";
   const key = cacheKey(ex, sym, tf, useLite);

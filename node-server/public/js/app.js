@@ -448,12 +448,14 @@ let candles = [],
   chartH = 0;
 let volH = 80;
 let offsetX = 0;
+let isLoadingOlderCandles = false;
+let hasReachedStartOfHistory = false;
 function getClampedOffsetX(val) {
   if (!Number.isFinite(val) || candles.length === 0) return 0;
   const PW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const visibleCount = PW / (candleW || 10);
   const minX = -Math.max(0, visibleCount - 2);
-  const maxX = Math.max(0, candles.length - 2);
+  const maxX = Math.max(0, candles.length + (hasReachedStartOfHistory ? -2 : 120));
   return Math.max(minX, Math.min(maxX, val));
 }
 let candleW = 10;
@@ -2552,6 +2554,11 @@ function drawChart() {
   const vis = candles.slice(s, e);
   const futureGap = viewStart < 0 ? -viewStart : 0;
   if (!vis.length && futureGap <= 0.5) return;
+
+  // Infinite scroll: dynamically load older historical candles when approaching left edge
+  if (viewStart < 80 && candles.length > 0 && !isLoadingOlderCandles && !hasReachedStartOfHistory) {
+    loadOlderHistory(activeEx, activeSym, activeTf);
+  }
 
   // тФАтФА Auto price range тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let autoMn = Infinity,
@@ -6159,6 +6166,8 @@ async function fetchKlines(ex, sym, tf) {
     currentLoadedTf = tf;
   }
 
+  isLoadingOlderCandles = false;
+  hasReachedStartOfHistory = false;
   offsetX = -6;
   chartNeedsDraw = false;
   viewMn = null;
@@ -6266,6 +6275,8 @@ async function fetchKlines(ex, sym, tf) {
         .catch(err => console.error("BG fetch error:", err));
     }, 150);
 
+    if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
+    connectKlWs(ex, sym, tf);
   } catch (err) {
     console.error("klines", err);
     if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym) {
@@ -6274,8 +6285,86 @@ async function fetchKlines(ex, sym, tf) {
       ctx.fillText("Loading error: " + err.message, chartW / 2, chartH / 2);
     }
   }
-  if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
-  connectKlWs(ex, sym, tf);
+}
+
+async function loadOlderHistory(ex, sym, tf) {
+  if (isLoadingOlderCandles || hasReachedStartOfHistory || !candles.length) return;
+  isLoadingOlderCandles = true;
+  const curToken = klFetchToken;
+  const oldestCandle = candles[0];
+  const oldestTs = oldestCandle.t;
+
+  try {
+    let olderCandles = [];
+    const tfMs = TF_MS[tf] || 60000;
+    const endTime = oldestTs - 1;
+
+    if (ex === "BN" || ex === "AD") {
+      const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
+      const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${endTime}`);
+      const data = await r.json();
+      if (Array.isArray(data)) {
+        olderCandles = data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] }));
+      }
+    } else if (ex === "BB") {
+      const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${endTime}`);
+      const data = await r.json();
+      if (data.result?.list) {
+        olderCandles = data.result.list.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
+      }
+    } else if (ex === "BX") {
+      const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
+      const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
+      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000&endTime=${endTime}`);
+      const data = await r.json();
+      if (data.data) {
+        olderCandles = data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) }));
+      }
+    } else if (ex === "BG") {
+      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=1000&endTime=${endTime}`);
+      const data = await r.json();
+      if (data.data) {
+        olderCandles = data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
+      }
+    } else if (ex === "GT") {
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000&to=${Math.floor(endTime / 1000)}`);
+      const data = await r.json();
+      if (Array.isArray(data)) {
+        olderCandles = data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) }));
+      }
+    } else if (ex === "HL") {
+      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: endTime - (1000 * tfMs), endTime: endTime } }) });
+      const data = await r.json();
+      if (Array.isArray(data)) {
+        olderCandles = data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }));
+      }
+    } else {
+      const r = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&before=${endTime}`);
+      const data = await r.json();
+      if (Array.isArray(data)) olderCandles = data;
+    }
+
+    if (curToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
+
+    const sanitized = sanitizeCandles(olderCandles).filter(c => c.t < oldestTs);
+    if (!sanitized.length) {
+      hasReachedStartOfHistory = true;
+      return;
+    }
+
+    const addedCount = sanitized.length;
+    candles = [...sanitized, ...candles];
+    if (candles.length > 20000) {
+      candles = candles.slice(-20000);
+    }
+    offsetX += addedCount;
+    chartNeedsDraw = true;
+    drawChart();
+  } catch (err) {
+    console.warn("loadOlderHistory error:", err);
+  } finally {
+    isLoadingOlderCandles = false;
+  }
 }
 
 function appendCandle(k) {
@@ -8930,6 +9019,10 @@ class ChartInstance {
     const futureGap = viewStart < 0 ? -viewStart : 0;
 
     if (!vis.length) return;
+
+    if (viewStart < 60 && this.candles.length > 0 && !this.loadingOlder && !this.hasReachedStart) {
+      this.loadOlderHistory();
+    }
 
     // Fast DOM text update for multichart (since binary protocol bypasses update())
     if (cData) {
