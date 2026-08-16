@@ -3098,26 +3098,18 @@ function drawChart() {
   vCtx.stroke();
 
   if (vis.length > 0) {
-    const validVols = [];
-    for (let i = 0; i < vis.length; i++) {
-      const v = Number(vis[i].v);
-      if (Number.isFinite(v) && v > 0) validVols.push(v);
+    // Buffer window to prevent sudden scale popping on 1mm scroll
+    const bufStart = Math.max(0, s - 15);
+    const bufEnd = Math.min(candles.length, e + 15);
+    let maxV = 0;
+    for (let i = bufStart; i < bufEnd; i++) {
+      const v = Number(candles[i]?.v) || 0;
+      if (v > maxV) maxV = v;
     }
 
-    if (validVols.length > 0) {
-      const maxV = Math.max(...validVols);
-
-      // Calculate coefficient of variation to detect flat bot/wash-trading feeds (e.g. BingX)
-      let sum = 0;
-      for (let i = 0; i < validVols.length; i++) sum += validVols[i];
-      const mean = sum / validVols.length;
-
-      let variance = 0;
-      for (let i = 0; i < validVols.length; i++) variance += Math.pow(validVols[i] - mean, 2);
-      const stdDev = Math.sqrt(variance / validVols.length);
-      const cv = stdDev / (mean || 1);
-      const isFlatFeed = cv < 0.12 && validVols.length >= 5;
-
+    if (maxV > 0) {
+      // 1.30 headroom ceiling so the tallest bar reaches ~75% of volume pane (exact TradingView behavior)
+      const scaleCeiling = maxV * 1.30;
       const usableHeight = volumeHeight - 6;
 
       for (let i = 0; i < vis.length; i++) {
@@ -3131,17 +3123,8 @@ function drawChart() {
         const fillX = leftX / dpr;
         const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
 
-        let vRatio;
-        if (isFlatFeed) {
-          // On flat bot volume feeds (BingX), position bars comfortably around ~40-55% height
-          const delta = (val - mean) / (mean || 1);
-          vRatio = Math.max(0.12, Math.min(0.85, 0.45 + delta * 2.5));
-        } else {
-          // On market feeds with wide dynamic ranges/spikes, power curve ensures past candles are visible
-          vRatio = Math.max(0.04, Math.min(1.0, Math.pow(val / maxV, 0.45)));
-        }
-
-        const vh = Math.max(2.5, vRatio * usableHeight);
+        const vRatio = Math.min(1.0, val / scaleCeiling);
+        const vh = Math.max(1 / dpr, vRatio * usableHeight);
         const fillY = volumeYStart + volumeHeight - vh;
 
         const up = c.c >= c.o;
@@ -8992,28 +8975,20 @@ class ChartInstance {
       gridPrice += gridStep;
     }
 
-    // Volume Histogram Overlay on multi-chart grid cell (Project Colors, No Lines, Dynamic Scaling)
+    // Volume Histogram Overlay on multi-chart grid cell (Project Colors, No Lines, Linear 1:1 Scaling)
     const cellVolH = Math.min(38, Math.round(PH * 0.22));
 
     if (vis.length > 0) {
-      const validVols = [];
-      for (let i = 0; i < vis.length; i++) {
-        const v = Number(vis[i].v);
-        if (Number.isFinite(v) && v > 0) validVols.push(v);
+      const bufStart = Math.max(0, s - 10);
+      const bufEnd = Math.min(this.candles.length, e + 10);
+      let maxV = 0;
+      for (let i = bufStart; i < bufEnd; i++) {
+        const v = Number(this.candles[i]?.v) || 0;
+        if (v > maxV) maxV = v;
       }
 
-      if (validVols.length > 0) {
-        const maxV = Math.max(...validVols);
-        let sum = 0;
-        for (let i = 0; i < validVols.length; i++) sum += validVols[i];
-        const mean = sum / validVols.length;
-
-        let variance = 0;
-        for (let i = 0; i < validVols.length; i++) variance += Math.pow(validVols[i] - mean, 2);
-        const stdDev = Math.sqrt(variance / validVols.length);
-        const cv = stdDev / (mean || 1);
-        const isFlatFeed = cv < 0.12 && validVols.length >= 5;
-
+      if (maxV > 0) {
+        const scaleCeiling = maxV * 1.30;
         const usableH = cellVolH - 4;
         const hwCell = Math.max(0.5, (candleWidth - 2) / 2);
 
@@ -9030,15 +9005,8 @@ class ChartInstance {
           const fillX = leftX / dpr;
           const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
 
-          let vRatio;
-          if (isFlatFeed) {
-            const delta = (val - mean) / (mean || 1);
-            vRatio = Math.max(0.12, Math.min(0.85, 0.45 + delta * 2.5));
-          } else {
-            vRatio = Math.max(0.04, Math.min(1.0, Math.pow(val / maxV, 0.45)));
-          }
-
-          const vh = Math.max(2, vRatio * usableH);
+          const vRatio = Math.min(1.0, val / scaleCeiling);
+          const vh = Math.max(1 / dpr, vRatio * usableH);
           const fillY = PH - vh;
 
           const up = c.c >= c.o;
