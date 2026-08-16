@@ -16,15 +16,42 @@ const EXCHANGES = Object.freeze({
 
 const ALIASES = Object.freeze({ XBT: "BTC", XDG: "DOGE" });
 
+const STOCK_ROOTS_ARBITRAGE = [
+  "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "COIN",
+  "MSTR", "BAC", "AMD", "INTC", "PLTR", "BABA", "DIS", "PYPL", "UBER", "SPY",
+  "QQQ", "IWM", "DIA", "V", "MA", "JPM", "WMT", "XOM", "CVX", "LLY",
+  "UNH", "JNJ", "AVGO", "ORCL", "CRM", "CSCO", "ABT", "MRK", "PEP", "KO",
+  "COST", "TMO", "MCD", "NKE", "ABBV", "DHR", "TXN", "NEE", "PM", "QCOM",
+  "HON", "UNP", "LIN", "BMY", "AMGN", "LOW", "IBM", "SBUX", "GE", "CAT",
+  "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
+  "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
+  "TQQQ", "SQQQ", "SPXL", "SPXS", "SOXL", "SOXS"
+];
+
 function canonicalBase(ticker) {
   const symbol = String(ticker?.sym || "").toUpperCase().trim();
-  if (/(?:USDT|USDC|USD)[_-]SPOT$/.test(symbol)) return "";
+  if (/(?:USDT|USDC|USD)[_-]SPOT$/i.test(symbol) || symbol.endsWith("_SPOT") || symbol.endsWith("-SPOT")) return "";
   let raw = String(ticker?.base || symbol).toUpperCase().trim();
   raw = raw
     .replace(/^K?1000000(?=[A-Z])/, "1000000")
+    .replace(/_SPOT$/i, "")
     .replace(/[-_.]?(USDTM|USDT|USDC|BUSD|USD)(?:[-_.]?(SWAP|PERP|PERPETUAL))?$/i, "")
     .replace(/[-_.]?(SWAP|PERP|PERPETUAL)$/i, "")
     .replace(/[^A-Z0-9]/g, "");
+
+  if (raw.endsWith("STOCK")) raw = raw.replace(/STOCK$/, "");
+  if ((raw.startsWith("R") || raw.startsWith("X")) && raw.length >= 4) raw = raw.slice(1);
+
+  for (const root of STOCK_ROOTS_ARBITRAGE) {
+    if (raw.startsWith(root) && raw.length <= root.length + 3) {
+      const rem = raw.slice(root.length);
+      if (["B", "X", "ON", "G", "M", "I", "STOCK", ""].includes(rem)) {
+        raw = root;
+        break;
+      }
+    }
+  }
+
   return ALIASES[raw] || raw;
 }
 

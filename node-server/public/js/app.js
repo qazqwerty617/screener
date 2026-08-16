@@ -5959,7 +5959,6 @@ window.addEventListener("online", () => {
 });
 
 function processTickerUpdate(t) {
-  if (isBaseInDensityBlacklist(t.base, t.sym || t.key)) return;
   const existing = coins.get(t.key);
   const base = existing || { prev: t.p, displayP: t.p };
   if (!base.displayP) base.displayP = t.p;
@@ -5967,12 +5966,6 @@ function processTickerUpdate(t) {
 }
 
 function processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, oi, trades) {
-  const colonIdx = key.indexOf(':');
-  const ex = colonIdx > 0 ? key.substring(0, colonIdx) : '';
-  const sym = colonIdx > 0 ? key.substring(colonIdx + 1) : key;
-  const base = sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '');
-  if (isBaseInDensityBlacklist(base, sym || key)) return;
-
   const existing = coins.get(key);
   if (existing) {
     existing.prev = existing.p;
@@ -5983,6 +5976,10 @@ function processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, 
     if (oi !== undefined) existing.oi = oi;
     if (trades !== undefined) existing.trades = trades;
   } else {
+    const colonIdx = key.indexOf(':');
+    const ex = colonIdx > 0 ? key.substring(0, colonIdx) : '';
+    const sym = colonIdx > 0 ? key.substring(colonIdx + 1) : key;
+    const base = sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '');
     coins.set(key, { key, ex, sym, base, prev: p, displayP: p, p, chg, v, h, l, o, funding: funding || 0, nextFunding: nextFunding || 0, oi: oi || 0, trades: trades || 0 });
   }
 }

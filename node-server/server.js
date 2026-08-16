@@ -137,16 +137,6 @@ function isNonCryptoOrStock(base, sym) {
 
 // ─── In-memory store ────────────────────────────────────────────────────────
 const tickers = new Map();
-const originalTickersSet = tickers.set.bind(tickers);
-tickers.set = function(key, value) {
-  if (value) {
-    const base = value.base || (value.sym ? value.sym.replace(/[-_/]?(USDT|USD|PERP)$/i, "") : "");
-    if (isNonCryptoOrStock(base, value.sym || key)) {
-      return this;
-    }
-  }
-  return originalTickersSet(key, value);
-};
 global.__obsidianTickers = tickers; // expose for telegramBot digest engine
 const dirtyKeys = new Set();
 const clients = new Set();
