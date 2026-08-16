@@ -2510,9 +2510,9 @@ function drawChart() {
   if (chartActiveIndicators.has("CVD")) activeIndicators.push("CVD");
   if (chartActiveIndicators.has("ATR")) activeIndicators.push("ATR");
 
-  // Volume always takes 60px, indicators take 40px each
-  const fixedVolumeHeight = 60;
-  const indicatorHeightPer = 40;
+  // Volume takes 85px (larger, expressive TradingView height), indicators take 45px each
+  const fixedVolumeHeight = 85;
+  const indicatorHeightPer = 45;
   const newVolH = fixedVolumeHeight + (activeIndicators.length * indicatorHeightPer);
 
   // Update volH if needed and adjust canvas
@@ -3099,12 +3099,13 @@ function drawChart() {
 
   if (vis.length > 0) {
     let maxV = 0;
-    for (let i = 0; i < candles.length; i++) {
-      const v = Number(candles[i]?.v) || 0;
+    for (let i = 0; i < vis.length; i++) {
+      const v = Number(vis[i]?.v) || 0;
       if (v > maxV) maxV = v;
     }
 
     if (maxV > 0) {
+      const scaleCeiling = maxV * 1.15;
       const usableHeight = volumeHeight - 6;
 
       for (let i = 0; i < vis.length; i++) {
@@ -3118,9 +3119,8 @@ function drawChart() {
         const fillX = leftX / dpr;
         const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
 
-        // Balanced power compression: compresses 1000x dynamic spikes so normal candles are clearly visible (4..10px) and pump spikes tower at 38px
-        const norm = Math.pow(val / maxV, 0.35);
-        const vh = Math.max(2.5, norm * usableHeight * 0.78);
+        const vRatio = Math.min(1.0, val / scaleCeiling);
+        const vh = Math.max(1.5, vRatio * usableHeight);
         const fillY = volumeYStart + volumeHeight - vh;
 
         const up = c.c >= c.o;
@@ -8971,17 +8971,18 @@ class ChartInstance {
       gridPrice += gridStep;
     }
 
-    // Volume Histogram Overlay on multi-chart grid cell (Project Colors, No Lines, Stable Compression)
-    const cellVolH = Math.min(38, Math.round(PH * 0.22));
+    // Volume Histogram Overlay on multi-chart grid cell (Project Colors, No Lines, TradingView Auto-Scale)
+    const cellVolH = Math.min(48, Math.round(PH * 0.28));
 
     if (vis.length > 0) {
       let maxV = 0;
-      for (let i = 0; i < this.candles.length; i++) {
-        const v = Number(this.candles[i]?.v) || 0;
+      for (let i = 0; i < vis.length; i++) {
+        const v = Number(vis[i]?.v) || 0;
         if (v > maxV) maxV = v;
       }
 
       if (maxV > 0) {
+        const scaleCeiling = maxV * 1.15;
         const usableH = cellVolH - 4;
         const hwCell = Math.max(0.5, (candleWidth - 2) / 2);
 
@@ -8998,8 +8999,8 @@ class ChartInstance {
           const fillX = leftX / dpr;
           const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
 
-          const norm = Math.pow(val / maxV, 0.35);
-          const vh = Math.max(2, norm * usableH * 0.78);
+          const vRatio = Math.min(1.0, val / scaleCeiling);
+          const vh = Math.max(1.5, vRatio * usableH);
           const fillY = PH - vh;
 
           const up = c.c >= c.o;
