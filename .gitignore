@@ -45,4 +45,6 @@ go-scanner/*.tmp
 
 # Scratch python scripts
 check_remote*.py
+deploy_remote*.py
 scratch_digest.py
+
