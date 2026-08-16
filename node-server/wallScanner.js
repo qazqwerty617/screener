@@ -39,12 +39,17 @@ const MAX_PER_COIN = 5;
 
 const CLUSTER_PCT = 0.1; // cluster walls within 0.1% of each other
 
-// Per-exchange statistical admission bands.  Most books run softer bands so
-// small/medium walls surface; BingX thin books stay tighter to cut noise.
+// Per-exchange statistical admission bands. Most books run balanced bands so
+// authentic walls across all venues surface; BingX thin books stay strict to cut bot noise.
 const WALL_STAT_THRESHOLDS = {
-  DEFAULT: { minZ: 2.2, minPercentile: 0.90 },
-  HL: { minZ: 2.0, minPercentile: 0.90 },
-  BX: { minZ: 5.0, minPercentile: 0.985 },
+  DEFAULT: { minZ: 2.0, minPercentile: 0.88 },
+  BN: { minZ: 1.8, minPercentile: 0.85 },
+  BB: { minZ: 1.8, minPercentile: 0.85 },
+  OX: { minZ: 1.8, minPercentile: 0.85 },
+  BG: { minZ: 1.8, minPercentile: 0.85 },
+  GT: { minZ: 1.8, minPercentile: 0.85 },
+  HL: { minZ: 1.6, minPercentile: 0.82 },
+  BX: { minZ: 2.8, minPercentile: 0.92 },
 };
 
 function statThresholdsFor(ex) {
@@ -335,14 +340,16 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     const th = statThresholdsFor(ex);
     if (Z < th.minZ || percentile < th.minPercentile) return;
 
-    let minDust = 20000;
-    if (ex === "BN" || ex === "BB") minDust = 35000;
-    if (ex === "BX") minDust = 1000000;
+    let minDust = 25000;
+    if (ex === "BN" || ex === "BB") minDust = 40000;
+    if (ex === "BX") minDust = 75000;
+    if (ex === "HL") minDust = 20000;
 
     if (coin.v && coin.v > 0) {
+      if (ex === "BX" && coin.v < 200000) return; // filter dead phantom pairs on BingX
       const volReq = ex === "BX"
-        ? Math.min(3000000, coin.v * 0.005)
-        : Math.min(3000000, coin.v * 0.0004);
+        ? Math.min(2000000, coin.v * 0.003)
+        : Math.min(2000000, coin.v * 0.0003);
       minDust = Math.max(minDust, volReq);
     }
 
@@ -372,8 +379,6 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       levelHistory.set(lk, h);
     } else {
       const timeSinceLastSeen = now - h.lastSeen;
-      // Rotating full-market coverage revisits long-tail symbols less often
-      // than the former top-40 loop, so persistence follows the revisit window.
       const maxMissGapMs = Math.max(
         60000,
         parseInt(process.env.WALL_REVISIT_MAX_GAP_MS, 10) || (DEFAULT_SYMBOL_CACHE_TTL_MS + 5 * 60 * 1000)
@@ -394,11 +399,8 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
       h.lastSeen = now;
     }
 
-    // Weak one-scan anomalies are usually spoof/noise.  Exception: publish a
-    // genuinely large, statistically exceptional wall immediately.
-    const strongImmediate = relSize >= (ex === "HL" ? 5.5 : 7.5) && percentile >= 0.985;
-    const needsPersistence = relSize < 5.5 || percentile < 0.985 || ex === "BX";
-    if (needsPersistence && h.consecutivePresent < 2 && !strongImmediate) return;
+    // BingX spoof check: require 2 confirmations for small/mid BingX walls to cut fake spoof fences
+    if (ex === "BX" && relSize < 3.8 && h.consecutivePresent < 2) return;
 
     const wallScore = (relSize / Z_THRESHOLD) * 5 * activityBonus / (1 + dist * 0.5);
     const wallRank = rankWallByStatistics(relSize, percentile);
