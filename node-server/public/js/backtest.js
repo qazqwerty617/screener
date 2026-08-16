@@ -159,7 +159,7 @@
   async function newCase() {
     const requestSeq = ++state.requestSeq;
     resetCase();
-    setLoading(true, "Подбираем ликвидный исторический участок…");
+    setLoading(true, "Подбираем активный сетап…");
     $("bt-new").disabled = true;
     try {
       const response = await fetch(`/api/backtest/new?tf=${encodeURIComponent(state.tf)}&ex=${encodeURIComponent(state.exchange)}`, { cache: "no-store" });
@@ -174,7 +174,7 @@
       $("bt-exchange").textContent = data.exchange;
       $("bt-watermark").textContent = `${data.sym} · ${data.tf}`;
       $("bt-date").textContent = `Анализ на ${dateLabel(data.cutoffTime)}`;
-      $("bt-pool").textContent = `Ликвидный топ · ${data.universeSize} монет`;
+      $("bt-pool").textContent = `Трендовый топ · ${data.universeSize} монет`;
       setLoading(false);
       updateControls();
       draw();
