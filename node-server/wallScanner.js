@@ -66,9 +66,9 @@ const EX_LIMITS = {
 };
 
 const OB_DEPTH = {
-  BN: 200, BB: 500, OX: 400, BG: 200,
-  GT: 200, MX: 500, KC: 200, BX: 200,
-  HT: 200, HL: 100, AD: 200,
+  BN: 100, BB: 500, OX: 400, BG: 150,
+  GT: 100, MX: 500, KC: 100, BX: 100,
+  HT: 150, HL: 50, AD: 100,
 };
 
 const EXCLUDED_BASES = new Set([
