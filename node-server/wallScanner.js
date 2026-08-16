@@ -315,6 +315,28 @@ function binOrders(orders, currentPrice, side) {
   return Array.from(bins.values());
 }
 
+function getMinWallUsdForCoin(coin, ex) {
+  const base = String(coin.base || "").toUpperCase();
+  // Absolute floors for major cryptocurrencies based on real market order book scale:
+  if (base === "BTC") return 5000000;  // $5M minimum on BTC
+  if (base === "ETH") return 2500000;  // $2.5M minimum on ETH
+  if (base === "SOL" || base === "BNB" || base === "XRP" || base === "DOGE") return 1000000; // $1M minimum
+
+  const vol = Number(coin.v) || 0;
+  let dynamicFloor = 25000;
+  if (vol >= 500000000) dynamicFloor = 3000000;       // $500M+ volume: $3M+ wall
+  else if (vol >= 100000000) dynamicFloor = 1000000;  // $100M+ volume: $1M+ wall
+  else if (vol >= 30000000)  dynamicFloor = 350000;   // $30M+ volume: $350K+ wall
+  else if (vol >= 10000000)  dynamicFloor = 120000;   // $10M+ volume: $120K+ wall
+  else if (vol >= 2000000)   dynamicFloor = 50000;    // $2M+ volume: $50K+ wall
+  else dynamicFloor = 25000;
+
+  if (ex === "BX") dynamicFloor = Math.max(dynamicFloor, 75000);
+  if (ex === "BN" || ex === "BB") dynamicFloor = Math.max(dynamicFloor, 35000);
+
+  return dynamicFloor;
+}
+
 function processOrderbook(ex, coin, bids, asks, currentScanId) {
   const price = coin.p;
   if (!price || price <= 0) return [];
@@ -342,19 +364,8 @@ function processOrderbook(ex, coin, bids, asks, currentScanId) {
     const th = statThresholdsFor(ex);
     if (Z < th.minZ || percentile < th.minPercentile) return;
 
-    let minDust = 20000;
-    if (ex === "BN" || ex === "BB") minDust = 30000;
-    if (ex === "BX") minDust = 50000;
-    if (ex === "HL" || ex === "KC" || ex === "AD") minDust = 15000;
-
-    if (coin.v && coin.v > 0) {
-      if (ex === "BX" && coin.v < 150000) return; // filter dead phantom pairs on BingX
-      const volReq = ex === "BX"
-        ? Math.min(2000000, coin.v * 0.002)
-        : Math.min(2000000, coin.v * 0.0002);
-      minDust = Math.max(minDust, volReq);
-    }
-
+    if (ex === "BX" && coin.v && coin.v < 150000) return; // filter dead phantom pairs on BingX
+    const minDust = getMinWallUsdForCoin(coin, ex);
     if (bin.usd < minDust) return;
 
     const tph = coin.trades || 0;

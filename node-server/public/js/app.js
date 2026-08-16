@@ -2207,9 +2207,7 @@ function drawDensityTimelineOnChart(ctx, options) {
   const { candles: chartCandles, base, candleWidth, viewStart, toY, PW, PH, TOP = 0 } = options;
   if (!chartCandles || !chartCandles.length || !base) return [];
 
-  const source = densityHistoryData.length
-    ? densityHistoryData
-    : densityData.map(wall => ({ ...wall, active: true, endedAt: null }));
+  const source = densityData.map(wall => ({ ...wall, active: true, endedAt: null }));
   const rangeStart = chartCandles[0].t;
   const observedTf = chartCandles.length > 1
     ? Math.max(1, chartCandles[chartCandles.length - 1].t - chartCandles[chartCandles.length - 2].t)
