@@ -1267,12 +1267,30 @@ function getSmcData(candles) {
     }
   }
 
-  // 3. INSTITUTIONAL QUALITY ORDER BLOCKS (OB - Unmitigated with Score Engine 0-100 pts)
+  // 3. INSTITUTIONAL QUALITY ORDER BLOCKS
+  // Score engine: origin → displacement → structure → context (SMC spec).
+  // Every threshold is ATR-normalized so BTC and a memecoin share one scale.
+  // Data contract for the renderer is unchanged: {type, startIdx, endIdx,
+  // high, low, score}; the 2-above / 2-below selection stays in renderSmc.
   const orderBlocks = [];
+
+  const atrArr = new Array(numCandles).fill(0);
+  {
+    let trSum = 0;
+    for (let i = 1; i < numCandles; i++) {
+      const pc = candles[i - 1].c;
+      const tr = Math.max(candles[i].h - candles[i].l, Math.abs(candles[i].h - pc), Math.abs(candles[i].l - pc));
+      trSum += tr;
+      atrArr[i] = i <= 14 ? trSum / i : (atrArr[i - 1] * 13 + tr) / 14;
+    }
+  }
+  const atrAt = i => atrArr[Math.min(numCandles - 1, Math.max(1, i))] || 1e-9;
+
   for (const sb of structureBreaks) {
     const breakIdx = sb.breakIdx;
     const isBull = sb.isBull;
 
+    // Origin: the last opposing candle before the structural break.
     let obCandleIdx = -1;
     for (let k = breakIdx - 1; k >= Math.max(0, breakIdx - 15); k--) {
       const c = candles[k];
@@ -1281,53 +1299,110 @@ function getSmcData(candles) {
     }
     if (obCandleIdx === -1) obCandleIdx = Math.max(0, breakIdx - 1);
     const obC = candles[obCandleIdx];
+    const zoneH = obC.h - obC.l || 1e-9;
+    const atr = atrAt(obCandleIdx);
 
-    let mitigated = false;
-    let endIdx = numCandles - 1;
+    // Displacement quality (0..30): impulse in ATR units, directional
+    // efficiency of the leg, and how close it closes to its extreme.
+    const legEnd = Math.min(numCandles, obCandleIdx + 6);
+    const leg = candles.slice(obCandleIdx + 1, legEnd);
+    let dispScore = 0;
+    let impulseATR = 0;
+    if (leg.length >= 2) {
+      const legHigh = Math.max(...leg.map(c => c.h));
+      const legLow = Math.min(...leg.map(c => c.l));
+      impulseATR = isBull ? (legHigh - obC.h) / atr : (obC.l - legLow) / atr;
+      const path = leg.reduce((a, c) => a + (c.h - c.l), 0) || 1e-9;
+      const efficiency = Math.abs(leg[leg.length - 1].c - leg[0].o) / path;
+      const lastLeg = leg[leg.length - 1];
+      const clv = isBull
+        ? (lastLeg.c - legLow) / (legHigh - legLow || 1e-9)
+        : (legHigh - lastLeg.c) / (legHigh - legLow || 1e-9);
+      dispScore += impulseATR >= 2.5 ? 15 : impulseATR >= 1.5 ? 11 : impulseATR >= 0.9 ? 7 : 2;
+      dispScore += efficiency >= 0.7 ? 10 : efficiency >= 0.5 ? 6 : 2;
+      dispScore += clv >= 0.7 ? 5 : clv >= 0.4 ? 3 : 1;
+    }
+    // A candle before a break with no real repricing behind it is noise.
+    if (impulseATR < 0.6) continue;
+
+    // Structure significance (0..20): reversals outweigh continuations and
+    // breaking a swing that stood for many bars outweighs a fresh micro one.
+    let structScore = sb.type.includes("CHoCH") ? 14 : 8;
+    const swingAge = breakIdx - sb.startIdx;
+    structScore += swingAge >= 20 ? 6 : swingAge >= 8 ? 3 : 0;
+
+    // Liquidity sweep before the origin (0..15): a wick pierces a prior
+    // opposite swing, the candle closes back inside, displacement follows.
+    let sweepScore = 0;
+    const lookFrom = Math.max(1, obCandleIdx - 10);
+    for (const sw of swings) {
+      if (sw.idx >= obCandleIdx || sw.idx < lookFrom - 3) continue;
+      if (isBull && sw.type !== "low") continue;
+      if (!isBull && sw.type !== "high") continue;
+      for (let k = Math.max(sw.idx + 1, lookFrom); k <= obCandleIdx; k++) {
+        const c = candles[k];
+        const pierced = isBull ? c.l < sw.price : c.h > sw.price;
+        const reclaimed = isBull ? c.c > sw.price : c.c < sw.price;
+        if (pierced && reclaimed) { sweepScore = 15; break; }
+      }
+      if (sweepScore) break;
+    }
+
+    // FVG confluence (0..12): imbalance left by the displacement leg.
+    const hasFvg = candles.slice(obCandleIdx + 1, Math.min(numCandles - 1, obCandleIdx + 4)).some((c, idx) => {
+      const cIdx = obCandleIdx + 1 + idx;
+      if (cIdx < 2 || cIdx >= numCandles) return false;
+      return isBull ? (candles[cIdx].l > candles[cIdx - 2].h) : (candles[cIdx].h < candles[cIdx - 2].l);
+    });
+    const fvgScore = hasFvg ? 12 : 0;
+
+    // Freshness (0..15) with touch decay. Wick taps decay the score; a close
+    // consuming half the zone or a third separate tap kills the block — a
+    // wick sweep alone must not (it is the reclaim setup itself).
+    let touchEpisodes = 0;
+    let inZone = false;
+    let alive = true;
     for (let k = breakIdx + 1; k < numCandles; k++) {
       const c = candles[k];
-      if (isBull) {
-        if (c.l <= obC.l + (obC.h - obC.l) * 0.3) { mitigated = true; endIdx = k; break; }
-      } else {
-        if (c.h >= obC.h - (obC.h - obC.l) * 0.3) { mitigated = true; endIdx = k; break; }
-      }
+      const wickPen = isBull ? (obC.h - c.l) / zoneH : (c.h - obC.l) / zoneH;
+      const closePen = isBull ? (obC.h - c.c) / zoneH : (c.c - obC.l) / zoneH;
+      const touching = wickPen > 0.08;
+      if (touching && !inZone) touchEpisodes++;
+      inZone = touching;
+      if (closePen >= 0.5) { alive = false; break; }
     }
+    if (!alive || touchEpisodes >= 3) continue;
+    const freshScore = Math.max(0, 15 - touchEpisodes * 6);
 
-    if (!mitigated) {
-      // INSTITUTIONAL QUALITY SCORE ENGINE (0-100 pts)
-      let score = 50;
+    // Volume confluence (0..8): origin candle is not a requirement, only a
+    // bonus when it clearly outsizes its recent average.
+    const avgVol = candles.slice(Math.max(0, obCandleIdx - 10), obCandleIdx).reduce((a, b) => a + (b.v || 0), 0) / 10;
+    const volScore = (obC.v && avgVol && obC.v > avgVol * 1.25) ? 8 : 0;
 
-      if (sb.type.includes("CHoCH")) score += 20;
-      else score += 10;
-
-      const next4High = Math.max(...candles.slice(obCandleIdx + 1, Math.min(numCandles, obCandleIdx + 6)).map(c => c.h));
-      const next4Low  = Math.min(...candles.slice(obCandleIdx + 1, Math.min(numCandles, obCandleIdx + 6)).map(c => c.l));
-      const impulsePct = isBull ? (next4High - obC.h) / obC.h : (obC.l - next4Low) / obC.l;
-      if (impulsePct >= 0.015) score += 25;
-      else if (impulsePct >= 0.008) score += 15;
-      else score += 5;
-
-      const hasFvg = candles.slice(obCandleIdx + 1, Math.min(numCandles - 1, obCandleIdx + 4)).some((c, idx) => {
-        const cIdx = obCandleIdx + 1 + idx;
-        if (cIdx < 2 || cIdx >= numCandles) return false;
-        return isBull ? (candles[cIdx].l > candles[cIdx - 2].h) : (candles[cIdx].h < candles[cIdx - 2].l);
-      });
-      if (hasFvg) score += 20;
-
-      const avgVol = candles.slice(Math.max(0, obCandleIdx - 10), obCandleIdx).reduce((a, b) => a + (b.v || 0), 0) / 10;
-      if (obC.v && avgVol && obC.v > avgVol * 1.25) score += 10;
-
-      score = Math.min(99, score);
-
-      orderBlocks.push({
-        type: isBull ? "bull" : "bear",
-        startIdx: obCandleIdx,
-        endIdx,
-        high: obC.h,
-        low: obC.l,
-        score
-      });
+    // Penalties: choppy tape around the origin and oversized zones.
+    let penalty = 0;
+    const ctxFrom = Math.max(1, obCandleIdx - 25);
+    const ctx = candles.slice(ctxFrom, obCandleIdx);
+    if (ctx.length >= 6) {
+      const path = ctx.reduce((a, c) => a + (c.h - c.l), 0) || 1e-9;
+      const chopEff = Math.abs(ctx[ctx.length - 1].c - ctx[0].o) / path;
+      if (chopEff < 0.3) penalty += 18;
+      else if (chopEff < 0.45) penalty += 9;
     }
+    if (zoneH > 2.5 * atr) penalty += 10;
+
+    const score = Math.max(1, Math.min(99, Math.round(
+      dispScore + structScore + sweepScore + fvgScore + freshScore + volScore - penalty
+    )));
+
+    orderBlocks.push({
+      type: isBull ? "bull" : "bear",
+      startIdx: obCandleIdx,
+      endIdx: numCandles - 1,
+      high: obC.h,
+      low: obC.l,
+      score
+    });
   }
 
   // 4. Textbook Fair Value Gaps (FVG - Unfilled with 30% Touch Mitigation)
