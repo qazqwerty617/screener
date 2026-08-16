@@ -509,6 +509,29 @@
                         </div>
 
                         <div class="chart-density-panel-section">
+                            <span class="chart-density-section-label">Формации & Уровни</span>
+                            <div class="chart-density-indicators-grid">
+                                <button class="chart-indicator-grid-btn" id="fmt-cascades"
+                                    data-desc="Каскады (ScalpX style) — последовательные уровни с подсчетом касаний.">Каскады</button>
+                                <button class="chart-indicator-grid-btn" id="fmt-levels"
+                                    data-desc="Уровни — горизонтальные уровни поддержки и сопротивления с числом касаний.">Уровни</button>
+                                <button class="chart-indicator-grid-btn" id="fmt-trendlines"
+                                    data-desc="Трендовые — наклонные динамические линии тренда по экстремумам.">Трендовые</button>
+                                <button class="chart-indicator-grid-btn" id="fmt-retests"
+                                    data-desc="Ретесты — уровни истинного пробоя с подтвержденным ретестом.">Ретесты</button>
+                            </div>
+                            <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center; justify-content: space-between;">
+                                <span style="font-size: 11px; color: var(--t3, #94a3b8); font-weight: 500;">Мин. касаний:</span>
+                                <div class="chart-density-filter-row" style="margin: 0; gap: 4px;">
+                                    <button class="chart-density-filter-btn" data-fmt-touches="1" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">1+</button>
+                                    <button class="chart-density-filter-btn on" data-fmt-touches="2" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">2+</button>
+                                    <button class="chart-density-filter-btn" data-fmt-touches="3" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">3+</button>
+                                    <button class="chart-density-filter-btn" data-fmt-touches="4" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">4+</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="chart-density-panel-section">
                             <span class="chart-density-section-label">Биржи</span>
                             <div class="chart-density-exc-wrap" id="chart-density-exc-wrap">
                                 <div class="chart-density-exc-btn" id="chart-density-exc-btn">

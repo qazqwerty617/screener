@@ -315,11 +315,11 @@ let chartActiveIndicators = loadActiveIndicators();
 let chartActiveFormations = loadActiveFormations();
 let chartActiveSmc = loadActiveSmc();
 // ═══ Formations Overlay on Main Chart ═══
-let chartFormationsOnChart = false;          // master switch (OFF by default)
-let chartFovTypes = new Set(["cascades"]);   // first enable always produces a visible result
-let chartFovCascadesMin = 1;                 // min levels for cascades (1..5)
-let chartFovBreakoutMin = 1;                 // min touches for horiz levels (1..5)
-let chartFovTrendlineMin = 1;                // min touches for trendlines (1..5)
+let chartFormationsOnChart = chartActiveFormations && chartActiveFormations.size > 0;
+let chartFovTypes = new Set(chartActiveFormations && chartActiveFormations.size > 0 ? Array.from(chartActiveFormations) : ["cascades"]);
+let chartFovCascadesMin = 2;                 // min touches for cascades (default 2+)
+let chartFovBreakoutMin = 2;                 // min touches for horiz levels (default 2+)
+let chartFovTrendlineMin = 2;                // min touches for trendlines (default 2+)
 let chartFovRetestApproaching = false;       // approach to retest toggle
 let chartFovNearest = false;                 // show nearest level only
 let chartFovShowLabels = true;               // show Resistance / Support labels
@@ -2297,7 +2297,7 @@ function drawDensityTimelineOnChart(ctx, options) {
   return badges;
 }
 
-// Formations Overlay – renders formation levels on main chart
+// Formations Overlay – renders formation levels on main chart (ScalpX style)
 // ════════════════════════════════════════════════════════════
 function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
   if (!chartFormationsOnChart || !candles || candles.length < 40) return;
@@ -2306,42 +2306,46 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const lastPrice = candles[N - 1].c;
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
 
-  const drawFormationTag = (text, y, color) => {
+  const drawScalpXTag = (text, startX, y, color) => {
     if (!chartFovShowLabels) return;
     ctx.save();
-    ctx.font = "700 9px Inter";
-    const width = ctx.measureText(text).width + 12;
-    const x = Math.max(4, PW - width - 6);
-    const top = Math.max(TOP + 2, Math.min(TOP + PH - 18, y - 9));
-    roundRect(ctx, x, top, width, 17, 5);
-    ctx.fillStyle = "rgba(10,13,18,.88)";
+    ctx.font = "600 10px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
+    const tw = ctx.measureText(text).width;
+    const padX = 6;
+    const h = 16;
+    const w = tw + padX * 2;
+    const bx = Math.max(4, Math.min(PW - w - 4, startX + 6));
+    const by = Math.max(TOP + 2, Math.min(TOP + PH - h - 2, y - h - 2));
+
+    roundRect(ctx, bx, by, w, h, 3);
+    ctx.fillStyle = "rgba(13, 16, 23, 0.90)";
     ctx.fill();
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 0.85;
     ctx.stroke();
-    ctx.fillStyle = color;
-    ctx.textAlign = "center";
+
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(text, x + width / 2, top + 8.5);
+    ctx.fillText(text, bx + padX, by + h / 2);
     ctx.restore();
   };
 
+  // ─── 1. CASCADES & HORIZONTAL LEVELS (ScalpX style) ───
+  const hasCascades = chartFovTypes.has('cascades') || chartActiveFormations.has('cascades');
+  const hasLevels = chartFovTypes.has('levels') || chartActiveFormations.has('levels') || chartFovTypes.has('breakouts') || chartFovTypes.has('breakout');
 
-  // ─── 1. CASCADES / LEVELS (Same level detection engine as Formations tab) ───
-  if (chartFovTypes.has('cascades')) {
+  if (hasCascades || hasLevels) {
     let levels = window.detectChartLevelsAndTouches
-      ? getCachedFormationDetection(candles, 'overlay:cascades', () => window.detectChartLevelsAndTouches(candles))
-      : [];
+      ? getCachedFormationDetection(candles, `overlay:cascades:${chartFovCascadesMin}`, () => window.detectChartLevelsAndTouches(candles, chartFovCascadesMin))
+      : (window.FormationEngine ? window.FormationEngine.detectCascades(candles, chartFovCascadesMin) : []);
 
-    const directionCounts = levels.reduce((acc, level) => {
-      acc[level.direction] = (acc[level.direction] || 0) + 1;
-      return acc;
-    }, {});
-    levels = levels.filter(level => (directionCounts[level.direction] || 0) >= chartFovCascadesMin);
+    const minTouches = Math.max(1, chartFovCascadesMin || 1);
+    levels = levels.filter(lv => (lv.touches || 1) >= minTouches);
 
     if (chartFovNearest && levels.length > 0) {
       levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
-      levels = levels.slice(0, 2);
+      levels = levels.slice(0, 4);
     }
 
     for (const lv of levels) {
@@ -2354,78 +2358,41 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.setLineDash([]);
       const color = lv.direction === 'up' ? '#f59e0b' : '#2dd4bf';
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.72;
-      ctx.lineWidth = 1.35;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 1.25;
       ctx.beginPath();
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
 
-      // Touch circle at swingIdx
-      if (chartFovShowTouches && lv.swingIdx !== undefined) {
+      // Touch circles at touchIndices (or swingIdx)
+      if (chartFovShowTouches) {
         ctx.fillStyle = color;
-        const tx = getCandleX(lv.swingIdx);
-        if (tx >= 0 && tx <= PW) {
-          ctx.beginPath();
-          ctx.arc(tx, y, 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      ctx.restore();
-      drawFormationTag(`Каскад ${lv.direction === 'up' ? '↑' : '↓'} ${directionCounts[lv.direction] || 1}`, y, color);
-    }
-  }
-
-  // ─── 2. BREAKOUT horizontal levels ───────────────────────
-  if (chartFovTypes.has('breakout')) {
-    let levels = window.detectChartBreakoutLevels
-      ? getCachedFormationDetection(candles, `overlay:breakout:${chartFovBreakoutMin}`, () => window.detectChartBreakoutLevels(candles, chartFovBreakoutMin))
-      : [];
-    levels = levels.filter(lv => (lv.touches || 1) >= chartFovBreakoutMin);
-
-    if (chartFovNearest && levels.length > 0) {
-      levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
-      levels = levels.slice(0, 2);
-    }
-
-    for (const lv of levels) {
-      const y = toY(lv.price);
-      if (y < TOP || y > TOP + PH) continue;
-
-      const startX = (typeof lv.swingIdx === 'number') ? Math.max(0, getCandleX(lv.swingIdx)) : 0;
-
-      ctx.save();
-      ctx.setLineDash([]);
-      const color = lv.direction === 'up' ? '#fb7185' : '#34d399';
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.78;
-      ctx.lineWidth = 1.45;
-      ctx.beginPath();
-      ctx.moveTo(startX, y);
-      ctx.lineTo(PW, y);
-      ctx.stroke();
-
-      if (chartFovShowTouches && lv.touchIndices) {
-        ctx.fillStyle = color;
-        for (const ti of lv.touchIndices) {
+        const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
+        for (const ti of touchesArr) {
+          if (typeof ti !== 'number') continue;
           const tx = getCandleX(ti);
-          if (tx < 0 || tx > PW) continue;
-          ctx.beginPath();
-          ctx.arc(tx, y, 3, 0, Math.PI * 2);
-          ctx.fill();
+          if (tx >= 0 && tx <= PW) {
+            ctx.beginPath();
+            ctx.arc(tx, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       }
       ctx.restore();
-      drawFormationTag(`Уровень ${lv.direction === 'up' ? '↑' : '↓'} · ${lv.touches || 1}`, y, color);
+
+      const priceFormatted = fP(lv.price);
+      const tagText = (lv.touches && lv.touches >= 2) ? `${priceFormatted} ×${lv.touches}` : `${priceFormatted}`;
+      drawScalpXTag(tagText, startX, y, color);
     }
   }
 
-
-  // ─── 3. TRENDLINES ───────────────────────────────────────
-  if (chartFovTypes.has('trendline')) {
+  // ─── 2. TRENDLINES ───────────────────────────────────────
+  const hasTrendlines = chartFovTypes.has('trendlines') || chartActiveFormations.has('trendlines') || chartFovTypes.has('trendline') || chartActiveFormations.has('trendline');
+  if (hasTrendlines) {
     let trendlines = window.detectChartTrendlines
       ? getCachedFormationDetection(candles, `overlay:trendline:${chartFovTrendlineMin}`, () => window.detectChartTrendlines(candles, chartFovTrendlineMin))
-      : [];
+      : (window.FormationEngine ? window.FormationEngine.detectTrendlines(candles, chartFovTrendlineMin) : []);
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= chartFovTrendlineMin);
 
     if (chartFovNearest && trendlines.length > 0) {
@@ -2443,8 +2410,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.setLineDash([]);
       const color = tl.direction === 'up' ? '#c084fc' : '#60a5fa';
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.8;
-      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
@@ -2456,22 +2423,26 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
           const ty = toY(tl.p1.price + tl.slope * (ti - tl.p1.idx));
           if (tx < 0 || tx > PW) continue;
           ctx.beginPath();
-          ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+          ctx.arc(tx, ty, 2.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }
       ctx.restore();
-      drawFormationTag(`Тренд ${tl.direction === 'up' ? '↑' : '↓'} · ${tl.touches || 1}`, y2, color);
+      const endPriceStr = fP(tl.endPrice || tl.p2.price);
+      drawScalpXTag(`${endPriceStr} · Тренд ${tl.direction === 'up' ? '↑' : '↓'} ×${tl.touches || 1}`, Math.max(0, x1), y2, color);
     }
   }
 
-  // ─── 4. RETESTS ──────────────────────────────────────────
-  if (chartFovTypes.has('retest')) {
+  // ─── 3. RETESTS ──────────────────────────────────────────
+  const hasRetests = chartFovTypes.has('retests') || chartActiveFormations.has('retests') || chartFovTypes.has('retest') || chartActiveFormations.has('retest');
+  if (hasRetests) {
     let retests = [];
     if (chartFovRetestApproaching && window.detectChartApproachingRetests) {
       retests = getCachedFormationDetection(candles, 'overlay:retest:approaching', () => window.detectChartApproachingRetests(candles));
     } else if (window.detectChartRetests) {
       retests = getCachedFormationDetection(candles, 'overlay:retest', () => window.detectChartRetests(candles));
+    } else if (window.FormationEngine) {
+      retests = chartFovRetestApproaching ? window.FormationEngine.detectApproachingRetests(candles) : window.FormationEngine.detectRetests(candles);
     }
 
     if (chartFovNearest && retests.length > 0) {
@@ -2489,14 +2460,15 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.setLineDash([]);
       const color = rt.direction === 'up' ? '#f472b6' : '#22d3ee';
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.8;
-      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
       ctx.restore();
-      drawFormationTag(`${rt.isApproachingRetest ? 'Подход' : 'Ретест'} ${rt.direction === 'up' ? '↑' : '↓'}`, y, color);
+      const rtPriceStr = fP(rt.price);
+      drawScalpXTag(`${rtPriceStr} · ${rt.isApproachingRetest ? 'Подход' : 'Ретест'} ${rt.direction === 'up' ? '↑' : '↓'}`, startX, y, color);
     }
   }
 }
@@ -7148,8 +7120,9 @@ const indicatorIdToName = {
   "ind-liqmap": "LIQMAP"
 };
 const formationIdToName = {
+  "fmt-cascades": "cascades",
   "fmt-levels": "levels",
-  "fmt-breakouts": "breakouts",
+  "fmt-breakouts": "breakout",
   "fmt-retests": "retests",
   "fmt-trendlines": "trendlines",
   "fmt-impulses": "impulses"
@@ -7167,9 +7140,13 @@ function syncIndicatorButtonsUI() {
     const smcName = smcIdToName[btn.id];
     let isActive = false;
     if (indicatorName && chartActiveIndicators.has(indicatorName)) isActive = true;
-    if (formationName && chartActiveFormations.has(formationName)) isActive = true;
+    if (formationName && (chartActiveFormations.has(formationName) || chartFovTypes.has(formationName))) isActive = true;
     if (smcName && chartActiveSmc.has(smcName)) isActive = true;
     btn.classList.toggle("on", isActive);
+  });
+  document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
+    const val = parseInt(btn.dataset.fmtTouches, 10);
+    btn.classList.toggle("on", val === chartFovCascadesMin);
   });
 }
 window.syncIndicatorButtonsUI = syncIndicatorButtonsUI;
@@ -7199,10 +7176,26 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
     if (fmtName) {
       if (btn.classList.contains("on")) {
         chartActiveFormations.add(fmtName);
+        chartFovTypes.add(fmtName);
       } else {
         chartActiveFormations.delete(fmtName);
+        chartFovTypes.delete(fmtName);
       }
+      chartFormationsOnChart = chartActiveFormations.size > 0 || chartFovTypes.size > 0;
       saveActiveFormations();
+      try {
+        localStorage.setItem('fov_settings', JSON.stringify({
+          enabled: chartFormationsOnChart,
+          types: Array.from(chartFovTypes),
+          cascadesMin: chartFovCascadesMin,
+          breakoutMin: chartFovBreakoutMin,
+          trendlineMin: chartFovTrendlineMin,
+          retestApproaching: chartFovRetestApproaching,
+          nearest: chartFovNearest,
+          showLabels: chartFovShowLabels,
+          showTouches: chartFovShowTouches
+        }));
+      } catch (_) {}
       // Sync left panel button if present
       const leftBtn = $(`fmt-left-${fmtName}`);
       if (leftBtn) {
@@ -7235,7 +7228,26 @@ document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn
     document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(b => b.classList.remove("on"));
     btn.classList.add("on");
     const val = parseInt(btn.dataset.fmtTouches, 10);
-    if (val) formationsMinTouches = val;
+    if (val) {
+      chartFovCascadesMin = val;
+      chartFovBreakoutMin = val;
+      chartFovTrendlineMin = val;
+      formationsMinTouches = val;
+      formationsMinCascade = val;
+      try {
+        localStorage.setItem('fov_settings', JSON.stringify({
+          enabled: chartFormationsOnChart,
+          types: Array.from(chartFovTypes),
+          cascadesMin: chartFovCascadesMin,
+          breakoutMin: chartFovBreakoutMin,
+          trendlineMin: chartFovTrendlineMin,
+          retestApproaching: chartFovRetestApproaching,
+          nearest: chartFovNearest,
+          showLabels: chartFovShowLabels,
+          showTouches: chartFovShowTouches
+        }));
+      } catch (_) {}
+    }
     if (typeof window.loadFormations === "function") window.loadFormations();
     requestAnimationFrame(drawChart);
   };
@@ -7380,7 +7392,10 @@ if (settingsBtn && settingsOverlay) {
     // settings panel, so the master switch stays off regardless of old state.
     try {
       const saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
-      if (Array.isArray(saved.types)) { chartFovTypes = new Set(saved.types); }
+      if (typeof saved.enabled === 'boolean') chartFormationsOnChart = saved.enabled;
+      else if (chartActiveFormations && chartActiveFormations.size > 0) chartFormationsOnChart = true;
+      if (Array.isArray(saved.types) && saved.types.length > 0) { chartFovTypes = new Set(saved.types); }
+      else if (chartActiveFormations && chartActiveFormations.size > 0) { chartFovTypes = new Set(chartActiveFormations); }
       if (typeof saved.cascadesMin === 'number') chartFovCascadesMin = saved.cascadesMin;
       if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
       if (typeof saved.trendlineMin === 'number') chartFovTrendlineMin = saved.trendlineMin;
