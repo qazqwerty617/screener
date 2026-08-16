@@ -1793,11 +1793,11 @@ app.get("/api/walls/status", (req, res) => {
 
 app.get("/api/arbitrage/snapshot", (req, res) => {
   const full = arbitrageEngine.getSnapshot();
-  const search = String(req.query.search || "").trim().toUpperCase().slice(0, 24);
-  const minNet = Math.max(-1, Math.min(20, Number(req.query.minNet) || 0));
+  const search = String(req.query.search || "").trim().toUpperCase().slice(0, 32);
+  const minNet = Math.max(-1, Math.min(100, Number(req.query.minNet) || 0));
   const minVolume = Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0));
   const exchanges = new Set(String(req.query.exchanges || "").split(",").filter(Boolean).slice(0, 11));
-  const limit = Math.max(25, Math.min(500, parseInt(req.query.limit, 10) || 250));
+  const limit = Math.max(25, Math.min(1000, parseInt(req.query.limit, 10) || 500));
   const includesExchange = row => {
     if (!exchanges.size) return true;
     const legs = [row.buyEx || row.longEx, row.sellEx || row.shortEx].filter(Boolean);
@@ -1826,7 +1826,7 @@ app.get("/api/arbitrage/snapshot", (req, res) => {
 
 app.get("/api/arbitrage/history", (req, res) => {
   const key = String(req.query.key || "").slice(0, 160);
-  if (!/^(spread|funding):[A-Z0-9]{1,32}:[A-Z]{2}:[A-Z]{2}$/.test(key)) {
+  if (!/^(spread|funding):[A-Z0-9_.-]{1,40}:[A-Z0-9]{2}:[A-Z0-9]{2}$/i.test(key)) {
     return res.status(400).json({ error: "Invalid route key" });
   }
   res.setHeader("Cache-Control", "no-store");
@@ -1835,7 +1835,7 @@ app.get("/api/arbitrage/history", (req, res) => {
 
 app.get("/api/arbitrage/depth", async (req, res) => {
   const key = String(req.query.key || "").slice(0, 160);
-  if (!/^spread:[A-Z0-9]{1,32}:[A-Z]{2}:[A-Z]{2}$/.test(key)) {
+  if (!/^spread:[A-Z0-9_.-]{1,40}:[A-Z0-9]{2}:[A-Z0-9]{2}$/i.test(key)) {
     return res.status(400).json({ error: "Invalid spread route key" });
   }
   const notional = Math.max(10, Math.min(1_000_000, Number(req.query.notional) || 500));
