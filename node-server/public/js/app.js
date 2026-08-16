@@ -2255,16 +2255,17 @@ function drawDensityTimelineOnChart(ctx, options) {
     const endX = Math.max(startX + 1, Math.min(PW, rawEndX));
     const isBid = wall.side === "bid";
     const active = wall.active !== false && !wall.endedAt;
-    const rgb = isBid ? [45, 212, 191] : [251, 113, 133];
-    const strength = Math.max(0, Math.min(1, Math.log10(Math.max(10000, Number(wall.S) || 0)) / 7));
-    const bandH = 3 + strength * 7;
+    const rgb = isBid ? [38, 201, 122] : [255, 69, 96];
 
-    const gradient = ctx.createLinearGradient(startX, 0, endX, 0);
-    gradient.addColorStop(0, `rgba(${rgb.join(',')},${active ? 0.42 : 0.18})`);
-    gradient.addColorStop(0.12, `rgba(${rgb.join(',')},${active ? 0.2 : 0.1})`);
-    gradient.addColorStop(1, `rgba(${rgb.join(',')},${active ? 0.05 : 0.025})`);
-    ctx.fillStyle = gradient;
-    ctx.fillRect(startX, y - bandH / 2, Math.max(1, endX - startX), bandH);
+    // Clean, crisp solid line (NO gradient shimmers/fades)
+    ctx.strokeStyle = active ? `rgba(${rgb.join(',')}, 0.85)` : `rgba(${rgb.join(',')}, 0.40)`;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash(active ? [] : [4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(startX, Math.round(y) - 0.5);
+    ctx.lineTo(endX, Math.round(y) - 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
     if (active && rawStartX >= -80 && rawStartX <= PW - 30) {
       const timeText = new Date(Number(wall.firstSeenAt) || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -2278,10 +2279,11 @@ function drawDensityTimelineOnChart(ctx, options) {
       labelY = Math.max(TOP + 2, Math.min(TOP + PH - 17, labelY));
       occupiedLabelY.push(labelY);
       const labelX = Math.max(3, Math.min(PW - labelW - 3, Math.max(3, rawStartX + 5)));
-      roundRect(ctx, labelX, labelY, labelW, 16, 5);
-      ctx.fillStyle = "rgba(9,12,17,.9)";
+      roundRect(ctx, labelX, labelY, labelW, 16, 4);
+      ctx.fillStyle = "rgba(15, 18, 24, 0.95)";
       ctx.fill();
-      ctx.strokeStyle = `rgba(${rgb.join(',')},.55)`;
+      ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.65)`;
+      ctx.lineWidth = 1;
       ctx.stroke();
       ctx.fillStyle = `rgb(${rgb.join(',')})`;
       ctx.textAlign = "center";
