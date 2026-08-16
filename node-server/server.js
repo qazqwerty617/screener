@@ -1236,11 +1236,11 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     try {
       let data;
       if (fetchEx === "HL") {
-        data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (500 * tfMs), endTime: Date.now() } });
+        data = await apiFetch("https://api.hyperliquid.xyz/info", 6000, 1, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (500 * tfMs), endTime: Date.now() } });
       } else {
         const url = getKlinesUrl(ex, sym, tf, 500);
         if (!url) return [];
-        data = await apiFetch(url, 4000, 0);
+        data = await apiFetch(url, 6000, 1);
       }
       return parseKlines(ex, data);
     } catch (e) { return []; }

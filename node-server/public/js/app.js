@@ -6211,7 +6211,7 @@ async function fetchKlines(ex, sym, tf) {
       if (!fastCandles || fastCandles.length === 0) {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 1200);
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
           const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`, { signal: controller.signal });
           clearTimeout(timeoutId);
           const dataLite = await rLite.json();
@@ -6237,6 +6237,7 @@ async function fetchKlines(ex, sym, tf) {
           updateOHLC();
           if (!chartW || !chartH) resizeChart();
           chartNeedsDraw = true;
+          drawChart();
         }
       }
     }
@@ -6264,6 +6265,7 @@ async function fetchKlines(ex, sym, tf) {
               candles = parsed;
               KLINES_CACHE.set(key, { ts: Date.now(), data: parsed });
               chartNeedsDraw = true;
+              drawChart();
             }
           }
         })
