@@ -770,6 +770,14 @@
                         <option value="age">Сначала старые</option>
                     </select>
                     <button id="density-reset-btn" class="density-reset-btn" title="Сбросить все фильтры">Сброс</button>
+                    <button id="density-blacklist-btn" class="density-blacklist-btn" title="Черный список монет">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                        </svg>
+                        <span>Черный список</span>
+                        <span class="density-blacklist-count" id="density-blacklist-count">0</span>
+                    </button>
                 </div>
 
 
@@ -780,6 +788,38 @@
             </div>
             <div id="density-canvas-wrap">
                 <canvas id="density-canvas"></canvas>
+            </div>
+
+            <!-- Density Blacklist Modal -->
+            <div id="density-blacklist-modal" class="density-blacklist-modal">
+                <div class="density-blacklist-content">
+                    <div class="density-bl-header">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+                            </svg>
+                            Черный список монет (Карта плотностей)
+                        </h3>
+                        <button class="density-bl-close" id="density-bl-close" title="Закрыть">✕</button>
+                    </div>
+                    <div class="density-bl-body">
+                        <div class="density-bl-input-row">
+                            <input type="text" id="density-bl-input" class="density-bl-input" placeholder="Добавить монету (напр. BTC, ETH, SOLUSDT)..." autocomplete="off">
+                            <button id="density-bl-add-btn" class="density-bl-add-btn">+ Добавить</button>
+                        </div>
+                        <div class="density-bl-tags-container" id="density-bl-tags">
+                            <!-- Tags injected dynamically -->
+                        </div>
+                    </div>
+                    <div class="density-bl-footer">
+                        <span class="density-bl-hint" id="density-bl-hint">Скрыто монет: 0</span>
+                        <div class="density-bl-actions">
+                            <button id="density-bl-reset-default" class="density-bl-btn-sec" title="Восстановить список по умолчанию">Сбросить по умолч.</button>
+                            <button id="density-bl-clear-all" class="density-bl-btn-sec" title="Очистить весь черный список">Очистить всё</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2585,13 +2625,13 @@
 
     <div id="toast-container" class="toast-container"></div>
 
-    <script src="/js/formationEngine.js?v=2003"></script>
-    <script src="/js/tradeOverlay.js?v=2003"></script>
-    <script src="/js/app.js?v=2003"></script>
-    <script src="/js/arbitrage.js?v=2003"></script>
-    <script src="/js/arbitrage-pro.js?v=2003"></script>
-    <script src="/js/backtest.js?v=2003"></script>
-    <script src="/js/journal.js?v=2003"></script>
+    <script src="/js/formationEngine.js?v=2004"></script>
+    <script src="/js/tradeOverlay.js?v=2004"></script>
+    <script src="/js/app.js?v=2004"></script>
+    <script src="/js/arbitrage.js?v=2004"></script>
+    <script src="/js/arbitrage-pro.js?v=2004"></script>
+    <script src="/js/backtest.js?v=2004"></script>
+    <script src="/js/journal.js?v=2004"></script>
 </body>
 
 </html>

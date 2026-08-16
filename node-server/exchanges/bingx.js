@@ -13,34 +13,21 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   async function init() {
     try {
       if (updateExStatus) updateExStatus("BX", "connecting");
-      const [contractsResp, tickersResp, premiumResp, spot24Resp] = await Promise.all([
-        apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/contracts", 15000, 2),
-        apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", 15000, 2),
-        apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/premiumIndex", 15000, 2),
-        apiFetch("https://open-api.bingx.com/openApi/spot/v1/ticker/24hr", 15000, 2).catch(() => null),
-      ]);
-      if (contractsResp?.code !== 0 || tickersResp?.code !== 0) throw new Error("BingX API error");
-
-      const tickersBySymbol = new Map((tickersResp.data || []).filter(item => item && item.symbol).map(item => [item.symbol, item]));
-      const fundingBySymbol = new Map((premiumResp.data || []).filter(item => item && item.symbol).map(item => [item.symbol, item]));
-      const spotOpenMap = new Map((spot24Resp?.data || []).filter(item => item && item.symbol).map(item => [item.symbol, +item.openPrice]));
+      const tickersResp = await apiFetch("https://open-api.bingx.com/openApi/swap/v2/quote/ticker", 10000, 2);
+      if (tickersResp?.code !== 0 || !Array.isArray(tickersResp.data)) throw new Error("BingX API error");
 
       bxSyms = [];
       let added = 0;
-      for (const contract of contractsResp.data || []) {
-        if (!contract?.symbol || !contract.symbol.endsWith("-USDT") || contract.symbol.startsWith("NC")) continue;
-        const ticker = tickersBySymbol.get(contract.symbol);
-        if (!ticker) continue;
-        const fm = fundingBySymbol.get(contract.symbol);
-        bxSyms.push(contract.symbol);
+      for (const ticker of tickersResp.data) {
+        if (!ticker?.symbol || !ticker.symbol.endsWith("-USDT") || ticker.symbol.startsWith("NC")) continue;
+        bxSyms.push(ticker.symbol);
         const p = +(ticker.lastPrice || 0);
-        const spotOpen = spotOpenMap.get(contract.symbol);
-        const o = spotOpen && spotOpen > 0 ? spotOpen : +(ticker.openPrice || 0);
+        const o = +(ticker.openPrice || 0);
         const h = +(ticker.highPrice || 0), l = +(ticker.lowPrice || 0);
-        tickers.set("BX:" + contract.symbol, {
-          key: "BX:" + contract.symbol, ex: "BX", sym: contract.symbol, base: contract.symbol.replace(/-USDT$/, ""),
+        tickers.set("BX:" + ticker.symbol, {
+          key: "BX:" + ticker.symbol, ex: "BX", sym: ticker.symbol, base: ticker.symbol.replace(/-USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : +(ticker.priceChangePercent || 0),
-          v: +(ticker.quoteVolume || ticker.volume || 0), h, l, o, funding: fm ? +fm.lastFundingRate * 100 : 0, nextFunding: fm ? +fm.nextFundingTime : 0,
+          v: +(ticker.quoteVolume || ticker.volume || 0), h, l, o, funding: 0, nextFunding: 0,
         });
         added++;
       }
@@ -51,7 +38,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       startRestPolling();
     } catch (e) {
       console.error("[BX] Init error:", e.message);
-      setTimeout(init, 5000);
+      setTimeout(init, 3000);
     }
   }
 

@@ -2215,6 +2215,7 @@ function drawDensityTimelineOnChart(ctx, options) {
   const rangeEnd = chartCandles[chartCandles.length - 1].t + observedTf;
 
   const walls = source.filter(w => {
+    if (isBaseInDensityBlacklist(w.base, w.sym)) return false;
     if (w.base !== base) return false;
     if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
     if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
@@ -8367,7 +8368,55 @@ document.addEventListener("contextmenu", (e) => {
   if (!e.target.closest(".cr")) closeMenus();
 });
 
-// тХРтХРтХР Density Map v2 тАФ Bubble Map тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
+// ═══ Density Blacklist Config ═══
+const DEFAULT_DENSITY_BLACKLIST = [
+  // User Screenshot & Majors:
+  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+  "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TRXUSDT",
+  "DOTUSDT", "LTCUSDT", "BCHUSDT", "SUIUSDT", "HYPEUSDT",
+  "ASTERUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "ZECUSDT", "ETCUSDT",
+  "WLFIUSDT", "NEARUSDT", "ENAUSDT",
+  // Base tickers:
+  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "TRX",
+  "DOT", "LTC", "BCH", "SUI", "HYPE", "ASTER", "1000PEPE", "PEPE", "1000SHIB", "SHIB",
+  "ZEC", "ETC", "WLFI", "NEAR", "ENA",
+  // Stables:
+  "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "PYUSD",
+  "USD1", "EUR1", "USDC1", "BTC1", "USTC", "USDD", "FRAX", "LUSD", "CRVUSD", "GUSD",
+  "USDJ", "CUSD", "EUR", "GBP", "JPY", "AUD", "USD", "CHF", "TRY", "RUB", "BRL",
+  "USDCUSDT", "BUSDUSDT", "FDUSDUSDT", "TUSDUSDT", "EURUSDT"
+];
+
+let densityBlacklistSet = (function() {
+  try {
+    const saved = localStorage.getItem("density_blacklist_coins");
+    if (saved) {
+      const arr = JSON.parse(saved);
+      if (Array.isArray(arr)) return new Set(arr.map(c => String(c).trim().toUpperCase()));
+    }
+  } catch(_) {}
+  return new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
+})();
+
+function isBaseInDensityBlacklist(base, sym) {
+  if (!densityBlacklistSet || densityBlacklistSet.size === 0) return false;
+  if (!base && !sym) return false;
+
+  const rawBase = (base || "").trim().toUpperCase();
+  const rawSym = (sym || "").trim().toUpperCase();
+
+  const cleanBase = rawBase.replace(/[-_/]?(USDT|USD|PERP)$/i, "");
+  const cleanSym = rawSym.replace(/_SPOT$/i, "").replace(/[-_]/g, "");
+  const fullSym = cleanBase + "USDT";
+
+  return densityBlacklistSet.has(rawBase) ||
+         densityBlacklistSet.has(cleanBase) ||
+         densityBlacklistSet.has(rawSym) ||
+         densityBlacklistSet.has(cleanSym) ||
+         densityBlacklistSet.has(fullSym);
+}
+
+// ─── Density Map v2 ── Bubble Map ──────────────────────────────────────────
 let densityCanvas, densityCtx, densityW, densityH;
 let densityData = [];     // active wall objects from server
 let densityHistoryData = []; // active + recently completed wall lifecycles
@@ -10288,6 +10337,7 @@ setInterval(() => {
 
 // тФАтФА Filter тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function passesDensityBaseFilters(d) {
+    if (isBaseInDensityBlacklist(d.base, d.sym)) return false;
     if (densityFilter !== "all" && d.side !== densityFilter) return false;
     if (densityMarket !== "all" && d.market !== densityMarket) return false;
     if (!densityExFilter.has(d.ex)) return false;
@@ -11091,14 +11141,148 @@ function resetDensityFilters() {
   layoutDensityBadges();
 }
 
-// тФАтФА Resize тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ═══ Density Blacklist Management ═══
+function initDensityBlacklistUI() {
+  const blBtn = $("density-blacklist-btn");
+  const blModal = $("density-blacklist-modal");
+  const blClose = $("density-bl-close");
+  const blInput = $("density-bl-input");
+  const blAddBtn = $("density-bl-add-btn");
+  const blTags = $("density-bl-tags");
+  const blCount = $("density-blacklist-count");
+  const blHint = $("density-bl-hint");
+  const blResetDefault = $("density-bl-reset-default");
+  const blClearAll = $("density-bl-clear-all");
+
+  function saveBlacklist() {
+    try {
+      localStorage.setItem("density_blacklist_coins", JSON.stringify(Array.from(densityBlacklistSet)));
+    } catch(_) {}
+    updateBlacklistUI();
+    layoutDensityBadges();
+    if (activeView === "screener") {
+      requestAnimationFrame(drawChart);
+      if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+        chartInstances.forEach(inst => { if (inst && typeof inst.draw === "function") inst.draw(); });
+      }
+    }
+  }
+
+  function updateBlacklistUI() {
+    const count = densityBlacklistSet.size;
+    if (blCount) blCount.textContent = count;
+    if (blBtn) blBtn.classList.toggle("has-items", count > 0);
+    if (blHint) blHint.textContent = `Скрыто монет: ${count}`;
+
+    if (!blTags) return;
+    blTags.innerHTML = "";
+    if (count === 0) {
+      blTags.innerHTML = '<div style="color:#64748b;font-size:12px;padding:16px;width:100%;text-align:center;">Черный список пуст. Добавьте монеты, которые хотите скрыть.</div>';
+      return;
+    }
+
+    const sorted = Array.from(densityBlacklistSet).sort();
+    sorted.forEach(coin => {
+      const tag = document.createElement("div");
+      tag.className = "density-bl-tag";
+      
+      const label = document.createElement("span");
+      label.textContent = coin.endsWith("USDT") ? coin : (coin + "USDT");
+      tag.appendChild(label);
+
+      const remBtn = document.createElement("button");
+      remBtn.className = "density-bl-remove";
+      remBtn.innerHTML = "×";
+      remBtn.title = `Удалить ${coin} из черного списка`;
+      remBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        densityBlacklistSet.delete(coin);
+        saveBlacklist();
+      });
+      tag.appendChild(remBtn);
+
+      blTags.appendChild(tag);
+    });
+  }
+
+  function addCoinToBlacklist(raw) {
+    if (!raw) return;
+    const parts = raw.split(/[\s,;|]+/);
+    let addedCount = 0;
+    parts.forEach(p => {
+      const clean = p.trim().toUpperCase().replace(/_SPOT$/i, "").replace(/[-_]/g, "");
+      if (clean && clean.length >= 2) {
+        densityBlacklistSet.add(clean);
+        addedCount++;
+      }
+    });
+    if (addedCount > 0) {
+      saveBlacklist();
+      showToast({ type: "success", title: "Черный список", message: `Добавлено монет: ${addedCount}`, durationMs: 2000 });
+    }
+  }
+
+  if (blBtn && blModal) {
+    blBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      updateBlacklistUI();
+      blModal.classList.add("open");
+      if (blInput) { blInput.value = ""; blInput.focus(); }
+    });
+  }
+
+  if (blClose && blModal) {
+    blClose.addEventListener("click", () => blModal.classList.remove("open"));
+  }
+
+  if (blModal) {
+    blModal.addEventListener("click", (e) => {
+      if (e.target === blModal) blModal.classList.remove("open");
+    });
+  }
+
+  if (blAddBtn && blInput) {
+    blAddBtn.addEventListener("click", () => {
+      addCoinToBlacklist(blInput.value);
+      blInput.value = "";
+    });
+    blInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        addCoinToBlacklist(blInput.value);
+        blInput.value = "";
+      } else if (e.key === "Escape" && blModal) {
+        blModal.classList.remove("open");
+      }
+    });
+  }
+
+  if (blResetDefault) {
+    blResetDefault.addEventListener("click", () => {
+      densityBlacklistSet = new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
+      saveBlacklist();
+      showToast({ type: "success", title: "Черный список", message: "Восстановлен стандартный черный список", durationMs: 2500 });
+    });
+  }
+
+  if (blClearAll) {
+    blClearAll.addEventListener("click", () => {
+      densityBlacklistSet.clear();
+      saveBlacklist();
+      showToast({ type: "info", title: "Черный список", message: "Черный список полностью очищен", durationMs: 2500 });
+    });
+  }
+
+  updateBlacklistUI();
+}
+
+// ─── Resize ────────────────────────────────────────────────────────────────
 window.addEventListener("resize", () => {
   if (activeView === "map") {
     resizeDensityCanvas();
   }
 });
 
-// тХРтХРтХР Init тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
+// ─── Init ──────────────────────────────────────────────────────────────────
 (function init() {
   // Subscription controls are critical navigation. Initialize them before
   // optional chart modules so an unrelated widget cannot disable upgrades.
@@ -11125,6 +11309,7 @@ window.addEventListener("resize", () => {
   loadTags();
   loadDrawings();
   loadDensityFilters();
+  initDensityBlacklistUI();
   if (typeof syncIndicatorButtonsUI === "function") syncIndicatorButtonsUI();
   fetchWalls();
 

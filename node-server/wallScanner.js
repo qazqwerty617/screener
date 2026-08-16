@@ -73,6 +73,7 @@ const OB_DEPTH = {
 
 const EXCLUDED_BASES = new Set([
   "USDT", "USDC", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "USDE", "PYUSD", "USD1", "EUR1", "USDC1", "BTC1",
+  "USTC", "USDD", "FRAX", "LUSD", "CRVUSD", "GUSD", "USDJ", "CUSD",
   "XAUT", "PAXG", "XAG", "XAU", "SILVER", "GOLD",
   "EUR", "GBP", "JPY", "AUD", "USD", "CHF", "TRY", "RUB", "BRL",
 ]);
