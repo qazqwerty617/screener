@@ -505,10 +505,10 @@ function buildWallSnapshot(allWalls, options = {}) {
 
     const rank = Number(w.rank) || 0;
     const confirmations = Number(w.confirmations) || 0;
-    if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 3) continue;
     const relSize = Number(w.relSize);
     const percentile = Number(w.percentile);
     const statTh = statThresholdsFor(w.ex);
+    if (Object.prototype.hasOwnProperty.call(w, "rank") && rank < 3) continue;
     if (rank === 3 && (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < statTh.minZ || percentile < statTh.minPercentile * 100)) continue;
     if (Object.prototype.hasOwnProperty.call(w, "confirmations") && confirmations < 2 &&
       (!Number.isFinite(relSize) || !Number.isFinite(percentile) || relSize < 5.5 || percentile < 98.5)) continue;
