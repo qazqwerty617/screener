@@ -8398,9 +8398,39 @@ const DEFAULT_DENSITY_BLACKLIST = [
   "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
   "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
   "AVGOX", "AAPLX", "TSLAX", "NVDAX", "MSFTX", "AMZNX", "GOOGX", "GOOGLX", "METAX",
-  "NFLXX", "COINX", "MSTRX", "BACX", "AMDX", "INTCX", "PLTRX", "BABAX", "DISX",
-  "PYPLX", "UBERX", "SPYX", "QQQX", "ARMX", "SMCX", "HOODX"
+  // ETFs / Leveraged Index Funds:
+  "TQQQ", "SQQQ", "SPXL", "SPXS", "SOXL", "SOXS", "UVXY", "SVXY", "VXX",
+  "FAS", "FAZ", "LABU", "LABD", "NUGT", "DUST", "JNUG", "JDST",
+  // Commodities & Indices:
+  "XAU", "XAG", "GOLD", "SILVER", "OIL", "WTI", "BRENT", "COPPER", "NATGAS",
+  "DOW", "SPX", "NDX", "US30", "US500", "USTECH", "DE40", "UK100", "JP225",
+  "XAUT", "PAXG"
 ];
+
+const KNOWN_STOCK_SET = new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
+
+function checkSingleStockClient(token) {
+  if (!token) return false;
+  if (token.endsWith("STOCK")) return true;
+  if (KNOWN_STOCK_SET.has(token)) return true;
+
+  let inner = token;
+  if ((token.startsWith("R") || token.startsWith("X")) && token.length >= 4) {
+    inner = token.slice(1);
+    if (KNOWN_STOCK_SET.has(inner)) return true;
+  }
+
+  for (const root of DEFAULT_DENSITY_BLACKLIST) {
+    if (root.length >= 3) {
+      if (inner === root) return true;
+      if (inner.startsWith(root) && inner.length <= root.length + 3) {
+        const rem = inner.slice(root.length);
+        if (["B", "X", "ON", "G", "M", "I", "STOCK"].includes(rem)) return true;
+      }
+    }
+  }
+  return false;
+}
 
 let densityBlacklistSet = (function() {
   try {
@@ -8414,12 +8444,25 @@ let densityBlacklistSet = (function() {
 })();
 
 function isBaseInDensityBlacklist(base, sym) {
-  if (!densityBlacklistSet || densityBlacklistSet.size === 0) return false;
   if (!base && !sym) return false;
+
+  let s = String(sym || base).toUpperCase();
+  const colonIdx = s.indexOf(":");
+  if (colonIdx >= 0) s = s.slice(colonIdx + 1);
+
+  s = s.replace(/_SPOT$/i, "")
+       .replace(/[-_]?(SWAP|PERP)$/i, "")
+       .replace(/[-_]?(USDT|USDC|BUSD|DAI|USD)$/i, "")
+       .replace(/[-_]/g, "");
+
+  let b = String(base || "").toUpperCase().replace(/[-_/]?(USDT|USD|PERP|SPOT)$/i, "").replace(/[-_]/g, "");
+
+  if (checkSingleStockClient(s) || checkSingleStockClient(b)) return true;
+
+  if (!densityBlacklistSet || densityBlacklistSet.size === 0) return false;
 
   const rawBase = (base || "").trim().toUpperCase();
   const rawSym = (sym || "").trim().toUpperCase();
-
   const cleanBase = rawBase.replace(/[-_/]?(USDT|USD|PERP)$/i, "");
   const cleanSym = rawSym.replace(/_SPOT$/i, "").replace(/[-_]/g, "");
   const fullSym = cleanBase + "USDT";
