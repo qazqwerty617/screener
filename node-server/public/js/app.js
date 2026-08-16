@@ -1280,7 +1280,7 @@ function getSmcData(candles) {
     }
   }
 
-  // 3. TEXTBOOK ICT / SMC ORDER BLOCKS
+  // 3. TEXTBOOK ICT / SMC ORDER BLOCKS (Hardcore Institutional Quality)
   const orderBlocks = [];
   const processedOrigins = new Set();
 
@@ -1288,21 +1288,19 @@ function getSmcData(candles) {
     const breakIdx = sb.breakIdx;
     const isBull = sb.isBull;
 
-    // A. Find the exact textbook Origin Candle:
-    // Bullish OB: The lowest down-close candle (close < open) prior to the displacement break
-    // Bearish OB: The highest up-close candle (close > open) prior to the displacement break
+    // A. Find the authoritative textbook Origin Candle at the crest/trough of the swing
     let obCandleIdx = -1;
     let extremePrice = isBull ? Infinity : -Infinity;
 
-    for (let k = breakIdx - 1; k >= Math.max(0, breakIdx - 20); k--) {
+    for (let k = breakIdx - 1; k >= Math.max(0, breakIdx - 25); k--) {
       const c = candles[k];
       if (isBull) {
-        if (c.l < extremePrice) {
+        if (c.l <= extremePrice) {
           extremePrice = c.l;
           obCandleIdx = k;
         }
       } else {
-        if (c.h > extremePrice) {
+        if (c.h >= extremePrice) {
           extremePrice = c.h;
           obCandleIdx = k;
         }
@@ -1310,16 +1308,24 @@ function getSmcData(candles) {
     }
 
     if (obCandleIdx === -1) obCandleIdx = Math.max(0, breakIdx - 1);
-    const obKey = `${isBull ? "bull" : "bear"}_${obCandleIdx}`;
-    if (processedOrigins.has(obKey)) continue;
-    processedOrigins.add(obKey);
+    
+    // Cluster suppression: never create multiple OBs for the same swing origin cluster
+    let duplicateCluster = false;
+    for (const origin of processedOrigins) {
+      if (Math.abs(origin - obCandleIdx) <= 12) {
+        duplicateCluster = true;
+        break;
+      }
+    }
+    if (duplicateCluster) continue;
+    processedOrigins.add(obCandleIdx);
 
     const obC = candles[obCandleIdx];
     const zoneH = obC.h - obC.l || 1e-9;
     const atr = atrAt(obCandleIdx);
     const mt = (obC.h + obC.l) / 2; // Mean Threshold (50% equilibrium)
 
-    // B. Displacement Engine: Decisive energetic move leaving the OB
+    // B. Displacement Engine: Hardcore institutional impulse requirement
     const legEnd = Math.min(numCandles, obCandleIdx + 7);
     const leg = candles.slice(obCandleIdx + 1, legEnd);
     if (leg.length < 2) continue;
@@ -1328,8 +1334,8 @@ function getSmcData(candles) {
     const legLow = Math.min(...leg.map(c => c.l));
     const impulseATR = isBull ? (legHigh - obC.h) / atr : (obC.l - legLow) / atr;
     
-    // Strict textbook rule: A candle with no energetic displacement is NOT an institutional block
-    if (impulseATR < 0.75) continue;
+    // Hardcore filter: must have decisive institutional displacement (>= 1.0 ATR)
+    if (impulseATR < 1.0) continue;
 
     const path = leg.reduce((a, c) => a + (c.h - c.l), 0) || 1e-9;
     const efficiency = Math.abs(leg[leg.length - 1].c - leg[0].o) / path;
@@ -1339,18 +1345,18 @@ function getSmcData(candles) {
       : (legHigh - lastLeg.c) / (legHigh - legLow || 1e-9);
 
     let dispScore = 0;
-    dispScore += impulseATR >= 2.5 ? 18 : impulseATR >= 1.5 ? 13 : impulseATR >= 1.0 ? 9 : 4;
+    dispScore += impulseATR >= 2.5 ? 20 : impulseATR >= 1.5 ? 15 : 10;
     dispScore += efficiency >= 0.65 ? 12 : efficiency >= 0.45 ? 7 : 3;
-    dispScore += clv >= 0.65 ? 5 : 2;
+    dispScore += clv >= 0.65 ? 6 : 2;
 
     // C. Structure & Break type
-    let structScore = sb.type.includes("CHoCH") ? 15 : 9;
+    let structScore = sb.type.includes("CHoCH") ? 16 : 10;
     const swingAge = breakIdx - sb.startIdx;
     structScore += swingAge >= 25 ? 6 : swingAge >= 10 ? 3 : 0;
 
     // D. Liquidity Sweep before Origin
     let sweepScore = 0;
-    const lookFrom = Math.max(1, obCandleIdx - 12);
+    const lookFrom = Math.max(1, obCandleIdx - 14);
     for (const sw of swings) {
       if (sw.idx >= obCandleIdx || sw.idx < lookFrom - 3) continue;
       if (isBull && sw.type !== "low") continue;
@@ -1364,7 +1370,7 @@ function getSmcData(candles) {
       if (sweepScore) break;
     }
 
-    // E. FVG / Imbalance Confluence (Textbook ICT requirement)
+    // E. FVG / Imbalance Confluence (Mandatory for Grade-A ICT Order Blocks)
     const hasFvg = candles.slice(obCandleIdx + 1, Math.min(numCandles - 1, obCandleIdx + 5)).some((c, idx) => {
       const cIdx = obCandleIdx + 1 + idx;
       if (cIdx < 2 || cIdx >= numCandles) return false;
@@ -1376,22 +1382,21 @@ function getSmcData(candles) {
     const avgVol = candles.slice(Math.max(0, obCandleIdx - 10), obCandleIdx).reduce((a, b) => a + (b.v || 0), 0) / 10;
     const volScore = (obC.v && avgVol && obC.v > avgVol * 1.2) ? 8 : 0;
 
-    // G. Strict Mitigation Tracking (Mean Threshold & Invalidation)
+    // G. Strict Mitigation Tracking (Mean Threshold 50% & Invalidation)
     let touchEpisodes = 0;
     let inZone = false;
     let alive = true;
     for (let k = breakIdx + 1; k < numCandles; k++) {
       const c = candles[k];
-      // Touching zone
       const isTouching = isBull ? c.l <= obC.h && c.h >= obC.l : c.h >= obC.l && c.l <= obC.h;
       if (isTouching && !inZone) touchEpisodes++;
       inZone = isTouching;
 
       // Invalidation: Real candle body closes beyond Mean Threshold (50%) or wicks through extreme
       if (isBull) {
-        if (c.c < mt || c.l < obC.l - (0.15 * atr)) { alive = false; break; }
+        if (c.c < mt || c.l < obC.l - (0.10 * atr)) { alive = false; break; }
       } else {
-        if (c.c > mt || c.h > obC.h + (0.15 * atr)) { alive = false; break; }
+        if (c.c > mt || c.h > obC.h + (0.10 * atr)) { alive = false; break; }
       }
     }
     if (!alive || touchEpisodes >= 3) continue;
@@ -1399,11 +1404,14 @@ function getSmcData(candles) {
 
     // H. Quality Penalties
     let penalty = 0;
-    if (zoneH > 2.2 * atr) penalty += 10;
+    if (zoneH > 2.0 * atr) penalty += 12;
 
     const score = Math.max(1, Math.min(100, Math.round(
       dispScore + structScore + sweepScore + fvgScore + freshScore + volScore - penalty
     )));
+
+    // Only high quality setups
+    if (score < 45) continue;
 
     orderBlocks.push({
       type: isBull ? "bull" : "bear",
@@ -1427,17 +1435,15 @@ function getSmcData(candles) {
     // Bullish FVG (SIBI): c3.l > c1.h with strong bullish displacement in c2
     if (c3.l > c1.h && c2.c > c2.o) {
       const gap = c3.l - c1.h;
-      const minGap = Math.max(candles[i].c * 0.0008, 0.20 * atr);
+      const minGap = Math.max(candles[i].c * 0.001, 0.25 * atr);
       if (gap >= minGap) {
         const topPrice = c3.l;
         const botPrice = c1.h;
         const ce = (topPrice + botPrice) / 2; // Consequent Encroachment
 
-        // Check subsequent price action for full fill / invalidation
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
           const ck = candles[k];
-          // Fully filled if price wicks below botPrice or closes below CE
           if (ck.l <= botPrice || ck.c < ce) {
             filled = true;
             break;
@@ -1459,7 +1465,7 @@ function getSmcData(candles) {
     // Bearish FVG (BISI): c3.h < c1.l with strong bearish displacement in c2
     if (c3.h < c1.l && c2.c < c2.o) {
       const gap = c1.l - c3.h;
-      const minGap = Math.max(candles[i].c * 0.0008, 0.20 * atr);
+      const minGap = Math.max(candles[i].c * 0.001, 0.25 * atr);
       if (gap >= minGap) {
         const topPrice = c1.l;
         const botPrice = c3.h;
@@ -1468,7 +1474,6 @@ function getSmcData(candles) {
         let filled = false;
         for (let k = i + 1; k < numCandles; k++) {
           const ck = candles[k];
-          // Fully filled if price wicks above topPrice or closes above CE
           if (ck.h >= topPrice || ck.c > ce) {
             filled = true;
             break;
@@ -1542,9 +1547,6 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
 
   const lastPrice = candles[candles.length - 1].c;
 
-  // X mapping must match the candle renderer exactly ((idx - viewStart) with
-  // the fractional part). Using floor(viewStart) here made every SMC zone
-  // drift up to a full candle width away from its origin while dragging.
   const getCandleX = (idx) => {
     return Math.round((idx - viewStart) * candleW + candleW / 2);
   };
@@ -1575,19 +1577,85 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
     ctx.restore();
   };
 
-  // 1. UNMITIGATED ORDER BLOCKS (OB) - Ranked by Quality Score (0-100 pts)
-  // Always projected 12 candles forward ahead of the chart right edge
-  // Label: strictly "OB" (no "(Bull)" or "(Bear)" suffix)
-  if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
-    const bullOBs = smcData.orderBlocks
-      .filter(ob => ob.type === "bull" && ob.high <= lastPrice)
-      .sort((a, b) => b.score - a.score || b.high - a.high)
-      .slice(0, 3);
+  // Spatial Non-Maximum Suppression (NMS) – completely eliminates overlapping duplicate OBs
+  function deduplicateOBs(list, maxCount = 2) {
+    const sorted = list.slice().sort((a, b) => b.score - a.score || b.startIdx - a.startIdx);
+    const selected = [];
 
-    const bearOBs = smcData.orderBlocks
-      .filter(ob => ob.type === "bear" && ob.low >= lastPrice)
-      .sort((a, b) => b.score - a.score || a.low - b.low)
-      .slice(0, 3);
+    for (const ob of sorted) {
+      let isOverlap = false;
+      for (const existing of selected) {
+        // Vertical price overlap check
+        const overlapTop = Math.min(ob.high, existing.high);
+        const overlapBot = Math.max(ob.low, existing.low);
+        if (overlapTop > overlapBot) {
+          const overlapH = overlapTop - overlapBot;
+          const h1 = ob.high - ob.low || 1e-9;
+          const h2 = existing.high - existing.low || 1e-9;
+          // If zones overlap by > 12% vertically, reject duplicate
+          if (overlapH / h1 > 0.12 || overlapH / h2 > 0.12) {
+            isOverlap = true;
+            break;
+          }
+        }
+        // Time proximity check: same swing origin within 16 candles
+        if (Math.abs(ob.startIdx - existing.startIdx) <= 16) {
+          isOverlap = true;
+          break;
+        }
+      }
+      if (!isOverlap) {
+        selected.push(ob);
+        if (selected.length >= maxCount) break;
+      }
+    }
+    return selected;
+  }
+
+  function deduplicateFVGs(list, maxCount = 2) {
+    const sorted = list.slice().sort((a, b) => (b.topPrice - b.botPrice) - (a.topPrice - a.botPrice) || b.startIdx - a.startIdx);
+    const selected = [];
+
+    for (const fvg of sorted) {
+      let isOverlap = false;
+      for (const existing of selected) {
+        const overlapTop = Math.min(fvg.topPrice, existing.topPrice);
+        const overlapBot = Math.max(fvg.botPrice, existing.botPrice);
+        if (overlapTop > overlapBot) {
+          const overlapH = overlapTop - overlapBot;
+          const h1 = fvg.topPrice - fvg.botPrice || 1e-9;
+          const h2 = existing.topPrice - existing.botPrice || 1e-9;
+          if (overlapH / h1 > 0.15 || overlapH / h2 > 0.15) {
+            isOverlap = true;
+            break;
+          }
+        }
+        if (Math.abs(fvg.startIdx - existing.startIdx) <= 8) {
+          isOverlap = true;
+          break;
+        }
+      }
+      if (!isOverlap) {
+        selected.push(fvg);
+        if (selected.length >= maxCount) break;
+      }
+    }
+    return selected;
+  }
+
+  // 1. UNMITIGATED ORDER BLOCKS (OB) - Deduped & Clean
+  // Always projected 12 candles forward ahead of the chart right edge
+  // Label: strictly "OB"
+  if (chartActiveSmc.has("ob") && smcData.orderBlocks.length > 0) {
+    const bullOBs = deduplicateOBs(
+      smcData.orderBlocks.filter(ob => ob.type === "bull" && ob.high <= lastPrice),
+      2
+    );
+
+    const bearOBs = deduplicateOBs(
+      smcData.orderBlocks.filter(ob => ob.type === "bear" && ob.low >= lastPrice),
+      2
+    );
 
     const activeOBs = [...bullOBs, ...bearOBs];
 
@@ -1623,18 +1691,18 @@ function renderSmartMoneyConcepts(ctx, candles, s, vis, candleW, futureGap, toY,
     }
   }
 
-  // 2. UNFILLED FAIR VALUE GAPS (FVG) - Filter to 3 closest Bull & 3 closest Bear
+  // 2. UNFILLED FAIR VALUE GAPS (FVG) - Deduped & Clean
   // Always projected 12 candles forward ahead of the chart right edge
   if (chartActiveSmc.has("fvg") && smcData.fvgs.length > 0) {
-    const bullFVGs = smcData.fvgs
-      .filter(fvg => fvg.type === "bull" && fvg.topPrice <= lastPrice)
-      .sort((a, b) => b.topPrice - a.topPrice)
-      .slice(0, 3);
+    const bullFVGs = deduplicateFVGs(
+      smcData.fvgs.filter(fvg => fvg.type === "bull" && fvg.topPrice <= lastPrice),
+      2
+    );
 
-    const bearFVGs = smcData.fvgs
-      .filter(fvg => fvg.type === "bear" && fvg.botPrice >= lastPrice)
-      .sort((a, b) => a.botPrice - b.botPrice)
-      .slice(0, 3);
+    const bearFVGs = deduplicateFVGs(
+      smcData.fvgs.filter(fvg => fvg.type === "bear" && fvg.botPrice >= lastPrice),
+      2
+    );
 
     const activeFVGs = [...bullFVGs, ...bearFVGs];
 
