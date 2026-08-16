@@ -1301,15 +1301,7 @@ const NON_CRYPTO_BASES = new Set([
   "SOXL", "SOXS", "SNDK", "SPCX", "SKHYNIX", "SKHY", "SNXX", "CYS", "CL", "KORU", "HEI",
   "MU", "UB", "CRCL", "DRAM", "NBIS", "RDW", "EWY", "EWJ", "AAOI", "SSPC", "CXMT", "AXTI",
   "RKLB", "XLK", "WDC", "BIIB", "ALAB", "AEHR", "COHR", "APP", "REGN", "DELL", "AMGN", "GILD",
-  "SOXX", "MRVL", "KIOXIA", "LRCX", "CRWD", "CRDO", "SITM", "OXY", "BMNR", "ARQQ", "KTOS",
-  "DKNG", "TTWO", "LUNR", "APLD", "RGTI", "POET", "ONDS", "CIEN", "PANW", "SNOW", "NOK",
-  "RIVN", "HIMS", "HPE", "VRT", "FLEX", "TXN", "ISRG", "GEV", "TER", "AAL", "BKNG", "AXON",
-  "VST", "QBTS", "CLSK", "ETN", "GFS", "LIN", "BRKB", "AVAV", "CMCSA", "TSEM", "VRTX",
-  "NVIDIA", "TESLA", "SAMSUNG", "HYUNDAI", "SONY", "TENCENT", "XIAOMI", "GIGADEVICE", "GIGADEV",
-  "POPMART", "HK0700", "HK1810", "NDX100", "SP500", "SPX500", "NAS100", "NASDAQ100", "US30",
-  "DOWJONES", "NIKKEI225", "RUSSELL2000", "NATGAS", "NGAS", "COPPER", "PALLADIUM", "ALUMINUM",
-  "ZINC", "NICKEL", "SILVER", "NVDL", "TSLL", "GGLL", "AAPU", "MSFU", "AMZU", "CONL", "BITO",
-  "TMF", "TBT", "UVXY", "TZA", "XLE", "XBI", "SMH", "URNM", "GDX", "EWZ", "FWDI",
+  "SOXX", "MRVL",
 ]);
 
 function backtestBase(ticker) {
@@ -1348,50 +1340,160 @@ function getBacktestUniverse(exchange) {
   return Array.from(tickers.values())
     .filter(ticker => isEligibleBacktestTicker(ticker, exchange))
     .sort((a, b) => {
-      const chgA = Math.abs(a.chg || 0);
-      const chgB = Math.abs(b.chg || 0);
-      const scoreA = chgA * 2.5 + Math.log10(Math.max(1, a.v || 1));
-      const scoreB = chgB * 2.5 + Math.log10(Math.max(1, b.v || 1));
+      const volA = Number(a.v) || 0;
+      const volB = Number(b.v) || 0;
+      const chgA = Math.abs(Number(a.chg) || 0);
+      const chgB = Math.abs(Number(b.chg) || 0);
+      const scoreA = Math.log10(Math.max(1000, volA)) * 2.5 + chgA * 2.0;
+      const scoreB = Math.log10(Math.max(1000, volB)) * 2.5 + chgB * 2.0;
       return scoreB - scoreA;
-    })
-    .slice(0, 500);
+    });
 }
 
-function calcWindowVolatilityScore(candles, tf) {
-  if (!candles || candles.length < 80) return 0;
-  const sample = candles.slice(-Math.min(160, candles.length));
-  const firstOpen = sample[0].o;
-  const lastClose = sample[sample.length - 1].c;
-  if (!lastClose || lastClose <= 0 || !firstOpen || firstOpen <= 0) return 0;
+async function fetchBacktestCandles(ex, sym, tf) {
+  const tfMs = (() => {
+    const low = tf.toLowerCase();
+    const num = parseInt(low, 10) || 1;
+    if (low.endsWith("m")) return num * 60 * 1000;
+    if (low.endsWith("h")) return num * 60 * 60 * 1000;
+    if (low.endsWith("d")) return num * 24 * 60 * 60 * 1000;
+    return 60000;
+  })();
 
-  const high = Math.max(...sample.map(c => c.h));
-  const low = Math.min(...sample.map(c => c.l));
-  const rangePct = (high - low) / lastClose;
+  const nowTs = Date.now();
+  const pages = (ex === "OX" || ex === "KC") ? 4 : 2;
+  const limit = (ex === "OX") ? 100 : ((ex === "KC") ? 200 : 1000);
 
+  const promises = [];
+  for (let p = 0; p < pages; p++) {
+    const before = nowTs - (p * limit * tfMs);
+    if (ex === "HL") {
+      promises.push(
+        apiFetch("https://api.hyperliquid.xyz/info", 3500, 0, "POST", {
+          type: "candleSnapshot",
+          req: { coin: sym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before }
+        }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }))).catch(() => [])
+      );
+    } else {
+      const url = getKlinesUrl(ex, sym, tf, limit, before);
+      if (url) {
+        promises.push(apiFetch(url, 3500, 0).then(data => parseKlines(ex, data)).catch(() => []));
+      }
+    }
+  }
+
+  const results = await Promise.all(promises);
+  const all = [];
+  for (const batch of results) {
+    if (Array.isArray(batch)) all.push(...batch);
+  }
+  const seen = new Set();
+  return all
+    .filter(c => c && Number.isFinite(c.t) && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0 && (seen.has(c.t) ? false : seen.add(c.t)))
+    .sort((a, b) => a.t - b.t)
+    .slice(0, -1);
+}
+
+function scoreBacktestCandidate(candles, cut, visibleBars, futureBars, tf) {
+  const visible = candles.slice(cut - visibleBars, cut);
+  const future = candles.slice(cut, cut + futureBars);
+  if (visible.length < visibleBars || future.length < futureBars) return 0;
+
+  const lastClose = visible[visible.length - 1].c;
+  if (!lastClose || lastClose <= 0) return 0;
+
+  const visHigh = Math.max(...visible.map(c => c.h));
+  const visLow = Math.min(...visible.map(c => c.l));
+  const visRangePct = (visHigh - visLow) / lastClose;
+
+  const futHigh = Math.max(...future.map(c => c.h));
+  const futLow = Math.min(...future.map(c => c.l));
+  const futRangePct = (futHigh - futLow) / lastClose;
+
+  // Strict dynamic filters: guarantees active, volatile market, not a boring flat channel
+  const minVisRange = { "1m": 0.035, "5m": 0.055, "15m": 0.080, "30m": 0.100, "1h": 0.130, "4h": 0.180, "1d": 0.250 }[tf] || 0.06;
+  const minFutRange = { "1m": 0.020, "5m": 0.030, "15m": 0.045, "30m": 0.060, "1h": 0.080, "4h": 0.120, "1d": 0.160 }[tf] || 0.035;
+
+  if (visRangePct < minVisRange || futRangePct < minFutRange) return 0;
+
+  // Check activity near cutoff (last 25 bars must have movement)
+  const recent = visible.slice(-25);
+  const recHigh = Math.max(...recent.map(c => c.h));
+  const recLow = Math.min(...recent.map(c => c.l));
+  const recRangePct = (recHigh - recLow) / lastClose;
+  if (recRangePct < minFutRange * 0.4) return 0;
+
+  // Measure ATR and Candle Bodies
   let trSum = 0;
   let bodySum = 0;
-  for (let i = 1; i < sample.length; i++) {
-    const prev = sample[i - 1].c;
-    const cur = sample[i];
+  for (let i = 1; i < visible.length; i++) {
+    const cur = visible[i];
+    const prev = visible[i - 1].c;
     trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - prev), Math.abs(cur.l - prev));
     bodySum += Math.abs(cur.c - cur.o);
   }
-  const avgTr = trSum / (sample.length - 1);
-  const avgBody = bodySum / (sample.length - 1);
+  const avgTr = trSum / (visible.length - 1);
+  const avgBody = bodySum / (visible.length - 1);
   const atrPct = avgTr / lastClose;
   const bodyPct = avgBody / lastClose;
+
+  const firstOpen = visible[0].o;
   const trendPct = Math.abs(lastClose - firstOpen) / firstOpen;
 
-  const minRange = { "1m": 0.022, "5m": 0.035, "15m": 0.050, "30m": 0.065, "1h": 0.085, "4h": 0.120, "1d": 0.160 }[tf] || 0.045;
-  const minAtr = { "1m": 0.0009, "5m": 0.0016, "15m": 0.0025, "30m": 0.0035, "1h": 0.0048, "4h": 0.0075, "1d": 0.0130 }[tf] || 0.0022;
-
-  if (rangePct < minRange || atrPct < minAtr) return 0;
-
-  return (rangePct * 100) * 1.5 + (atrPct * 1000) * 2.0 + (trendPct * 100) * 1.2 + (bodyPct * 1000) * 1.0;
+  return (visRangePct * 100) * 2.5 
+       + (futRangePct * 100) * 3.5 
+       + (recRangePct * 100) * 2.0 
+       + (atrPct * 1000) * 3.0 
+       + (bodyPct * 1000) * 2.0 
+       + (trendPct * 100) * 1.5;
 }
 
-function isInterestingBacktestWindow(candles, tf) {
-  return calcWindowVolatilityScore(candles, tf) > 0;
+function findBestBacktestWindow(candles, tf) {
+  if (!candles || candles.length < 260) return null;
+  const visibleBars = Math.min(200, Math.max(150, Math.floor(candles.length * 0.45)));
+  const futureBars = Math.min(90, Math.max(50, Math.floor(candles.length * 0.18)));
+  const minCut = visibleBars;
+  const maxCut = candles.length - futureBars;
+  if (maxCut <= minCut) return null;
+
+  const candidates = [];
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
+    const score = scoreBacktestCandidate(candles, candidateCut, visibleBars, futureBars, tf);
+    if (score > 0) {
+      candidates.push({
+        cut: candidateCut,
+        visible: candles.slice(candidateCut - visibleBars, candidateCut),
+        future: candles.slice(candidateCut, candidateCut + futureBars),
+        score,
+      });
+    }
+  }
+
+  // Fallback with slightly relaxed criteria if strict filter didn't match in this specific batch
+  if (candidates.length === 0) {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
+      const visible = candles.slice(candidateCut - visibleBars, candidateCut);
+      const future = candles.slice(candidateCut, candidateCut + futureBars);
+      const lastClose = visible[visible.length - 1].c;
+      const visHigh = Math.max(...visible.map(c => c.h));
+      const visLow = Math.min(...visible.map(c => c.l));
+      const visRangePct = (visHigh - visLow) / lastClose;
+      const futHigh = Math.max(...future.map(c => c.h));
+      const futLow = Math.min(...future.map(c => c.l));
+      const futRangePct = (futHigh - futLow) / lastClose;
+
+      if (visRangePct > 0.035 && futRangePct > 0.02) {
+        candidates.push({ cut: candidateCut, visible, future, score: visRangePct + futRangePct });
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates.slice(0, Math.min(3, candidates.length));
+  return top[Math.floor(Math.random() * top.length)];
 }
 
 function publicBacktestCandle(c) {
@@ -1405,7 +1507,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref();
 
-// тФАтФАтФА Go Scanner Proxy тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ─── Go Scanner Proxy ─────────────────────────────────────────────────────────────
 const GO_SCANNER_URL = "http://127.0.0.1:8082";
 
 app.get("/api/go-status", async (req, res) => {
@@ -1433,7 +1535,7 @@ app.get("/api/go-klines", async (req, res) => {
       return res.status(r.status).json({ error: text });
     }
     const data = await r.json();
-    // Go returns [{t,o,h,l,c,v}] тАФ convert to flat array for frontend compatibility
+    // Go returns [{t,o,h,l,c,v}] – convert to flat array for frontend compatibility
     const flat = [];
     for (const c of data) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
     res.json(flat);
@@ -1441,7 +1543,7 @@ app.get("/api/go-klines", async (req, res) => {
     res.status(503).json({ error: "Go scanner offline: " + e.message });
   }
 });
-// тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ─────────────────────────────────────────────────────────────────────────────────
 
 function cacheKey(ex, sym, tf, lite) {
   return `${ex}|${sym}|${tf}|${lite ? "1" : "0"}`;
@@ -1486,7 +1588,7 @@ app.get("/api/klines", async (req, res) => {
   }
 });
 
-// тФАтФАтФА Blind backtest / bar replay тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ─── Blind backtest / bar replay ──────────────────────────────────────────────────
 app.get("/api/backtest/new", async (req, res) => {
   const allowedTf = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d"]);
   const tf = allowedTf.has(req.query.tf) ? req.query.tf : "5m";
@@ -1494,52 +1596,32 @@ app.get("/api/backtest/new", async (req, res) => {
   const universe = getBacktestUniverse(exchange);
   res.setHeader("Cache-Control", "no-store");
 
-  if (universe.length < 20) {
+  if (universe.length < 10) {
     return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
   }
 
-  const shuffled = universe.slice().sort(() => Math.random() - 0.5);
+  // Pick from the top active liquid coins (ranked by volume & volatility)
+  const topPool = universe.slice(0, Math.min(80, universe.length)).sort(() => Math.random() - 0.5);
   let lastError = null;
 
-  for (const ticker of shuffled.slice(0, 20)) {
-    try {
-      const candles = (await fetchFullHistory(ticker.ex, ticker.sym, tf, false))
-        .filter(c => c && Number.isFinite(c.t) && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0)
-        .sort((a, b) => a.t - b.t)
-        .slice(0, -1); // never use a still-forming candle
+  // Process in fast parallel batches of 3 tickers for instant sub-300ms response
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < topPool.length; i += BATCH_SIZE) {
+    const batch = topPool.slice(i, i + BATCH_SIZE);
+    const fetchPromises = batch.map(ticker =>
+      fetchBacktestCandles(ticker.ex, ticker.sym, tf)
+        .then(candles => ({ ticker, candles }))
+        .catch(err => { lastError = err; return null; })
+    );
 
-      const desiredHistory = { "1m": 2600, "5m": 2200, "15m": 1400, "30m": 1000, "1h": 700, "4h": 320, "1d": 160 }[tf] || 700;
-      const historyCap = { OX: 450, HT: 700, HL: 700, KC: 1500 }[exchange] || desiredHistory;
-      const minHistory = Math.min(desiredHistory, historyCap);
-      if (candles.length < minHistory) continue; // skip very recent listings
+    const results = await Promise.all(fetchPromises);
 
-      const visibleBars = Math.min(240, Math.max(150, candles.length - 100));
-      const futureBars = Math.min(96, Math.max(40, Math.floor(candles.length * 0.12)));
-      const minCut = visibleBars;
-      const maxCut = candles.length - futureBars;
-      if (maxCut <= minCut) continue;
+    for (const resItem of results) {
+      if (!resItem || !resItem.candles || resItem.candles.length < 260) continue;
+      const best = findBestBacktestWindow(resItem.candles, tf);
+      if (!best) continue;
 
-      const candidates = [];
-      for (let attempt = 0; attempt < 35; attempt++) {
-        const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
-        const candidate = candles.slice(candidateCut - visibleBars, candidateCut);
-        const score = calcWindowVolatilityScore(candidate, tf);
-        if (score > 0) {
-          candidates.push({ cut: candidateCut, visible: candidate, score });
-        }
-      }
-      if (candidates.length === 0) continue;
-
-      // Sort by volatility score descending and pick from top 3
-      candidates.sort((a, b) => b.score - a.score);
-      const topCandidates = candidates.slice(0, Math.min(3, candidates.length));
-      const best = topCandidates[Math.floor(Math.random() * topCandidates.length)];
-
-      const cut = best.cut;
-      const visible = best.visible;
-      const future = candles.slice(cut, cut + futureBars);
-      if (visible.length < 150 || future.length < 40) continue;
-
+      const ticker = resItem.ticker;
       const id = randomUUID();
       backtestSessions.set(id, {
         id,
@@ -1548,7 +1630,7 @@ app.get("/api/backtest/new", async (req, res) => {
         sym: ticker.sym,
         base: ticker.base || ticker.sym.replace(/USDT$/, ""),
         tf,
-        future,
+        future: best.future,
         revealed: 0,
       });
 
@@ -1559,17 +1641,15 @@ app.get("/api/backtest/new", async (req, res) => {
         sym: ticker.sym,
         base: ticker.base || ticker.sym.replace(/USDT$/, ""),
         tf,
-        cutoffTime: visible[visible.length - 1].t,
-        candles: visible.map(publicBacktestCandle),
-        futureCount: future.length,
+        cutoffTime: best.visible[best.visible.length - 1].t,
+        candles: best.visible.map(publicBacktestCandle),
+        futureCount: best.future.length,
         universeSize: universe.length,
       });
-    } catch (error) {
-      lastError = error;
     }
   }
 
-  res.status(503).json({ error: lastError?.message || "Не удалось подобрать исторический участок" });
+  res.status(503).json({ error: lastError?.message || "Не удалось подобрать активный исторический участок. Попробуйте еще раз." });
 });
 
 app.post("/api/backtest/:id/step", (req, res) => {
