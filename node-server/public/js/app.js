@@ -3143,7 +3143,17 @@ function drawChart() {
   vCtx.lineTo(PW, volumeYStart);
   vCtx.stroke();
 
-  if (vis.length > 0) {
+  const vs = window.volumeSettings || {
+    show: true,
+    up: "#26c97a",
+    upOp: 75,
+    down: "#ff4560",
+    downOp: 75
+  };
+  const upVolCol = hexToRgba(vs.up || "#26c97a", vs.upOp ?? 75);
+  const dnVolCol = hexToRgba(vs.down || "#ff4560", vs.downOp ?? 75);
+
+  if (vs.show && vis.length > 0) {
     let maxV = 0;
     for (let i = 0; i < vis.length; i++) {
       const v = Number(vis[i]?.v) || 0;
@@ -3170,7 +3180,7 @@ function drawChart() {
         const fillY = volumeYStart + volumeHeight - vh;
 
         const up = c.c >= c.o;
-        vCtx.fillStyle = up ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+        vCtx.fillStyle = up ? upVolCol : dnVolCol;
         vCtx.fillRect(fillX, fillY, fillW, vh);
       }
     }
@@ -9327,9 +9337,19 @@ class ChartInstance {
     }
 
     // Volume Histogram Overlay on multi-chart grid cell (Project Colors, No Lines, TradingView Auto-Scale)
+    const vs = window.volumeSettings || {
+      show: true,
+      up: "#26c97a",
+      upOp: 75,
+      down: "#ff4560",
+      downOp: 75
+    };
+    const upVolColGrid = hexToRgba(vs.up || "#26c97a", Math.round((vs.upOp ?? 75) * 0.6));
+    const dnVolColGrid = hexToRgba(vs.down || "#ff4560", Math.round((vs.downOp ?? 75) * 0.6));
+
     const cellVolH = Math.min(48, Math.round(PH * 0.28));
 
-    if (vis.length > 0) {
+    if (vs.show && vis.length > 0) {
       let maxV = 0;
       for (let i = 0; i < vis.length; i++) {
         const v = Number(vis[i]?.v) || 0;
@@ -9359,7 +9379,7 @@ class ChartInstance {
           const fillY = PH - vh;
 
           const up = c.c >= c.o;
-          ctx.fillStyle = up ? "rgba(38, 201, 122, 0.45)" : "rgba(255, 69, 96, 0.45)";
+          ctx.fillStyle = up ? upVolColGrid : dnVolColGrid;
           ctx.fillRect(fillX, fillY, fillW, vh);
         }
       }
