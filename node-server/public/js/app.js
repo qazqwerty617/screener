@@ -14162,9 +14162,23 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     }
     natrVal = Math.max(0, Math.min(100, natrVal));
 
-    // Funding
+    // Funding rate & countdown
     const fundingVal = coinInfo && typeof coinInfo.funding === "number" ? coinInfo.funding : 0.0100;
-    const fundStr = (fundingVal >= 0 ? "+" : "") + fundingVal.toFixed(4) + "%";
+    let fundStr = (fundingVal >= 0 ? "+" : "") + fundingVal.toFixed(4) + "%";
+
+    let fundMs = 0;
+    if (coinInfo && coinInfo.nextFunding > 0) {
+      fundMs = coinInfo.nextFunding - Date.now();
+    } else {
+      const eightH = 8 * 3600000;
+      fundMs = eightH - (Date.now() % eightH);
+    }
+    if (fundMs > 0) {
+      const fh = Math.floor(fundMs / 3600000);
+      const fm = Math.floor((fundMs % 3600000) / 60000);
+      const fs = Math.floor((fundMs % 60000) / 1000);
+      fundStr += ` (${fh}:${String(fm).padStart(2, "0")}:${String(fs).padStart(2, "0")})`;
+    }
 
     // 3. Render Dedicated HiDPI Ultra-HD (4K Crisp) Offscreen Canvas (2400 x 1360 physical pixels)
     const W = 1200;
@@ -14255,7 +14269,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     renderStatPill("ИЗМ", chgText, isChgUp ? "#22c55e" : "#ef4444");
     renderStatPill("ОБЪЕМ", vol24Str, "#ffffff");
     renderStatPill("NATR", natrVal.toFixed(1) + "%", "#a855f7");
-    renderStatPill("FR", fundStr, fundingVal > 0 ? "#fbbf24" : fundingVal < 0 ? "#ef4444" : "#94a3b8");
+    renderStatPill("ФАНДИНГ", fundStr, fundingVal > 0 ? "#fbbf24" : fundingVal < 0 ? "#ef4444" : "#94a3b8");
 
     // Right-side alert notification title
     ctx.textAlign = "right";
@@ -14537,12 +14551,6 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       }
       gp += gridStep;
     }
-
-    // ── Volume Pane Label ──
-    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
-    ctx.font = "bold 10px Inter, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`VOL: ${typeof fV === "function" ? fV(maxVol) : maxVol.toFixed(0)}`, 14, volY + 14);
 
     // ── Time Axis (Bottom) ──
     const timeY = H - BTM_TIME / 2;
