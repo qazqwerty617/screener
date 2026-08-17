@@ -14274,9 +14274,14 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     // Right-side alert notification title
     ctx.textAlign = "right";
     if (alertOptions && alertOptions.isFormation) {
+      const fInfo = alertOptions.formationInfo || { touches: 3, distPct: 0.28 };
       ctx.fillStyle = "#c084fc";
-      ctx.font = "bold 13px Inter, sans-serif";
-      ctx.fillText(`⚡ OBSIDIAN FORMATION ALERT`, W - 22, 26);
+      ctx.font = "bold 12.5px Inter, sans-serif";
+      ctx.fillText(`⚡ OBSIDIAN FORMATION ALERT`, W - 22, 20);
+
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "500 10.5px Inter, sans-serif";
+      ctx.fillText(`📐 Наклонка: ${fInfo.touches || 3} касания · до линии ${fInfo.distPct || 0.28}%`, W - 22, 34);
     } else {
       ctx.fillStyle = "#f59e0b";
       ctx.font = "bold 13px Inter, sans-serif";
@@ -14452,7 +14457,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.restore();
     }
 
-    // ── Render Formation Highlight (If Formation Alert) ──
+    // ── Render Formation Highlight (Clean Thin Precise Lines) ──
     const alertBadgeYs = [];
     const lastCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
 
@@ -14463,73 +14468,76 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.clip();
 
       const fType = alertOptions.formationType || "trendline";
-      const fInfo = alertOptions.formationInfo || { touches: 3, distPct: 0.28 };
-      
-      // Auto-calculate realistic swing line on recent candles (last 60 candles)
-      const lookback = Math.min(60, numCandles);
-      const startIdx = numCandles - lookback;
-      let swing1Idx = startIdx, swing2Idx = numCandles - Math.floor(lookback / 2);
-      let swing1H = candleList[swing1Idx].h, swing2H = candleList[swing2Idx].h;
-      
-      for (let i = startIdx; i < numCandles - 15; i++) {
-        if (candleList[i].h > swing1H) { swing1H = candleList[i].h; swing1Idx = i; }
-      }
-      for (let i = swing1Idx + 10; i < numCandles - 2; i++) {
-        if (candleList[i].h > swing2H) { swing2H = candleList[i].h; swing2Idx = i; }
+      let realTrendlines = [];
+      if (typeof FormationEngine !== "undefined" && typeof FormationEngine.detectTrendlines === "function") {
+        try {
+          realTrendlines = FormationEngine.detectTrendlines(candleList, 2);
+        } catch (_) {}
       }
 
-      const p1 = fInfo.p1 || swing1H;
-      const p2 = fInfo.p2 || swing2H;
-      const x1 = swing1Idx * candleStepW + candleStepW / 2;
-      const x2 = swing2Idx * candleStepW + candleStepW / 2;
-      const y1 = toY(p1);
-      const y2 = toY(p2);
+      let p1, p2, x1, x2, y1, y2, slope, touchPts = [];
 
-      // Draw Extended Formation Trendline
-      const dx = x2 - x1, dy = y2 - y1;
-      const slope = dx !== 0 ? dy / dx : 0;
-      const lineEndX = lastCandleX + candleStepW * 4;
+      if (Array.isArray(realTrendlines) && realTrendlines.length > 0) {
+        const bestTl = realTrendlines[0];
+        p1 = bestTl.p1.price;
+        p2 = bestTl.p2.price;
+        x1 = bestTl.p1.idx * candleStepW + candleStepW / 2;
+        x2 = bestTl.p2.idx * candleStepW + candleStepW / 2;
+        y1 = toY(p1);
+        y2 = toY(p2);
+        slope = (y2 - y1) / Math.max(1, x2 - x1);
+        if (Array.isArray(bestTl.touchIndices)) {
+          touchPts = bestTl.touchIndices.map(idx => ({
+            x: idx * candleStepW + candleStepW / 2,
+            y: toY(p1 + bestTl.slope * (idx - bestTl.p1.idx))
+          }));
+        }
+      } else {
+        // Fallback: Accurate high swing tangent on last 70 candles
+        const lookback = Math.min(70, numCandles);
+        const startIdx = numCandles - lookback;
+        let s1 = startIdx, s2 = numCandles - 15;
+        let max1 = 0, max2 = 0;
+
+        for (let i = startIdx; i < numCandles - 30; i++) {
+          if (candleList[i].h > max1) { max1 = candleList[i].h; s1 = i; }
+        }
+        for (let i = s1 + 10; i < numCandles - 3; i++) {
+          if (candleList[i].h > max2) { max2 = candleList[i].h; s2 = i; }
+        }
+
+        p1 = max1 || candleList[s1].h;
+        p2 = max2 || candleList[s2].h;
+        x1 = s1 * candleStepW + candleStepW / 2;
+        x2 = s2 * candleStepW + candleStepW / 2;
+        y1 = toY(p1);
+        y2 = toY(p2);
+        slope = (y2 - y1) / Math.max(1, x2 - x1);
+        touchPts = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+      }
+
+      // Draw Thin, Crisp Formation Trendline (No harsh glow!)
+      const lineEndX = lastCandleX + candleStepW * 3;
       const lineEndY = y1 + slope * (lineEndX - x1);
 
-      ctx.strokeStyle = "#facc15";
-      ctx.lineWidth = 2.5;
-      ctx.shadowColor = "rgba(250, 204, 21, 0.6)";
-      ctx.shadowBlur = 10;
+      ctx.strokeStyle = "#eab308";
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(lineEndX, lineEndY);
       ctx.stroke();
 
-      // Touch Points 🟡
-      [ { x: x1, y: y1 }, { x: x2, y: y2 }, { x: lineEndX - candleStepW * 6, y: y1 + slope * (lineEndX - candleStepW * 6 - x1) } ].forEach(pt => {
-        ctx.fillStyle = "#facc15";
+      // Subtle touch dots (small 2.5px radius)
+      touchPts.forEach(pt => {
+        ctx.fillStyle = "#eab308";
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, 2.8, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1;
         ctx.stroke();
       });
-
-      // Formation Label Tag Pill
-      const tagText = `📐 Наклонка: ${fInfo.touches || 3} касания · Дистанция ${fInfo.distPct || 0.28}%`;
-      ctx.font = "bold 11px Inter, sans-serif";
-      const tagW = ctx.measureText(tagText).width + 16;
-      const tagX = Math.max(10, Math.min(PW - tagW - 10, (x1 + x2) / 2 - tagW / 2));
-      const tagY = Math.max(TOP + 10, Math.min(TOP + PH - 30, (y1 + y2) / 2 - 24));
-
-      if (typeof roundRect === "function") roundRect(ctx, tagX, tagY, tagW, 22, 5);
-      else ctx.fillRect(tagX, tagY, tagW, 22);
-      ctx.fillStyle = "rgba(20, 16, 2, 0.9)";
-      ctx.fill();
-      ctx.strokeStyle = "#facc15";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-
-      ctx.fillStyle = "#fde047";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(tagText, tagX + 8, tagY + 11);
 
       ctx.restore();
     } else if (targetLevel > 0) {
