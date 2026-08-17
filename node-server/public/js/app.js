@@ -14389,72 +14389,74 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.fillRect(cx - candleBodyW / 2, vTop, candleBodyW, volY + VOL_H - vTop);
     }
 
-    // ── Render User Drawings / Markups on the Chart ──
-    let userDrawings = [];
-    if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && (!sym || normSymCode(sym) === normSymCode(activeSym))) {
-      userDrawings = chartDrawings;
-    } else {
-      try {
-        const raw = localStorage.getItem("crypto_drawings_" + targetSym);
-        if (raw) userDrawings = JSON.parse(raw);
-      } catch (_) {}
-    }
+    // ── Render User Drawings / Markups on the Chart (Only for regular Price Alerts, keep Formation Alerts clean) ──
+    if (!alertOptions?.isFormation) {
+      let userDrawings = [];
+      if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && (!sym || normSymCode(sym) === normSymCode(activeSym))) {
+        userDrawings = chartDrawings;
+      } else {
+        try {
+          const raw = localStorage.getItem("crypto_drawings_" + targetSym);
+          if (raw) userDrawings = JSON.parse(raw);
+        } catch (_) {}
+      }
 
-    if (Array.isArray(userDrawings) && userDrawings.length > 0) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, TOP, PW, PH);
-      ctx.clip();
+      if (Array.isArray(userDrawings) && userDrawings.length > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, TOP, PW, PH);
+        ctx.clip();
 
-      for (const d of userDrawings) {
-        if (!d || d.type === "alert") continue;
-        const x1 = getSnapX(d.t1), y1 = toY(d.p1);
-        const x2 = getSnapX(d.t2), y2 = toY(d.p2);
-        const col = d.color || "#facc15";
-        ctx.strokeStyle = col;
-        ctx.fillStyle = col;
-        ctx.lineWidth = 1.8;
-        ctx.setLineDash([]);
+        for (const d of userDrawings) {
+          if (!d || d.type === "alert") continue;
+          const x1 = getSnapX(d.t1), y1 = toY(d.p1);
+          const x2 = getSnapX(d.t2), y2 = toY(d.p2);
+          const col = d.color || "#facc15";
+          ctx.strokeStyle = col;
+          ctx.fillStyle = col;
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([]);
 
-        if (d.type === "line") {
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
-        } else if (d.type === "ray") {
-          const dx = x2 - x1, dy = y2 - y1;
-          const mag = Math.sqrt(dx * dx + dy * dy);
-          if (mag > 0.01) {
-            const ex = x1 + (dx / mag) * W * 2;
-            const ey = y1 + (dy / mag) * W * 2;
+          if (d.type === "line") {
             ctx.beginPath();
             ctx.moveTo(x1, y1);
-            ctx.lineTo(ex, ey);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          } else if (d.type === "ray") {
+            const dx = x2 - x1, dy = y2 - y1;
+            const mag = Math.sqrt(dx * dx + dy * dy);
+            if (mag > 0.01) {
+              const ex = x1 + (dx / mag) * W * 2;
+              const ey = y1 + (dy / mag) * W * 2;
+              ctx.beginPath();
+              ctx.moveTo(x1, y1);
+              ctx.lineTo(ex, ey);
+              ctx.stroke();
+            }
+          } else if (d.type === "h-ray") {
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(PW, y1);
+            ctx.stroke();
+          } else if (d.type === "rect") {
+            const left = Math.min(x1, x2);
+            const top = Math.min(y1, y2);
+            const width = Math.abs(x2 - x1);
+            const height = Math.abs(y2 - y1);
+            ctx.fillStyle = "rgba(251, 113, 133, 0.14)";
+            ctx.fillRect(left, top, width, height);
+            ctx.strokeRect(left, top, width, height);
+          } else if (d.type === "brush" && Array.isArray(d.points) && d.points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(getSnapX(d.points[0].t), toY(d.points[0].p));
+            for (let pi = 1; pi < d.points.length; pi++) {
+              ctx.lineTo(getSnapX(d.points[pi].t), toY(d.points[pi].p));
+            }
             ctx.stroke();
           }
-        } else if (d.type === "h-ray") {
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(PW, y1);
-          ctx.stroke();
-        } else if (d.type === "rect") {
-          const left = Math.min(x1, x2);
-          const top = Math.min(y1, y2);
-          const width = Math.abs(x2 - x1);
-          const height = Math.abs(y2 - y1);
-          ctx.fillStyle = "rgba(251, 113, 133, 0.14)";
-          ctx.fillRect(left, top, width, height);
-          ctx.strokeRect(left, top, width, height);
-        } else if (d.type === "brush" && Array.isArray(d.points) && d.points.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(getSnapX(d.points[0].t), toY(d.points[0].p));
-          for (let pi = 1; pi < d.points.length; pi++) {
-            ctx.lineTo(getSnapX(d.points[pi].t), toY(d.points[pi].p));
-          }
-          ctx.stroke();
         }
+        ctx.restore();
       }
-      ctx.restore();
     }
 
     // ── Render Formation Highlight (Clean Thin Precise Lines) ──
