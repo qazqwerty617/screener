@@ -15242,37 +15242,6 @@ function selectPayMethod(method) {
   });
 }
 
-    // Helper: setup blacklist quick pills and custom input
-    function setupBlacklistGroup(containerId, inputId, activeBl, customVal, onChange) {
-      const container = $(containerId);
-      const customInput = $(inputId);
-      if (!container) return;
-
-      let selected = Array.isArray(activeBl) ? [...activeBl] : ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
-
-      const buttons = container.querySelectorAll("button.fmt-btn[data-bl]");
-      buttons.forEach(btn => {
-        const coin = btn.dataset.bl;
-        btn.classList.toggle("active", selected.includes(coin));
-        btn.onclick = () => {
-          if (selected.includes(coin)) {
-            selected = selected.filter(c => c !== coin);
-          } else {
-            selected.push(coin);
-          }
-          btn.classList.toggle("active", selected.includes(coin));
-          onChange(selected, customInput ? customInput.value : "");
-        };
-      });
-
-      if (customInput) {
-        customInput.value = customVal || "";
-        customInput.oninput = () => {
-          onChange(selected, customInput.value);
-        };
-      }
-    }
-
 function backToTariffs() {
   const step1 = $("pay-step-tariffs");
   const step2 = $("pay-step-invoice");
@@ -15665,6 +15634,40 @@ function initNotificationsUI() {
     }
   }
 
+  // Helper: setup blacklist quick pills and custom input
+  function setupBlacklistGroup(containerId, inputId, activeBl, customVal, onChange) {
+    const container = $(containerId);
+    const customInput = $(inputId);
+    if (!container) return;
+
+    let selected = Array.isArray(activeBl) ? [...activeBl] : ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+
+    const buttons = container.querySelectorAll("button.fmt-btn[data-bl]");
+    buttons.forEach(btn => {
+      const coin = btn.dataset.bl;
+      btn.classList.toggle("active", selected.includes(coin));
+      btn.onclick = () => {
+        if (selected.includes(coin)) {
+          selected = selected.filter(c => c !== coin);
+        } else {
+          selected.push(coin);
+        }
+        btn.classList.toggle("active", selected.includes(coin));
+        onChange(selected, customInput ? customInput.value : "");
+      };
+    });
+
+    if (customInput) {
+      customInput.value = customVal || "";
+      const updateCustom = () => {
+        onChange(selected, customInput.value);
+      };
+      customInput.oninput = updateCustom;
+      customInput.onchange = updateCustom;
+      customInput.onblur = updateCustom;
+    }
+  }
+
   function openFormationAlertsModal() {
     const isPro = window.currentUser && window.currentUser.plan === "pro";
     if (!isPro) {
@@ -15838,6 +15841,15 @@ function initNotificationsUI() {
 
   // Formation Modal Save button
   $("btn-save-formation-alerts")?.addEventListener("click", () => {
+    const customInput = $("fmt-blacklist-custom");
+    if (customInput) {
+      currentFormationAlertSettings.blacklistCustom = customInput.value.trim();
+    }
+    const pills = $("fmt-blacklist-pills");
+    if (pills) {
+      const activePills = Array.from(pills.querySelectorAll("button.fmt-btn.active[data-bl]")).map(b => b.dataset.bl);
+      currentFormationAlertSettings.blacklist = activePills;
+    }
     saveFormationAlertSettings(currentFormationAlertSettings);
     closeFormationAlertsModal();
     showToast({ title: "Настройки сохранены", message: "Параметры сигналов и алертов формаций успешно обновлены", type: "success" });
