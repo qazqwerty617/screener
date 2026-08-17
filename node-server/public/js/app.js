@@ -2300,11 +2300,15 @@ function drawDensityTimelineOnChart(ctx, options) {
 // Formations Overlay – renders formation levels on main chart
 // ════════════════════════════════════════════════════════════
 function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
-  if (!chartFormationsOnChart || !candles || candles.length < 40) return;
+  if (!chartFormationsOnChart || !candles || candles.length < 40) return [];
 
   const N = candles.length;
   const lastPrice = candles[N - 1].c;
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
+  const scaleBadges = [];
+
+  const neutralLineColor = "rgba(148, 163, 184, 0.75)";
+  const neutralTouchColor = "rgba(203, 213, 225, 0.85)";
 
   // ─── 1. CASCADES ───
   const hasCascades = chartActiveFormations.has('cascades') || chartFovTypes.has('cascades');
@@ -2326,9 +2330,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      const color = lv.direction === 'up' ? '#f59e0b' : '#2dd4bf';
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = neutralLineColor;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
       ctx.moveTo(startX, y);
@@ -2337,7 +2339,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       // Touch circles at touchIndices (or swingIdx)
       if (chartFovShowTouches) {
-        ctx.fillStyle = color;
+        ctx.fillStyle = neutralTouchColor;
         const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
         for (const ti of touchesArr) {
           if (typeof ti !== 'number') continue;
@@ -2350,6 +2352,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+
+      scaleBadges.push({ price: lv.price, y });
     }
   }
 
@@ -2376,9 +2380,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      const color = lv.direction === 'up' ? '#f59e0b' : '#2dd4bf';
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = neutralLineColor;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
       ctx.moveTo(startX, y);
@@ -2386,7 +2388,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
 
       if (chartFovShowTouches) {
-        ctx.fillStyle = color;
+        ctx.fillStyle = neutralTouchColor;
         const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
         for (const ti of touchesArr) {
           if (typeof ti !== 'number') continue;
@@ -2399,6 +2401,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+
+      scaleBadges.push({ price: lv.price, y });
     }
   }
 
@@ -2424,16 +2428,14 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
       ctx.save();
       ctx.setLineDash([]);
-      const color = tl.direction === 'up' ? '#c084fc' : '#60a5fa';
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = neutralLineColor;
       ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
       if (chartFovShowTouches && tl.swingIndices) {
-        ctx.fillStyle = color;
+        ctx.fillStyle = neutralTouchColor;
         for (const ti of tl.swingIndices) {
           const tx = getCandleX(ti);
           const ty = toY(tl.p1.price + tl.slope * (ti - tl.p1.idx));
@@ -2468,17 +2470,19 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      const color = rt.direction === 'up' ? '#f472b6' : '#22d3ee';
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = neutralLineColor;
       ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
       ctx.restore();
+
+      scaleBadges.push({ price: rt.price, y });
     }
   }
+
+  return scaleBadges;
 }
 
 
@@ -2827,8 +2831,8 @@ function drawChart() {
     renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
   }
 
-  // тФАтФА Formations Overlay тФАтФА
-  renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart);
+  // Formations Overlay
+  const formationScaleBadges = renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) || [];
 
   ctx.restore();
 
@@ -3701,6 +3705,32 @@ function drawChart() {
       // Draw exact price
       ctx.fillStyle = "#ffffff";
       ctx.font = "bold 10.5px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(fP(badge.price), badgeX + badgeW / 2, by);
+      ctx.restore();
+    }
+  }
+
+  // Draw subtle price labels on right scale for formation/cascade levels
+  if (formationScaleBadges && formationScaleBadges.length > 0) {
+    const badgeH = 15;
+    const badgeW = PR - 12;
+    const badgeX = PW + 6;
+    for (const badge of formationScaleBadges) {
+      const by = toY(badge.price);
+      if (by < TOP + 6 || by > TOP + PH - 6) continue;
+      const badgeY = Math.round(by - badgeH / 2);
+      ctx.save();
+      roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
+      ctx.fillStyle = "rgba(15, 23, 42, 0.65)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+      ctx.lineWidth = 0.85;
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(203, 213, 225, 0.75)";
+      ctx.font = "500 9.5px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(fP(badge.price), badgeX + badgeW / 2, by);
