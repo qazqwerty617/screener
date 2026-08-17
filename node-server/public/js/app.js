@@ -2446,6 +2446,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+
+      if (typeof tl.endPrice === 'number' && Number.isFinite(tl.endPrice)) {
+        scaleBadges.push({ price: tl.endPrice, y: y2 });
+      }
     }
   }
 

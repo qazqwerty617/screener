@@ -248,46 +248,79 @@
     if (candles.length < 40) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const touchTol = range * 0.14;
-    const crossTol = range * 0.025;
+    const touchTol = Math.min(range * 0.12, lastPrice * 0.002);
+    const crossTol = Math.min(range * 0.02, lastPrice * 0.0004);
     const minimum = Math.max(2, Number(minTouches) || 2);
     const candidates = [];
 
     function collect(points, resistance) {
-      const recent = points.slice(-60);
+      const recent = points.slice(-80);
       for (let i = 0; i < recent.length - 1; i++) {
         for (let j = i + 1; j < recent.length; j++) {
           const p1 = recent[i], p2 = recent[j];
           const span = p2.idx - p1.idx;
-          if (span < 10) continue;
+          if (span < 12) continue;
+
+          // Descending trendline must have p2.price < p1.price (downward slope)
+          // Ascending trendline must have p2.price > p1.price (upward slope)
           if (resistance ? p2.price >= p1.price : p2.price <= p1.price) continue;
+
           const slope = (p2.price - p1.price) / span;
-          if (Math.abs(slope) > range * 0.35) continue;
-          const touches = [];
+          // Filter out steep vertical angles (cliffs)
+          if (Math.abs(slope) > range * 0.25 || Math.abs(slope) < range * 0.001) continue;
+
+          // Check that trendline is STRICTLY unbroken from p1.idx to current candle
           let crossed = false;
           for (let k = p1.idx; k < candles.length; k++) {
             const line = p1.price + slope * (k - p1.idx);
             if (!(line > 0)) { crossed = true; break; }
-            const wick = resistance ? candles[k].h : candles[k].l;
-            const close = candles[k].c;
-            if (resistance ? (close > line || wick > line + crossTol) : (close < line || wick < line - crossTol)) {
-              crossed = true;
-              break;
-            }
-            if (Math.abs(wick - line) <= touchTol && (!touches.length || k - touches[touches.length - 1] >= 3)) {
-              touches.push(k);
+            const c = candles[k];
+            if (resistance) {
+              if (c.c > line || c.h > line + crossTol) { crossed = true; break; }
+            } else {
+              if (c.c < line || c.l < line - crossTol) { crossed = true; break; }
             }
           }
-          if (crossed || touches.length < minimum) continue;
+          if (crossed) continue;
+
+          // Count distinct bounces with wave departure
+          const minDeparture = range * 0.25;
+          const touches = [p1.idx];
+          let departed = false;
+          let lastTouch = p1.idx;
+
+          for (let k = p1.idx + 1; k < candles.length; k++) {
+            const line = p1.price + slope * (k - p1.idx);
+            const c = candles[k];
+            const wick = resistance ? c.h : c.l;
+            const close = c.c;
+
+            const dist = resistance ? (line - close) : (close - line);
+            if (dist >= minDeparture) {
+              departed = true;
+            }
+
+            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 5) {
+              touches.push(k);
+              lastTouch = k;
+              departed = false;
+            }
+          }
+
+          if (touches.length < minimum) continue;
+
           const endPrice = p1.price + slope * (candles.length - 1 - p1.idx);
           if (!(endPrice > 0)) continue;
-          if (resistance ? lastPrice > endPrice + crossTol : lastPrice < endPrice - crossTol) continue;
+          if (resistance ? lastPrice > endPrice : lastPrice < endPrice) continue;
+
           const distanceAtr = Math.abs(endPrice - lastPrice) / range;
-          if (distanceAtr > 6) continue;
+          if (distanceAtr > 8) continue;
+
           candidates.push({
             p1, p2, slope, endPrice, direction: resistance ? "up" : "down",
             swingIndices: touches, touches: touches.length, isTrendline: true,
-            strength: touches.length * 6 + span / 25 - distanceAtr * 2 - (candles.length - 1 - p2.idx) / 100,
+            span: candles.length - 1 - p1.idx,
+            strength: touches.length * 7 + span / 20 - distanceAtr * 2,
           });
         }
       }
@@ -296,10 +329,11 @@
     const points = swings(candles, 3);
     collect(points.filter(item => item.type === "high"), true);
     collect(points.filter(item => item.type === "low"), false);
+
     candidates.sort((a, b) => b.strength - a.strength);
     const kept = [];
     for (const item of candidates) {
-      if (!kept.some(other => other.direction === item.direction && Math.abs(other.endPrice - item.endPrice) <= range * 0.2 && Math.abs(other.slope - item.slope) <= range * 0.02)) {
+      if (!kept.some(other => other.direction === item.direction && Math.abs(other.endPrice - item.endPrice) <= range * 0.15 && Math.abs(other.slope - item.slope) <= range * 0.015)) {
         kept.push(item);
       }
       if (kept.length >= 6) break;
