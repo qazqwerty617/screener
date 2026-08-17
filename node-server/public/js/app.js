@@ -5326,17 +5326,116 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   window.openAuthModal = openAuthModal;
 
+  function revertToDefaultFreeState() {
+    console.log("[PRO REVERT] Reverting appearance, colors, and formation alerts to default free tier");
+
+    // 1. Reset Background & Axis Colors
+    try {
+      if (typeof updateBgColor === "function") updateBgColor("#0d0f14", 100, true);
+      if (typeof updateAxisColor === "function") updateAxisColor("#d1d4dc", 100, true);
+      if (typeof updateScreenerBgColor === "function") updateScreenerBgColor("#0d0f14", true);
+    } catch (_) {}
+
+    // 2. Reset Candle Settings to default (#26c97a / #ff4560)
+    const defaultCandles = {
+      body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
+      border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
+      wick: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 }
+    };
+    try {
+      localStorage.setItem("screener-candle-settings", JSON.stringify(defaultCandles));
+      if (window.candleSettings) Object.assign(window.candleSettings, defaultCandles);
+    } catch (_) {}
+
+    // 3. Reset Volume Settings
+    const defaultVolume = {
+      show: true,
+      up: "#26c97a",
+      upOp: 75,
+      down: "#ff4560",
+      downOp: 75
+    };
+    try {
+      localStorage.setItem("screener-volume-settings", JSON.stringify(defaultVolume));
+      if (window.volumeSettings) Object.assign(window.volumeSettings, defaultVolume);
+    } catch (_) {}
+
+    // 4. Reset Formation Colors
+    const defaultFormationColors = {
+      cascadeUp: "#94a3b8", cascadeUpOp: 75,
+      cascadeDown: "#94a3b8", cascadeDownOp: 75,
+      trendlineUp: "#94a3b8", trendlineUpOp: 75,
+      trendlineDown: "#94a3b8", trendlineDownOp: 75,
+      level: "#94a3b8", levelOp: 75,
+      retest: "#94a3b8", retestOp: 75
+    };
+    try {
+      localStorage.setItem("screener-formation-colors", JSON.stringify(defaultFormationColors));
+      if (window.formationColorSettings) Object.assign(window.formationColorSettings, defaultFormationColors);
+    } catch (_) {}
+
+    // 5. Disable all Formation Alerts (PRO Feature)
+    try {
+      const rawFmt = localStorage.getItem("obsidian_formation_alert_settings");
+      if (rawFmt) {
+        const fmtSettings = JSON.parse(rawFmt);
+        if (fmtSettings.trendline) fmtSettings.trendline.enabled = false;
+        if (fmtSettings.level) fmtSettings.level.enabled = false;
+        if (fmtSettings.retest) fmtSettings.retest.enabled = false;
+        localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(fmtSettings));
+        if (typeof currentFormationAlertSettings !== "undefined" && currentFormationAlertSettings) {
+          if (currentFormationAlertSettings.trendline) currentFormationAlertSettings.trendline.enabled = false;
+          if (currentFormationAlertSettings.level) currentFormationAlertSettings.level.enabled = false;
+          if (currentFormationAlertSettings.retest) currentFormationAlertSettings.retest.enabled = false;
+        }
+      }
+    } catch (_) {}
+
+    // 6. Disable Formations Chart Overlay
+    try {
+      localStorage.removeItem("fov_settings");
+      if (typeof chartFormationsOnChart !== "undefined") chartFormationsOnChart = false;
+    } catch (_) {}
+
+    // 7. If currently on a PRO tab (map, arbitrage, formations, backtest, journal), switch back to screener
+    try {
+      if (typeof activeView !== "undefined" && activeView !== "screener") {
+        const proViews = ["map", "arbitrage", "formations", "backtest", "journal"];
+        if (proViews.includes(activeView)) {
+          if (typeof switchView === "function") switchView("screener");
+        }
+      }
+    } catch (_) {}
+
+    // 8. Refresh and redraw charts to apply defaults immediately
+    try {
+      if (typeof refreshCharts === "function") refreshCharts();
+      if (typeof drawChart === "function") drawChart();
+    } catch (_) {}
+  }
+  window.revertToDefaultFreeState = revertToDefaultFreeState;
+
+  let lastKnownProStatus = localStorage.getItem("obsidian_was_pro") === "true";
+
   function renderProfile(user) {
     currentUser = user;
     window.currentUser = user;
     if (authCloseBtn) authCloseBtn.style.display = "block";
+
+    const isPro = !!(user && user.plan === "pro");
+
+    // Automatically revert appearance and disable PRO features when PRO subscription ends or is revoked
+    if (lastKnownProStatus && !isPro) {
+      revertToDefaultFreeState();
+    }
+    lastKnownProStatus = isPro;
+    localStorage.setItem("obsidian_was_pro", isPro ? "true" : "false");
 
     if (user) {
       const name = user.username || "Трейдер";
       const id = user.id || "USR-000000";
       const email = user.email || "—";
       const method = user.authMethod === "telegram" ? "Telegram" : "Логин / Пароль";
-      const isPro = user.plan === "pro";
 
       if (profileNameDisplay) profileNameDisplay.textContent = name;
       if (profileUseridDisplay) profileUseridDisplay.textContent = `ID: ${id}`;
@@ -15532,6 +15631,13 @@ function initNotificationsUI() {
   }
 
   function openFormationAlertsModal() {
+    const isPro = window.currentUser && window.currentUser.plan === "pro";
+    if (!isPro) {
+      if (typeof openProModal === "function") {
+        openProModal("Детектор и алерты формаций");
+      }
+      return;
+    }
     loadFormationAlertSettings();
     syncFormationUI();
     const overlay = $("modal-formation-alerts-overlay");
@@ -15820,6 +15926,9 @@ function initNotificationsUI() {
 
   async function runFormationAlertScanner() {
     if (isScanningFormationAlerts) return;
+    const isPro = window.currentUser && window.currentUser.plan === "pro";
+    if (!isPro) return; // Formation alerts are exclusively a PRO feature
+
     const s = currentFormationAlertSettings;
     if (!s) return;
 
