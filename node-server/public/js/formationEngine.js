@@ -312,24 +312,26 @@
     if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const touchTol = Math.min(range * 0.16, lastPrice * 0.0025);
-    const crossBodyTol = Math.min(range * 0.06, lastPrice * 0.0010);
-    const crossWickTol = Math.min(range * 0.14, lastPrice * 0.0022);
+    const touchTol = Math.min(range * 0.15, lastPrice * 0.0022);
+    const crossBodyTol = Math.min(range * 0.05, lastPrice * 0.0008);
+    const crossWickTol = Math.min(range * 0.12, lastPrice * 0.0018);
     const minimum = Math.max(2, Number(minTouches) || 2);
     const N = candles.length;
 
     function collectForSide(points, resistance) {
       const candidates = [];
-      const pts = points.slice(-120);
+      const pts = points.slice(-140);
 
       for (let i = 0; i < pts.length - 1; i++) {
         for (let j = i + 1; j < pts.length; j++) {
           const p1 = pts[i], p2 = pts[j];
           const span = p2.idx - p1.idx;
-          if (span < 12) continue;
+          // Must span at least 18 bars to represent a real structure, not micro-pump noise
+          if (span < 18) continue;
 
           const slope = (p2.price - p1.price) / span;
-          if (Math.abs(slope) > range * 0.22 || Math.abs(slope) < range * 0.0003) continue;
+          // Forbid excessively steep lines (vertical impulse wicks)
+          if (Math.abs(slope) > range * 0.11 || Math.abs(slope) < range * 0.0004) continue;
 
           let crossed = false;
           for (let k = p1.idx; k < N; k++) {
@@ -344,7 +346,7 @@
           }
           if (crossed) continue;
 
-          const minDeparture = range * 0.20;
+          const minDeparture = range * 0.22;
           const touches = [p1.idx];
           let departed = false;
           let lastTouch = p1.idx;
@@ -360,7 +362,7 @@
               departed = true;
             }
 
-            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 4) {
+            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 5) {
               touches.push(k);
               lastTouch = k;
               departed = false;
@@ -369,22 +371,34 @@
 
           if (touches.length < minimum) continue;
 
-          if (touches.length === 2 && span > 130) continue;
+          if (touches.length === 2 && span > 140) continue;
           let maxGap = 0;
           for (let t = 1; t < touches.length; t++) {
             maxGap = Math.max(maxGap, touches[t] - touches[t - 1]);
           }
-          if (maxGap > 150) continue;
+          if (maxGap > 160) continue;
 
           const lastTouchAge = N - 1 - touches[touches.length - 1];
-          if (lastTouchAge > 80) continue;
+          if (lastTouchAge > 85) continue;
 
           const endPrice = p1.price + slope * (N - 1 - p1.idx);
           if (!(endPrice > 0)) continue;
           if (resistance ? lastPrice > endPrice + crossBodyTol : lastPrice < endPrice - crossBodyTol) continue;
 
           const distanceAtr = Math.abs(endPrice - lastPrice) / range;
-          if (distanceAtr > 4.0) continue;
+          if (distanceAtr > 3.8) continue;
+
+          const totalSpan = N - 1 - p1.idx;
+          // Priority ranking:
+          // 1. Touches count (touches * 35)
+          // 2. Structural size / span (totalSpan * 0.4)
+          // 3. Proximity to current price (closer = higher score)
+          // 4. Freshness of touch
+          const strength =
+            touches.length * 35.0 +
+            Math.min(totalSpan, 200) * 0.35 +
+            Math.max(0, 4.0 - distanceAtr) * 12.0 +
+            Math.max(0, 80 - lastTouchAge) * 0.25;
 
           candidates.push({
             p1: { idx: p1.idx, price: p1.price, t: candles[p1.idx]?.t },
@@ -396,39 +410,19 @@
             touchTimes: touches.map(idx => candles[idx]?.t),
             touches: touches.length,
             isTrendline: true,
-            span: N - 1 - p1.idx,
+            span: totalSpan,
             lastTouchAge,
-            strength: touches.length * 14 + (N - 1 - p1.idx) / 15 - distanceAtr * 3.0 - (lastTouchAge / 12),
+            strength,
           });
         }
       }
 
       candidates.sort((a, b) => b.strength - a.strength);
 
-      // Select up to 2 cleanest NON-INTERSECTING trendlines
+      // Select ONLY the single best dominant trendline on this side (No clutter, no overlapping fans!)
       const kept = [];
-      const minSpacing = Math.min(range * 0.20, lastPrice * 0.004);
-
-      for (const cand of candidates) {
-        if (kept.length >= 2) break;
-
-        let conflict = false;
-        for (const existing of kept) {
-          if (Math.abs(existing.endPrice - cand.endPrice) <= minSpacing && Math.abs(existing.slope - cand.slope) <= range * 0.012) {
-            conflict = true;
-            break;
-          }
-          const startK = Math.max(existing.p1.idx, cand.p1.idx);
-          const endK = N - 1 + 8;
-          if (startK < endK && linesCross(existing, cand, startK, endK)) {
-            conflict = true;
-            break;
-          }
-        }
-
-        if (!conflict) {
-          kept.push(cand);
-        }
+      if (candidates.length > 0) {
+        kept.push(candidates[0]);
       }
 
       return kept;
@@ -437,6 +431,21 @@
     const allSwings = swings(candles, 3);
     const topResistances = collectForSide(allSwings.filter(item => item.type === "high"), true);
     const bottomSupports = collectForSide(allSwings.filter(item => item.type === "low"), false);
+
+    // Cross-check: If top resistance and bottom support cross each other in visible chart, keep the higher-scored one
+    if (topResistances.length > 0 && bottomSupports.length > 0) {
+      const r = topResistances[0];
+      const s = bottomSupports[0];
+      const startK = Math.max(r.p1.idx, s.p1.idx);
+      const endK = N - 1 + 8;
+      if (startK < endK && linesCross(r, s, startK, endK)) {
+        if (r.strength >= s.strength) {
+          return [r];
+        } else {
+          return [s];
+        }
+      }
+    }
 
     return [...topResistances, ...bottomSupports];
   }

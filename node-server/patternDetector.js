@@ -126,6 +126,8 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
   const lines    = [];
 
   function tryPair(p1, p2, type) {
+    const span = p2.idx - p1.idx;
+    if (span < 18) return null;
     const angle = Math.abs(slopeDegrees(p1, p2));
     if (angle < minAngle) return null;
 
