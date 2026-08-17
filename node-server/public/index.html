@@ -1744,7 +1744,7 @@
                     <div class="fmt-modal-icon">⚡</div>
                     <div>
                         <div class="fmt-modal-title">Сигналы и авто-сканер формаций</div>
-                        <div class="fmt-modal-subtitle">Автоматический поиск наклонных уровней, горизонталок и ретестов с отправкой Ultra-HD скриншотов в Telegram</div>
+                        <div class="fmt-modal-subtitle">Автоматический поиск наклонных линий, уровней и ретестов с отправкой графиков в Telegram</div>
                     </div>
                 </div>
                 <button type="button" class="fmt-modal-close" id="fmt-modal-close" title="Закрыть">×</button>
@@ -1759,7 +1759,7 @@
                         <div class="fmt-card" id="fmt-card-trendline">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(250, 204, 21, 0.15); color: #facc15;">📐</div>
+                                    <div class="fmt-card-icon" style="background: rgba(234, 179, 8, 0.12); color: #eab308;">📐</div>
                                     <div>
                                         <div class="fmt-card-title">Наклонный уровень (Наклонка)</div>
                                         <div class="fmt-card-sub">Поиск сформированных наклонных линий тренда</div>
@@ -1769,34 +1769,34 @@
                             </div>
                             <div class="fmt-card-body" id="fmt-trendline-body">
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Таймфреймы сканирования:</span>
+                                    <span class="fmt-setting-label">Таймфреймы:</span>
                                     <div class="fmt-btn-group" id="fmt-trendline-tf-group">
                                         <button type="button" class="fmt-btn" data-tf="1m">1m</button>
                                         <button type="button" class="fmt-btn active" data-tf="5m">5m</button>
                                         <button type="button" class="fmt-btn active" data-tf="15m">15m</button>
                                         <button type="button" class="fmt-btn active" data-tf="1h">1h</button>
                                         <button type="button" class="fmt-btn" data-tf="4h">4h</button>
-                                        <button type="button" class="fmt-btn" data-tf="1d">1d</button>
+                                        <button type="button" class="fmt-btn" data-tf="1d">1D</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Минимум касаний:</span>
                                     <div class="fmt-btn-group" id="fmt-trendline-touches-group">
                                         <button type="button" class="fmt-btn" data-val="2">2+</button>
-                                        <button type="button" class="fmt-btn active" data-val="3">3+ касания</button>
+                                        <button type="button" class="fmt-btn active" data-val="3">3+</button>
                                         <button type="button" class="fmt-btn" data-val="4">4+</button>
                                         <button type="button" class="fmt-btn" data-val="5">5+</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Расстояние до наклонки (триггер):</span>
+                                    <span class="fmt-setting-label">Дистанция до линии:</span>
                                     <div class="fmt-btn-group" id="fmt-trendline-dist-group">
                                         <button type="button" class="fmt-btn" data-val="0.1">0.1%</button>
                                         <button type="button" class="fmt-btn" data-val="0.2">0.2%</button>
                                         <button type="button" class="fmt-btn active" data-val="0.3">0.3%</button>
                                         <button type="button" class="fmt-btn" data-val="0.5">0.5%</button>
                                         <button type="button" class="fmt-btn" data-val="1.0">1.0%</button>
-                                        <div style="display: flex; align-items: center; gap: 4px; margin-left: 2px;">
+                                        <div style="display: inline-flex; align-items: center; gap: 3px; margin-left: 2px;">
                                             <input type="number" step="0.1" min="0.05" max="10" class="fmt-input" id="fmt-trendline-custom-dist" placeholder="%" style="display: none;">
                                             <button type="button" class="fmt-btn" id="fmt-trendline-custom-btn" data-val="custom">Свой %</button>
                                         </div>
@@ -1805,9 +1805,9 @@
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Тип наклонки:</span>
                                     <div class="fmt-btn-group" id="fmt-trendline-dir-group">
-                                        <button type="button" class="fmt-btn active" data-val="all">Все (Поддержка и Сопр.)</button>
-                                        <button type="button" class="fmt-btn" data-val="down">Только Поддержка (Long)</button>
-                                        <button type="button" class="fmt-btn" data-val="up">Только Сопротивление (Short)</button>
+                                        <button type="button" class="fmt-btn active" data-val="all">Все</button>
+                                        <button type="button" class="fmt-btn" data-val="down">Поддержка (Long)</button>
+                                        <button type="button" class="fmt-btn" data-val="up">Сопротивление (Short)</button>
                                     </div>
                                 </div>
                             </div>
@@ -1817,44 +1817,44 @@
                         <div class="fmt-card" id="fmt-card-level">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(167, 139, 250, 0.15); color: #a78bfa;">➖</div>
+                                    <div class="fmt-card-icon" style="background: rgba(99, 102, 241, 0.12); color: #818cf8;">➖</div>
                                     <div>
                                         <div class="fmt-card-title">Горизонтальный уровень (Горизонталка)</div>
-                                        <div class="fmt-card-sub">Поиск сильных локальных и старших уровней цен</div>
+                                        <div class="fmt-card-sub">Поиск сильных локальных и старших ценовых уровней</div>
                                     </div>
                                 </div>
                                 <label class="switch"><input type="checkbox" id="set-fmt-level-enabled" checked><span class="slider"></span></label>
                             </div>
                             <div class="fmt-card-body" id="fmt-level-body">
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Таймфреймы сканирования:</span>
+                                    <span class="fmt-setting-label">Таймфреймы:</span>
                                     <div class="fmt-btn-group" id="fmt-level-tf-group">
                                         <button type="button" class="fmt-btn" data-tf="1m">1m</button>
                                         <button type="button" class="fmt-btn active" data-tf="5m">5m</button>
                                         <button type="button" class="fmt-btn active" data-tf="15m">15m</button>
                                         <button type="button" class="fmt-btn active" data-tf="1h">1h</button>
                                         <button type="button" class="fmt-btn" data-tf="4h">4h</button>
-                                        <button type="button" class="fmt-btn" data-tf="1d">1d</button>
+                                        <button type="button" class="fmt-btn" data-tf="1d">1D</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Минимум касаний:</span>
                                     <div class="fmt-btn-group" id="fmt-level-touches-group">
                                         <button type="button" class="fmt-btn" data-val="2">2+</button>
-                                        <button type="button" class="fmt-btn active" data-val="3">3+ касания</button>
+                                        <button type="button" class="fmt-btn active" data-val="3">3+</button>
                                         <button type="button" class="fmt-btn" data-val="4">4+</button>
                                         <button type="button" class="fmt-btn" data-val="5">5+</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Расстояние до уровня (триггер):</span>
+                                    <span class="fmt-setting-label">Дистанция до уровня:</span>
                                     <div class="fmt-btn-group" id="fmt-level-dist-group">
                                         <button type="button" class="fmt-btn" data-val="0.1">0.1%</button>
                                         <button type="button" class="fmt-btn" data-val="0.2">0.2%</button>
                                         <button type="button" class="fmt-btn active" data-val="0.3">0.3%</button>
                                         <button type="button" class="fmt-btn" data-val="0.5">0.5%</button>
                                         <button type="button" class="fmt-btn" data-val="1.0">1.0%</button>
-                                        <div style="display: flex; align-items: center; gap: 4px; margin-left: 2px;">
+                                        <div style="display: inline-flex; align-items: center; gap: 3px; margin-left: 2px;">
                                             <input type="number" step="0.1" min="0.05" max="10" class="fmt-input" id="fmt-level-custom-dist" placeholder="%" style="display: none;">
                                             <button type="button" class="fmt-btn" id="fmt-level-custom-btn" data-val="custom">Свой %</button>
                                         </div>
@@ -1863,9 +1863,9 @@
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Тип уровня:</span>
                                     <div class="fmt-btn-group" id="fmt-level-dir-group">
-                                        <button type="button" class="fmt-btn active" data-val="all">Все (Поддержка и Сопр.)</button>
-                                        <button type="button" class="fmt-btn" data-val="support">Только Поддержка</button>
-                                        <button type="button" class="fmt-btn" data-val="resistance">Только Сопротивление</button>
+                                        <button type="button" class="fmt-btn active" data-val="all">Все</button>
+                                        <button type="button" class="fmt-btn" data-val="support">Поддержка</button>
+                                        <button type="button" class="fmt-btn" data-val="resistance">Сопротивление</button>
                                     </div>
                                 </div>
                             </div>
@@ -1878,7 +1878,7 @@
                         <div class="fmt-card" id="fmt-card-retest">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(34, 197, 94, 0.15); color: #22c55e;">🔄</div>
+                                    <div class="fmt-card-icon" style="background: rgba(34, 197, 94, 0.12); color: #22c55e;">🔄</div>
                                     <div>
                                         <div class="fmt-card-title">Подтвержденный ретест (Ретест)</div>
                                         <div class="fmt-card-sub">Пробой уровня, закрепление и удержание с обратной стороны</div>
@@ -1888,57 +1888,57 @@
                             </div>
                             <div class="fmt-card-body" id="fmt-retest-body">
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Таймфреймы сканирования:</span>
+                                    <span class="fmt-setting-label">Таймфреймы:</span>
                                     <div class="fmt-btn-group" id="fmt-retest-tf-group">
                                         <button type="button" class="fmt-btn" data-tf="1m">1m</button>
                                         <button type="button" class="fmt-btn active" data-tf="5m">5m</button>
                                         <button type="button" class="fmt-btn active" data-tf="15m">15m</button>
                                         <button type="button" class="fmt-btn active" data-tf="1h">1h</button>
                                         <button type="button" class="fmt-btn" data-tf="4h">4h</button>
-                                        <button type="button" class="fmt-btn" data-tf="1d">1d</button>
+                                        <button type="button" class="fmt-btn" data-tf="1d">1D</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Тип пробоя и ретеста:</span>
+                                    <span class="fmt-setting-label">Тип ретеста:</span>
                                     <div class="fmt-btn-group" id="fmt-retest-dir-group">
-                                        <button type="button" class="fmt-btn active" data-val="all">Все (Long & Short)</button>
-                                        <button type="button" class="fmt-btn" data-val="up">Бычий (Пробой вверх + Long)</button>
-                                        <button type="button" class="fmt-btn" data-val="down">Медвежий (Пробой вниз + Short)</button>
+                                        <button type="button" class="fmt-btn active" data-val="all">Все</button>
+                                        <button type="button" class="fmt-btn" data-val="up">Бычий (Long)</button>
+                                        <button type="button" class="fmt-btn" data-val="down">Медвежий (Short)</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Стадия ретеста:</span>
                                     <div class="fmt-btn-group" id="fmt-retest-stage-group">
-                                        <button type="button" class="fmt-btn active" data-val="confirmed">Только подтвержденный отскок</button>
-                                        <button type="button" class="fmt-btn" data-val="approaching">Приближение к ретесту</button>
-                                        <button type="button" class="fmt-btn" data-val="both">Оба варианта</button>
+                                        <button type="button" class="fmt-btn active" data-val="confirmed">Отскок</button>
+                                        <button type="button" class="fmt-btn" data-val="approaching">Подход</button>
+                                        <button type="button" class="fmt-btn" data-val="both">Оба</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Максимальная давность:</span>
+                                    <span class="fmt-setting-label">Давность:</span>
                                     <div class="fmt-btn-group" id="fmt-retest-age-group">
-                                        <button type="button" class="fmt-btn" data-val="10">до 10 свечей</button>
-                                        <button type="button" class="fmt-btn active" data-val="20">до 20 свечей</button>
-                                        <button type="button" class="fmt-btn" data-val="35">до 35 свечей</button>
+                                        <button type="button" class="fmt-btn" data-val="10">до 10 св.</button>
+                                        <button type="button" class="fmt-btn active" data-val="20">до 20 св.</button>
+                                        <button type="button" class="fmt-btn" data-val="35">до 35 св.</button>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- 4. General Notification Channels & Filters -->
-                        <div class="fmt-card" style="background: rgba(255, 255, 255, 0.02);">
+                        <div class="fmt-card">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🔔</div>
+                                    <div class="fmt-card-icon" style="background: rgba(56, 189, 248, 0.12); color: #38bdf8;">🔔</div>
                                     <div>
-                                        <div class="fmt-card-title">Каналы оповещений и фильтры</div>
+                                        <div class="fmt-card-title">Оповещения и фильтры</div>
                                         <div class="fmt-card-sub">Куда и как отправлять найденные сигналы</div>
                                     </div>
                                 </div>
                             </div>
-                            <div class="fmt-card-body" style="margin-top: 10px; padding-top: 10px;">
+                            <div class="fmt-card-body">
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Отправлять Ultra-HD снимок в Telegram:</span>
+                                    <span class="fmt-setting-label">Ultra-HD снимок в Telegram:</span>
                                     <label class="switch"><input type="checkbox" id="fmt-modal-tg-enabled" checked><span class="slider"></span></label>
                                 </div>
                                 <div class="fmt-setting-row">
@@ -1950,16 +1950,16 @@
                                     <label class="switch"><input type="checkbox" id="fmt-modal-toast-enabled" checked><span class="slider"></span></label>
                                 </div>
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Кулдаун по одной монете:</span>
+                                    <span class="fmt-setting-label">Кулдаун монеты:</span>
                                     <div class="fmt-btn-group" id="fmt-cooldown-group">
-                                        <button type="button" class="fmt-btn active" data-val="300">5м</button>
-                                        <button type="button" class="fmt-btn" data-val="900">15м</button>
-                                        <button type="button" class="fmt-btn" data-val="1800">30м</button>
-                                        <button type="button" class="fmt-btn" data-val="3600">1ч</button>
+                                        <button type="button" class="fmt-btn active" data-val="300">5 мин</button>
+                                        <button type="button" class="fmt-btn" data-val="900">15 мин</button>
+                                        <button type="button" class="fmt-btn" data-val="1800">30 мин</button>
+                                        <button type="button" class="fmt-btn" data-val="3600">1 час</button>
                                     </div>
                                 </div>
                                 <div class="fmt-setting-row">
-                                    <span class="fmt-setting-label">Мин. суточный объем:</span>
+                                    <span class="fmt-setting-label">Мин. объем 24ч:</span>
                                     <div class="fmt-btn-group" id="fmt-minvol-group">
                                         <button type="button" class="fmt-btn active" data-val="0">Все</button>
                                         <button type="button" class="fmt-btn" data-val="1000000">&gt; $1M</button>
@@ -1976,16 +1976,16 @@
             <!-- Modal Footer -->
             <div class="fmt-modal-footer">
                 <div style="display: flex; gap: 8px;">
-                    <button type="button" class="btn-test-sound" id="btn-test-sound-fmt" style="padding: 7px 12px; font-size: 12px; background: var(--bg3); border: 1px solid var(--bd2); color: var(--t1); border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                    <button type="button" class="btn-test-sound" id="btn-test-sound-fmt" style="padding: 7px 14px; font-size: 12px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #cbd5e1; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: 500;">
                         🔊 Звук
                     </button>
-                    <button type="button" id="btn-test-tg-photo-fmt" style="padding: 7px 14px; font-size: 12px; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: 600; transition: all 0.15s ease;">
+                    <button type="button" id="btn-test-tg-photo-fmt" style="padding: 7px 16px; font-size: 12px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.28); color: #38bdf8; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: 600; transition: all 0.15s ease;">
                         📸 Отправить 4K скриншот в TG
                     </button>
                 </div>
                 <div style="display: flex; gap: 10px; margin-left: auto;">
-                    <button type="button" class="settings-reset-btn" id="btn-reset-formation-alerts" style="padding: 7px 16px; border-radius: 6px; font-size: 12px;">Сбросить по умолчанию</button>
-                    <button type="button" class="settings-apply-btn" id="btn-save-formation-alerts" style="padding: 7px 22px; border-radius: 6px; font-size: 12px; font-weight: 700; background: var(--ac); color: #fff;">Применить настройки</button>
+                    <button type="button" class="settings-reset-btn" id="btn-reset-formation-alerts" style="padding: 7px 16px; border-radius: 6px; font-size: 12px; background: transparent; border: 1px solid rgba(255,255,255,0.09); color: #94a3b8;">Сбросить</button>
+                    <button type="button" class="settings-apply-btn" id="btn-save-formation-alerts" style="padding: 7px 22px; border-radius: 6px; font-size: 12px; font-weight: 600; background: #2563eb; color: #fff; border: 1px solid #3b82f6;">Применить</button>
                 </div>
             </div>
         </div>

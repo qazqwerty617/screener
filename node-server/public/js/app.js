@@ -14080,7 +14080,7 @@ window.submitBugReport = submitBugReport;
 window.handleBugScreenshotSelect = handleBugScreenshotSelect;
 window.removeBugScreenshot = removeBugScreenshot;
 
-async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0, alertTf = activeTf, alertEx = activeEx) {
+async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0, alertTf = activeTf, alertEx = activeEx, alertOptions = {}) {
   try {
     const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
     const targetSym = (sym || activeSym || "BTCUSDT").toUpperCase();
