@@ -15242,6 +15242,37 @@ function selectPayMethod(method) {
   });
 }
 
+    // Helper: setup blacklist quick pills and custom input
+    function setupBlacklistGroup(containerId, inputId, activeBl, customVal, onChange) {
+      const container = $(containerId);
+      const customInput = $(inputId);
+      if (!container) return;
+
+      let selected = Array.isArray(activeBl) ? [...activeBl] : ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+
+      const buttons = container.querySelectorAll("button.fmt-btn[data-bl]");
+      buttons.forEach(btn => {
+        const coin = btn.dataset.bl;
+        btn.classList.toggle("active", selected.includes(coin));
+        btn.onclick = () => {
+          if (selected.includes(coin)) {
+            selected = selected.filter(c => c !== coin);
+          } else {
+            selected.push(coin);
+          }
+          btn.classList.toggle("active", selected.includes(coin));
+          onChange(selected, customInput ? customInput.value : "");
+        };
+      });
+
+      if (customInput) {
+        customInput.value = customVal || "";
+        customInput.oninput = () => {
+          onChange(selected, customInput.value);
+        };
+      }
+    }
+
 function backToTariffs() {
   const step1 = $("pay-step-tariffs");
   const step2 = $("pay-step-invoice");
@@ -15428,6 +15459,8 @@ const DEFAULT_FORMATION_ALERT_SETTINGS = {
   cooldownSeconds: 300,
   minVolume: 0,
   exchanges: ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"],
+  blacklist: ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"],
+  blacklistCustom: "",
   trendline: {
     enabled: true,
     timeframes: ["5m", "15m", "1h"],
@@ -15462,6 +15495,8 @@ function loadFormationAlertSettings() {
         ...DEFAULT_FORMATION_ALERT_SETTINGS,
         ...parsed,
         exchanges: Array.isArray(parsed.exchanges) && parsed.exchanges.length > 0 ? parsed.exchanges : [...DEFAULT_FORMATION_ALERT_SETTINGS.exchanges],
+        blacklist: Array.isArray(parsed.blacklist) ? parsed.blacklist : [...DEFAULT_FORMATION_ALERT_SETTINGS.blacklist],
+        blacklistCustom: typeof parsed.blacklistCustom === "string" ? parsed.blacklistCustom : "",
         trendline: { ...DEFAULT_FORMATION_ALERT_SETTINGS.trendline, ...(parsed.trendline || {}) },
         level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(parsed.level || {}) },
         retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(parsed.retest || {}) }
@@ -15690,6 +15725,10 @@ function initNotificationsUI() {
     setupButtonGroup("fmt-cooldown-group", s.cooldownSeconds, val => { s.cooldownSeconds = parseInt(val, 10); });
     setupButtonGroup("fmt-minvol-group", s.minVolume, val => { s.minVolume = parseFloat(val); });
     setupExchangeGroup("fmt-exchanges-group", s.exchanges, exs => { s.exchanges = exs; });
+    setupBlacklistGroup("fmt-blacklist-pills", "fmt-blacklist-custom", s.blacklist, s.blacklistCustom, (bl, custom) => {
+      s.blacklist = bl;
+      s.blacklistCustom = custom;
+    });
 
     // 2. Trendline (Наклонка)
     const setTl = $("set-fmt-trendline-enabled");
@@ -15867,6 +15906,28 @@ function initNotificationsUI() {
     }
   }
 
+  function isFormationCoinBlacklisted(sym) {
+    if (!sym) return false;
+    const s = currentFormationAlertSettings;
+    if (!s) return false;
+
+    const rawSym = String(sym).toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const base = rawSym.replace(/(USDT|USDC|BUSD|USD|PERP|SWAP|F)$/, "");
+
+    const blList = Array.isArray(s.blacklist) ? s.blacklist : [];
+    const customList = typeof s.blacklistCustom === "string" 
+      ? s.blacklistCustom.toUpperCase().split(/[,;\s]+/).map(x => x.trim().replace(/[^A-Z0-9]/g, "")).filter(Boolean)
+      : [];
+
+    const allExcluded = new Set([...blList.map(x => x.toUpperCase()), ...customList]);
+
+    if (allExcluded.has(rawSym) || allExcluded.has(base)) return true;
+    for (const item of allExcluded) {
+      if (item && (rawSym === item || base === item || (rawSym.startsWith(item) && rawSym.length <= item.length + 5))) return true;
+    }
+    return false;
+  }
+
   async function triggerMatchedFormationAlert(data) {
     const s = currentFormationAlertSettings;
     if (!s) return;
@@ -15969,6 +16030,7 @@ function initNotificationsUI() {
               const sym = key.substring(colonIdx + 1);
 
               if (!isAllowedEx(ex)) continue;
+              if (isFormationCoinBlacklisted(sym)) continue;
 
               const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
               const curPrice = coinObj?.p || 0;
@@ -16046,6 +16108,7 @@ function initNotificationsUI() {
               const sym = key.substring(colonIdx + 1);
 
               if (!isAllowedEx(ex)) continue;
+              if (isFormationCoinBlacklisted(sym)) continue;
 
               const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
               const curPrice = coinObj?.p || 0;
@@ -16116,6 +16179,7 @@ function initNotificationsUI() {
               const sym = key.substring(colonIdx + 1);
 
               if (!isAllowedEx(ex)) continue;
+              if (isFormationCoinBlacklisted(sym)) continue;
 
               const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
               const curPrice = coinObj?.p || 0;
