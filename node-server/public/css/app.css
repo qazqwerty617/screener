@@ -522,17 +522,33 @@ button {
     display: block !important;
 }
 
-/* Multichart View: Hide single-coin stats to give room for multichart toolbar controls and exchange selector */
-body.view-is-multichart .chart-bar .stat,
-body.view-is-multichart .chart-bar .sep:nth-of-type(n+2) {
+/* Multichart View: Hide single-coin stats and sym-btn in #ctbar to give ample room for multichart toolbar controls and exchange selector */
+body.view-is-multichart #ctbar .stat,
+body.view-is-multichart #ctbar .sep:nth-of-type(n+2),
+body.view-is-multichart #ctbar #sym-btn {
     display: none !important;
 }
 
-body.view-is-multichart .grid-config {
+body.view-is-multichart #ctbar .grid-config {
     display: flex !important;
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
+}
+
+#ctbar #exc-wrap {
+    margin-left: auto;
+    position: relative;
+    padding-right: 14px;
+    margin-right: 4px;
+    flex-shrink: 0 !important;
+    z-index: 10000;
+}
+
+#ctbar #exc-btn {
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    min-width: max-content;
 }
 
 @keyframes fadeIn {
