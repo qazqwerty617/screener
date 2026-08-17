@@ -4752,6 +4752,8 @@ canvas.addEventListener("mousedown", (e) => {
         t2: t,
         p2: roundedPrice,
         color: getToolColor("alert"),
+        tf: activeTf || "5m",
+        ex: activeEx || "BN"
       });
 
       chartDrawings.push({ ...tempDrawing });
@@ -4762,6 +4764,7 @@ canvas.addEventListener("mousedown", (e) => {
           id: Date.now(),
           ex: activeEx || "BN",
           sym: activeSym || "BTCUSDT",
+          tf: activeTf || "5m",
           dir,
           price: roundedPrice,
           createdPrice: currentPrice,
@@ -14077,6 +14080,628 @@ window.submitBugReport = submitBugReport;
 window.handleBugScreenshotSelect = handleBugScreenshotSelect;
 window.removeBugScreenshot = removeBugScreenshot;
 
+async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0, alertTf = activeTf, alertEx = activeEx) {
+  try {
+    const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
+    const targetSym = (sym || activeSym || "BTCUSDT").toUpperCase();
+    const targetEx = alertEx || activeEx || "BN";
+    const targetTf = alertTf || activeTf || "5m";
+
+    let candleList = [];
+    if (sym === activeSym && targetTf === activeTf && Array.isArray(candles) && candles.length >= 100) {
+      candleList = candles.slice(-500);
+    }
+
+    if (candleList.length < 300) {
+      try {
+        const res = await fetch(`/api/klines?ex=${targetEx}&sym=${targetSym}&tf=${targetTf}&lite=1`);
+        if (res.ok) {
+          const raw = await res.json();
+          if (Array.isArray(raw) && raw.length >= 6) {
+            const parsed = [];
+            for (let i = 0; i < raw.length; i += 6) {
+              parsed.push({
+                t: +raw[i],
+                o: +raw[i + 1],
+                h: +raw[i + 2],
+                l: +raw[i + 3],
+                c: +raw[i + 4],
+                v: +raw[i + 5] || 0
+              });
+            }
+            if (parsed.length > 0) candleList = parsed.slice(-500);
+          }
+        }
+      } catch (err) {
+        console.warn("[SNAPSHOT FETCH KLINES FALLBACK]", err);
+      }
+    }
+
+    if (!candleList || candleList.length === 0) {
+      if (Array.isArray(candles) && candles.length > 0) {
+        candleList = candles.slice(-500);
+      }
+    }
+
+    if (!candleList || candleList.length === 0) return null;
+
+    const W = 1200;
+    const H = 680;
+    const shot = document.createElement("canvas");
+    shot.width = W;
+    shot.height = H;
+    const ctx = shot.getContext("2d");
+
+    const TOP = 48;
+    const PR = 105;
+    const PW = W - PR;
+    const BTM_TIME = 28;
+    const VOL_H = 105;
+    const PH = H - TOP - VOL_H - BTM_TIME;
+    const volY = TOP + PH;
+
+    ctx.fillStyle = "#0c0e14";
+    ctx.fillRect(0, 0, W, H);
+
+    const displaySym = targetSym;
+    const displayExFull = typeof getFullExchangeName === "function" ? getFullExchangeName(targetEx) : "BINANCE";
+    const tfLabel = String(targetTf).toUpperCase();
+
+    ctx.font = "bold 20px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(displaySym, 24, 25);
+    const symW = ctx.measureText(displaySym).width;
+
+    const tfColors = { "1M": "#38bdf8", "3M": "#38bdf8", "5M": "#22c55e", "15M": "#a855f7", "30M": "#ec4899", "1H": "#f59e0b", "4H": "#f97316", "1D": "#e11d48" };
+    const tfBg = tfColors[tfLabel] || "#a855f7";
+    const badgeX = 24 + symW + 12;
+    const tfBadgeW = Math.max(38, tfLabel.length * 9 + 18);
+
+    ctx.fillStyle = tfBg;
+    if (typeof roundRect === "function") roundRect(ctx, badgeX, 13, tfBadgeW, 24, 5);
+    else ctx.fillRect(badgeX, 13, tfBadgeW, 24);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 12px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(tfLabel, badgeX + tfBadgeW / 2, 25);
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.font = "500 13px Inter, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`${displayExFull} · ${candleList.length} СВЕЧЕЙ`, badgeX + tfBadgeW + 14, 25);
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#f59e0b";
+    ctx.font = "bold 13px Inter, sans-serif";
+    ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 24, 25);
+
+    let minP = Infinity, maxP = -Infinity;
+    let maxVol = 0.0001;
+    for (const c of candleList) {
+      if (c.l < minP) minP = c.l;
+      if (c.h > maxP) maxP = c.h;
+      if (c.v > maxVol) maxVol = c.v;
+    }
+    if (targetLevel > 0) {
+      minP = Math.min(minP, targetLevel);
+      maxP = Math.max(maxP, targetLevel);
+    }
+    const priceMargin = (maxP - minP) * 0.07 || (minP * 0.01);
+    minP -= priceMargin;
+    maxP += priceMargin;
+    const priceRange = maxP - minP || 1;
+
+    const toY = (p) => TOP + (maxP - p) * (PH / priceRange);
+    const toVolY = (v) => volY + VOL_H - (v / maxVol) * (VOL_H - 15);
+
+    const gridStep = typeof calcNiceStep === "function" ? calcNiceStep(priceRange, 7) : priceRange / 7;
+    let gp = Math.ceil(minP / gridStep) * gridStep;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([]);
+    while (gp <= maxP) {
+      const y = toY(gp);
+      if (y >= TOP && y <= TOP + PH) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(PW, y);
+        ctx.stroke();
+      }
+      gp += gridStep;
+    }
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.beginPath();
+    ctx.moveTo(0, volY);
+    ctx.lineTo(W, volY);
+    ctx.stroke();
+
+    const numCandles = candleList.length;
+    const candleStepW = PW / numCandles;
+    const candleBodyW = Math.max(1, Math.min(candleStepW * 0.75, candleStepW - 1));
+
+    let hitCandleX = null;
+
+    for (let i = 0; i < numCandles; i++) {
+      const c = candleList[i];
+      const cx = i * candleStepW + candleStepW / 2;
+      const isUp = c.c >= c.o;
+      const col = isUp ? "#22c55e" : "#ef4444";
+
+      const yH = toY(c.h);
+      const yL = toY(c.l);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx, yH);
+      ctx.lineTo(cx, yL);
+      ctx.stroke();
+
+      const yO = toY(c.o);
+      const yC = toY(c.c);
+      const bTop = Math.min(yO, yC);
+      const bH = Math.max(1.5, Math.abs(yC - yO));
+      ctx.fillStyle = col;
+      ctx.fillRect(cx - candleBodyW / 2, bTop, candleBodyW, bH);
+
+      const vTop = toVolY(c.v);
+      ctx.fillStyle = isUp ? "rgba(34, 197, 94, 0.45)" : "rgba(239, 68, 68, 0.45)";
+      ctx.fillRect(cx - candleBodyW / 2, vTop, candleBodyW, volY + VOL_H - vTop);
+
+      if (targetLevel > 0 && c.h >= targetLevel && c.l <= targetLevel && hitCandleX === null) {
+        hitCandleX = cx;
+      }
+    }
+
+    if (hitCandleX === null && numCandles > 0) {
+      hitCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
+    }
+
+    const alertBadgeYs = [];
+    if (targetLevel > 0) {
+      const alertY = toY(targetLevel);
+      alertBadgeYs.push(alertY);
+
+      ctx.save();
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, alertY);
+      ctx.lineTo(PW, alertY);
+      ctx.stroke();
+      ctx.restore();
+
+      if (hitCandleX !== null) {
+        ctx.save();
+        ctx.fillStyle = "#f59e0b";
+        ctx.beginPath();
+        ctx.arc(hitCandleX, alertY, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      const bH = 22;
+      const bW = PR - 8;
+      const bX = PW + 4;
+      const bY = alertY - bH / 2;
+
+      ctx.save();
+      if (typeof roundRect === "function") roundRect(ctx, bX, bY, bW, bH, 5);
+      else ctx.fillRect(bX, bY, bW, bH);
+      ctx.fillStyle = "#221603";
+      ctx.fill();
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = "#fbbf24";
+      ctx.font = "bold 11px Inter, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const alertStr = typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4);
+      ctx.fillText(`🎯 ${alertStr}`, bX + bW / 2, alertY);
+      ctx.restore();
+    }
+
+    const lastCandle = candleList[numCandles - 1];
+    if (lastCandle) {
+      const lastClose = lastCandle.c;
+      const liveY = toY(lastClose);
+      alertBadgeYs.push(liveY);
+
+      ctx.save();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, liveY);
+      ctx.lineTo(PW, liveY);
+      ctx.stroke();
+      ctx.restore();
+
+      const bH = 22;
+      const bW = PR - 8;
+      const bX = PW + 4;
+      const bY = liveY - bH / 2;
+      const isUp = lastClose >= lastCandle.o;
+
+      ctx.save();
+      if (typeof roundRect === "function") roundRect(ctx, bX, bY, bW, bH, 5);
+      else ctx.fillRect(bX, bY, bW, bH);
+      ctx.fillStyle = "#131722";
+      ctx.fill();
+      ctx.strokeStyle = isUp ? "#22c55e" : "#ef4444";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 11px Inter, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(typeof fP === "function" ? fP(lastClose) : lastClose.toFixed(4), bX + bW / 2, liveY);
+      ctx.restore();
+    }
+
+    gp = Math.ceil(minP / gridStep) * gridStep;
+    ctx.font = "10px Inter, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    while (gp <= maxP) {
+      const y = toY(gp);
+      if (y >= TOP + 12 && y <= TOP + PH - 12) {
+        const collides = alertBadgeYs.some(by => Math.abs(by - y) < 16);
+        if (!collides) {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+          ctx.fillText(typeof fP === "function" ? fP(gp) : gp.toFixed(4), PW + 8, y);
+        }
+      }
+      gp += gridStep;
+    }
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.font = "bold 10px Inter, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`VOL: ${typeof fV === "function" ? fV(maxVol) : maxVol.toFixed(0)}`, 14, volY + 14);
+
+    const timeY = H - BTM_TIME / 2;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.font = "10px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    const timeStep = Math.floor(numCandles / 7);
+    for (let i = Math.floor(timeStep / 2); i < numCandles; i += timeStep) {
+      const c = candleList[i];
+      if (c && c.t) {
+        const d = new Date(c.t);
+        const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+        const dateStr = `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const label = targetTf.includes("d") ? dateStr : `${dateStr} ${timeStr}`;
+        const tx = i * candleStepW + candleStepW / 2;
+        if (tx > 40 && tx < PW - 40) {
+          ctx.fillText(label, tx, timeY);
+        }
+      }
+    }
+
+    const result = shot.toDataURL("image/jpeg", 0.90);
+    console.log(`[CHART SNAPSHOT 500 BARS] Generated OK for ${targetSym} ${targetTf}, size=${result ? result.length : 0}`);
+    return result;
+  } catch (err) {
+    console.error("[OFFSCREEN SNAPSHOT ERROR]", err);
+    return null;
+  }
+}
+
+function sendTelegramAlert(message, photoDataUrl = null) {
+  const activeUser = window.currentUser;
+  const chatId = activeUser?.telegramChatId || activeUser?.telegramId || localStorage.getItem("obsidian_tg_chat_id");
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  const hasPhoto = photoDataUrl && typeof photoDataUrl === "string" && photoDataUrl.startsWith("data:image");
+  console.log(`[ALERT TG] hasPhoto=${!!hasPhoto}, photoLen=${photoDataUrl ? photoDataUrl.length : 0}, chatId=${chatId}`);
+
+  const endpoint = hasPhoto ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
+  const body = hasPhoto
+    ? { chatId: chatId || undefined, caption: message, photoDataUrl }
+    : { chatId: chatId || undefined, message };
+
+  fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body)
+  }).then(async r => {
+    const d = await r.json();
+    console.log(`[ALERT TG] Response status=${r.status}`, d);
+    if (!r.ok || !d.success) {
+      console.warn("Telegram alert dispatch result:", d);
+    }
+  }).catch(err => {
+    console.error("Telegram alert dispatch error:", err);
+  });
+}
+
+async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
+  if (!price || price <= 0) return;
+  const targetSym = normSymCode(sym);
+  const targetEx = normExCode(ex);
+  
+  const hVal = high > 0 ? high : price;
+  const lVal = low > 0 ? low : price;
+
+  if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && chartDrawings.length > 0) {
+    const isCurrentChart = (!sym || normSymCode(sym) === normSymCode(activeSym)) && (!ex || normExCode(ex) === normExCode(activeEx));
+    if (isCurrentChart) {
+      for (let i = chartDrawings.length - 1; i >= 0; i--) {
+        const d = chartDrawings[i];
+        if (!d || d.type !== "alert" || d.triggered) continue;
+
+        const alertPrice = d.p1;
+        if (!alertPrice || alertPrice <= 0) continue;
+
+        let isHit = false;
+        if (hVal >= alertPrice && lVal <= alertPrice) isHit = true;
+        else if (Math.abs(price - alertPrice) / alertPrice <= 0.001) isHit = true;
+        else if (d.createdP && d.createdP < alertPrice && hVal >= alertPrice) isHit = true;
+        else if (d.createdP && d.createdP > alertPrice && lVal <= alertPrice) isHit = true;
+
+        if (isHit) {
+          d.triggered = true;
+
+          let photoDataUrl = null;
+          try {
+            photoDataUrl = await captureChartSnapshot(sym || activeSym, price, alertPrice, d.tf || activeTf || "5m", ex || activeEx || "BN");
+          } catch (_) {}
+
+          chartDrawings.splice(i, 1);
+          if (typeof saveDrawings === "function") saveDrawings();
+          if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+
+          const displayExFull = getFullExchangeName(ex || activeEx || "BN");
+          const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
+          const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
+
+          const title = `🔔 Достигнут уровень цены!`;
+          const body = `<b>${displayExFull} · ${displaySym}</b> достиг уровня <b>$${formattedTarget}</b>`;
+
+          const telegramMsg =
+            `─────── <b>${displaySym}</b> ───────\n` +
+            `• <b>Биржа:</b> ${displayExFull}\n` +
+            `• <b>Ценовой уровень:</b> $${formattedTarget}\n` +
+            `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+            `─────────────────────────\n` +
+            `🎯 <b>Obsidian Price Alert</b>`;
+
+          try { playAlertSound("chime"); } catch (_) {}
+          try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
+          try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
+        }
+      }
+    }
+  }
+
+  if (!priceAlerts || !priceAlerts.length) return;
+
+  for (let i = 0; i < priceAlerts.length; i++) {
+    const alert = priceAlerts[i];
+    if (!alert || alert.triggered) continue;
+    
+    const alertSym = normSymCode(alert.sym);
+    const alertEx = normExCode(alert.ex);
+    
+    if (alertSym !== targetSym && !targetSym.includes(alertSym) && !alertSym.includes(targetSym)) continue;
+    if (alertEx && targetEx && alertEx !== targetEx) continue;
+    
+    let isHit = false;
+
+    if (alert.dir === "gte" && hVal >= alert.price) isHit = true;
+    if (alert.dir === "lte" && lVal <= alert.price) isHit = true;
+
+    if (!isHit && alert.createdPrice && alert.createdPrice > 0) {
+      if (alert.createdPrice < alert.price && hVal >= alert.price) isHit = true;
+      if (alert.createdPrice > alert.price && lVal <= alert.price) isHit = true;
+    }
+
+    if (!isHit) {
+      const relDiff = Math.min(Math.abs(price - alert.price), Math.abs(hVal - alert.price), Math.abs(lVal - alert.price)) / alert.price;
+      if (relDiff <= 0.001) isHit = true;
+    }
+    
+    if (isHit) {
+      alert.triggered = true;
+
+      let photoDataUrl = null;
+      try {
+        photoDataUrl = await captureChartSnapshot(alert.sym || sym || activeSym, price, alert.price, alert.tf || activeTf || "5m", alert.ex || targetEx || "BN");
+      } catch (_) {}
+      
+      if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings)) {
+        const initialLen = chartDrawings.length;
+        chartDrawings = chartDrawings.filter(d => {
+          if (d.type === "alert") {
+            if (alert.drawingId && d.t1 === alert.drawingId) return false;
+            if (Math.abs(d.p1 - alert.price) / (alert.price || 1) < 0.0008) return false;
+          }
+          return true;
+        });
+        if (chartDrawings.length !== initialLen && typeof saveDrawings === "function") {
+          saveDrawings();
+        }
+      }
+
+      try {
+        const drawKey = "crypto_drawings_" + alert.sym;
+        const rawDraw = localStorage.getItem(drawKey);
+        if (rawDraw) {
+          let arr = JSON.parse(rawDraw);
+          arr = arr.filter(d => {
+            if (d.type === "alert") {
+              if (alert.drawingId && d.t1 === alert.drawingId) return false;
+              if (Math.abs(d.p1 - alert.price) / (alert.price || 1) < 0.0008) return false;
+            }
+            return true;
+          });
+          localStorage.setItem(drawKey, JSON.stringify(arr));
+        }
+      } catch (_) {}
+
+      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+      if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+        chartInstances.forEach(inst => { if (inst && inst.draw) inst.draw(true); });
+      }
+
+      const alertExNameFull = getFullExchangeName(alert.ex || targetEx || "BN");
+      const alertSymName = (alert.sym || targetSym || "BTCUSDT").toUpperCase();
+      const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
+
+      const title = `🔔 Достигнут уровень цены!`;
+      const body = `<b>${alertExNameFull} · ${alertSymName}</b> достиг уровня <b>$${formattedTarget}</b>`;
+      
+      const telegramMsg =
+        `─────── <b>${alertSymName}</b> ───────\n` +
+        `• <b>Биржа:</b> ${alertExNameFull}\n` +
+        `• <b>Ценовой уровень:</b> ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget}\n` +
+        `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+        `─────────────────────────\n` +
+        `🎯 <b>Obsidian Price Alert</b>`;
+
+      try { playAlertSound("chime"); } catch (_) {}
+      try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
+      try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
+      
+      savePriceAlerts();
+    }
+  }
+};
+
+// ── NOTIFICATIONS & PRICE ALERTS ENGINE ──
+let priceAlerts = [];
+let audioCtx = null;
+
+function unlockAudioContext() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (_) {}
+  }
+  if (audioCtx && audioCtx.state === "suspended") {
+    audioCtx.resume().catch(() => {});
+  }
+}
+window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
+window.addEventListener("keydown", unlockAudioContext, { passive: true });
+
+function renderPriceAlertsList() {
+  // UI grid was removed; this is intentionally a no-op.
+}
+
+function loadPriceAlerts() {
+  try {
+    const raw = localStorage.getItem("obsidian_price_alerts");
+    priceAlerts = raw ? JSON.parse(raw) : [];
+    // Filter out old triggered alerts on load
+    priceAlerts = priceAlerts.filter(a => !a.triggered);
+  } catch (_) { priceAlerts = []; }
+}
+
+function savePriceAlerts() {
+  try {
+    // Save only active alerts
+    const active = priceAlerts.filter(a => !a.triggered);
+    localStorage.setItem("obsidian_price_alerts", JSON.stringify(active));
+  } catch (_) {}
+}
+
+function playAlertSound(kind = "chime") {
+  try {
+    unlockAudioContext();
+    if (!audioCtx) return;
+    
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    
+    osc.type = "sine";
+    if (kind === "chime") {
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.15);
+    } else {
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.setValueAtTime(800, now + 0.1);
+    }
+    
+    gain.gain.setValueAtTime(0.4, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    
+    osc.start(now);
+    osc.stop(now + 0.5);
+  } catch (_) {}
+}
+
+
+
+function getFullExchangeName(ex) {
+  if (!ex) return "BINANCE";
+  const s = String(ex).toUpperCase().trim();
+  if (s === "BN" || s === "BINANCE" || s === "BNF" || s === "BNS") return "BINANCE";
+  if (s === "BB" || s === "BYBIT" || s === "BBF" || s === "BBS") return "BYBIT";
+  if (s === "OK" || s === "OX" || s === "OKX") return "OKX";
+  if (s === "MX" || s === "MEXC") return "MEXC";
+  if (s === "GT" || s === "GATE" || s === "GATEIO") return "GATE";
+  if (s === "BG" || s === "BITGET") return "BITGET";
+  if (s === "BX" || s === "BINGX") return "BINGX";
+  if (s === "KC" || s === "KUCOIN") return "KUCOIN";
+  if (s === "HT" || s === "HTX" || s === "HUOBI") return "HTX";
+  if (s === "HL" || s === "HYPERLIQUID") return "HYPERLIQUID";
+  if (s === "AD" || s === "ASTERDEX") return "ASTERDEX";
+  return s;
+}
+
+function normExCode(e) {
+  if (!e) return "";
+  const s = String(e).toUpperCase().trim();
+  if (s === "BINANCE" || s === "BN") return "BN";
+  if (s === "BYBIT" || s === "BB") return "BB";
+  if (s === "OKX" || s === "OK" || s === "OX") return "OK";
+  if (s === "MEXC" || s === "MX") return "MX";
+  if (s === "GATE" || s === "GATE.IO" || s === "GT") return "GT";
+  if (s === "BITGET" || s === "BG") return "BG";
+  if (s === "BINGX" || s === "BX") return "BX";
+  if (s === "KUCOIN" || s === "KC") return "KC";
+  if (s === "HTX" || s === "HUOBI" || s === "HT") return "HT";
+  if (s === "HYPERLIQUID" || s === "HL") return "HL";
+  if (s === "ASTERDEX" || s === "AD") return "AD";
+  return s;
+}
+
+function normSymCode(s) {
+  if (!s) return "";
+  let str = String(s).toUpperCase().trim();
+  str = str.replace(/\.F$|\.S$/i, "");
+  str = str.replace(/[-_/.]/g, "");
+  str = str.replace(/USDT$|PERP$/i, "");
+  return str;
+}
+
 // Keep subscription actions out of inline HTML handlers. Besides being easier
 // to maintain, this keeps the upgrade flow working under a strict CSP.
 function bindProAccessControls() {
@@ -14382,513 +15007,6 @@ function copyPayField(elementId) {
       document.body.removeChild(input);
       alert("Скопировано: " + textToCopy);
     });
-  }
-}
-
-// ── NOTIFICATIONS & PRICE ALERTS ENGINE ──
-let priceAlerts = [];
-let audioCtx = null;
-
-function unlockAudioContext() {
-  if (!audioCtx) {
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    } catch (_) {}
-  }
-  if (audioCtx && audioCtx.state === "suspended") {
-    audioCtx.resume().catch(() => {});
-  }
-}
-window.addEventListener("pointerdown", unlockAudioContext, { passive: true });
-window.addEventListener("keydown", unlockAudioContext, { passive: true });
-
-function renderPriceAlertsList() {
-  // UI grid was removed; this is intentionally a no-op.
-}
-
-function loadPriceAlerts() {
-  try {
-    const raw = localStorage.getItem("obsidian_price_alerts");
-    priceAlerts = raw ? JSON.parse(raw) : [];
-    // Filter out old triggered alerts on load
-    priceAlerts = priceAlerts.filter(a => !a.triggered);
-  } catch (_) { priceAlerts = []; }
-}
-
-function savePriceAlerts() {
-  try {
-    // Save only active alerts
-    const active = priceAlerts.filter(a => !a.triggered);
-    localStorage.setItem("obsidian_price_alerts", JSON.stringify(active));
-  } catch (_) {}
-}
-
-function playAlertSound(kind = "chime") {
-  try {
-    unlockAudioContext();
-    if (!audioCtx) return;
-    
-    const now = audioCtx.currentTime;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    
-    osc.type = "sine";
-    if (kind === "chime") {
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.exponentialRampToValueAtTime(1320, now + 0.15);
-    } else {
-      osc.frequency.setValueAtTime(600, now);
-      osc.frequency.setValueAtTime(800, now + 0.1);
-    }
-    
-    gain.gain.setValueAtTime(0.4, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-    
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    
-    osc.start(now);
-    osc.stop(now + 0.5);
-  } catch (_) {}
-}
-
-
-
-function getFullExchangeName(ex) {
-  if (!ex) return "BINANCE";
-  const s = String(ex).toUpperCase().trim();
-  if (s === "BN" || s === "BINANCE" || s === "BNF" || s === "BNS") return "BINANCE";
-  if (s === "BB" || s === "BYBIT" || s === "BBF" || s === "BBS") return "BYBIT";
-  if (s === "OK" || s === "OX" || s === "OKX") return "OKX";
-  if (s === "MX" || s === "MEXC") return "MEXC";
-  if (s === "GT" || s === "GATE" || s === "GATEIO") return "GATE";
-  if (s === "BG" || s === "BITGET") return "BITGET";
-  if (s === "BX" || s === "BINGX") return "BINGX";
-  if (s === "KC" || s === "KUCOIN") return "KUCOIN";
-  if (s === "HT" || s === "HTX" || s === "HUOBI") return "HTX";
-  if (s === "HL" || s === "HYPERLIQUID") return "HYPERLIQUID";
-  if (s === "AD" || s === "ASTERDEX") return "ASTERDEX";
-  return s;
-}
-
-function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal = 0) {
-  try {
-    const targetLevel = alertPriceVal > 0 ? alertPriceVal : priceVal;
-
-    // 1. Try capturing real on-screen main canvas if active symbol matches or DOM canvas is available
-    const mainCanvas = document.getElementById("chart-canvas");
-    const volCanvas = document.getElementById("vol-canvas");
-
-    const isCurrentActiveSym = (!sym || normSymCode(sym) === normSymCode(activeSym));
-
-    if (isCurrentActiveSym && mainCanvas && mainCanvas.width > 100 && mainCanvas.height > 100) {
-      // Create a canvas with the real chart's pixel dimensions
-      const shot = document.createElement("canvas");
-      shot.width = mainCanvas.width;
-      shot.height = mainCanvas.height + (volCanvas && volCanvas.height > 0 ? volCanvas.height : 0);
-      const ctx = shot.getContext("2d");
-
-      // Fill background
-      ctx.fillStyle = typeof getCanvasBgColor === "function" ? getCanvasBgColor() : "#0d0f14";
-      ctx.fillRect(0, 0, shot.width, shot.height);
-
-      // Draw main chart canvas
-      ctx.drawImage(mainCanvas, 0, 0);
-
-      // Draw volume canvas directly underneath main chart canvas if present
-      if (volCanvas && volCanvas.height > 0) {
-        ctx.drawImage(volCanvas, 0, mainCanvas.height);
-      }
-
-      // Convert to compressed JPEG data URL for fast delivery
-      const result = shot.toDataURL("image/jpeg", 0.88);
-      console.log(`[CHART SNAPSHOT] Captured REAL screener canvas OK, size=${result ? result.length : 0}`);
-      return result;
-    }
-
-    // 2. Check if user is in multi-chart grid mode and capture matching cell canvas
-    const gridContainer = document.getElementById("chart-grid-container");
-    if (gridContainer && gridContainer.style.display !== "none") {
-      const cellCanvases = gridContainer.querySelectorAll(".cell-canvas");
-      for (const cellCv of cellCanvases) {
-        if (cellCv && cellCv.width > 100 && cellCv.height > 100) {
-          const shot = document.createElement("canvas");
-          shot.width = cellCv.width;
-          shot.height = cellCv.height;
-          const ctx = shot.getContext("2d");
-          ctx.fillStyle = "#0d0f14";
-          ctx.fillRect(0, 0, shot.width, shot.height);
-          ctx.drawImage(cellCv, 0, 0);
-          const result = shot.toDataURL("image/jpeg", 0.88);
-          console.log(`[CHART SNAPSHOT] Captured GRID cell canvas OK, size=${result ? result.length : 0}`);
-          return result;
-        }
-      }
-    }
-
-    // 3. Fallback: Standalone High-Quality 15m Offscreen Renderer with real klines / synthetic candles
-    const width = 900;
-    const height = 500;
-    const shot = document.createElement("canvas");
-    shot.width = width;
-    shot.height = height;
-    const ctx = shot.getContext("2d");
-
-    // Dark theme background
-    ctx.fillStyle = "#0d0f14";
-    ctx.fillRect(0, 0, width, height);
-
-    // Grid lines
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-    ctx.lineWidth = 1;
-    for (let y = 50; y < height - 30; y += 45) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(width - 80, y);
-      ctx.stroke();
-    }
-    for (let x = 60; x < width - 80; x += 90) {
-      ctx.beginPath();
-      ctx.moveTo(x, 40);
-      ctx.lineTo(x, height - 30);
-      ctx.stroke();
-    }
-
-    // Header & 15m Timeframe Badge
-    const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
-    const displayExFull = typeof getFullExchangeName === "function" ? getFullExchangeName(activeEx || "BN") : "BINANCE";
-    ctx.font = "bold 18px sans-serif";
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(`${displaySym}`, 20, 30);
-
-    const symWidth = ctx.measureText(displaySym).width;
-    ctx.fillStyle = "#a855f7"; // Purple 15m badge
-    ctx.fillRect(20 + symWidth + 12, 14, 45, 20);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 12px sans-serif";
-    ctx.fillText("15m", 20 + symWidth + 24, 28);
-
-    ctx.font = "13px sans-serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-    ctx.fillText(`${displayExFull} · OBSIDIAN PRO`, width - 230, 28);
-
-    // Fetch candle data from global candles array or synthesize candles around target level
-    let rawCandles = (typeof candles !== "undefined" && Array.isArray(candles) && candles.length > 0)
-      ? candles.slice(-60)
-      : [];
-
-    let candleData = rawCandles.map(c => ({
-      o: Number(c.o ?? c.open ?? 0),
-      h: Number(c.h ?? c.high ?? 0),
-      l: Number(c.l ?? c.low ?? 0),
-      c: Number(c.c ?? c.close ?? 0)
-    })).filter(c => c.h > 0 && c.l > 0);
-
-    if (candleData.length === 0 && targetLevel > 0) {
-      const base = targetLevel;
-      let curr = base * 0.995;
-      for (let i = 0; i < 45; i++) {
-        const change = (Math.random() - 0.48) * base * 0.003;
-        const o = curr;
-        const c = curr + change;
-        const h = Math.max(o, c) + Math.random() * base * 0.0012;
-        const l = Math.min(o, c) - Math.random() * base * 0.0012;
-        candleData.push({ o, h, l, c });
-        curr = c;
-      }
-    }
-
-    if (candleData.length > 0) {
-      let minP = Infinity, maxP = -Infinity;
-      for (const c of candleData) {
-        if (c.l < minP) minP = c.l;
-        if (c.h > maxP) maxP = c.h;
-      }
-      if (targetLevel > 0) {
-        minP = Math.min(minP, targetLevel * 0.996);
-        maxP = Math.max(maxP, targetLevel * 1.004);
-      }
-      const pad = (maxP - minP) * 0.08 || 1;
-      minP -= pad;
-      maxP += pad;
-
-      const topY = 45;
-      const botY = height - 40;
-      const chartH = botY - topY;
-      const stepX = (width - 110) / candleData.length;
-      const getY = p => botY - ((p - minP) / (maxP - minP)) * chartH;
-
-      for (let i = 0; i < candleData.length; i++) {
-        const c = candleData[i];
-        const x = 20 + i * stepX;
-        const openY = getY(c.o);
-        const closeY = getY(c.c);
-        const highY = getY(c.h);
-        const lowY = getY(c.l);
-        const isUp = c.c >= c.o;
-        const color = isUp ? "#0eac68" : "#e04343";
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(x + stepX * 0.45, highY);
-        ctx.lineTo(x + stepX * 0.45, lowY);
-        ctx.stroke();
-
-        ctx.fillStyle = color;
-        const bTop = Math.min(openY, closeY);
-        const bH = Math.max(Math.abs(closeY - openY), 2);
-        ctx.fillRect(x + 1, bTop, Math.max(stepX - 3, 2), bH);
-      }
-
-      if (targetLevel > 0) {
-        const levelY = getY(targetLevel);
-        ctx.save();
-        ctx.shadowColor = "#f0b90b";
-        ctx.shadowBlur = 8;
-        ctx.setLineDash([7, 4]);
-        ctx.strokeStyle = "#f0b90b";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(0, levelY);
-        ctx.lineTo(width - 85, levelY);
-        ctx.stroke();
-        ctx.restore();
-
-        ctx.fillStyle = "#f0b90b";
-        ctx.fillRect(width - 85, levelY - 12, 85, 24);
-        ctx.fillStyle = "#000000";
-        ctx.font = "bold 11px monospace";
-        const priceStr = typeof fP === "function" ? fP(targetLevel) : targetLevel.toFixed(4);
-        ctx.fillText(`🔔 ${priceStr}`, width - 80, levelY + 4);
-      }
-    }
-
-    const result = shot.toDataURL("image/jpeg", 0.88);
-    console.log(`[CHART SNAPSHOT] Rendered fallback chart OK, size=${result ? result.length : 0}`);
-    return result;
-  } catch (err) {
-    console.error("[OFFSCREEN RENDER ERROR]", err);
-    return null;
-  }
-}
-
-function sendTelegramAlert(message, photoDataUrl = null) {
-  const activeUser = window.currentUser;
-  const chatId = activeUser?.telegramChatId || activeUser?.telegramId || localStorage.getItem("obsidian_tg_chat_id");
-  const headers = { "Content-Type": "application/json" };
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
-
-  const hasPhoto = photoDataUrl && typeof photoDataUrl === "string" && photoDataUrl.startsWith("data:image");
-  console.log(`[ALERT TG] hasPhoto=${!!hasPhoto}, photoLen=${photoDataUrl ? photoDataUrl.length : 0}, chatId=${chatId}`);
-
-  const endpoint = hasPhoto ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
-  const body = hasPhoto
-    ? { chatId: chatId || undefined, caption: message, photoDataUrl }
-    : { chatId: chatId || undefined, message };
-
-  fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  }).then(async r => {
-    const d = await r.json();
-    console.log(`[ALERT TG] Response status=${r.status}`, d);
-    if (!r.ok || !d.success) {
-      console.warn("Telegram alert dispatch result:", d);
-    }
-  }).catch(err => { console.error("[ALERT TG] fetch error:", err); });
-}
-
-function normExCode(e) {
-  if (!e) return "";
-  const s = String(e).toUpperCase().trim();
-  if (s === "BINANCE" || s === "BN") return "BN";
-  if (s === "BYBIT" || s === "BB") return "BB";
-  if (s === "OKX" || s === "OK" || s === "OX") return "OK";
-  if (s === "MEXC" || s === "MX") return "MX";
-  if (s === "GATE" || s === "GATE.IO" || s === "GT") return "GT";
-  if (s === "BITGET" || s === "BG") return "BG";
-  if (s === "BINGX" || s === "BX") return "BX";
-  if (s === "KUCOIN" || s === "KC") return "KC";
-  if (s === "HTX" || s === "HUOBI" || s === "HT") return "HT";
-  if (s === "HYPERLIQUID" || s === "HL") return "HL";
-  if (s === "ASTERDEX" || s === "AD") return "AD";
-  return s;
-}
-
-function normSymCode(s) {
-  if (!s) return "";
-  let str = String(s).toUpperCase().trim();
-  str = str.replace(/\.F$|\.S$/i, "");
-  str = str.replace(/[-_/.]/g, "");
-  str = str.replace(/USDT$|PERP$/i, "");
-  return str;
-}
-
-function checkPriceAlerts(ex, sym, price, high = price, low = price) {
-  if (!price || price <= 0) return;
-  const targetSym = normSymCode(sym);
-  const targetEx = normExCode(ex);
-  
-  const hVal = high > 0 ? high : price;
-  const lVal = low > 0 ? low : price;
-
-  // 1. Direct check on live chartDrawings visible on the active chart (STRICTLY matching both symbol AND exchange)
-  if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && chartDrawings.length > 0) {
-    const isCurrentChart = (!sym || normSymCode(sym) === normSymCode(activeSym)) && (!ex || normExCode(ex) === normExCode(activeEx));
-    if (isCurrentChart) {
-      for (let i = chartDrawings.length - 1; i >= 0; i--) {
-        const d = chartDrawings[i];
-        if (!d || d.type !== "alert" || d.triggered) continue;
-
-        const alertPrice = d.p1;
-        if (!alertPrice || alertPrice <= 0) continue;
-
-        let isHit = false;
-        if (hVal >= alertPrice && lVal <= alertPrice) isHit = true;
-        else if (Math.abs(price - alertPrice) / alertPrice <= 0.001) isHit = true;
-        else if (d.createdP && d.createdP < alertPrice && hVal >= alertPrice) isHit = true;
-        else if (d.createdP && d.createdP > alertPrice && lVal <= alertPrice) isHit = true;
-
-        if (isHit) {
-          d.triggered = true;
-
-          // Capture chart screenshot WITH the alert line visible BEFORE removing drawing
-          let photoDataUrl = null;
-          try { photoDataUrl = captureChartSnapshot(sym || activeSym, price, alertPrice); } catch (_) {}
-
-          chartDrawings.splice(i, 1);
-          if (typeof saveDrawings === "function") saveDrawings();
-          if (typeof drawChart === "function") requestAnimationFrame(drawChart);
-
-          const displayExFull = getFullExchangeName(ex || activeEx || "BN");
-          const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
-          const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
-          const now = new Date();
-          const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-          const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
-
-          const title = `🔔 Достигнут уровень цены!`;
-          const body = `<b>${displayExFull} · ${displaySym}</b> достиг уровня <b>$${formattedTarget}</b>`;
-
-          const telegramMsg =
-            `─────── <b>${displaySym}</b> ───────\n` +
-            `• <b>Биржа:</b> ${displayExFull}\n` +
-            `• <b>Ценовой уровень:</b> $${formattedTarget}\n` +
-            `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
-            `─────────────────────────\n` +
-            `🎯 <b>Obsidian Price Alert</b>`;
-
-          try { playAlertSound("chime"); } catch (_) {}
-          try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
-          try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
-        }
-      }
-    }
-  }
-
-  // 2. Check global priceAlerts array for background/multi-coin alerts
-  if (!priceAlerts || !priceAlerts.length) return;
-
-  for (let i = 0; i < priceAlerts.length; i++) {
-    const alert = priceAlerts[i];
-    if (!alert || alert.triggered) continue;
-    
-    const alertSym = normSymCode(alert.sym);
-    const alertEx = normExCode(alert.ex);
-    
-    if (alertSym !== targetSym && !targetSym.includes(alertSym) && !alertSym.includes(targetSym)) continue;
-    if (alertEx && targetEx && alertEx !== targetEx) continue;
-    
-    let isHit = false;
-
-    // Standard direction checks (including candle high/low range)
-    if (alert.dir === "gte" && hVal >= alert.price) isHit = true;
-    if (alert.dir === "lte" && lVal <= alert.price) isHit = true;
-
-    // Initial price relative crossing check
-    if (!isHit && alert.createdPrice && alert.createdPrice > 0) {
-      if (alert.createdPrice < alert.price && hVal >= alert.price) isHit = true;
-      if (alert.createdPrice > alert.price && lVal <= alert.price) isHit = true;
-    }
-
-    // Proximity check (within 0.1% tolerance)
-    if (!isHit) {
-      const relDiff = Math.min(Math.abs(price - alert.price), Math.abs(hVal - alert.price), Math.abs(lVal - alert.price)) / alert.price;
-      if (relDiff <= 0.001) isHit = true;
-    }
-    
-    if (isHit) {
-      alert.triggered = true;
-
-      let photoDataUrl = null;
-      try { photoDataUrl = captureChartSnapshot(alert.sym || sym || activeSym, price, alert.price); } catch (_) {}
-      
-      // Remove alert drawing from chartDrawings for active symbol
-      if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings)) {
-        const initialLen = chartDrawings.length;
-        chartDrawings = chartDrawings.filter(d => {
-          if (d.type === "alert") {
-            if (alert.drawingId && d.t1 === alert.drawingId) return false;
-            if (Math.abs(d.p1 - alert.price) / (alert.price || 1) < 0.0008) return false;
-          }
-          return true;
-        });
-        if (chartDrawings.length !== initialLen && typeof saveDrawings === "function") {
-          saveDrawings();
-        }
-      }
-
-      // Remove alert drawing from stored drawings for the alert's symbol
-      try {
-        const drawKey = "crypto_drawings_" + alert.sym;
-        const rawDraw = localStorage.getItem(drawKey);
-        if (rawDraw) {
-          let arr = JSON.parse(rawDraw);
-          arr = arr.filter(d => {
-            if (d.type === "alert") {
-              if (alert.drawingId && d.t1 === alert.drawingId) return false;
-              if (Math.abs(d.p1 - alert.price) / (alert.price || 1) < 0.0008) return false;
-            }
-            return true;
-          });
-          localStorage.setItem(drawKey, JSON.stringify(arr));
-        }
-      } catch (_) {}
-
-      // Re-render chart to immediately erase the line/bell
-      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
-      if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
-        chartInstances.forEach(inst => { if (inst && inst.draw) inst.draw(true); });
-      }
-
-      const alertExNameFull = getFullExchangeName(alert.ex || targetEx || "BN");
-      const alertSymName = (alert.sym || targetSym || "BTCUSDT").toUpperCase();
-      const formattedTarget = typeof fP === "function" ? fP(alert.price) : alert.price.toLocaleString();
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
-
-      const title = `🔔 Достигнут уровень цены!`;
-      const body = `<b>${alertExNameFull} · ${alertSymName}</b> достиг уровня <b>$${formattedTarget}</b>`;
-      
-      const telegramMsg =
-        `─────── <b>${alertSymName}</b> ───────\n` +
-        `• <b>Биржа:</b> ${alertExNameFull}\n` +
-        `• <b>Ценовой уровень:</b> ${alert.dir === 'gte' ? '≥' : '≤'} $${formattedTarget}\n` +
-        `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
-        `─────────────────────────\n` +
-        `🎯 <b>Obsidian Price Alert</b>`;
-
-      try { playAlertSound("chime"); } catch (_) {}
-      try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
-      try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
-      
-      savePriceAlerts();
-    }
   }
 }
 
