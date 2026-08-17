@@ -509,15 +509,15 @@
 
                         <div class="chart-density-panel-section">
                             <span class="chart-density-section-label">Формации & Уровни</span>
-                            <div class="chart-density-indicators-grid">
-                                <button class="chart-indicator-grid-btn" id="fmt-cascades"
+                            <div class="chart-density-indicators-grid" style="grid-template-columns: repeat(4, 1fr);">
+                                <button class="chart-indicator-grid-btn" id="fmt-cascades" title="Каскады уровней"
                                     data-desc="Каскады (ScalpX style) — последовательные уровни с подсчетом касаний.">Каскады</button>
-                                <button class="chart-indicator-grid-btn" id="fmt-levels"
-                                    data-desc="Уровни — горизонтальные уровни поддержки и сопротивления с числом касаний.">Уровни</button>
-                                <button class="chart-indicator-grid-btn" id="fmt-trendlines"
-                                    data-desc="Трендовые — наклонные динамические линии тренда по экстремумам.">Трендовые</button>
-                                <button class="chart-indicator-grid-btn" id="fmt-retests"
-                                    data-desc="Ретесты — уровни истинного пробоя с подтвержденным ретестом.">Ретесты</button>
+                                <button class="chart-indicator-grid-btn" id="fmt-levels" title="Горизонтальные уровни"
+                                    data-desc="Горизонталки — горизонтальные уровни поддержки и сопротивления с числом касаний.">Горизонт...</button>
+                                <button class="chart-indicator-grid-btn" id="fmt-trendlines" title="Наклонные уровни тренда"
+                                    data-desc="Наклонки — наклонные динамические линии тренда по экстремумам.">Наклонки</button>
+                                <button class="chart-indicator-grid-btn" id="fmt-retests" title="Подтвержденный ретест"
+                                    data-desc="Ретест — уровни истинного пробоя с подтвержденным ретестом.">Ретест</button>
                             </div>
                             <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center; justify-content: space-between;">
                                 <span style="font-size: 11px; color: var(--t3, #94a3b8); font-weight: 500;">Мин. касаний:</span>
