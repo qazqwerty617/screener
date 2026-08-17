@@ -254,7 +254,7 @@
     const candidates = [];
 
     function collect(points, resistance) {
-      const recent = points.slice(-30);
+      const recent = points.slice(-60);
       for (let i = 0; i < recent.length - 1; i++) {
         for (let j = i + 1; j < recent.length; j++) {
           const p1 = recent[i], p2 = recent[j];
