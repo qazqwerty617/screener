@@ -15636,6 +15636,293 @@ function initNotificationsUI() {
       showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
     };
   }
+
+  // ═══ 24/7 Background Formation Alert Scanner Engine ═══
+  const formationAlertCooldownMap = new Map();
+  let isScanningFormationAlerts = false;
+
+  async function triggerMatchedFormationAlert(data) {
+    const s = currentFormationAlertSettings;
+    if (!s) return;
+    const exFull = getFullExchangeName(data.ex);
+    const symDisp = (data.sym || "BTCUSDT").toUpperCase();
+    const formattedPrice = typeof fP === "function" ? fP(data.curPrice) : data.curPrice.toLocaleString();
+    const formattedVol = data.vol24 >= 1e9 ? (data.vol24 / 1e9).toFixed(2) + "B" : data.vol24 >= 1e6 ? (data.vol24 / 1e6).toFixed(1) + "M" : (data.vol24 / 1e3).toFixed(0) + "K";
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const dateStr = `${String(now.getDate()).padStart(2, "0")}.${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    console.log(`[FORMATION ALERT MATCH] ${symDisp} [${data.tf}] ${data.typeName} touches=${data.touches} dist=${data.distPct}%`);
+
+    let photoDataUrl = null;
+    if (s.tgEnabled) {
+      try {
+        photoDataUrl = await captureChartSnapshot(data.sym, data.curPrice, data.targetPrice, data.tf, data.ex, {
+          isFormation: true,
+          formationType: data.type,
+          formationInfo: data.formationInfo
+        });
+      } catch (err) {
+        console.warn("Snapshot generation failed for formation alert:", err);
+      }
+    }
+
+    if (s.soundEnabled) {
+      try { playAlertSound("chime"); } catch (_) {}
+    }
+
+    if (s.toastEnabled) {
+      try {
+        showToast({
+          title: `📐 ${data.typeName}`,
+          message: `<b>${symDisp} (${exFull}) [${data.tf}]</b>: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
+          type: "price_alert"
+        });
+      } catch (_) {}
+    }
+
+    if (s.tgEnabled) {
+      const telegramMsg =
+        `📐 <b>Сигнал формации: ${data.typeName}</b>\n` +
+        `• <b>Монета:</b> ${symDisp} (${exFull})\n` +
+        `• <b>Таймфрейм:</b> ${data.tf}\n` +
+        `• <b>Касания:</b> ${data.touches} касания\n` +
+        `• <b>Дистанция:</b> ${data.distPct}% до формации\n` +
+        `• <b>Текущая цена:</b> $${formattedPrice}\n` +
+        `• <b>Объем 24ч:</b> $${formattedVol}\n` +
+        `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+        `─────────────────────────\n` +
+        `⚡ <b>Obsidian Formation Scanner</b>`;
+
+      sendTelegramAlert(telegramMsg, photoDataUrl);
+    }
+  }
+
+  async function runFormationAlertScanner() {
+    if (isScanningFormationAlerts) return;
+    const s = currentFormationAlertSettings;
+    if (!s) return;
+
+    const isTl = !!s.trendline?.enabled;
+    const isLvl = !!s.level?.enabled;
+    const isRet = !!s.retest?.enabled;
+    if (!isTl && !isLvl && !isRet) return;
+
+    isScanningFormationAlerts = true;
+
+    try {
+      const cooldownMs = Math.max(1, s.cooldownMinutes || 5) * 60 * 1000;
+      const minVol = Number(s.minVol24h) || 0;
+      const now = Date.now();
+
+      // 1. Scan Trendlines if enabled
+      if (isTl) {
+        const tfs = Array.isArray(s.trendline.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h"];
+        const minTouches = Number(s.trendline.minTouches) || 2;
+        const maxDist = Number(s.trendline.distancePct) || 1.0;
+        const targetDir = s.trendline.direction || "all";
+
+        for (const tf of tfs) {
+          try {
+            const res = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=trendline`);
+            if (!res.ok) continue;
+            const map = await res.json();
+            if (!map || typeof map !== "object") continue;
+
+            for (const [key, items] of Object.entries(map)) {
+              if (!Array.isArray(items) || items.length === 0) continue;
+              const colonIdx = key.indexOf(":");
+              if (colonIdx <= 0) continue;
+              const ex = key.substring(0, colonIdx);
+              const sym = key.substring(colonIdx + 1);
+
+              const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
+              const curPrice = coinObj?.p || 0;
+              const vol24 = coinObj?.v || 0;
+              if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
+
+              for (const item of items) {
+                const touches = item.touches || item.swingIndices?.length || 2;
+                if (touches < minTouches) continue;
+
+                if (targetDir === "long" && item.direction !== "up") continue;
+                if (targetDir === "short" && item.direction !== "down") continue;
+
+                const lineEndP = item.endPrice || (item.p2 ? item.p2.price : item.price);
+                if (!lineEndP || lineEndP <= 0) continue;
+                const distPct = Math.abs(curPrice - lineEndP) / curPrice * 100;
+                if (distPct > maxDist) continue;
+
+                const cdKey = `${key}:trendline:${tf}`;
+                const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
+                if (now - lastAlert < cooldownMs) continue;
+
+                formationAlertCooldownMap.set(cdKey, now);
+
+                await triggerMatchedFormationAlert({
+                  ex,
+                  sym,
+                  tf,
+                  type: "trendline",
+                  typeName: "Наклонный уровень (Наклонка)",
+                  touches,
+                  distPct: distPct.toFixed(2),
+                  targetPrice: lineEndP,
+                  curPrice,
+                  vol24,
+                  formationInfo: {
+                    touches,
+                    distPct: distPct.toFixed(2),
+                    p1: item.p1?.price,
+                    p2: item.p2?.price
+                  }
+                });
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      // 2. Scan Levels (Горизонталки) if enabled
+      if (isLvl) {
+        const tfs = Array.isArray(s.level.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["5m", "15m", "1h"];
+        const minTouches = Number(s.level.minTouches) || 2;
+        const maxDist = Number(s.level.distancePct) || 1.0;
+        const targetDir = s.level.direction || "all";
+
+        for (const tf of tfs) {
+          try {
+            const res = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=levels`);
+            if (!res.ok) continue;
+            const map = await res.json();
+            if (!map || typeof map !== "object") continue;
+
+            for (const [key, items] of Object.entries(map)) {
+              if (!Array.isArray(items) || items.length === 0) continue;
+              const colonIdx = key.indexOf(":");
+              if (colonIdx <= 0) continue;
+              const ex = key.substring(0, colonIdx);
+              const sym = key.substring(colonIdx + 1);
+
+              const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
+              const curPrice = coinObj?.p || 0;
+              const vol24 = coinObj?.v || 0;
+              if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
+
+              for (const item of items) {
+                const touches = item.touches || item.touchIndices?.length || 1;
+                if (touches < minTouches) continue;
+
+                if (targetDir === "support" && item.direction !== "down") continue;
+                if (targetDir === "resistance" && item.direction !== "up") continue;
+
+                const lvlPrice = item.price || item.endPrice;
+                if (!lvlPrice || lvlPrice <= 0) continue;
+                const distPct = Math.abs(curPrice - lvlPrice) / curPrice * 100;
+                if (distPct > maxDist) continue;
+
+                const cdKey = `${key}:level:${tf}:${lvlPrice.toFixed(4)}`;
+                const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
+                if (now - lastAlert < cooldownMs) continue;
+
+                formationAlertCooldownMap.set(cdKey, now);
+
+                await triggerMatchedFormationAlert({
+                  ex,
+                  sym,
+                  tf,
+                  type: "level",
+                  typeName: "Горизонтальный уровень (Горизонталка)",
+                  touches,
+                  distPct: distPct.toFixed(2),
+                  targetPrice: lvlPrice,
+                  curPrice,
+                  vol24,
+                  formationInfo: {
+                    touches,
+                    distPct: distPct.toFixed(2),
+                    p1: lvlPrice,
+                    p2: lvlPrice
+                  }
+                });
+              }
+            }
+          } catch (_) {}
+        }
+      }
+
+      // 3. Scan Retests if enabled
+      if (isRet) {
+        const tfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h"];
+        const targetDir = s.retest.direction || "all";
+
+        for (const tf of tfs) {
+          try {
+            const res = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=retest`);
+            if (!res.ok) continue;
+            const map = await res.json();
+            if (!map || typeof map !== "object") continue;
+
+            for (const [key, items] of Object.entries(map)) {
+              if (!Array.isArray(items) || items.length === 0) continue;
+              const colonIdx = key.indexOf(":");
+              if (colonIdx <= 0) continue;
+              const ex = key.substring(0, colonIdx);
+              const sym = key.substring(colonIdx + 1);
+
+              const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
+              const curPrice = coinObj?.p || 0;
+              const vol24 = coinObj?.v || 0;
+              if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
+
+              for (const item of items) {
+                if (targetDir === "long" && item.direction !== "up") continue;
+                if (targetDir === "short" && item.direction !== "down") continue;
+
+                const lvlPrice = item.price || item.endPrice;
+                if (!lvlPrice || lvlPrice <= 0) continue;
+                const distPct = Math.abs(curPrice - lvlPrice) / curPrice * 100;
+
+                const cdKey = `${key}:retest:${tf}`;
+                const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
+                if (now - lastAlert < cooldownMs) continue;
+
+                formationAlertCooldownMap.set(cdKey, now);
+
+                await triggerMatchedFormationAlert({
+                  ex,
+                  sym,
+                  tf,
+                  type: "retest",
+                  typeName: "Подтвержденный ретест (Ретест)",
+                  touches: item.touches || 2,
+                  distPct: distPct.toFixed(2),
+                  targetPrice: lvlPrice,
+                  curPrice,
+                  vol24,
+                  formationInfo: {
+                    touches: item.touches || 2,
+                    distPct: distPct.toFixed(2),
+                    p1: lvlPrice,
+                    p2: lvlPrice
+                  }
+                });
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (err) {
+      console.error("[FORMATION ALERT SCANNER ERROR]", err);
+    } finally {
+      isScanningFormationAlerts = false;
+    }
+  }
+
+  // Run auto-scanner loop every 12 seconds
+  setTimeout(runFormationAlertScanner, 3000);
+  setInterval(runFormationAlertScanner, 12000);
+  window.runFormationAlertScanner = runFormationAlertScanner;
 }
 
 // Global hook for price checking and formation alert settings
