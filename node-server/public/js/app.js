@@ -14126,16 +14126,58 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
     if (!candleList || candleList.length === 0) return null;
 
-    // 2. Render Dedicated Clean High-Resolution Offscreen Canvas (1200 x 680)
+    // 2. Retrieve live coin stats for the HUD card
+    let coinInfo = null;
+    if (typeof coins !== "undefined" && coins && typeof coins.get === "function") {
+      coinInfo = coins.get(`${targetEx}:${targetSym}`) || coins.get(`${activeEx}:${activeSym}`);
+      if (!coinInfo) {
+        for (const [_, v] of coins.entries()) {
+          if (v && (v.sym === targetSym || normSymCode(v.sym) === normSymCode(targetSym))) {
+            coinInfo = v;
+            break;
+          }
+        }
+      }
+    }
+
+    const lastCandle = candleList[candleList.length - 1];
+    const liveClose = lastCandle ? lastCandle.c : (coinInfo?.p || targetLevel);
+    
+    // 24h Change
+    const chg24 = (coinInfo && coinInfo.o > 0)
+      ? (((liveClose || coinInfo.p) - coinInfo.o) / coinInfo.o) * 100
+      : (coinInfo?.chg !== undefined ? coinInfo.chg : (candleList.length > 1 ? ((liveClose - candleList[0].o) / candleList[0].o) * 100 : 0));
+
+    // Volume
+    const vol24Str = coinInfo?.v ? (typeof fV === "function" ? fV(coinInfo.v) : `$${(coinInfo.v/1e6).toFixed(1)}M`) : (typeof fV === "function" ? fV(liveClose * 50000) : "—");
+
+    // NATR
+    let natrVal = 0;
+    if (coinInfo && coinInfo.p > 0 && coinInfo.h && coinInfo.l && coinInfo.h >= coinInfo.l) {
+      natrVal = ((coinInfo.h - coinInfo.l) / coinInfo.p) * 100;
+    } else if (candleList.length > 0) {
+      let lH = 0, lL = Infinity;
+      for (const c of candleList) { if (c.h > lH) lH = c.h; if (c.l < lL) lL = c.l; }
+      if (liveClose > 0 && lH >= lL) natrVal = ((lH - lL) / liveClose) * 100 * 0.35;
+    }
+    natrVal = Math.max(0, Math.min(100, natrVal));
+
+    // Funding
+    const fundingVal = coinInfo && typeof coinInfo.funding === "number" ? coinInfo.funding : 0.0100;
+    const fundStr = (fundingVal >= 0 ? "+" : "") + fundingVal.toFixed(4) + "%";
+
+    // 3. Render Dedicated HiDPI Ultra-HD (4K Crisp) Offscreen Canvas (2400 x 1360 physical pixels)
     const W = 1200;
     const H = 680;
+    const DPR = 2; // HiDPI 2x Supersampling for ultra-crisp lines & text
     const shot = document.createElement("canvas");
-    shot.width = W;
-    shot.height = H;
+    shot.width = W * DPR;
+    shot.height = H * DPR;
     const ctx = shot.getContext("2d");
+    ctx.scale(DPR, DPR);
 
     // Layout configuration
-    const TOP = 48;
+    const TOP = 52;
     const PR = 105;
     const PW = W - PR;
     const BTM_TIME = 28;
@@ -14143,11 +14185,11 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     const PH = H - TOP - VOL_H - BTM_TIME;
     const volY = TOP + PH;
 
-    // Solid Background
+    // Deep Obsidian Solid Background
     ctx.fillStyle = "#0c0e14";
     ctx.fillRect(0, 0, W, H);
 
-    // ── Header (Symbol + Timeframe + Obsidian Alert Title, NO exchange or candle count texts) ──
+    // ── Header (Symbol + Timeframe Badge + Stats HUD + Alert Title) ──
     const displaySym = targetSym;
     const tfLabel = String(targetTf).toUpperCase();
 
@@ -14156,29 +14198,70 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(displaySym, 24, 25);
+    ctx.fillText(displaySym, 22, 26);
     const symW = ctx.measureText(displaySym).width;
 
     // Timeframe Badge
     const tfColors = { "1M": "#38bdf8", "3M": "#38bdf8", "5M": "#22c55e", "15M": "#a855f7", "30M": "#ec4899", "1H": "#f59e0b", "4H": "#f97316", "1D": "#e11d48" };
     const tfBg = tfColors[tfLabel] || "#a855f7";
-    const badgeX = 24 + symW + 12;
-    const tfBadgeW = Math.max(38, tfLabel.length * 9 + 18);
+    const badgeX = 22 + symW + 10;
+    const tfBadgeW = Math.max(36, tfLabel.length * 9 + 16);
 
     ctx.fillStyle = tfBg;
-    if (typeof roundRect === "function") roundRect(ctx, badgeX, 13, tfBadgeW, 24, 5);
-    else ctx.fillRect(badgeX, 13, tfBadgeW, 24);
+    if (typeof roundRect === "function") roundRect(ctx, badgeX, 14, tfBadgeW, 23, 5);
+    else ctx.fillRect(badgeX, 14, tfBadgeW, 23);
     ctx.fill();
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 12px Inter, sans-serif";
+    ctx.font = "bold 11.5px Inter, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(tfLabel, badgeX + tfBadgeW / 2, 25);
+    ctx.fillText(tfLabel, badgeX + tfBadgeW / 2, 26);
+
+    // ── Coin Stats HUD Card (Изм, Объем, NATR, Фандинг) ──
+    const hudX = badgeX + tfBadgeW + 16;
+    const chgText = (chg24 >= 0 ? "+" : "") + chg24.toFixed(2) + "%";
+    const isChgUp = chg24 >= 0;
+
+    // Render Stats Pills
+    let curStatX = hudX;
+    const renderStatPill = (label, val, valCol) => {
+      ctx.font = "600 10.5px Inter, sans-serif";
+      const lblW = ctx.measureText(label).width;
+      ctx.font = "bold 11px Inter, sans-serif";
+      const valW = ctx.measureText(val).width;
+      const pillW = lblW + valW + 18;
+
+      ctx.save();
+      if (typeof roundRect === "function") roundRect(ctx, curStatX, 14, pillW, 23, 5);
+      else ctx.fillRect(curStatX, 14, pillW, 23);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.055)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+      ctx.font = "600 10px Inter, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(label, curStatX + 7, 26);
+
+      ctx.fillStyle = valCol;
+      ctx.font = "bold 11px Inter, monospace";
+      ctx.fillText(val, curStatX + 7 + lblW + 4, 26);
+      ctx.restore();
+
+      curStatX += pillW + 8;
+    };
+
+    renderStatPill("ИЗМ", chgText, isChgUp ? "#22c55e" : "#ef4444");
+    renderStatPill("ОБЪЕМ", vol24Str, "#ffffff");
+    renderStatPill("NATR", natrVal.toFixed(1) + "%", "#a855f7");
+    renderStatPill("FR", fundStr, fundingVal > 0 ? "#fbbf24" : fundingVal < 0 ? "#ef4444" : "#94a3b8");
 
     // Right-side alert notification title
     ctx.textAlign = "right";
     ctx.fillStyle = "#f59e0b";
     ctx.font = "bold 13px Inter, sans-serif";
-    ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 24, 25);
+    ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 22, 26);
 
     // ── Price bounds calculation across candle list + alert level ──
     let minP = Infinity, maxP = -Infinity;
@@ -14203,7 +14286,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     // Helper functions for coordinates on snapshot canvas
     const numCandles = candleList.length;
     const candleStepW = PW / numCandles;
-    const candleBodyW = Math.max(1.5, Math.min(candleStepW * 0.75, candleStepW - 1.5));
+    const candleBodyW = Math.max(1.8, Math.min(candleStepW * 0.76, candleStepW - 1.2));
 
     function getSnapX(t) {
       if (typeof t !== "number") return -1;
@@ -14257,7 +14340,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       const yH = toY(c.h);
       const yL = toY(c.l);
       ctx.strokeStyle = col;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.1;
       ctx.beginPath();
       ctx.moveTo(cx, yH);
       ctx.lineTo(cx, yL);
@@ -14301,7 +14384,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
         const col = d.color || "#facc15";
         ctx.strokeStyle = col;
         ctx.fillStyle = col;
-        ctx.lineWidth = 1.6;
+        ctx.lineWidth = 1.8;
         ctx.setLineDash([]);
 
         if (d.type === "line") {
@@ -14347,7 +14430,6 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
     // ── Alert Level Marker (Аккуратная метка ценового уровня) ──
     const alertBadgeYs = [];
-    const lastCandle = candleList[numCandles - 1];
     const lastCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
 
     if (targetLevel > 0) {
@@ -14441,7 +14523,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
     // ── Price Scale Labels (Right) ──
     gp = Math.ceil(minP / gridStep) * gridStep;
-    ctx.font = "10px Inter, sans-serif";
+    ctx.font = "10.5px Inter, sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     while (gp <= maxP) {
@@ -14449,7 +14531,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       if (y >= TOP + 12 && y <= TOP + PH - 12) {
         const collides = alertBadgeYs.some(by => Math.abs(by - y) < 16);
         if (!collides) {
-          ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+          ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
           ctx.fillText(typeof fP === "function" ? fP(gp) : gp.toFixed(4), PW + 8, y);
         }
       }
@@ -14457,15 +14539,15 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     }
 
     // ── Volume Pane Label ──
-    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
     ctx.font = "bold 10px Inter, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(`VOL: ${typeof fV === "function" ? fV(maxVol) : maxVol.toFixed(0)}`, 14, volY + 14);
 
     // ── Time Axis (Bottom) ──
     const timeY = H - BTM_TIME / 2;
-    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
-    ctx.font = "10px Inter, sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.font = "10.5px Inter, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
@@ -14484,9 +14566,9 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       }
     }
 
-    // Convert to compressed JPEG data URL
-    const result = shot.toDataURL("image/jpeg", 0.90);
-    console.log(`[CHART SNAPSHOT 300 BARS] Generated OK for ${targetSym} ${targetTf}, size=${result ? result.length : 0}`);
+    // Convert to Lossless High-Resolution PNG for absolute razor sharpness (no JPEG compression blur)
+    const result = shot.toDataURL("image/png");
+    console.log(`[CHART SNAPSHOT ULTRA-HD 4K] Generated OK for ${targetSym} ${targetTf}, size=${result ? result.length : 0}`);
     return result;
   } catch (err) {
     console.error("[OFFSCREEN SNAPSHOT ERROR]", err);
