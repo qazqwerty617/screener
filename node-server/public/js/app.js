@@ -3919,8 +3919,8 @@ function drawChart() {
 
   // Collect active badge Y coordinates to avoid overlapping axis labels
   const activeBadgeYs = [];
-  const lc = candles[candles.length - 1];
-  if (lc) activeBadgeYs.push(toY(lc.c));
+  const lastCandle = candles[candles.length - 1];
+  if (lastCandle) activeBadgeYs.push(toY(lastCandle.c));
   if (drawingScaleBadges && drawingScaleBadges.length > 0) {
     for (const b of drawingScaleBadges) activeBadgeYs.push(toY(b.price));
   }
