@@ -14087,12 +14087,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     const targetEx = alertEx || activeEx || "BN";
     const targetTf = alertTf || activeTf || "5m";
 
+    // 1. Fetch / collect up to 300 candles of the alert timeframe
     let candleList = [];
-    if (sym === activeSym && targetTf === activeTf && Array.isArray(candles) && candles.length >= 100) {
-      candleList = candles.slice(-500);
+    if (sym === activeSym && targetTf === activeTf && Array.isArray(candles) && candles.length >= 50) {
+      candleList = candles.slice(-300);
     }
 
-    if (candleList.length < 300) {
+    if (candleList.length < 150) {
       try {
         const res = await fetch(`/api/klines?ex=${targetEx}&sym=${targetSym}&tf=${targetTf}&lite=1`);
         if (res.ok) {
@@ -14109,7 +14110,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
                 v: +raw[i + 5] || 0
               });
             }
-            if (parsed.length > 0) candleList = parsed.slice(-500);
+            if (parsed.length > 0) candleList = parsed.slice(-300);
           }
         }
       } catch (err) {
@@ -14119,12 +14120,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
     if (!candleList || candleList.length === 0) {
       if (Array.isArray(candles) && candles.length > 0) {
-        candleList = candles.slice(-500);
+        candleList = candles.slice(-300);
       }
     }
 
     if (!candleList || candleList.length === 0) return null;
 
+    // 2. Render Dedicated Clean High-Resolution Offscreen Canvas (1200 x 680)
     const W = 1200;
     const H = 680;
     const shot = document.createElement("canvas");
@@ -14132,6 +14134,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     shot.height = H;
     const ctx = shot.getContext("2d");
 
+    // Layout configuration
     const TOP = 48;
     const PR = 105;
     const PW = W - PR;
@@ -14140,13 +14143,15 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     const PH = H - TOP - VOL_H - BTM_TIME;
     const volY = TOP + PH;
 
+    // Solid Background
     ctx.fillStyle = "#0c0e14";
     ctx.fillRect(0, 0, W, H);
 
+    // ── Header (Symbol + Timeframe + Obsidian Alert Title, NO exchange or candle count texts) ──
     const displaySym = targetSym;
-    const displayExFull = typeof getFullExchangeName === "function" ? getFullExchangeName(targetEx) : "BINANCE";
     const tfLabel = String(targetTf).toUpperCase();
 
+    // Symbol Text
     ctx.font = "bold 20px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "left";
@@ -14154,6 +14159,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     ctx.fillText(displaySym, 24, 25);
     const symW = ctx.measureText(displaySym).width;
 
+    // Timeframe Badge
     const tfColors = { "1M": "#38bdf8", "3M": "#38bdf8", "5M": "#22c55e", "15M": "#a855f7", "30M": "#ec4899", "1H": "#f59e0b", "4H": "#f97316", "1D": "#e11d48" };
     const tfBg = tfColors[tfLabel] || "#a855f7";
     const badgeX = 24 + symW + 12;
@@ -14168,16 +14174,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     ctx.textAlign = "center";
     ctx.fillText(tfLabel, badgeX + tfBadgeW / 2, 25);
 
-    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
-    ctx.font = "500 13px Inter, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`${displayExFull} · ${candleList.length} СВЕЧЕЙ`, badgeX + tfBadgeW + 14, 25);
-
+    // Right-side alert notification title
     ctx.textAlign = "right";
     ctx.fillStyle = "#f59e0b";
     ctx.font = "bold 13px Inter, sans-serif";
     ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 24, 25);
 
+    // ── Price bounds calculation across candle list + alert level ──
     let minP = Infinity, maxP = -Infinity;
     let maxVol = 0.0001;
     for (const c of candleList) {
@@ -14197,6 +14200,29 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     const toY = (p) => TOP + (maxP - p) * (PH / priceRange);
     const toVolY = (v) => volY + VOL_H - (v / maxVol) * (VOL_H - 15);
 
+    // Helper functions for coordinates on snapshot canvas
+    const numCandles = candleList.length;
+    const candleStepW = PW / numCandles;
+    const candleBodyW = Math.max(1.5, Math.min(candleStepW * 0.75, candleStepW - 1.5));
+
+    function getSnapX(t) {
+      if (typeof t !== "number") return -1;
+      if (t > 1000000000) {
+        let closestIdx = 0;
+        let minDiff = Infinity;
+        for (let i = 0; i < candleList.length; i++) {
+          const diff = Math.abs(candleList[i].t - t);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestIdx = i;
+          }
+        }
+        return closestIdx * candleStepW + candleStepW / 2;
+      }
+      return t * candleStepW + candleStepW / 2;
+    }
+
+    // ── Grid Lines ──
     const gridStep = typeof calcNiceStep === "function" ? calcNiceStep(priceRange, 7) : priceRange / 7;
     let gp = Math.ceil(minP / gridStep) * gridStep;
     ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
@@ -14213,24 +14239,21 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       gp += gridStep;
     }
 
+    // Volume divider
     ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
     ctx.beginPath();
     ctx.moveTo(0, volY);
     ctx.lineTo(W, volY);
     ctx.stroke();
 
-    const numCandles = candleList.length;
-    const candleStepW = PW / numCandles;
-    const candleBodyW = Math.max(1, Math.min(candleStepW * 0.75, candleStepW - 1));
-
-    let hitCandleX = null;
-
+    // ── Candlesticks & Volume Bars (300 bars) ──
     for (let i = 0; i < numCandles; i++) {
       const c = candleList[i];
       const cx = i * candleStepW + candleStepW / 2;
       const isUp = c.c >= c.o;
       const col = isUp ? "#22c55e" : "#ef4444";
 
+      // Wick
       const yH = toY(c.h);
       const yL = toY(c.l);
       ctx.strokeStyle = col;
@@ -14240,6 +14263,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.lineTo(cx, yL);
       ctx.stroke();
 
+      // Body
       const yO = toY(c.o);
       const yC = toY(c.c);
       const bTop = Math.min(yO, yC);
@@ -14247,24 +14271,90 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.fillStyle = col;
       ctx.fillRect(cx - candleBodyW / 2, bTop, candleBodyW, bH);
 
+      // Volume bar
       const vTop = toVolY(c.v);
       ctx.fillStyle = isUp ? "rgba(34, 197, 94, 0.45)" : "rgba(239, 68, 68, 0.45)";
       ctx.fillRect(cx - candleBodyW / 2, vTop, candleBodyW, volY + VOL_H - vTop);
+    }
 
-      if (targetLevel > 0 && c.h >= targetLevel && c.l <= targetLevel && hitCandleX === null) {
-        hitCandleX = cx;
+    // ── Render User Drawings / Markups on the Chart ──
+    let userDrawings = [];
+    if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && (!sym || normSymCode(sym) === normSymCode(activeSym))) {
+      userDrawings = chartDrawings;
+    } else {
+      try {
+        const raw = localStorage.getItem("crypto_drawings_" + targetSym);
+        if (raw) userDrawings = JSON.parse(raw);
+      } catch (_) {}
+    }
+
+    if (Array.isArray(userDrawings) && userDrawings.length > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, TOP, PW, PH);
+      ctx.clip();
+
+      for (const d of userDrawings) {
+        if (!d || d.type === "alert") continue;
+        const x1 = getSnapX(d.t1), y1 = toY(d.p1);
+        const x2 = getSnapX(d.t2), y2 = toY(d.p2);
+        const col = d.color || "#facc15";
+        ctx.strokeStyle = col;
+        ctx.fillStyle = col;
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash([]);
+
+        if (d.type === "line") {
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(x2, y2);
+          ctx.stroke();
+        } else if (d.type === "ray") {
+          const dx = x2 - x1, dy = y2 - y1;
+          const mag = Math.sqrt(dx * dx + dy * dy);
+          if (mag > 0.01) {
+            const ex = x1 + (dx / mag) * W * 2;
+            const ey = y1 + (dy / mag) * W * 2;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+          }
+        } else if (d.type === "h-ray") {
+          ctx.beginPath();
+          ctx.moveTo(x1, y1);
+          ctx.lineTo(PW, y1);
+          ctx.stroke();
+        } else if (d.type === "rect") {
+          const left = Math.min(x1, x2);
+          const top = Math.min(y1, y2);
+          const width = Math.abs(x2 - x1);
+          const height = Math.abs(y2 - y1);
+          ctx.fillStyle = "rgba(251, 113, 133, 0.14)";
+          ctx.fillRect(left, top, width, height);
+          ctx.strokeRect(left, top, width, height);
+        } else if (d.type === "brush" && Array.isArray(d.points) && d.points.length > 1) {
+          ctx.beginPath();
+          ctx.moveTo(getSnapX(d.points[0].t), toY(d.points[0].p));
+          for (let pi = 1; pi < d.points.length; pi++) {
+            ctx.lineTo(getSnapX(d.points[pi].t), toY(d.points[pi].p));
+          }
+          ctx.stroke();
+        }
       }
+      ctx.restore();
     }
 
-    if (hitCandleX === null && numCandles > 0) {
-      hitCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
-    }
-
+    // ── Alert Level Marker (Аккуратная метка ценового уровня) ──
     const alertBadgeYs = [];
+    const lastCandle = candleList[numCandles - 1];
+    const lastCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
+
     if (targetLevel > 0) {
       const alertY = toY(targetLevel);
       alertBadgeYs.push(alertY);
 
+      // Dotted Alert Line across the chart
       ctx.save();
       ctx.strokeStyle = "#f59e0b";
       ctx.lineWidth = 1.5;
@@ -14275,18 +14365,18 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.stroke();
       ctx.restore();
 
-      if (hitCandleX !== null) {
-        ctx.save();
-        ctx.fillStyle = "#f59e0b";
-        ctx.beginPath();
-        ctx.arc(hitCandleX, alertY, 4.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.restore();
-      }
+      // Glowing trigger marker on the triggering (latest) candle
+      ctx.save();
+      ctx.fillStyle = "#f59e0b";
+      ctx.beginPath();
+      ctx.arc(lastCandleX, alertY, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
 
+      // Stylized Target Badge on Right Price Scale
       const bH = 22;
       const bW = PR - 8;
       const bX = PW + 4;
@@ -14310,7 +14400,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.restore();
     }
 
-    const lastCandle = candleList[numCandles - 1];
+    // ── Live / Last Candle Price Badge ──
     if (lastCandle) {
       const lastClose = lastCandle.c;
       const liveY = toY(lastClose);
@@ -14349,6 +14439,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.restore();
     }
 
+    // ── Price Scale Labels (Right) ──
     gp = Math.ceil(minP / gridStep) * gridStep;
     ctx.font = "10px Inter, sans-serif";
     ctx.textAlign = "left";
@@ -14365,11 +14456,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       gp += gridStep;
     }
 
+    // ── Volume Pane Label ──
     ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
     ctx.font = "bold 10px Inter, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText(`VOL: ${typeof fV === "function" ? fV(maxVol) : maxVol.toFixed(0)}`, 14, volY + 14);
 
+    // ── Time Axis (Bottom) ──
     const timeY = H - BTM_TIME / 2;
     ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
     ctx.font = "10px Inter, sans-serif";
@@ -14391,8 +14484,9 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       }
     }
 
+    // Convert to compressed JPEG data URL
     const result = shot.toDataURL("image/jpeg", 0.90);
-    console.log(`[CHART SNAPSHOT 500 BARS] Generated OK for ${targetSym} ${targetTf}, size=${result ? result.length : 0}`);
+    console.log(`[CHART SNAPSHOT 300 BARS] Generated OK for ${targetSym} ${targetTf}, size=${result ? result.length : 0}`);
     return result;
   } catch (err) {
     console.error("[OFFSCREEN SNAPSHOT ERROR]", err);
