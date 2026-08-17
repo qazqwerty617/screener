@@ -87,34 +87,56 @@
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
     const clusterTol = Math.max(0.0008, Math.min(0.0035, (range / lastPrice) * 0.25));
-    const epsilon = Math.min(range * 0.025, lastPrice * 0.0005);
+    const epsilon = Math.min(range * 0.02, lastPrice * 0.0004);
     const points = swings(candles, 3);
-    const minT = Math.max(1, Number(minTouches) || 1);
+    const minT = Math.max(1, Number(minTouches) || 2);
     const candidates = [];
 
     for (const resistance of [true, false]) {
       const side = points.filter(item => item.type === (resistance ? "high" : "low"));
       for (const cluster of makeClusters(side, clusterTol, resistance)) {
-        if (cluster.touches < minT) continue;
         const first = Math.min(...cluster.swingIndices);
         if (resistance ? cluster.price <= lastPrice : cluster.price >= lastPrice) continue;
         if (!isLevelClean(candles, cluster.price, first, resistance, epsilon)) continue;
+
+        // Collect all distinct touches across the span of candles from first touch to now
+        const touchTol = Math.min(range * 0.12, lastPrice * 0.002);
+        const touchIndices = [first];
+        for (let i = first + 2; i < candles.length - 1; i++) {
+          const wick = resistance ? candles[i].h : candles[i].l;
+          if (Math.abs(wick - cluster.price) <= touchTol && i - touchIndices[touchIndices.length - 1] >= 2) {
+            touchIndices.push(i);
+          }
+        }
+
+        if (touchIndices.length < minT) continue;
+
         const distanceAtr = Math.abs(cluster.price - lastPrice) / range;
         if (distanceAtr > 15) continue;
+
         candidates.push({
           price: cluster.price,
           endPrice: cluster.price,
           swingIdx: first,
           direction: resistance ? "up" : "down",
-          touchIndices: cluster.swingIndices.slice().sort((a, b) => a - b),
-          touches: cluster.touches,
-          strength: cluster.touches * 5 - distanceAtr,
+          touchIndices,
+          touches: touchIndices.length,
+          strength: touchIndices.length * 6 - distanceAtr,
           isHorizontal: true,
         });
       }
     }
+
     candidates.sort((a, b) => b.strength - a.strength);
-    return candidates.slice(0, 10);
+    const kept = [];
+    const minSpacing = Math.min(range * 0.10, lastPrice * 0.002);
+    for (const item of candidates) {
+      if (!kept.some(other => other.direction === item.direction && Math.abs(other.price - item.price) <= minSpacing)) {
+        kept.push(item);
+      }
+      if (kept.length >= 8) break;
+    }
+    return kept;
   }
 
   function detectCascades(raw, minCount) {
