@@ -15302,6 +15302,7 @@ const DEFAULT_FORMATION_ALERT_SETTINGS = {
   tgEnabled: true,
   cooldownSeconds: 300,
   minVolume: 0,
+  exchanges: ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"],
   trendline: {
     enabled: true,
     timeframes: ["5m", "15m", "1h"],
@@ -15335,6 +15336,7 @@ function loadFormationAlertSettings() {
       currentFormationAlertSettings = {
         ...DEFAULT_FORMATION_ALERT_SETTINGS,
         ...parsed,
+        exchanges: Array.isArray(parsed.exchanges) && parsed.exchanges.length > 0 ? parsed.exchanges : [...DEFAULT_FORMATION_ALERT_SETTINGS.exchanges],
         trendline: { ...DEFAULT_FORMATION_ALERT_SETTINGS.trendline, ...(parsed.trendline || {}) },
         level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(parsed.level || {}) },
         retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(parsed.retest || {}) }
@@ -15380,7 +15382,7 @@ function initNotificationsUI() {
     const buttons = container.querySelectorAll("button.fmt-btn[data-tf]");
     buttons.forEach(btn => {
       const tf = btn.dataset.tf;
-      btn.classList.toggle("active", activeTfs.includes(tf));
+      btn.classList.toggle("active", (activeTfs || []).includes(tf));
       btn.onclick = () => {
         btn.classList.toggle("active");
         const currentSelected = Array.from(container.querySelectorAll("button.fmt-btn.active[data-tf]")).map(b => b.dataset.tf);
@@ -15391,6 +15393,65 @@ function initNotificationsUI() {
         onToggle(currentSelected);
       };
     });
+  }
+
+  // Helper: setup multi-select exchange button groups
+  const ALL_EXCHANGES_LIST = ["BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"];
+
+  function setupExchangeGroup(containerId, activeExs, onToggle) {
+    const container = $(containerId);
+    if (!container) return;
+    let selected = Array.isArray(activeExs) && activeExs.length > 0 ? [...activeExs] : ["all", ...ALL_EXCHANGES_LIST];
+    if (selected.includes("all") && selected.length === 1) {
+      selected = ["all", ...ALL_EXCHANGES_LIST];
+    }
+
+    const buttons = container.querySelectorAll("button.fmt-btn[data-ex]");
+    
+    function refreshUI() {
+      const isAll = selected.includes("all") || ALL_EXCHANGES_LIST.every(e => selected.includes(e));
+      buttons.forEach(btn => {
+        const ex = btn.dataset.ex;
+        if (ex === "all") {
+          btn.classList.toggle("active", isAll);
+        } else {
+          btn.classList.toggle("active", isAll || selected.includes(ex));
+        }
+      });
+    }
+
+    buttons.forEach(btn => {
+      const ex = btn.dataset.ex;
+      btn.onclick = () => {
+        if (ex === "all") {
+          const wasAll = selected.includes("all") || ALL_EXCHANGES_LIST.every(e => selected.includes(e));
+          if (wasAll) {
+            selected = ["BN"]; // Keep at least 1
+          } else {
+            selected = ["all", ...ALL_EXCHANGES_LIST];
+          }
+        } else {
+          if (selected.includes("all")) {
+            selected = [...ALL_EXCHANGES_LIST];
+          }
+          if (selected.includes(ex)) {
+            selected = selected.filter(e => e !== ex && e !== "all");
+            if (selected.length === 0) {
+              selected = [ex];
+            }
+          } else {
+            selected.push(ex);
+            if (ALL_EXCHANGES_LIST.every(e => selected.includes(e))) {
+              selected = ["all", ...ALL_EXCHANGES_LIST];
+            }
+          }
+        }
+        refreshUI();
+        onToggle(selected);
+      };
+    });
+
+    refreshUI();
   }
 
   // Helper: setup distance selector with custom input support
@@ -15496,6 +15557,7 @@ function initNotificationsUI() {
 
     setupButtonGroup("fmt-cooldown-group", s.cooldownSeconds, val => { s.cooldownSeconds = parseInt(val, 10); });
     setupButtonGroup("fmt-minvol-group", s.minVolume, val => { s.minVolume = parseFloat(val); });
+    setupExchangeGroup("fmt-exchanges-group", s.exchanges, exs => { s.exchanges = exs; });
 
     // 2. Trendline (Наклонка)
     const setTl = $("set-fmt-trendline-enabled");
@@ -15715,6 +15777,8 @@ function initNotificationsUI() {
     try {
       const cooldownMs = Math.max(1, s.cooldownMinutes || 5) * 60 * 1000;
       const minVol = Number(s.minVol24h) || 0;
+      const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
+      const isAllowedEx = (e) => allowedExs.includes("all") || allowedExs.includes(e) || allowedExs.includes(String(e).toUpperCase());
       const now = Date.now();
 
       // 1. Scan Trendlines if enabled
@@ -15737,6 +15801,8 @@ function initNotificationsUI() {
               if (colonIdx <= 0) continue;
               const ex = key.substring(0, colonIdx);
               const sym = key.substring(colonIdx + 1);
+
+              if (!isAllowedEx(ex)) continue;
 
               const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
               const curPrice = coinObj?.p || 0;
@@ -15806,6 +15872,8 @@ function initNotificationsUI() {
               const ex = key.substring(0, colonIdx);
               const sym = key.substring(colonIdx + 1);
 
+              if (!isAllowedEx(ex)) continue;
+
               const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
               const curPrice = coinObj?.p || 0;
               const vol24 = coinObj?.v || 0;
@@ -15871,6 +15939,8 @@ function initNotificationsUI() {
               if (colonIdx <= 0) continue;
               const ex = key.substring(0, colonIdx);
               const sym = key.substring(colonIdx + 1);
+
+              if (!isAllowedEx(ex)) continue;
 
               const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
               const curPrice = coinObj?.p || 0;
