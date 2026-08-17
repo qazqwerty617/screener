@@ -248,44 +248,47 @@
     if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const touchTol = Math.min(range * 0.14, lastPrice * 0.0022);
-    const crossTol = Math.min(range * 0.02, lastPrice * 0.0004);
+    const touchTol = Math.min(range * 0.16, lastPrice * 0.0025);
+    const crossBodyTol = Math.min(range * 0.06, lastPrice * 0.0010);
+    const crossWickTol = Math.min(range * 0.14, lastPrice * 0.0022);
     const minimum = Math.max(2, Number(minTouches) || 2);
-    const candidates = [];
 
-    function collect(points, resistance) {
-      const recent = points.slice(-100);
-      for (let i = 0; i < recent.length - 1; i++) {
-        for (let j = i + 1; j < recent.length; j++) {
-          const p1 = recent[i], p2 = recent[j];
+    function collectForSide(points, resistance) {
+      const candidates = [];
+      const N = candles.length;
+      const pts = points.slice(-120);
+
+      for (let i = 0; i < pts.length - 1; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const p1 = pts[i], p2 = pts[j];
           const span = p2.idx - p1.idx;
-          if (span < 14) continue;
+          if (span < 12) continue;
 
           const slope = (p2.price - p1.price) / span;
-          // Filter out steep near-vertical angles (cliffs)
-          if (Math.abs(slope) > range * 0.18 || Math.abs(slope) < range * 0.0005) continue;
+          // Disallow steep vertical cliffs
+          if (Math.abs(slope) > range * 0.22 || Math.abs(slope) < range * 0.0003) continue;
 
-          // Check that trendline is STRICTLY unbroken from p1.idx to current candle
+          // Check that line is unbroken by candle closes and significant wick breaks
           let crossed = false;
-          for (let k = p1.idx; k < candles.length; k++) {
+          for (let k = p1.idx; k < N; k++) {
             const line = p1.price + slope * (k - p1.idx);
             if (!(line > 0)) { crossed = true; break; }
             const c = candles[k];
             if (resistance) {
-              if (c.c > line || c.h > line + crossTol) { crossed = true; break; }
+              if (c.c > line + crossBodyTol || c.h > line + crossWickTol) { crossed = true; break; }
             } else {
-              if (c.c < line || c.l < line - crossTol) { crossed = true; break; }
+              if (c.c < line - crossBodyTol || c.l < line - crossWickTol) { crossed = true; break; }
             }
           }
           if (crossed) continue;
 
           // Count distinct bounces with wave departure
-          const minDeparture = range * 0.25;
+          const minDeparture = range * 0.20;
           const touches = [p1.idx];
           let departed = false;
           let lastTouch = p1.idx;
 
-          for (let k = p1.idx + 1; k < candles.length; k++) {
+          for (let k = p1.idx + 1; k < N; k++) {
             const line = p1.price + slope * (k - p1.idx);
             const c = candles[k];
             const wick = resistance ? c.h : c.l;
@@ -296,7 +299,7 @@
               departed = true;
             }
 
-            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 5) {
+            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 4) {
               touches.push(k);
               lastTouch = k;
               departed = false;
@@ -305,48 +308,57 @@
 
           if (touches.length < minimum) continue;
 
-          // The last touch MUST be active / recent (within last 35 candles)
-          const lastTouchAge = candles.length - 1 - touches[touches.length - 1];
-          if (lastTouchAge > 35) continue;
+          // Density / distribution validation: avoid empty gaps across hundreds of candles
+          if (touches.length === 2 && span > 130) continue;
+          let maxGap = 0;
+          for (let t = 1; t < touches.length; t++) {
+            maxGap = Math.max(maxGap, touches[t] - touches[t - 1]);
+          }
+          if (maxGap > 150) continue;
 
-          const endPrice = p1.price + slope * (candles.length - 1 - p1.idx);
+          const lastTouchAge = N - 1 - touches[touches.length - 1];
+          if (lastTouchAge > 80) continue;
+
+          const endPrice = p1.price + slope * (N - 1 - p1.idx);
           if (!(endPrice > 0)) continue;
-          if (resistance ? lastPrice > endPrice : lastPrice < endPrice) continue;
+          if (resistance ? lastPrice > endPrice + crossBodyTol : lastPrice < endPrice - crossBodyTol) continue;
 
           const distanceAtr = Math.abs(endPrice - lastPrice) / range;
-          if (distanceAtr > 4.5) continue;
+          if (distanceAtr > 4.0) continue;
 
           candidates.push({
             p1, p2, slope, endPrice, direction: resistance ? "up" : "down",
             swingIndices: touches, touches: touches.length, isTrendline: true,
-            span: candles.length - 1 - p1.idx,
+            span: N - 1 - p1.idx,
             lastTouchAge,
-            strength: touches.length * 10 + (candles.length - 1 - p1.idx) / 20 - distanceAtr * 2 - lastTouchAge / 10,
+            strength: touches.length * 12 + (N - 1 - p1.idx) / 15 - distanceAtr * 2.5 - (lastTouchAge / 12),
           });
         }
       }
-    }
 
-    const points = swings(candles, 3);
-    collect(points.filter(item => item.type === "high"), true);
-    collect(points.filter(item => item.type === "low"), false);
-
-    candidates.sort((a, b) => b.strength - a.strength);
-    const kept = [];
-    const minSpacing = Math.min(range * 0.25, lastPrice * 0.005);
-    let resCount = 0, supCount = 0;
-
-    for (const item of candidates) {
-      if (item.direction === "up" && resCount >= 2) continue;
-      if (item.direction === "down" && supCount >= 2) continue;
-      if (!kept.some(other => other.direction === item.direction && (Math.abs(other.endPrice - item.endPrice) <= minSpacing || Math.abs(other.slope - item.slope) <= range * 0.01))) {
-        kept.push(item);
-        if (item.direction === "up") resCount++;
-        else supCount++;
+      candidates.sort((a, b) => b.strength - a.strength);
+      const kept = [];
+      const minSpacing = Math.min(range * 0.25, lastPrice * 0.005);
+      for (const item of candidates) {
+        if (!kept.some(other => Math.abs(other.endPrice - item.endPrice) <= minSpacing || Math.abs(other.slope - item.slope) <= range * 0.012)) {
+          kept.push(item);
+        }
+        if (kept.length >= 2) break;
       }
-      if (kept.length >= 3) break;
+      return kept;
     }
-    return kept;
+
+    const allSwings = swings(candles, 3);
+    const topResistances = collectForSide(allSwings.filter(item => item.type === "high"), true);
+    const bottomSupports = collectForSide(allSwings.filter(item => item.type === "low"), false);
+
+    const result = [];
+    if (topResistances.length > 0) result.push(topResistances[0]);
+    if (bottomSupports.length > 0) result.push(bottomSupports[0]);
+    if (topResistances.length > 1 && result.length < 3) result.push(topResistances[1]);
+    if (bottomSupports.length > 1 && result.length < 4) result.push(bottomSupports[1]);
+
+    return result;
   }
 
   function detectRetestSet(raw, approaching) {
