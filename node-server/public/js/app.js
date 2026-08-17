@@ -2297,7 +2297,7 @@ function drawDensityTimelineOnChart(ctx, options) {
   return badges;
 }
 
-// Formations Overlay – renders formation levels on main chart (ScalpX style)
+// Formations Overlay – renders formation levels on main chart
 // ════════════════════════════════════════════════════════════
 function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
   if (!chartFormationsOnChart || !candles || candles.length < 40) return;
@@ -2306,32 +2306,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const lastPrice = candles[N - 1].c;
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
 
-  const drawScalpXTag = (text, startX, y, color) => {
-    if (!chartFovShowLabels) return;
-    ctx.save();
-    ctx.font = "600 10px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
-    const tw = ctx.measureText(text).width;
-    const padX = 6;
-    const h = 16;
-    const w = tw + padX * 2;
-    const bx = Math.max(4, Math.min(PW - w - 4, startX + 6));
-    const by = Math.max(TOP + 2, Math.min(TOP + PH - h - 2, y - h - 2));
-
-    roundRect(ctx, bx, by, w, h, 3);
-    ctx.fillStyle = "rgba(13, 16, 23, 0.90)";
-    ctx.fill();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 0.85;
-    ctx.stroke();
-
-    ctx.fillStyle = "#ffffff";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, bx + padX, by + h / 2);
-    ctx.restore();
-  };
-
-  // ─── 1. CASCADES (ScalpX style) ───
+  // ─── 1. CASCADES ───
   const hasCascades = chartActiveFormations.has('cascades') || chartFovTypes.has('cascades');
   if (hasCascades) {
     let levels = window.FormationEngine
@@ -2375,14 +2350,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
-
-      const priceFormatted = fP(lv.price);
-      const tagText = (lv.touches && lv.touches >= 2) ? `${priceFormatted} ×${lv.touches}` : `${priceFormatted}`;
-      drawScalpXTag(tagText, startX, y, color);
     }
   }
 
-  // ─── 2. HORIZONTAL LEVELS (ScalpX style) ───
+  // ─── 2. HORIZONTAL LEVELS ───
   const hasLevels = chartActiveFormations.has('levels') || chartFovTypes.has('levels');
   if (hasLevels) {
     let levels = window.FormationEngine
@@ -2428,14 +2399,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
-
-      const priceFormatted = fP(lv.price);
-      const tagText = (lv.touches && lv.touches >= 2) ? `${priceFormatted} ×${lv.touches}` : `${priceFormatted}`;
-      drawScalpXTag(tagText, startX, y, color);
     }
   }
 
-  // ─── 3. TRENDLINES (ScalpX style) ───
+  // ─── 3. TRENDLINES ───
   const hasTrendlines = chartActiveFormations.has('trendlines') || chartFovTypes.has('trendlines');
   if (hasTrendlines) {
     let trendlines = window.FormationEngine
@@ -2477,13 +2444,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
-      const endPriceStr = fP(tl.endPrice || tl.p2.price);
-      const tagText = (tl.touches && tl.touches >= 2) ? `${endPriceStr} ×${tl.touches}` : `${endPriceStr}`;
-      drawScalpXTag(tagText, Math.max(0, x1), y2, color);
     }
   }
 
-  // ─── 4. RETESTS (ScalpX style) ───
+  // ─── 4. RETESTS ───
   const hasRetests = chartActiveFormations.has('retests') || chartFovTypes.has('retests');
   if (hasRetests) {
     let retests = [];
@@ -2513,9 +2477,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.lineTo(PW, y);
       ctx.stroke();
       ctx.restore();
-      const rtPriceStr = fP(rt.price);
-      const tagText = (rt.touches && rt.touches >= 2) ? `${rtPriceStr} ×${rt.touches}` : `${rtPriceStr}`;
-      drawScalpXTag(tagText, startX, y, color);
     }
   }
 }
