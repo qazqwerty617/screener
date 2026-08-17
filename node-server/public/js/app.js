@@ -8192,11 +8192,19 @@ function toggleExcDropdown() {
     excBtn.classList.remove("open");
     excBtn.setAttribute("aria-expanded", "false");
   } else {
-    // Position the fixed menu below the button
     const rect = excBtn.getBoundingClientRect();
-    excMenu.style.top = (rect.bottom + 6) + "px";
-    excMenu.style.left = "auto";
-    excMenu.style.right = (window.innerWidth - rect.right) + "px";
+    const menuWidth = 205;
+    excMenu.style.position = "fixed";
+    excMenu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 340) + "px";
+    let rightPos = Math.max(8, window.innerWidth - rect.right);
+    if (window.innerWidth - rightPos < menuWidth) {
+      excMenu.style.right = "auto";
+      excMenu.style.left = "8px";
+    } else {
+      excMenu.style.right = rightPos + "px";
+      excMenu.style.left = "auto";
+    }
+    excMenu.style.zIndex = "999999";
     excMenu.classList.add("open");
     excBtn.classList.add("open");
     excBtn.setAttribute("aria-expanded", "true");

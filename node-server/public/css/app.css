@@ -437,10 +437,11 @@ button {
 /* ── Exchange Dropdown ── */
 .exc-wrap {
     margin-left: auto;
+    margin-left: auto;
     position: relative;
     padding-right: 8px;
-    flex-shrink: 0;
-    z-index: 9999;
+    flex-shrink: 0 !important;
+    z-index: 10000;
 }
 
 .exc-btn {
@@ -460,8 +461,8 @@ button {
     min-width: 0;
     max-width: none;
     overflow: visible;
-    white-space: nowrap;
-    flex-shrink: 0;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
     outline: none !important;
 }
 
@@ -503,24 +504,36 @@ button {
 }
 
 .exc-menu {
-    position: fixed;
+    position: fixed !important;
     top: auto;
     right: auto;
-    min-width: 195px;
+    min-width: 200px;
     background: #13151e !important;
     border: 1px solid var(--bd2);
     border-radius: 10px;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.75);
-    z-index: 10000 !important;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85);
+    z-index: 999999 !important;
     overflow: hidden;
     display: none;
     animation: fadeIn 0.15s ease;
 }
 
 .exc-menu.open {
-    display: block;
+    display: block !important;
 }
 
+/* Multichart View: Hide single-coin stats to give room for multichart toolbar controls and exchange selector */
+body.view-is-multichart .chart-bar .stat,
+body.view-is-multichart .chart-bar .sep:nth-of-type(n+2) {
+    display: none !important;
+}
+
+body.view-is-multichart .grid-config {
+    display: flex !important;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
 
 @keyframes fadeIn {
     from {
