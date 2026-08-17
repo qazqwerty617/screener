@@ -81,6 +81,33 @@
     return true;
   }
 
+  function getDistinctTouches(candles, level, startIdx, resistance, range) {
+    const touchTol = Math.min(range * 0.12, level * 0.002);
+    const minDeparture = range * 0.28;
+    const touches = [startIdx];
+    let departed = false;
+    let lastTouch = startIdx;
+
+    for (let i = startIdx + 1; i < candles.length - 1; i++) {
+      const c = candles[i];
+      const wick = resistance ? c.h : c.l;
+      const close = c.c;
+
+      const dist = resistance ? (level - close) : (close - level);
+      if (dist >= minDeparture) {
+        departed = true;
+      }
+
+      if (departed && Math.abs(wick - level) <= touchTol && (i - lastTouch) >= 5) {
+        touches.push(i);
+        lastTouch = i;
+        departed = false;
+      }
+    }
+
+    return touches;
+  }
+
   function detectHorizontals(raw, minTouches) {
     const candles = normalize(raw);
     if (candles.length < 30) return [];
@@ -89,7 +116,7 @@
     const clusterTol = Math.max(0.0008, Math.min(0.0035, (range / lastPrice) * 0.25));
     const epsilon = Math.min(range * 0.02, lastPrice * 0.0004);
     const points = swings(candles, 3);
-    const minT = Math.max(1, Number(minTouches) || 2);
+    const minT = Math.max(1, Number(minTouches) || 1);
     const candidates = [];
 
     for (const resistance of [true, false]) {
@@ -99,16 +126,8 @@
         if (resistance ? cluster.price <= lastPrice : cluster.price >= lastPrice) continue;
         if (!isLevelClean(candles, cluster.price, first, resistance, epsilon)) continue;
 
-        // Collect all distinct touches across the span of candles from first touch to now
-        const touchTol = Math.min(range * 0.12, lastPrice * 0.002);
-        const touchIndices = [first];
-        for (let i = first + 2; i < candles.length - 1; i++) {
-          const wick = resistance ? candles[i].h : candles[i].l;
-          if (Math.abs(wick - cluster.price) <= touchTol && i - touchIndices[touchIndices.length - 1] >= 2) {
-            touchIndices.push(i);
-          }
-        }
-
+        // Get TRUE distinct touches with full wave departure between each touch
+        const touchIndices = getDistinctTouches(candles, cluster.price, first, resistance, range);
         if (touchIndices.length < minT) continue;
 
         const distanceAtr = Math.abs(cluster.price - lastPrice) / range;
