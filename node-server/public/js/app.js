@@ -2307,8 +2307,17 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
   const scaleBadges = [];
 
-  const neutralLineColor = "rgba(148, 163, 184, 0.75)";
-  const neutralTouchColor = "rgba(203, 213, 225, 0.85)";
+  const fmtColors = window.formationColorSettings || {
+    cascadeUp: "#94a3b8", cascadeUpOp: 75,
+    cascadeDown: "#94a3b8", cascadeDownOp: 75,
+    trendlineUp: "#94a3b8", trendlineUpOp: 75,
+    trendlineDown: "#94a3b8", trendlineDownOp: 75,
+    level: "#94a3b8", levelOp: 75,
+    retest: "#94a3b8", retestOp: 75
+  };
+
+  const getFmtColor = (hex, op = 75) => (typeof hexToRgba === "function") ? hexToRgba(hex, op) : hex;
+  const getFmtDotColor = (hex, op = 75) => (typeof hexToRgba === "function") ? hexToRgba(hex, Math.min(100, (Number(op) || 75) + 15)) : hex;
 
   // ─── 1. CASCADES ───
   const hasCascades = chartActiveFormations.has('cascades') || chartFovTypes.has('cascades');
@@ -2326,12 +2335,16 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const y = toY(lv.price);
       if (y < TOP || y > TOP + PH) continue;
 
+      const isUp = (lv.direction === "up" || lv.price >= lastPrice);
+      const lineColor = isUp ? getFmtColor(fmtColors.cascadeUp, fmtColors.cascadeUpOp) : getFmtColor(fmtColors.cascadeDown, fmtColors.cascadeDownOp);
+      const touchColor = isUp ? getFmtDotColor(fmtColors.cascadeUp, fmtColors.cascadeUpOp) : getFmtDotColor(fmtColors.cascadeDown, fmtColors.cascadeDownOp);
+
       const startIdx = lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0);
       const startX = Math.max(0, getCandleX(startIdx));
 
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = neutralLineColor;
+      ctx.strokeStyle = lineColor;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
       ctx.moveTo(startX, y);
@@ -2340,7 +2353,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       // Touch circles at touchIndices (or swingIdx)
       if (chartFovShowTouches) {
-        ctx.fillStyle = neutralTouchColor;
+        ctx.fillStyle = touchColor;
         const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
         for (let i = 0; i < touchesArr.length; i++) {
           const origIdx = touchesArr[i];
@@ -2357,7 +2370,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       }
       ctx.restore();
 
-      scaleBadges.push({ price: lv.price, y });
+      scaleBadges.push({ price: lv.price, y, color: lineColor });
     }
   }
 
@@ -2376,6 +2389,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       levels = levels.slice(0, 4);
     }
 
+    const lineColor = getFmtColor(fmtColors.level, fmtColors.levelOp);
+    const touchColor = getFmtDotColor(fmtColors.level, fmtColors.levelOp);
+
     for (const lv of levels) {
       const y = toY(lv.price);
       if (y < TOP || y > TOP + PH) continue;
@@ -2385,7 +2401,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = neutralLineColor;
+      ctx.strokeStyle = lineColor;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
       ctx.moveTo(startX, y);
@@ -2393,7 +2409,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
 
       if (chartFovShowTouches) {
-        ctx.fillStyle = neutralTouchColor;
+        ctx.fillStyle = touchColor;
         const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
         for (let i = 0; i < touchesArr.length; i++) {
           const origIdx = touchesArr[i];
@@ -2410,7 +2426,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       }
       ctx.restore();
 
-      scaleBadges.push({ price: lv.price, y });
+      scaleBadges.push({ price: lv.price, y, color: lineColor });
     }
   }
 
@@ -2424,6 +2440,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= minTouches);
 
     for (const tl of trendlines) {
+      const isUp = (tl.direction === "up");
+      const lineColor = isUp ? getFmtColor(fmtColors.trendlineUp, fmtColors.trendlineUpOp) : getFmtColor(fmtColors.trendlineDown, fmtColors.trendlineDownOp);
+      const touchColor = isUp ? getFmtDotColor(fmtColors.trendlineUp, fmtColors.trendlineUpOp) : getFmtDotColor(fmtColors.trendlineDown, fmtColors.trendlineDownOp);
+
       const idx1 = tl.p1.t ? getIdxFromTime(tl.p1.t, candles) : tl.p1.idx;
       const extIdx = N - 1 + 8;
       const x1 = getCandleX(idx1);
@@ -2433,14 +2453,14 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = neutralLineColor;
+      ctx.strokeStyle = lineColor;
       ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
       if (chartFovShowTouches && tl.swingIndices) {
-        ctx.fillStyle = neutralTouchColor;
+        ctx.fillStyle = touchColor;
         for (let i = 0; i < tl.swingIndices.length; i++) {
           const origIdx = tl.swingIndices[i];
           const time = tl.touchTimes ? tl.touchTimes[i] : null;
@@ -2457,7 +2477,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       if (typeof tl.endPrice === 'number' && Number.isFinite(tl.endPrice)) {
         const currentY = toY(tl.endPrice);
-        scaleBadges.push({ price: tl.endPrice, y: currentY });
+        scaleBadges.push({ price: tl.endPrice, y: currentY, color: lineColor });
       }
     }
   }
@@ -2475,6 +2495,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       retests = retests.slice(0, 2);
     }
 
+    const lineColor = getFmtColor(fmtColors.retest, fmtColors.retestOp);
+    const touchColor = getFmtDotColor(fmtColors.retest, fmtColors.retestOp);
+
     for (const rt of retests) {
       const y = toY(rt.price);
       if (y < TOP || y > TOP + PH) continue;
@@ -2484,7 +2507,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       ctx.save();
       ctx.setLineDash([]);
-      ctx.strokeStyle = neutralLineColor;
+      ctx.strokeStyle = lineColor;
       ctx.lineWidth = 1.35;
       ctx.beginPath();
       ctx.moveTo(startX, y);
@@ -2492,7 +2515,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
 
       if (chartFovShowTouches) {
-        ctx.fillStyle = neutralTouchColor;
+        ctx.fillStyle = touchColor;
         const touchesArr = Array.isArray(rt.touchIndices) ? rt.touchIndices : [rt.swingIdx, rt.touchIdx];
         for (let i = 0; i < touchesArr.length; i++) {
           const origIdx = touchesArr[i];
@@ -2509,7 +2532,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       }
       ctx.restore();
 
-      scaleBadges.push({ price: rt.price, y });
+      scaleBadges.push({ price: rt.price, y, color: lineColor });
     }
   }
 
@@ -3756,11 +3779,11 @@ function drawChart() {
       roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
       ctx.fillStyle = "rgba(15, 23, 42, 0.65)";
       ctx.fill();
-      ctx.strokeStyle = "rgba(148, 163, 184, 0.35)";
+      ctx.strokeStyle = badge.color || "rgba(148, 163, 184, 0.35)";
       ctx.lineWidth = 0.85;
       ctx.stroke();
 
-      ctx.fillStyle = "rgba(203, 213, 225, 0.75)";
+      ctx.fillStyle = badge.color || "rgba(203, 213, 225, 0.75)";
       ctx.font = "500 9.5px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -7794,9 +7817,27 @@ if (settingsBtn && settingsOverlay) {
       downOp: 75
     };
 
+    const DEFAULT_FORMATION_COLORS = {
+      cascadeUp: "#94a3b8",
+      cascadeUpOp: 75,
+      cascadeDown: "#94a3b8",
+      cascadeDownOp: 75,
+      trendlineUp: "#94a3b8",
+      trendlineUpOp: 75,
+      trendlineDown: "#94a3b8",
+      trendlineDownOp: 75,
+      level: "#94a3b8",
+      levelOp: 75,
+      retest: "#94a3b8",
+      retestOp: 75
+    };
+
+    const formationColorState = { ...DEFAULT_FORMATION_COLORS };
+
     // Global access
     window.candleSettings = candleState;
     window.volumeSettings = volumeState;
+    window.formationColorSettings = formationColorState;
 
     // Load settings
     const loadSettings = () => {
@@ -7805,6 +7846,13 @@ if (settingsBtn && settingsOverlay) {
 
       const savedVolume = localStorage.getItem("screener-volume-settings");
       if (savedVolume) Object.assign(volumeState, JSON.parse(savedVolume));
+
+      const savedFmtColors = localStorage.getItem("screener-formation-colors");
+      if (savedFmtColors) {
+        try {
+          Object.assign(formationColorState, JSON.parse(savedFmtColors));
+        } catch (_) {}
+      }
 
       $("set-candle-body").checked = candleState.body.show;
       $("set-candle-border").checked = candleState.border.show;
@@ -7856,6 +7904,26 @@ if (settingsBtn && settingsOverlay) {
           volumeState[side + "Op"] = o;
           refreshCharts();
         };
+      } else if (id.startsWith("fmt-")) {
+        const keyMap = {
+          "fmt-cascade-up": "cascadeUp",
+          "fmt-cascade-down": "cascadeDown",
+          "fmt-trendline-up": "trendlineUp",
+          "fmt-trendline-down": "trendlineDown",
+          "fmt-level": "level",
+          "fmt-retest": "retest"
+        };
+        const prop = keyMap[id];
+        if (prop) {
+          initialColor = formationColorState[prop] || "#94a3b8";
+          initialOpacity = formationColorState[prop + "Op"] ?? 75;
+          onUpdate = (c, o) => {
+            formationColorState[prop] = c;
+            formationColorState[prop + "Op"] = o;
+            localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
+            refreshCharts();
+          };
+        }
       } else if (id === "screener-bg") {
         initialColor = localStorage.getItem("screener-sidebar-bg-color") || "#0d0f14";
         initialOpacity = 100;
@@ -7939,6 +8007,8 @@ if (settingsBtn && settingsOverlay) {
 
         volumeState.show = $("set-show-volume").checked;
         localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
+
+        localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
 
         refreshCharts();
         if (settingsOverlay) settingsOverlay.classList.remove("open");
