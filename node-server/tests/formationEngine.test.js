@@ -47,3 +47,24 @@ test("confirmed retest requires breakout, departure and hold from the new side",
   const retests = engine.detectRetests(candles);
   assert.ok(retests.some(item => item.direction === "up" && item.touchIdx === 65));
 });
+
+test("cascades respect timeframe distance limit and filter distant macro levels on 1m", () => {
+  const candles = baseCandles(100);
+  // 1m candle intervals (60_000 ms)
+  // Distant swing at 15% (idx 10, should be filtered on 1m chart because dist > 5%)
+  candles[10] = { ...candles[10], h: 115, c: 101, o: 101 };
+  candles[9].h = 101;
+  candles[11].h = 101;
+
+  // Nearby swing within 3% (idx 25, clean resistance)
+  candles[25] = { ...candles[25], h: 103, c: 101, o: 101 };
+  candles[24].h = 101;
+  candles[26].h = 101;
+  candles[candles.length - 1].c = 100;
+
+  const cascades = engine.detectCascades(candles, 1);
+  const upCascades = cascades.filter(c => c.direction === "up");
+  assert.ok(upCascades.some(c => Math.abs(c.price - 103) < 0.1), "Should include nearby 3% cascade");
+  assert.equal(upCascades.some(c => Math.abs(c.price - 115) < 0.1), false, "Should exclude distant 15% macro level on 1m timeframe");
+});
+

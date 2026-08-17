@@ -108,14 +108,51 @@
     return touches;
   }
 
+  function getCandleTfMinutes(candles) {
+    if (!candles || candles.length < 2) return 1;
+    const diffs = [];
+    for (let i = Math.max(1, candles.length - 25); i < candles.length; i++) {
+      const dt = candles[i].t - candles[i - 1].t;
+      if (dt > 0) diffs.push(dt);
+    }
+    if (diffs.length === 0) return 1;
+    diffs.sort((a, b) => a - b);
+    const medianMs = diffs[Math.floor(diffs.length / 2)];
+    return Math.max(1, Math.round(medianMs / 60000));
+  }
+
+  function getTimeframeProfile(candles) {
+    const tfMins = getCandleTfMinutes(candles);
+    if (tfMins <= 1) {
+      // 1m: max 5% up/down, top 3 levels per side, recent 180 bars (~3 hours)
+      return { tfMins: 1, maxDistPct: 0.05, maxLevelsPerSide: 3, swingW: 3, maxLookback: 180, minSpacingPct: 0.0015 };
+    } else if (tfMins <= 5) {
+      // 3m-5m: max 10% up/down, top 3 levels per side, recent 220 bars
+      return { tfMins: 5, maxDistPct: 0.10, maxLevelsPerSide: 3, swingW: 3, maxLookback: 220, minSpacingPct: 0.0025 };
+    } else if (tfMins <= 15) {
+      // 15m: max 16% up/down, top 3-4 levels per side, recent 250 bars
+      return { tfMins: 15, maxDistPct: 0.16, maxLevelsPerSide: 4, swingW: 3, maxLookback: 250, minSpacingPct: 0.0040 };
+    } else if (tfMins <= 60) {
+      // 30m-1h: max 22% up/down, top 4 levels per side, recent 280 bars
+      return { tfMins: 60, maxDistPct: 0.22, maxLevelsPerSide: 4, swingW: 4, maxLookback: 280, minSpacingPct: 0.0060 };
+    } else if (tfMins <= 240) {
+      // 2h-4h: max 30% up/down, top 4 levels per side, recent 300 bars
+      return { tfMins: 240, maxDistPct: 0.30, maxLevelsPerSide: 4, swingW: 4, maxLookback: 300, minSpacingPct: 0.0080 };
+    } else {
+      // 1d+: max 55% up/down, top 5 levels per side, recent 360 bars
+      return { tfMins: 1440, maxDistPct: 0.55, maxLevelsPerSide: 5, swingW: 5, maxLookback: 360, minSpacingPct: 0.0150 };
+    }
+  }
+
   function detectHorizontals(raw, minTouches) {
     const candles = normalize(raw);
     if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
+    const profile = getTimeframeProfile(candles);
     const clusterTol = Math.max(0.0008, Math.min(0.0035, (range / lastPrice) * 0.25));
     const epsilon = Math.min(range * 0.02, lastPrice * 0.0004);
-    const points = swings(candles, 3);
+    const points = swings(candles, profile.swingW);
     const minT = Math.max(1, Number(minTouches) || 1);
     const candidates = [];
 
@@ -124,6 +161,10 @@
       for (const cluster of makeClusters(side, clusterTol, resistance)) {
         const first = Math.min(...cluster.swingIndices);
         if (resistance ? cluster.price <= lastPrice : cluster.price >= lastPrice) continue;
+
+        const distPct = Math.abs(cluster.price - lastPrice) / lastPrice;
+        if (distPct > profile.maxDistPct * 1.3) continue;
+
         if (!isLevelClean(candles, cluster.price, first, resistance, epsilon)) continue;
 
         // Get TRUE distinct touches with full wave departure between each touch
@@ -163,15 +204,24 @@
     if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
+    const profile = getTimeframeProfile(candles);
     const epsilon = Math.min(range * 0.025, lastPrice * 0.0005);
     const minCascadeCount = Math.max(1, Number(minCount) || 1);
-    const allSwings = swings(candles, 3);
+    
+    // Lookback constraint according to timeframe
+    const minStartIdx = Math.max(profile.swingW, candles.length - profile.maxLookback);
+    const allSwings = swings(candles, profile.swingW).filter(sw => sw.idx >= minStartIdx);
+    
     const upCandidates = [];
     const downCandidates = [];
 
     for (const sw of allSwings) {
       if (sw.type === "high") {
         if (sw.price <= lastPrice) continue;
+        // Limit max distance from current price for this timeframe!
+        const distPct = (sw.price - lastPrice) / lastPrice;
+        if (distPct > profile.maxDistPct) continue;
+
         if (!isLevelClean(candles, sw.price, sw.idx, true, epsilon)) continue;
 
         const touchIndices = [sw.idx];
@@ -193,6 +243,10 @@
         });
       } else if (sw.type === "low") {
         if (sw.price >= lastPrice) continue;
+        // Limit max distance from current price for this timeframe!
+        const distPct = (lastPrice - sw.price) / lastPrice;
+        if (distPct > profile.maxDistPct) continue;
+
         if (!isLevelClean(candles, sw.price, sw.idx, false, epsilon)) continue;
 
         const touchIndices = [sw.idx];
@@ -218,7 +272,7 @@
     function dedupeLevels(list, isUp) {
       list.sort((a, b) => b.touches - a.touches || a.age - b.age);
       const kept = [];
-      const minSpacing = Math.min(range * 0.08, lastPrice * 0.0015);
+      const minSpacing = Math.max(lastPrice * profile.minSpacingPct, Math.min(range * 0.08, lastPrice * 0.0015));
       for (const item of list) {
         if (!kept.some(other => Math.abs(other.price - item.price) <= minSpacing)) {
           kept.push(item);
@@ -234,10 +288,10 @@
 
     const out = [];
     if (dedupedUp.length >= minCascadeCount) {
-      out.push(...dedupedUp.slice(0, 10));
+      out.push(...dedupedUp.slice(0, profile.maxLevelsPerSide));
     }
     if (dedupedDown.length >= minCascadeCount) {
-      out.push(...dedupedDown.slice(0, 10));
+      out.push(...dedupedDown.slice(0, profile.maxLevelsPerSide));
     }
 
     return out;
@@ -246,10 +300,10 @@
   function linesCross(l1, l2, startK, endK) {
     const p1Start = l1.p1.price + l1.slope * (startK - l1.p1.idx);
     const p2Start = l2.p1.price + l2.slope * (startK - l2.p1.idx);
-    const p1End   = l1.p1.price + l1.slope * (endK - l1.p1.idx);
-    const p2End   = l2.p1.price + l2.slope * (endK - l2.p1.idx);
+    const p1End = l1.p1.price + l1.slope * (endK - l1.p1.idx);
+    const p2End = l2.p1.price + l2.slope * (endK - l2.p1.idx);
     const diffStart = p1Start - p2Start;
-    const diffEnd   = p1End - p2End;
+    const diffEnd = p1End - p2End;
     return (diffStart * diffEnd) < 0;
   }
 
@@ -471,7 +525,7 @@
         for (let i = departIdx + 1; i < N; i++) {
           const c = candles[i];
           const touchesLevel = bullish ? (c.l <= level + touchTol) : (c.h >= level - touchTol);
-          const holdsLevel   = bullish ? (c.c >= level - holdBuffer) : (c.c <= level + holdBuffer);
+          const holdsLevel = bullish ? (c.c >= level - holdBuffer) : (c.c <= level + holdBuffer);
 
           if (touchesLevel && holdsLevel) {
             touchIdx = i;
