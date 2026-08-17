@@ -3917,6 +3917,17 @@ function drawChart() {
   // Restore clipping for candles and drawings area before rendering Price Axis labels
   ctx.restore();
 
+  // Collect active badge Y coordinates to avoid overlapping axis labels
+  const activeBadgeYs = [];
+  const lc = candles[candles.length - 1];
+  if (lc) activeBadgeYs.push(toY(lc.c));
+  if (drawingScaleBadges && drawingScaleBadges.length > 0) {
+    for (const b of drawingScaleBadges) activeBadgeYs.push(toY(b.price));
+  }
+  if (formationScaleBadges && formationScaleBadges.length > 0) {
+    for (const b of formationScaleBadges) activeBadgeYs.push(toY(b.price));
+  }
+
   // ── Price Axis (Right) ─────────────────────────────────────────────────────────────
   gridPrice = Math.ceil(mn / gridStep) * gridStep;
   ctx.font = "10px Inter";
@@ -3925,8 +3936,11 @@ function drawChart() {
   while (gridPrice <= mx + gridStep * 0.01) {
     const y = toY(gridPrice);
     if (y >= TOP + 10 && y <= TOP + PH - 10) {
-      ctx.fillStyle = axisColor;
-      ctx.fillText(fP(gridPrice), PW + 6, y + 4);
+      const collidesWithBadge = activeBadgeYs.some(by => Math.abs(by - y) < 14);
+      if (!collidesWithBadge) {
+        ctx.fillStyle = axisColor;
+        ctx.fillText(fP(gridPrice), PW + 6, y + 4);
+      }
     }
     gridPrice += gridStep;
   }
@@ -3964,25 +3978,33 @@ function drawChart() {
     }
   }
 
-  // Draw subtle price labels on right scale for formation/cascade levels
+  // Draw crisp, solid price labels on right scale for formation/cascade levels
   if (formationScaleBadges && formationScaleBadges.length > 0) {
-    const badgeH = 15;
-    const badgeW = PR - 12;
-    const badgeX = PW + 6;
+    const badgeH = 18;
+    const badgeW = PR - 8;
+    const badgeX = PW + 4;
+    const renderedBadges = [];
+
     for (const badge of formationScaleBadges) {
       const by = toY(badge.price);
-      if (by < TOP + 6 || by > TOP + PH - 6) continue;
+      if (by < TOP + 8 || by > TOP + PH - 8) continue;
+      // Skip overlapping formation badges (< 15px)
+      if (renderedBadges.some(prevY => Math.abs(prevY - by) < 15)) continue;
+      renderedBadges.push(by);
+
       const badgeY = Math.round(by - badgeH / 2);
       ctx.save();
-      roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
-      ctx.fillStyle = "rgba(15, 23, 42, 0.65)";
+      roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+      // 100% solid opaque background to prevent bleed-through
+      ctx.fillStyle = "#131722";
       ctx.fill();
-      ctx.strokeStyle = badge.color || "rgba(148, 163, 184, 0.35)";
-      ctx.lineWidth = 0.85;
+      ctx.strokeStyle = badge.color || "#38bdf8";
+      ctx.lineWidth = 1.3;
       ctx.stroke();
 
-      ctx.fillStyle = badge.color || "rgba(203, 213, 225, 0.75)";
-      ctx.font = "500 9.5px Inter, -apple-system, BlinkMacSystemFont, sans-serif";
+      // High-contrast, crystal-clear white text
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 10px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(fP(badge.price), badgeX + badgeW / 2, by);
