@@ -2421,10 +2421,11 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
     }
 
     for (const tl of trendlines) {
+      const extIdx = N - 1 + 8;
       const x1 = getCandleX(tl.p1.idx);
-      const x2 = getCandleX(N - 1);
+      const x2 = Math.min(PW, getCandleX(extIdx));
       const y1 = toY(tl.p1.price);
-      const y2 = toY(tl.p1.price + tl.slope * (N - 1 - tl.p1.idx));
+      const y2 = toY(tl.p1.price + tl.slope * (extIdx - tl.p1.idx));
       if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
       ctx.save();
       ctx.setLineDash([]);
@@ -2448,7 +2449,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.restore();
 
       if (typeof tl.endPrice === 'number' && Number.isFinite(tl.endPrice)) {
-        scaleBadges.push({ price: tl.endPrice, y: y2 });
+        const currentY = toY(tl.endPrice);
+        scaleBadges.push({ price: tl.endPrice, y: currentY });
       }
     }
   }
