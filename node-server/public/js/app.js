@@ -5378,9 +5378,11 @@ document.addEventListener("DOMContentLoaded", () => {
         profileUpgradeBanner.style.setProperty("display", isPro ? "none" : "flex", "important");
       }
 
-      const logoProBadge = $("logo-pro-badge") || document.querySelector(".logo-rest");
-      if (logoProBadge) {
-        logoProBadge.style.display = isPro ? "inline" : "none";
+      const logoTierBadge = $("logo-tier-badge") || $("logo-pro-badge") || document.querySelector(".logo-rest");
+      if (logoTierBadge) {
+        logoTierBadge.textContent = isPro ? "PRO" : "FREE";
+        logoTierBadge.style.color = isPro ? "var(--t1)" : "rgba(255, 255, 255, 0.55)";
+        logoTierBadge.style.display = "inline";
       }
 
       if (tgBotStatusText) {
@@ -5410,9 +5412,11 @@ document.addEventListener("DOMContentLoaded", () => {
         syncPreferencesToServer();
       }
     } else {
-      const logoProBadge = $("logo-pro-badge") || document.querySelector(".logo-rest");
-      if (logoProBadge) {
-        logoProBadge.style.display = "none";
+      const logoTierBadge = $("logo-tier-badge") || $("logo-pro-badge") || document.querySelector(".logo-rest");
+      if (logoTierBadge) {
+        logoTierBadge.textContent = "FREE";
+        logoTierBadge.style.color = "rgba(255, 255, 255, 0.55)";
+        logoTierBadge.style.display = "inline";
       }
     }
   }
