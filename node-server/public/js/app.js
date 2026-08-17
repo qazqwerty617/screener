@@ -1442,10 +1442,11 @@ function calcCVD(data) {
   let sum = 0;
   for (let i = 0; i < data.length; i++) {
     const c = data[i];
-    const range = c.h - c.l || 1;
+    const range = Math.max(1e-8, c.h - c.l);
     const buyR = (c.c - c.l) / range;
     const sellR = (c.h - c.c) / range;
-    sum += c.v * (buyR - sellR);
+    const netVol = (c.v || 0) * (buyR - sellR);
+    sum += netVol;
     cvd[i] = sum;
   }
   cvd._len = data.length;
@@ -1466,28 +1467,54 @@ function calcOI(data) {
   const oi = new Array(data.length);
   const ticker = (typeof activeEx !== "undefined" && typeof activeSym !== "undefined" && typeof coins !== "undefined")
     ? coins.get(activeEx + ":" + activeSym) : null;
-  const baseOI = ticker ? getOiPct(ticker) : 2.5;
 
   let hasExplicitOI = false;
   for (let i = 0; i < data.length; i++) {
-    if (typeof data[i].oi === "number" && Number.isFinite(data[i].oi)) {
+    if (typeof data[i].oi === "number" && Number.isFinite(data[i].oi) && data[i].oi > 0) {
       hasExplicitOI = true;
       oi[i] = data[i].oi;
     }
   }
 
   if (!hasExplicitOI) {
-    let cur = Math.max(0.5, baseOI);
-    oi[data.length - 1] = cur;
-    for (let i = data.length - 2; i >= 0; i--) {
-      const c = data[i + 1];
-      const prev = data[i];
+    const currentOI = (ticker && ticker.oi && ticker.oi > 0) ? ticker.oi : (ticker && ticker.v ? ticker.v * 0.22 : 12500000);
+    
+    let meanVol = 0;
+    for (let i = 0; i < data.length; i++) meanVol += (data[i].v || 0);
+    meanVol = (meanVol / data.length) || 1;
+
+    const deltaOI = new Array(data.length).fill(0);
+    for (let i = 1; i < data.length; i++) {
+      const c = data[i];
+      const prev = data[i - 1];
       const ret = prev.c > 0 ? (c.c - prev.c) / prev.c : 0;
-      const volFactor = c.v > 0 ? Math.min(0.05, (c.v / 1e7) * 0.005) : 0.005;
-      cur = cur - (ret * 0.35 + Math.sin(i * 0.25) * 0.015 * (1 + volFactor));
-      if (cur < 0.1) cur = 0.1 + Math.abs(Math.sin(i)) * 0.05;
-      oi[i] = cur;
+      const relVol = Math.min(4, Math.max(0.2, (c.v || 0) / meanVol));
+      const range = Math.max(1e-8, c.h - c.l);
+      const buyRatio = (c.c - c.l) / range;
+      const sellRatio = (c.h - c.c) / range;
+      const netFlow = buyRatio - sellRatio;
+
+      const change = (netFlow * 0.007 + ret * 0.014) * relVol;
+      deltaOI[i] = change;
     }
+
+    oi[data.length - 1] = currentOI;
+    for (let i = data.length - 2; i >= 0; i--) {
+      const nextVal = oi[i + 1];
+      const factor = 1 + deltaOI[i + 1];
+      oi[i] = Math.max(currentOI * 0.2, nextVal / Math.max(0.85, Math.min(1.15, factor)));
+    }
+
+    const smooth = new Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      let sum = 0, count = 0;
+      for (let j = Math.max(0, i - 1); j <= Math.min(data.length - 1, i + 1); j++) {
+        sum += oi[j];
+        count++;
+      }
+      smooth[i] = sum / count;
+    }
+    for (let i = 0; i < data.length; i++) oi[i] = smooth[i];
   }
 
   oi._len = data.length;
@@ -2594,9 +2621,9 @@ function drawChart() {
   if (chartActiveIndicators.has("ATR")) activeIndicators.push("ATR");
   if (chartActiveIndicators.has("OI")) activeIndicators.push("OI");
 
-  // Volume takes 85px (larger, expressive TradingView height), indicators take 45px each
-  const fixedVolumeHeight = 85;
-  const indicatorHeightPer = 45;
+  // Volume takes 75px, indicators take 80px each for clean professional charts
+  const fixedVolumeHeight = 75;
+  const indicatorHeightPer = 80;
   const newVolH = fixedVolumeHeight + (activeIndicators.length * indicatorHeightPer);
 
   // Update volH if needed and adjust canvas
@@ -2968,18 +2995,21 @@ function drawChart() {
         const rsi = calcRSI(candles, 14);
         const lastVal = rsi[rsi.length - 1];
 
-        // Draw levels 30, 50, 70
-        const y30 = yStart + indicatorSubH - (30 / 100) * (indicatorSubH - 25) - 15;
-        const y50 = yStart + indicatorSubH - (50 / 100) * (indicatorSubH - 25) - 15;
-        const y70 = yStart + indicatorSubH - (70 / 100) * (indicatorSubH - 25) - 15;
+        const padTop = 22;
+        const padBot = 10;
+        const plotH = indicatorSubH - padTop - padBot;
+
+        const y70 = yStart + padTop + plotH * (1 - 70 / 100);
+        const y50 = yStart + padTop + plotH * (1 - 50 / 100);
+        const y30 = yStart + padTop + plotH * (1 - 30 / 100);
 
         // Fill 30-70 channel
         vCtx.fillStyle = "rgba(139, 92, 246, 0.08)";
         vCtx.fillRect(0, y70, PW, y30 - y70);
 
         // Dash lines
-        vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
-        vCtx.setLineDash([3, 3]);
+        vCtx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+        vCtx.setLineDash([4, 4]);
         vCtx.lineWidth = 1;
 
         vCtx.beginPath();
@@ -2990,12 +3020,12 @@ function drawChart() {
         vCtx.setLineDash([]);
 
         // Draw levels labels on the right
-        vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
+        vCtx.fillStyle = "rgba(255, 255, 255, 0.45)";
         vCtx.font = "bold 9px Inter";
         vCtx.textAlign = "right";
-        vCtx.fillText("70", PW - 4, y70 + 3);
-        vCtx.fillText("50", PW - 4, y50 + 3);
-        vCtx.fillText("30", PW - 4, y30 + 3);
+        vCtx.fillText("70", PW - 6, y70 - 2);
+        vCtx.fillText("50", PW - 6, y50 - 2);
+        vCtx.fillText("30", PW - 6, y30 - 2);
 
         // Draw RSI Curve
         vCtx.beginPath();
@@ -3005,21 +3035,21 @@ function drawChart() {
           const val = rsi[s + i];
           if (val != null) {
             const x = (s + i - viewStart) * candleW + candleW / 2;
-            const y = yStart + indicatorSubH - (val / 100) * (indicatorSubH - 25) - 15;
+            const y = yStart + padTop + plotH * (1 - Math.max(0, Math.min(100, val)) / 100);
             if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
           }
         }
         vCtx.stroke();
 
         // Big clear label
-        vCtx.fillStyle = "#a78bfa";
+        const rsiColor = lastVal >= 70 ? "#22c55e" : lastVal <= 30 ? "#ef4444" : "#a78bfa";
+        vCtx.fillStyle = rsiColor;
         vCtx.font = "bold 11px Inter";
         vCtx.textAlign = "left";
         vCtx.textBaseline = "top";
-        vCtx.fillText(`RSI(14): ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, 10, yStart + 5);
-        // Right side value too
+        vCtx.fillText(`RSI (14): ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, 10, yStart + 6);
         vCtx.textAlign = "right";
-        vCtx.fillText(`RSI: ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, PW - 4, yStart + 5);
+        vCtx.fillText(`RSI: ${lastVal != null ? lastVal.toFixed(2) : "N/A"}`, PW - 6, yStart + 6);
 
       } else if (subType === "ATR") {
         const atr = calcATR(candles, 14);
@@ -3029,43 +3059,63 @@ function drawChart() {
           if (atr[s + i] > maxAtr) maxAtr = atr[s + i];
         }
 
-        // Draw Curve
+        const padTop = 22;
+        const padBot = 8;
+        const plotH = indicatorSubH - padTop - padBot;
+
+        // Area fill
+        vCtx.beginPath();
+        let firstX = 0, lastX = 0;
+        for (let i = 0; i < vis.length; i++) {
+          const val = atr[s + i];
+          const x = (s + i - viewStart) * candleW + candleW / 2;
+          const y = yStart + padTop + plotH * (1 - Math.min(1, Math.max(0, (val || 0) / maxAtr)));
+          if (i === 0) { firstX = x; vCtx.moveTo(x, yStart + indicatorSubH); vCtx.lineTo(x, y); }
+          else vCtx.lineTo(x, y);
+          lastX = x;
+        }
+        vCtx.lineTo(lastX, yStart + indicatorSubH);
+        vCtx.closePath();
+        vCtx.fillStyle = "rgba(251, 146, 60, 0.08)";
+        vCtx.fill();
+
+        // Stroke
         vCtx.beginPath();
         vCtx.strokeStyle = "#fb923c"; // ATR Orange
         vCtx.lineWidth = 2;
         for (let i = 0; i < vis.length; i++) {
           const val = atr[s + i];
-          if (val) {
-            const x = (s + i - viewStart) * candleW + candleW / 2;
-            const y = yStart + indicatorSubH - (val / maxAtr) * (indicatorSubH - 25) - 15;
-            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
-          }
+          const x = (s + i - viewStart) * candleW + candleW / 2;
+          const y = yStart + padTop + plotH * (1 - Math.min(1, Math.max(0, (val || 0) / maxAtr)));
+          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
         vCtx.stroke();
 
-        // Big clear label
         vCtx.fillStyle = "#fb923c";
         vCtx.font = "bold 11px Inter";
         vCtx.textAlign = "left";
         vCtx.textBaseline = "top";
-        vCtx.fillText(`ATR(14): ${lastVal != null ? fP(lastVal) : "N/A"}`, 10, yStart + 5);
-        // Right side value too
+        vCtx.fillText(`ATR (14): ${lastVal != null ? fP(lastVal) : "N/A"}`, 10, yStart + 6);
         vCtx.textAlign = "right";
-        vCtx.fillText(`ATR: ${lastVal != null ? fP(lastVal) : "N/A"}`, PW - 4, yStart + 5);
+        vCtx.fillText(`ATR: ${lastVal != null ? fP(lastVal) : "N/A"}`, PW - 6, yStart + 6);
 
       } else if (subType === "MACD") {
         const macdData = calcMACD(candles);
         const lastM = macdData.macd[macdData.macd.length - 1];
         const lastS = macdData.signal[macdData.signal.length - 1];
+        const lastH = macdData.hist[macdData.hist.length - 1];
 
         let maxMacd = 0.00001;
         for (let i = 0; i < vis.length; i++) {
           const idx = s + i;
-          const mVal = Math.max(Math.abs(macdData.macd[idx]), Math.abs(macdData.signal[idx]), Math.abs(macdData.hist[idx]));
+          const mVal = Math.max(Math.abs(macdData.macd[idx] || 0), Math.abs(macdData.signal[idx] || 0), Math.abs(macdData.hist[idx] || 0));
           if (mVal > maxMacd) maxMacd = mVal;
         }
 
-        const yZero = yStart + indicatorSubH / 2;
+        const padTop = 22;
+        const padBot = 8;
+        const plotH = indicatorSubH - padTop - padBot;
+        const yZero = yStart + padTop + plotH / 2;
 
         // Zero line
         vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
@@ -3076,47 +3126,52 @@ function drawChart() {
         vCtx.stroke();
 
         // Hist bars
+        const barW = Math.max(2, candleW - 2);
         for (let i = 0; i < vis.length; i++) {
-          const val = macdData.hist[s + i];
+          const val = macdData.hist[s + i] || 0;
           const x = (s + i - viewStart) * candleW + candleW / 2;
-          const yVal = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
-          vCtx.fillStyle = val >= 0 ? "rgba(34, 197, 94, 0.7)" : "rgba(239, 68, 68, 0.7)";
-          vCtx.fillRect(x - 1.5, Math.min(yZero, yVal), 3, Math.max(1, Math.abs(yZero - yVal)));
+          const yVal = yZero - (val / maxMacd) * (plotH / 2);
+          vCtx.fillStyle = val >= 0 ? "rgba(34, 197, 94, 0.8)" : "rgba(239, 68, 68, 0.8)";
+          vCtx.fillRect(x - barW / 2, Math.min(yZero, yVal), barW, Math.max(1, Math.abs(yZero - yVal)));
         }
 
         // MACD Line (Blue)
         vCtx.beginPath();
-        vCtx.strokeStyle = "#3b82f6";
+        vCtx.strokeStyle = "#38bdf8";
         vCtx.lineWidth = 2;
         for (let i = 0; i < vis.length; i++) {
-          const val = macdData.macd[s + i];
+          const val = macdData.macd[s + i] || 0;
           const x = (s + i - viewStart) * candleW + candleW / 2;
-          const y = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
+          const y = yZero - (val / maxMacd) * (plotH / 2);
           if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
         vCtx.stroke();
 
-        // Signal Line (Pink)
+        // Signal Line (Orange)
         vCtx.beginPath();
-        vCtx.strokeStyle = "#f43f5e";
+        vCtx.strokeStyle = "#f59e0b";
         vCtx.lineWidth = 2;
         for (let i = 0; i < vis.length; i++) {
-          const val = macdData.signal[s + i];
+          const val = macdData.signal[s + i] || 0;
           const x = (s + i - viewStart) * candleW + candleW / 2;
-          const y = yZero - (val / maxMacd) * (indicatorSubH / 2 - 15);
+          const y = yZero - (val / maxMacd) * (plotH / 2);
           if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
         }
         vCtx.stroke();
 
-        // Big clear label
-        vCtx.fillStyle = "#3b82f6";
         vCtx.font = "bold 11px Inter";
         vCtx.textAlign = "left";
         vCtx.textBaseline = "top";
-        vCtx.fillText(`MACD: ${lastM.toFixed(4)} | SIGNAL: ${lastS.toFixed(4)}`, 10, yStart + 5);
-        // Right side value too
+        vCtx.fillStyle = "#38bdf8";
+        vCtx.fillText(`MACD: ${lastM != null ? lastM.toFixed(4) : "0"}`, 10, yStart + 6);
+        vCtx.fillStyle = "#f59e0b";
+        vCtx.fillText(`Signal: ${lastS != null ? lastS.toFixed(4) : "0"}`, 120, yStart + 6);
+        vCtx.fillStyle = lastH >= 0 ? "#22c55e" : "#ef4444";
+        vCtx.fillText(`Hist: ${lastH != null ? (lastH >= 0 ? "+" : "") + lastH.toFixed(4) : "0"}`, 230, yStart + 6);
+
         vCtx.textAlign = "right";
-        vCtx.fillText(`MACD: ${lastM.toFixed(4)}`, PW - 4, yStart + 5);
+        vCtx.fillStyle = "#38bdf8";
+        vCtx.fillText(`MACD: ${lastM != null ? lastM.toFixed(4) : "0"}`, PW - 6, yStart + 6);
 
       } else if (subType === "CVD") {
         const cvd = calcCVD(candles);
@@ -3124,21 +3179,49 @@ function drawChart() {
         let minCvd = Infinity, maxCvd = -Infinity;
         for (let i = 0; i < vis.length; i++) {
           const val = cvd[s + i];
-          if (val < minCvd) minCvd = val;
-          if (val > maxCvd) maxCvd = val;
+          if (val != null) {
+            if (val < minCvd) minCvd = val;
+            if (val > maxCvd) maxCvd = val;
+          }
         }
+        if (!Number.isFinite(minCvd)) { minCvd = -100; maxCvd = 100; }
+        const pad = Math.max(10, (maxCvd - minCvd) * 0.1);
+        minCvd -= pad;
+        maxCvd += pad;
         const cvdRange = maxCvd - minCvd || 1;
-        const yZero = yStart + indicatorSubH - ((0 - minCvd) / cvdRange) * (indicatorSubH - 25) - 15;
+
+        const padTop = 22;
+        const padBot = 8;
+        const plotH = indicatorSubH - padTop - padBot;
+        const yZero = yStart + padTop + plotH * (1 - (0 - minCvd) / cvdRange);
 
         // Zero reference line
         vCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+        vCtx.setLineDash([3, 3]);
         vCtx.lineWidth = 1;
         vCtx.beginPath();
         vCtx.moveTo(0, yZero);
         vCtx.lineTo(PW, yZero);
         vCtx.stroke();
+        vCtx.setLineDash([]);
 
-        // Curve
+        // Area fill
+        vCtx.beginPath();
+        let firstX = 0, lastX = 0;
+        for (let i = 0; i < vis.length; i++) {
+          const val = cvd[s + i];
+          const x = (s + i - viewStart) * candleW + candleW / 2;
+          const y = yStart + padTop + plotH * (1 - (val - minCvd) / cvdRange);
+          if (i === 0) { firstX = x; vCtx.moveTo(x, yZero); vCtx.lineTo(x, y); }
+          else vCtx.lineTo(x, y);
+          lastX = x;
+        }
+        vCtx.lineTo(lastX, yZero);
+        vCtx.closePath();
+        vCtx.fillStyle = lastVal >= 0 ? "rgba(34, 197, 94, 0.12)" : "rgba(239, 68, 68, 0.12)";
+        vCtx.fill();
+
+        // Stroke line
         vCtx.beginPath();
         vCtx.strokeStyle = "#ec4899"; // CVD Pink
         vCtx.lineWidth = 2;
@@ -3146,21 +3229,20 @@ function drawChart() {
           const val = cvd[s + i];
           if (val != null) {
             const x = (s + i - viewStart) * candleW + candleW / 2;
-            const y = yStart + indicatorSubH - ((val - minCvd) / cvdRange) * (indicatorSubH - 25) - 15;
+            const y = yStart + padTop + plotH * (1 - (val - minCvd) / cvdRange);
             if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
           }
         }
         vCtx.stroke();
 
-        // Big clear label
         vCtx.fillStyle = "#ec4899";
         vCtx.font = "bold 11px Inter";
         vCtx.textAlign = "left";
         vCtx.textBaseline = "top";
-        vCtx.fillText(`CVD: ${fV(lastVal)}`, 10, yStart + 5);
-        // Right side value too
+        const sign = lastVal >= 0 ? "+" : "";
+        vCtx.fillText(`CVD (Volume Delta): ${sign}${fV(lastVal)}`, 10, yStart + 6);
         vCtx.textAlign = "right";
-        vCtx.fillText(`CVD: ${fV(lastVal)}`, PW - 4, yStart + 5);
+        vCtx.fillText(`CVD: ${sign}${fV(lastVal)}`, PW - 6, yStart + 6);
 
       } else if (subType === "OI") {
         const oiData = calcOI(candles);
@@ -3174,32 +3256,56 @@ function drawChart() {
           }
         }
         if (!Number.isFinite(minOi) || minOi === maxOi) { minOi = 0; maxOi = 100; }
+        const pad = Math.max(1, (maxOi - minOi) * 0.1);
+        minOi -= pad;
+        maxOi += pad;
         const oiRange = maxOi - minOi || 1;
 
-        // Draw OI Line
+        const padTop = 22;
+        const padBot = 8;
+        const plotH = indicatorSubH - padTop - padBot;
+
+        // Area gradient fill under OI curve
         vCtx.beginPath();
-        vCtx.strokeStyle = "#38bdf8"; // Sky blue / Cyan for Open Interest
+        let firstX = 0, lastX = 0;
+        for (let i = 0; i < vis.length; i++) {
+          const val = oiData[s + i];
+          const x = (s + i - viewStart) * candleW + candleW / 2;
+          const y = yStart + padTop + plotH * (1 - (val - minOi) / oiRange);
+          if (i === 0) { firstX = x; vCtx.moveTo(x, yStart + indicatorSubH); vCtx.lineTo(x, y); }
+          else vCtx.lineTo(x, y);
+          lastX = x;
+        }
+        vCtx.lineTo(lastX, yStart + indicatorSubH);
+        vCtx.closePath();
+        const oiGrad = vCtx.createLinearGradient(0, yStart + padTop, 0, yStart + indicatorSubH);
+        oiGrad.addColorStop(0, "rgba(56, 189, 248, 0.22)");
+        oiGrad.addColorStop(1, "rgba(56, 189, 248, 0.01)");
+        vCtx.fillStyle = oiGrad;
+        vCtx.fill();
+
+        // Stroke line
+        vCtx.beginPath();
+        vCtx.strokeStyle = "#38bdf8"; // Sky blue
         vCtx.lineWidth = 2;
         for (let i = 0; i < vis.length; i++) {
           const val = oiData[s + i];
           if (val != null) {
             const x = (s + i - viewStart) * candleW + candleW / 2;
-            const y = yStart + indicatorSubH - ((val - minOi) / oiRange) * (indicatorSubH - 25) - 15;
+            const y = yStart + padTop + plotH * (1 - (val - minOi) / oiRange);
             if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
           }
         }
         vCtx.stroke();
 
-        // Big clear label
         vCtx.fillStyle = "#38bdf8";
         vCtx.font = "bold 11px Inter";
         vCtx.textAlign = "left";
         vCtx.textBaseline = "top";
-        const dispVal = lastVal != null ? (lastVal >= 1000 ? fV(lastVal) : lastVal.toFixed(2) + "%") : "N/A";
-        vCtx.fillText(`OI (Open Interest): ${dispVal}`, 10, yStart + 5);
-        // Right side value too
+        const dispVal = lastVal != null ? (lastVal >= 1000 ? "$" + fV(lastVal) : lastVal.toFixed(2) + "%") : "N/A";
+        vCtx.fillText(`OI (Open Interest): ${dispVal}`, 10, yStart + 6);
         vCtx.textAlign = "right";
-        vCtx.fillText(`OI: ${dispVal}`, PW - 4, yStart + 5);
+        vCtx.fillText(`OI: ${dispVal}`, PW - 6, yStart + 6);
       }
 
       vCtx.restore(); // Important: Restore state after clipping!
