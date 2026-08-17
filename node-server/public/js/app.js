@@ -5378,6 +5378,11 @@ document.addEventListener("DOMContentLoaded", () => {
         profileUpgradeBanner.style.setProperty("display", isPro ? "none" : "flex", "important");
       }
 
+      const logoProBadge = $("logo-pro-badge") || document.querySelector(".logo-rest");
+      if (logoProBadge) {
+        logoProBadge.style.display = isPro ? "inline" : "none";
+      }
+
       if (tgBotStatusText) {
         if (user.telegramLinked) {
           tgBotStatusText.textContent = "✅ Подключен (@ObsidianScreenerBot)";
@@ -5403,6 +5408,11 @@ document.addEventListener("DOMContentLoaded", () => {
         applyAccountPreferences(user.preferences);
       } else if (authToken || localStorage.getItem("obsidian_auth_token")) {
         syncPreferencesToServer();
+      }
+    } else {
+      const logoProBadge = $("logo-pro-badge") || document.querySelector(".logo-rest");
+      if (logoProBadge) {
+        logoProBadge.style.display = "none";
       }
     }
   }
