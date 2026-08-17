@@ -30,7 +30,7 @@
   function swings(candles, windowSize) {
     const w = windowSize || 3;
     const out = [];
-    const start = Math.max(w, candles.length - 360);
+    const start = Math.max(w, candles.length - 500);
     for (let i = start; i < candles.length - w; i++) {
       let high = true, low = true;
       for (let j = i - w; j <= i + w; j++) {
@@ -86,8 +86,8 @@
     if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const clusterTol = Math.max(0.001, Math.min(0.005, (range / lastPrice) * 0.3));
-    const epsilon = range * 0.035;
+    const clusterTol = Math.max(0.0008, Math.min(0.0035, (range / lastPrice) * 0.25));
+    const epsilon = Math.min(range * 0.025, lastPrice * 0.0005);
     const points = swings(candles, 3);
     const minT = Math.max(1, Number(minTouches) || 1);
     const candidates = [];
@@ -100,7 +100,7 @@
         if (resistance ? cluster.price <= lastPrice : cluster.price >= lastPrice) continue;
         if (!isLevelClean(candles, cluster.price, first, resistance, epsilon)) continue;
         const distanceAtr = Math.abs(cluster.price - lastPrice) / range;
-        if (distanceAtr > 12) continue;
+        if (distanceAtr > 15) continue;
         candidates.push({
           price: cluster.price,
           endPrice: cluster.price,
@@ -122,7 +122,7 @@
     if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const epsilon = range * 0.035;
+    const epsilon = Math.min(range * 0.025, lastPrice * 0.0005);
     const minCascadeCount = Math.max(1, Number(minCount) || 1);
     const allSwings = swings(candles, 3);
     const upCandidates = [];
@@ -134,7 +134,7 @@
         if (!isLevelClean(candles, sw.price, sw.idx, true, epsilon)) continue;
 
         const touchIndices = [sw.idx];
-        const touchTol = range * 0.18;
+        const touchTol = Math.min(range * 0.12, lastPrice * 0.002);
         for (let i = sw.idx + 2; i < candles.length - 1; i++) {
           if (Math.abs(candles[i].h - sw.price) <= touchTol && i - touchIndices[touchIndices.length - 1] > 1) {
             touchIndices.push(i);
@@ -155,7 +155,7 @@
         if (!isLevelClean(candles, sw.price, sw.idx, false, epsilon)) continue;
 
         const touchIndices = [sw.idx];
-        const touchTol = range * 0.18;
+        const touchTol = Math.min(range * 0.12, lastPrice * 0.002);
         for (let i = sw.idx + 2; i < candles.length - 1; i++) {
           if (Math.abs(candles[i].l - sw.price) <= touchTol && i - touchIndices[touchIndices.length - 1] > 1) {
             touchIndices.push(i);
@@ -177,8 +177,9 @@
     function dedupeLevels(list, isUp) {
       list.sort((a, b) => b.touches - a.touches || a.age - b.age);
       const kept = [];
+      const minSpacing = Math.min(range * 0.08, lastPrice * 0.0015);
       for (const item of list) {
-        if (!kept.some(other => Math.abs(other.price - item.price) <= range * 0.12)) {
+        if (!kept.some(other => Math.abs(other.price - item.price) <= minSpacing)) {
           kept.push(item);
         }
       }
@@ -192,10 +193,10 @@
 
     const out = [];
     if (dedupedUp.length >= minCascadeCount) {
-      out.push(...dedupedUp.slice(0, 6));
+      out.push(...dedupedUp.slice(0, 10));
     }
     if (dedupedDown.length >= minCascadeCount) {
-      out.push(...dedupedDown.slice(0, 6));
+      out.push(...dedupedDown.slice(0, 10));
     }
 
     return out;
