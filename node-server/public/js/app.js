@@ -15345,20 +15345,55 @@ function initNotificationsUI() {
     }
   }
 
+  function openFormationAlertsModal() {
+    loadFormationAlertSettings();
+    syncFormationUI();
+    const overlay = $("modal-formation-alerts-overlay");
+    if (overlay) overlay.style.display = "flex";
+  }
+
+  function closeFormationAlertsModal() {
+    const overlay = $("modal-formation-alerts-overlay");
+    if (overlay) overlay.style.display = "none";
+  }
+
+  window.openFormationAlertsModal = openFormationAlertsModal;
+  window.closeFormationAlertsModal = closeFormationAlertsModal;
+
+  // Open modal triggers
+  $("btn-open-formation-alerts")?.addEventListener("click", openFormationAlertsModal);
+  $("btn-open-fmt-from-settings")?.addEventListener("click", () => {
+    if (typeof closeSettingsModal === "function") closeSettingsModal();
+    openFormationAlertsModal();
+  });
+
+  // Close modal triggers
+  $("fmt-modal-close")?.addEventListener("click", closeFormationAlertsModal);
+  $("modal-formation-alerts-overlay")?.addEventListener("click", (e) => {
+    if (e.target.id === "modal-formation-alerts-overlay") closeFormationAlertsModal();
+  });
+
   function syncFormationUI() {
     const s = currentFormationAlertSettings;
 
     // 1. General Alert Settings
     const setSound = $("set-sound-enabled");
     const setToast = $("set-toast-enabled");
-    const setTg = $("set-fmt-tg-enabled");
+    const setTgModal = $("fmt-modal-tg-enabled");
+    const setSoundModal = $("fmt-modal-sound-enabled");
+    const setToastModal = $("fmt-modal-toast-enabled");
+
     if (setSound) setSound.checked = !!s.soundEnabled;
     if (setToast) setToast.checked = !!s.toastEnabled;
-    if (setTg) setTg.checked = !!s.tgEnabled;
+    if (setTgModal) setTgModal.checked = !!s.tgEnabled;
+    if (setSoundModal) setSoundModal.checked = !!s.soundEnabled;
+    if (setToastModal) setToastModal.checked = !!s.toastEnabled;
 
-    if (setSound) setSound.onchange = () => { s.soundEnabled = setSound.checked; };
-    if (setToast) setToast.onchange = () => { s.toastEnabled = setToast.checked; };
-    if (setTg) setTg.onchange = () => { s.tgEnabled = setTg.checked; };
+    if (setSound) setSound.onchange = () => { s.soundEnabled = setSound.checked; if (setSoundModal) setSoundModal.checked = setSound.checked; };
+    if (setToast) setToast.onchange = () => { s.toastEnabled = setToast.checked; if (setToastModal) setToastModal.checked = setToast.checked; };
+    if (setTgModal) setTgModal.onchange = () => { s.tgEnabled = setTgModal.checked; };
+    if (setSoundModal) setSoundModal.onchange = () => { s.soundEnabled = setSoundModal.checked; if (setSound) setSound.checked = setSoundModal.checked; };
+    if (setToastModal) setToastModal.onchange = () => { s.toastEnabled = setToastModal.checked; if (setToast) setToast.checked = setToastModal.checked; };
 
     setupButtonGroup("fmt-cooldown-group", s.cooldownSeconds, val => { s.cooldownSeconds = parseInt(val, 10); });
     setupButtonGroup("fmt-minvol-group", s.minVolume, val => { s.minVolume = parseFloat(val); });
@@ -15424,12 +15459,30 @@ function initNotificationsUI() {
   syncFormationUI();
 
   // Test Sound & Alert Button
-  $("btn-test-sound")?.addEventListener("click", () => {
+  function triggerTestAlert() {
     playAlertSound("chime");
     showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
     if (currentFormationAlertSettings.tgEnabled) {
       sendTelegramAlert("🔔 <b>Obsidian Formation & Price Alert</b>\n\nТестовый сигнал из скринера получен успешно!");
     }
+  }
+
+  $("btn-test-sound")?.addEventListener("click", triggerTestAlert);
+  $("btn-test-sound-fmt")?.addEventListener("click", triggerTestAlert);
+
+  // Formation Modal Save button
+  $("btn-save-formation-alerts")?.addEventListener("click", () => {
+    saveFormationAlertSettings(currentFormationAlertSettings);
+    closeFormationAlertsModal();
+    showToast({ title: "Настройки сохранены", message: "Параметры сигналов и алертов формаций успешно обновлены", type: "success" });
+  });
+
+  // Formation Modal Reset button
+  $("btn-reset-formation-alerts")?.addEventListener("click", () => {
+    currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+    saveFormationAlertSettings(currentFormationAlertSettings);
+    syncFormationUI();
+    showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
   });
 
   // Settings Apply button hook
@@ -15437,7 +15490,7 @@ function initNotificationsUI() {
   if (applyBtn) {
     applyBtn.onclick = () => {
       saveFormationAlertSettings(currentFormationAlertSettings);
-      showToast({ title: "Настройки сохранены", message: "Параметры уведомлений по формациям успешно обновлены", type: "success" });
+      showToast({ title: "Настройки сохранены", message: "Параметры уведомлений успешно применены", type: "success" });
       if (typeof closeSettingsModal === "function") closeSettingsModal();
     };
   }
