@@ -2326,7 +2326,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const y = toY(lv.price);
       if (y < TOP || y > TOP + PH) continue;
 
-      const startX = (typeof lv.swingIdx === 'number') ? Math.max(0, getCandleX(lv.swingIdx)) : 0;
+      const startIdx = lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0);
+      const startX = Math.max(0, getCandleX(startIdx));
 
       ctx.save();
       ctx.setLineDash([]);
@@ -2341,7 +2342,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if (chartFovShowTouches) {
         ctx.fillStyle = neutralTouchColor;
         const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
-        for (const ti of touchesArr) {
+        for (let i = 0; i < touchesArr.length; i++) {
+          const origIdx = touchesArr[i];
+          const time = lv.touchTimes ? lv.touchTimes[i] : null;
+          const ti = time ? getIdxFromTime(time, candles) : origIdx;
           if (typeof ti !== 'number') continue;
           const tx = getCandleX(ti);
           if (tx >= 0 && tx <= PW) {
@@ -2376,7 +2380,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const y = toY(lv.price);
       if (y < TOP || y > TOP + PH) continue;
 
-      const startX = (typeof lv.swingIdx === 'number') ? Math.max(0, getCandleX(lv.swingIdx)) : 0;
+      const startIdx = lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0);
+      const startX = Math.max(0, getCandleX(startIdx));
 
       ctx.save();
       ctx.setLineDash([]);
@@ -2390,7 +2395,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if (chartFovShowTouches) {
         ctx.fillStyle = neutralTouchColor;
         const touchesArr = Array.isArray(lv.touchIndices) ? lv.touchIndices : [lv.swingIdx];
-        for (const ti of touchesArr) {
+        for (let i = 0; i < touchesArr.length; i++) {
+          const origIdx = touchesArr[i];
+          const time = lv.touchTimes ? lv.touchTimes[i] : null;
+          const ti = time ? getIdxFromTime(time, candles) : origIdx;
           if (typeof ti !== 'number') continue;
           const tx = getCandleX(ti);
           if (tx >= 0 && tx <= PW) {
@@ -2415,17 +2423,13 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
     const minTouches = Math.max(1, chartFovCascadesMin || 2);
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= minTouches);
 
-    if (chartFovNearest && trendlines.length > 0) {
-      trendlines.sort((a, b) => Math.abs((a.endPrice || lastPrice) - lastPrice) - Math.abs((b.endPrice || lastPrice) - lastPrice));
-      trendlines = trendlines.slice(0, 3);
-    }
-
     for (const tl of trendlines) {
+      const idx1 = tl.p1.t ? getIdxFromTime(tl.p1.t, candles) : tl.p1.idx;
       const extIdx = N - 1 + 8;
-      const x1 = getCandleX(tl.p1.idx);
+      const x1 = getCandleX(idx1);
       const x2 = Math.min(PW, getCandleX(extIdx));
       const y1 = toY(tl.p1.price);
-      const y2 = toY(tl.p1.price + tl.slope * (extIdx - tl.p1.idx));
+      const y2 = toY(tl.p1.price + tl.slope * (extIdx - idx1));
       if ((x1 < 0 && x2 < 0) || (x1 > PW && x2 > PW)) continue;
       ctx.save();
       ctx.setLineDash([]);
@@ -2437,9 +2441,12 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
       if (chartFovShowTouches && tl.swingIndices) {
         ctx.fillStyle = neutralTouchColor;
-        for (const ti of tl.swingIndices) {
+        for (let i = 0; i < tl.swingIndices.length; i++) {
+          const origIdx = tl.swingIndices[i];
+          const time = tl.touchTimes ? tl.touchTimes[i] : null;
+          const ti = time ? getIdxFromTime(time, candles) : origIdx;
           const tx = getCandleX(ti);
-          const ty = toY(tl.p1.price + tl.slope * (ti - tl.p1.idx));
+          const ty = toY(tl.p1.price + tl.slope * (ti - idx1));
           if (tx < 0 || tx > PW) continue;
           ctx.beginPath();
           ctx.arc(tx, ty, 2.5, 0, Math.PI * 2);

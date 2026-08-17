@@ -243,6 +243,16 @@
     return out;
   }
 
+  function linesCross(l1, l2, startK, endK) {
+    const p1Start = l1.p1.price + l1.slope * (startK - l1.p1.idx);
+    const p2Start = l2.p1.price + l2.slope * (startK - l2.p1.idx);
+    const p1End   = l1.p1.price + l1.slope * (endK - l1.p1.idx);
+    const p2End   = l2.p1.price + l2.slope * (endK - l2.p1.idx);
+    const diffStart = p1Start - p2Start;
+    const diffEnd   = p1End - p2End;
+    return (diffStart * diffEnd) < 0;
+  }
+
   function detectTrendlines(raw, minTouches) {
     const candles = normalize(raw);
     if (candles.length < 30) return [];
@@ -252,10 +262,10 @@
     const crossBodyTol = Math.min(range * 0.06, lastPrice * 0.0010);
     const crossWickTol = Math.min(range * 0.14, lastPrice * 0.0022);
     const minimum = Math.max(2, Number(minTouches) || 2);
+    const N = candles.length;
 
     function collectForSide(points, resistance) {
       const candidates = [];
-      const N = candles.length;
       const pts = points.slice(-120);
 
       for (let i = 0; i < pts.length - 1; i++) {
@@ -265,10 +275,8 @@
           if (span < 12) continue;
 
           const slope = (p2.price - p1.price) / span;
-          // Disallow steep vertical cliffs
           if (Math.abs(slope) > range * 0.22 || Math.abs(slope) < range * 0.0003) continue;
 
-          // Check that line is unbroken by candle closes and significant wick breaks
           let crossed = false;
           for (let k = p1.idx; k < N; k++) {
             const line = p1.price + slope * (k - p1.idx);
@@ -282,7 +290,6 @@
           }
           if (crossed) continue;
 
-          // Count distinct bounces with wave departure
           const minDeparture = range * 0.20;
           const touches = [p1.idx];
           let departed = false;
@@ -308,7 +315,6 @@
 
           if (touches.length < minimum) continue;
 
-          // Density / distribution validation: avoid empty gaps across hundreds of candles
           if (touches.length === 2 && span > 130) continue;
           let maxGap = 0;
           for (let t = 1; t < touches.length; t++) {
@@ -327,24 +333,50 @@
           if (distanceAtr > 4.0) continue;
 
           candidates.push({
-            p1, p2, slope, endPrice, direction: resistance ? "up" : "down",
-            swingIndices: touches, touches: touches.length, isTrendline: true,
+            p1: { idx: p1.idx, price: p1.price, t: candles[p1.idx]?.t },
+            p2: { idx: p2.idx, price: p2.price, t: candles[p2.idx]?.t },
+            slope,
+            endPrice,
+            direction: resistance ? "up" : "down",
+            swingIndices: touches,
+            touchTimes: touches.map(idx => candles[idx]?.t),
+            touches: touches.length,
+            isTrendline: true,
             span: N - 1 - p1.idx,
             lastTouchAge,
-            strength: touches.length * 12 + (N - 1 - p1.idx) / 15 - distanceAtr * 2.5 - (lastTouchAge / 12),
+            strength: touches.length * 14 + (N - 1 - p1.idx) / 15 - distanceAtr * 3.0 - (lastTouchAge / 12),
           });
         }
       }
 
       candidates.sort((a, b) => b.strength - a.strength);
+
+      // Select up to 2 cleanest NON-INTERSECTING trendlines
       const kept = [];
-      const minSpacing = Math.min(range * 0.25, lastPrice * 0.005);
-      for (const item of candidates) {
-        if (!kept.some(other => Math.abs(other.endPrice - item.endPrice) <= minSpacing || Math.abs(other.slope - item.slope) <= range * 0.012)) {
-          kept.push(item);
-        }
+      const minSpacing = Math.min(range * 0.20, lastPrice * 0.004);
+
+      for (const cand of candidates) {
         if (kept.length >= 2) break;
+
+        let conflict = false;
+        for (const existing of kept) {
+          if (Math.abs(existing.endPrice - cand.endPrice) <= minSpacing && Math.abs(existing.slope - cand.slope) <= range * 0.012) {
+            conflict = true;
+            break;
+          }
+          const startK = Math.max(existing.p1.idx, cand.p1.idx);
+          const endK = N - 1 + 8;
+          if (startK < endK && linesCross(existing, cand, startK, endK)) {
+            conflict = true;
+            break;
+          }
+        }
+
+        if (!conflict) {
+          kept.push(cand);
+        }
       }
+
       return kept;
     }
 
@@ -352,13 +384,7 @@
     const topResistances = collectForSide(allSwings.filter(item => item.type === "high"), true);
     const bottomSupports = collectForSide(allSwings.filter(item => item.type === "low"), false);
 
-    const result = [];
-    if (topResistances.length > 0) result.push(topResistances[0]);
-    if (bottomSupports.length > 0) result.push(bottomSupports[0]);
-    if (topResistances.length > 1 && result.length < 3) result.push(topResistances[1]);
-    if (bottomSupports.length > 1 && result.length < 4) result.push(bottomSupports[1]);
-
-    return result;
+    return [...topResistances, ...bottomSupports];
   }
 
   function detectRetestSet(raw, approaching) {
