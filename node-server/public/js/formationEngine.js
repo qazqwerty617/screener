@@ -389,54 +389,148 @@
 
   function detectRetestSet(raw, approaching) {
     const candles = normalize(raw);
-    if (candles.length < 45) return [];
+    if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const zone = range * 0.16;
-    const breakBuffer = range * 0.12;
+    const touchTol = Math.min(range * 0.14, lastPrice * 0.0022);
+    const breakBuffer = Math.min(range * 0.08, lastPrice * 0.0012);
+    const holdBuffer = Math.min(range * 0.05, lastPrice * 0.0008);
+    const minDeparture = range * 0.30;
     const candidates = [];
     const points = swings(candles, 3);
+    const N = candles.length;
 
     for (const bullish of [true, false]) {
-      const clusters = makeClusters(points.filter(item => item.type === (bullish ? "high" : "low")), Math.max(0.0008, range / lastPrice * 0.3), bullish);
-      for (const cluster of clusters) {
-        if (cluster.touches < 2) continue;
-        const level = cluster.price;
-        const lastTouch = Math.max(...cluster.swingIndices);
+      const sideSwings = points.filter(item => item.type === (bullish ? "high" : "low"));
+
+      for (const sw of sideSwings) {
+        const origIdx = sw.idx;
+        const level = sw.price;
+        if (N - 1 - origIdx < 10) continue;
+
+        // 1. Before breakout: price must NEVER cross to the other side of level
         let breakIdx = -1;
-        for (let i = lastTouch + 1; i < candles.length - 2; i++) {
-          if (bullish ? candles[i].c > level + breakBuffer : candles[i].c < level - breakBuffer) { breakIdx = i; break; }
+        let preFailed = false;
+
+        for (let i = origIdx + 1; i < N - 1; i++) {
+          const c = candles[i];
+          if (bullish) {
+            if (c.c > level + breakBuffer) {
+              breakIdx = i;
+              break;
+            }
+          } else {
+            if (c.c < level - breakBuffer) {
+              breakIdx = i;
+              break;
+            }
+          }
         }
-        if (breakIdx < 0) continue;
-        let departed = false, touchIdx = -1, failed = false;
-        for (let i = breakIdx + 1; i < candles.length - 1 && i <= breakIdx + 45; i++) {
-          const candle = candles[i];
-          if (bullish ? candle.c < level - zone : candle.c > level + zone) { failed = true; break; }
-          if (bullish ? candle.h >= level + range * 0.65 : candle.l <= level - range * 0.65) departed = true;
-          if (!departed || i < breakIdx + 2) continue;
-          const touched = bullish ? candle.l <= level + zone : candle.h >= level - zone;
-          const held = bullish ? candle.c >= level : candle.c <= level;
-          if (touched && held) { touchIdx = i; break; }
+
+        if (breakIdx < 0 || breakIdx - origIdx < 3) continue;
+
+        // 2. Breakout departure: price must move away from the level by at least minDeparture
+        let departed = false;
+        let departIdx = -1;
+        for (let i = breakIdx; i < Math.min(N - 1, breakIdx + 45); i++) {
+          const c = candles[i];
+          if (bullish ? (c.h >= level + minDeparture) : (c.l <= level - minDeparture)) {
+            departed = true;
+            departIdx = i;
+            break;
+          }
+          if (bullish ? (c.c < level - holdBuffer) : (c.c > level + holdBuffer)) {
+            break;
+          }
         }
-        if (failed) continue;
+
+        if (!departed || departIdx < 0) continue;
+
         if (approaching) {
-          if (touchIdx >= 0 || !departed) continue;
-          const distance = bullish ? lastPrice - level : level - lastPrice;
-          if (distance <= 0 || distance > range * 0.8) continue;
-          candidates.push({ price: level, direction: bullish ? "up" : "down", swingIdx: Math.min(...cluster.swingIndices), breakIdx, touches: cluster.touches, isApproachingRetest: true, outcome: "approaching", strength: cluster.touches * 5 - distance / range });
+          const dist = bullish ? (lastPrice - level) : (level - lastPrice);
+          if (dist > 0 && dist <= range * 0.40) {
+            candidates.push({
+              price: level,
+              direction: bullish ? "up" : "down",
+              swingIdx: origIdx,
+              swingTime: candles[origIdx]?.t,
+              breakIdx,
+              touches: 1,
+              isApproachingRetest: true,
+              outcome: "approaching",
+              strength: 10 - (dist / range) * 5 - (N - 1 - breakIdx) / 20,
+            });
+          }
           continue;
         }
-        if (touchIdx < 0 || candles.length - 1 - touchIdx > 20) continue;
-        let held = true;
-        for (let i = touchIdx; i < candles.length - 1; i++) {
-          if (bullish ? candles[i].c < level - zone : candles[i].c > level + zone) { held = false; break; }
+
+        // 3. Retest touch & hold: price returns back to touch the level from the new side
+        let touchIdx = -1;
+        let retestFailed = false;
+
+        for (let i = departIdx + 1; i < N; i++) {
+          const c = candles[i];
+          const touchesLevel = bullish ? (c.l <= level + touchTol) : (c.h >= level - touchTol);
+          const holdsLevel   = bullish ? (c.c >= level - holdBuffer) : (c.c <= level + holdBuffer);
+
+          if (touchesLevel && holdsLevel) {
+            touchIdx = i;
+            break;
+          }
+
+          if (bullish ? (c.c < level - holdBuffer) : (c.c > level + holdBuffer)) {
+            retestFailed = true;
+            break;
+          }
         }
-        if (!held) continue;
-        candidates.push({ price: level, direction: bullish ? "up" : "down", swingIdx: Math.min(...cluster.swingIndices), breakIdx, touchIdx, touches: cluster.touches, isRetest: true, outcome: "confirmed", strength: cluster.touches * 7 - (candles.length - 1 - touchIdx) / 4 });
+
+        if (retestFailed || touchIdx < 0) continue;
+
+        // 4. Must hold continuously from touchIdx to current candle (NOW)
+        let heldTillNow = true;
+        for (let i = touchIdx; i < N; i++) {
+          const c = candles[i];
+          if (bullish ? (c.c < level - holdBuffer) : (c.c > level + holdBuffer)) {
+            heldTillNow = false;
+            break;
+          }
+        }
+        if (!heldTillNow) continue;
+
+        // 5. Current price must be on the right side and retest must be recent
+        const lastTouchAge = N - 1 - touchIdx;
+        if (lastTouchAge > 35) continue;
+
+        if (bullish ? (lastPrice < level - holdBuffer) : (lastPrice > level + holdBuffer)) continue;
+
+        candidates.push({
+          price: level,
+          direction: bullish ? "up" : "down",
+          swingIdx: origIdx,
+          swingTime: candles[origIdx]?.t,
+          touchIdx,
+          touchTime: candles[touchIdx]?.t,
+          touchIndices: [origIdx, touchIdx],
+          touchTimes: [candles[origIdx]?.t, candles[touchIdx]?.t],
+          touches: 2,
+          isRetest: true,
+          outcome: "confirmed",
+          lastTouchAge,
+          strength: 20 - (lastTouchAge / 5) + (breakIdx - origIdx) / 10,
+        });
       }
     }
+
     candidates.sort((a, b) => b.strength - a.strength);
-    return candidates.slice(0, approaching ? 3 : 4);
+    const kept = [];
+    const minSpacing = Math.min(range * 0.20, lastPrice * 0.004);
+    for (const cand of candidates) {
+      if (!kept.some(other => Math.abs(other.price - cand.price) <= minSpacing)) {
+        kept.push(cand);
+      }
+      if (kept.length >= 2) break;
+    }
+    return kept;
   }
 
   return {

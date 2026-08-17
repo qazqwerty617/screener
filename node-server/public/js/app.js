@@ -2479,7 +2479,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const y = toY(rt.price);
       if (y < TOP || y > TOP + PH) continue;
 
-      const startX = (typeof rt.swingIdx === 'number') ? Math.max(0, getCandleX(rt.swingIdx)) : 0;
+      const startIdx = rt.swingTime ? getIdxFromTime(rt.swingTime, candles) : ((typeof rt.swingIdx === 'number') ? rt.swingIdx : 0);
+      const startX = Math.max(0, getCandleX(startIdx));
 
       ctx.save();
       ctx.setLineDash([]);
@@ -2489,6 +2490,23 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.moveTo(startX, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
+
+      if (chartFovShowTouches) {
+        ctx.fillStyle = neutralTouchColor;
+        const touchesArr = Array.isArray(rt.touchIndices) ? rt.touchIndices : [rt.swingIdx, rt.touchIdx];
+        for (let i = 0; i < touchesArr.length; i++) {
+          const origIdx = touchesArr[i];
+          if (typeof origIdx !== 'number') continue;
+          const time = rt.touchTimes ? rt.touchTimes[i] : null;
+          const ti = time ? getIdxFromTime(time, candles) : origIdx;
+          const tx = getCandleX(ti);
+          if (tx >= 0 && tx <= PW) {
+            ctx.beginPath();
+            ctx.arc(tx, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
       ctx.restore();
 
       scaleBadges.push({ price: rt.price, y });
