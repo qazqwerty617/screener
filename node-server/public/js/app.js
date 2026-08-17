@@ -15194,80 +15194,272 @@ function copyPayField(elementId) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// FORMATION ALERTS & NOTIFICATIONS CONTROLLER
+// ══════════════════════════════════════════════════════════════════════════
+const DEFAULT_FORMATION_ALERT_SETTINGS = {
+  soundEnabled: true,
+  toastEnabled: true,
+  tgEnabled: true,
+  cooldownSeconds: 300,
+  minVolume: 0,
+  trendline: {
+    enabled: true,
+    timeframes: ["5m", "15m", "1h"],
+    minTouches: 3,
+    distancePct: 0.3,
+    direction: "all" // "all" | "down" (support/long) | "up" (resistance/short)
+  },
+  level: {
+    enabled: true,
+    timeframes: ["5m", "15m", "1h"],
+    minTouches: 3,
+    distancePct: 0.3,
+    direction: "all" // "all" | "support" | "resistance"
+  },
+  retest: {
+    enabled: true,
+    timeframes: ["5m", "15m", "1h"],
+    direction: "all", // "all" | "up" | "down"
+    stage: "confirmed", // "confirmed" | "approaching" | "both"
+    maxAgeCandles: 20
+  }
+};
+
+let currentFormationAlertSettings = { ...DEFAULT_FORMATION_ALERT_SETTINGS };
+
+function loadFormationAlertSettings() {
+  try {
+    const raw = localStorage.getItem("obsidian_formation_alert_settings");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      currentFormationAlertSettings = {
+        ...DEFAULT_FORMATION_ALERT_SETTINGS,
+        ...parsed,
+        trendline: { ...DEFAULT_FORMATION_ALERT_SETTINGS.trendline, ...(parsed.trendline || {}) },
+        level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(parsed.level || {}) },
+        retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(parsed.retest || {}) }
+      };
+    }
+  } catch (_) {
+    currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+  }
+  window.formationAlertSettings = currentFormationAlertSettings;
+  return currentFormationAlertSettings;
+}
+
+function saveFormationAlertSettings(settings) {
+  currentFormationAlertSettings = settings || currentFormationAlertSettings;
+  localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
+  window.formationAlertSettings = currentFormationAlertSettings;
+}
+
 function initNotificationsUI() {
   loadPriceAlerts();
-  
-  const btnConnectTg = $("btn-connect-tg-settings");
-  const tgTitle = $("tg-settings-status-title");
-  const tgSub = $("tg-settings-status-sub");
+  loadFormationAlertSettings();
 
-  function updateTgSettingsUI() {
-    const user = window.currentUser;
-    if (user && user.telegramLinked) {
-      if (tgTitle) tgTitle.textContent = `✅ Telegram подключен (${user.telegramUsername || user.username || "Подключен"})`;
-      if (tgSub) tgSub.textContent = "Уведомления о ценовых алертах активны в боте";
-      if (btnConnectTg) btnConnectTg.textContent = "Переподключить TG";
-      if (user.telegramChatId) localStorage.setItem("obsidian_tg_chat_id", user.telegramChatId);
-    } else {
-      if (tgTitle) tgTitle.textContent = "Подключение Telegram";
-      if (tgSub) tgSub.textContent = "Нажмите кнопку для привязки Telegram-бота";
-      if (btnConnectTg) btnConnectTg.textContent = "Подключить Telegram";
+  // Helper: setup single-select button groups
+  function setupButtonGroup(containerId, activeVal, onSelect) {
+    const container = $(containerId);
+    if (!container) return;
+    const buttons = container.querySelectorAll("button.fmt-btn[data-val]");
+    buttons.forEach(btn => {
+      const val = btn.dataset.val;
+      btn.classList.toggle("active", String(val) === String(activeVal));
+      btn.onclick = () => {
+        buttons.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        onSelect(val);
+      };
+    });
+  }
+
+  // Helper: setup multi-select timeframe button groups
+  function setupTfGroup(containerId, activeTfs, onToggle) {
+    const container = $(containerId);
+    if (!container) return;
+    const buttons = container.querySelectorAll("button.fmt-btn[data-tf]");
+    buttons.forEach(btn => {
+      const tf = btn.dataset.tf;
+      btn.classList.toggle("active", activeTfs.includes(tf));
+      btn.onclick = () => {
+        btn.classList.toggle("active");
+        const currentSelected = Array.from(container.querySelectorAll("button.fmt-btn.active[data-tf]")).map(b => b.dataset.tf);
+        if (currentSelected.length === 0) {
+          btn.classList.add("active"); // Ensure at least 1 tf is selected
+          return;
+        }
+        onToggle(currentSelected);
+      };
+    });
+  }
+
+  // Helper: setup distance selector with custom input support
+  function setupDistanceGroup(containerId, customInputId, customBtnId, activeDist, onSelect) {
+    const container = $(containerId);
+    const customInput = $(customInputId);
+    const customBtn = $(customBtnId);
+    if (!container) return;
+
+    const buttons = container.querySelectorAll("button.fmt-btn[data-val]");
+    let isStandard = false;
+
+    buttons.forEach(btn => {
+      const val = btn.dataset.val;
+      if (val !== "custom" && parseFloat(val) === parseFloat(activeDist)) {
+        btn.classList.add("active");
+        isStandard = true;
+      } else {
+        btn.classList.remove("active");
+      }
+
+      btn.onclick = () => {
+        if (val === "custom") {
+          buttons.forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          if (customInput) {
+            customInput.style.display = "inline-block";
+            customInput.focus();
+            if (customInput.value) onSelect(parseFloat(customInput.value) || 0.3);
+          }
+        } else {
+          buttons.forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          if (customInput) customInput.style.display = "none";
+          onSelect(parseFloat(val));
+        }
+      };
+    });
+
+    if (!isStandard && customBtn && customInput) {
+      customBtn.classList.add("active");
+      customInput.style.display = "inline-block";
+      customInput.value = activeDist;
+    }
+
+    if (customInput) {
+      customInput.oninput = () => {
+        const parsed = parseFloat(customInput.value);
+        if (!isNaN(parsed) && parsed > 0) onSelect(parsed);
+      };
     }
   }
 
-  updateTgSettingsUI();
+  function syncFormationUI() {
+    const s = currentFormationAlertSettings;
 
-  btnConnectTg?.addEventListener("click", async () => {
-    try {
-      const activeUser = window.currentUser;
-      const endpoint = activeUser ? "/api/auth/telegram-link-token" : "/api/auth/telegram-start";
-      const headers = activeUser && authToken ? { "Authorization": `Bearer ${authToken}` } : {};
-      const r = await fetch(endpoint, { method: "POST", headers });
-      const data = await r.json();
-      
-      if (!r.ok || !data.success || !data.botUrl) {
-        throw new Error(data.error || "Не удалось запустить интеграцию Telegram");
-      }
+    // 1. General Alert Settings
+    const setSound = $("set-sound-enabled");
+    const setToast = $("set-toast-enabled");
+    const setTg = $("set-fmt-tg-enabled");
+    if (setSound) setSound.checked = !!s.soundEnabled;
+    if (setToast) setToast.checked = !!s.toastEnabled;
+    if (setTg) setTg.checked = !!s.tgEnabled;
 
-      window.open(data.botUrl, "_blank");
-      showToast({ title: "Telegram", message: "Перейдите в Telegram и нажмите START для подтверждения включения уведомлений", type: "info" });
+    if (setSound) setSound.onchange = () => { s.soundEnabled = setSound.checked; };
+    if (setToast) setToast.onchange = () => { s.toastEnabled = setToast.checked; };
+    if (setTg) setTg.onchange = () => { s.tgEnabled = setTg.checked; };
 
-      const token = data.regToken || data.linkToken;
-      if (token && data.regToken) {
-        let count = 0;
-        const timer = setInterval(async () => {
-          count++;
-          if (count > 80) clearInterval(timer);
-          try {
-            const pollRes = await fetch(`/api/auth/telegram-poll?token=${token}`);
-            const pollData = await pollRes.json();
-            if (pollData.status === "approved" && pollData.user) {
-              clearInterval(timer);
-              authToken = pollData.token || authToken;
-              if (pollData.token) localStorage.setItem("obsidian_auth_token", authToken);
-              if (typeof renderProfile === "function") renderProfile(pollData.user);
-              updateTgSettingsUI();
-              showToast({ title: "Telegram", message: "Telegram успешно подключен!", type: "success" });
-            }
-          } catch (_) {}
-        }, 1500);
-      }
-    } catch (err) {
-      alert("Ошибка: " + err.message);
+    setupButtonGroup("fmt-cooldown-group", s.cooldownSeconds, val => { s.cooldownSeconds = parseInt(val, 10); });
+    setupButtonGroup("fmt-minvol-group", s.minVolume, val => { s.minVolume = parseFloat(val); });
+
+    // 2. Trendline (Наклонка)
+    const setTl = $("set-fmt-trendline-enabled");
+    const cardTl = $("fmt-card-trendline");
+    const bodyTl = $("fmt-trendline-body");
+    if (setTl) {
+      setTl.checked = !!s.trendline.enabled;
+      if (cardTl) cardTl.classList.toggle("active", setTl.checked);
+      if (bodyTl) bodyTl.style.opacity = setTl.checked ? "1" : "0.45";
+      setTl.onchange = () => {
+        s.trendline.enabled = setTl.checked;
+        if (cardTl) cardTl.classList.toggle("active", setTl.checked);
+        if (bodyTl) bodyTl.style.opacity = setTl.checked ? "1" : "0.45";
+      };
     }
-  });
-  
+    setupTfGroup("fmt-trendline-tf-group", s.trendline.timeframes, tfs => { s.trendline.timeframes = tfs; });
+    setupButtonGroup("fmt-trendline-touches-group", s.trendline.minTouches, val => { s.trendline.minTouches = parseInt(val, 10); });
+    setupDistanceGroup("fmt-trendline-dist-group", "fmt-trendline-custom-dist", "fmt-trendline-custom-btn", s.trendline.distancePct, dist => { s.trendline.distancePct = dist; });
+    setupButtonGroup("fmt-trendline-dir-group", s.trendline.direction, val => { s.trendline.direction = val; });
+
+    // 3. Horizontal Level (Горизонталка)
+    const setLvl = $("set-fmt-level-enabled");
+    const cardLvl = $("fmt-card-level");
+    const bodyLvl = $("fmt-level-body");
+    if (setLvl) {
+      setLvl.checked = !!s.level.enabled;
+      if (cardLvl) cardLvl.classList.toggle("active", setLvl.checked);
+      if (bodyLvl) bodyLvl.style.opacity = setLvl.checked ? "1" : "0.45";
+      setLvl.onchange = () => {
+        s.level.enabled = setLvl.checked;
+        if (cardLvl) cardLvl.classList.toggle("active", setLvl.checked);
+        if (bodyLvl) bodyLvl.style.opacity = setLvl.checked ? "1" : "0.45";
+      };
+    }
+    setupTfGroup("fmt-level-tf-group", s.level.timeframes, tfs => { s.level.timeframes = tfs; });
+    setupButtonGroup("fmt-level-touches-group", s.level.minTouches, val => { s.level.minTouches = parseInt(val, 10); });
+    setupDistanceGroup("fmt-level-dist-group", "fmt-level-custom-dist", "fmt-level-custom-btn", s.level.distancePct, dist => { s.level.distancePct = dist; });
+    setupButtonGroup("fmt-level-dir-group", s.level.direction, val => { s.level.direction = val; });
+
+    // 4. Retest (Подтвержденный ретест)
+    const setRet = $("set-fmt-retest-enabled");
+    const cardRet = $("fmt-card-retest");
+    const bodyRet = $("fmt-retest-body");
+    if (setRet) {
+      setRet.checked = !!s.retest.enabled;
+      if (cardRet) cardRet.classList.toggle("active", setRet.checked);
+      if (bodyRet) bodyRet.style.opacity = setRet.checked ? "1" : "0.45";
+      setRet.onchange = () => {
+        s.retest.enabled = setRet.checked;
+        if (cardRet) cardRet.classList.toggle("active", setRet.checked);
+        if (bodyRet) bodyRet.style.opacity = setRet.checked ? "1" : "0.45";
+      };
+    }
+    setupTfGroup("fmt-retest-tf-group", s.retest.timeframes, tfs => { s.retest.timeframes = tfs; });
+    setupButtonGroup("fmt-retest-dir-group", s.retest.direction, val => { s.retest.direction = val; });
+    setupButtonGroup("fmt-retest-stage-group", s.retest.stage, val => { s.retest.stage = val; });
+    setupButtonGroup("fmt-retest-age-group", s.retest.maxAgeCandles, val => { s.retest.maxAgeCandles = parseInt(val, 10); });
+  }
+
+  syncFormationUI();
+
+  // Test Sound & Alert Button
   $("btn-test-sound")?.addEventListener("click", () => {
     playAlertSound("chime");
     showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
-    sendTelegramAlert("🔔 <b>Obsidian Test Alert</b>\n\nТестовый сигнал из скринера получен успешно!");
+    if (currentFormationAlertSettings.tgEnabled) {
+      sendTelegramAlert("🔔 <b>Obsidian Formation & Price Alert</b>\n\nТестовый сигнал из скринера получен успешно!");
+    }
   });
+
+  // Settings Apply button hook
+  const applyBtn = $("settings-apply-btn");
+  if (applyBtn) {
+    applyBtn.onclick = () => {
+      saveFormationAlertSettings(currentFormationAlertSettings);
+      showToast({ title: "Настройки сохранены", message: "Параметры уведомлений по формациям успешно обновлены", type: "success" });
+      if (typeof closeSettingsModal === "function") closeSettingsModal();
+    };
+  }
+
+  // Settings Reset button hook
+  const resetBtn = $("settings-reset-btn");
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+      saveFormationAlertSettings(currentFormationAlertSettings);
+      syncFormationUI();
+      showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
+    };
+  }
 }
 
-// Global hook for price checking
+// Global hook for price checking and formation alert settings
 window.checkPriceAlerts = checkPriceAlerts;
 window.showToast = showToast;
 window.playAlertSound = playAlertSound;
+window.loadFormationAlertSettings = loadFormationAlertSettings;
+window.saveFormationAlertSettings = saveFormationAlertSettings;
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", initNotificationsUI);
