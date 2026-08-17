@@ -2338,12 +2338,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ? getCachedFormationDetection(candles, `overlay:cascades:${chartFovCascadesMin}`, () => window.FormationEngine.detectCascades(candles, chartFovCascadesMin))
       : [];
 
-    const minTouches = Math.max(1, chartFovCascadesMin || 1);
-    levels = levels.filter(lv => (lv.touches || 1) >= minTouches);
-
     if (chartFovNearest && levels.length > 0) {
       levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
-      levels = levels.slice(0, 4);
+      levels = levels.slice(0, 6);
     }
 
     for (const lv of levels) {

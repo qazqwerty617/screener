@@ -83,7 +83,7 @@
 
   function detectHorizontals(raw, minTouches) {
     const candles = normalize(raw);
-    if (candles.length < 40) return [];
+    if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
     const clusterTol = Math.max(0.001, Math.min(0.005, (range / lastPrice) * 0.3));
@@ -100,7 +100,7 @@
         if (resistance ? cluster.price <= lastPrice : cluster.price >= lastPrice) continue;
         if (!isLevelClean(candles, cluster.price, first, resistance, epsilon)) continue;
         const distanceAtr = Math.abs(cluster.price - lastPrice) / range;
-        if (distanceAtr > 10) continue;
+        if (distanceAtr > 12) continue;
         candidates.push({
           price: cluster.price,
           endPrice: cluster.price,
@@ -117,54 +117,88 @@
     return candidates.slice(0, 10);
   }
 
-  function detectCascades(raw, minTouches) {
+  function detectCascades(raw, minCount) {
     const candles = normalize(raw);
-    if (candles.length < 40) return [];
+    if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
     const epsilon = range * 0.035;
-    const minT = Math.max(1, Number(minTouches) || 1);
-    const candidates = [];
+    const minCascadeCount = Math.max(1, Number(minCount) || 1);
+    const allSwings = swings(candles, 3);
+    const upCandidates = [];
+    const downCandidates = [];
 
-    for (const sw of swings(candles, 3)) {
-      const resistance = sw.type === "high";
-      if (resistance ? sw.price <= lastPrice : sw.price >= lastPrice) continue;
-      if (!isLevelClean(candles, sw.price, sw.idx, resistance, epsilon)) continue;
+    for (const sw of allSwings) {
+      if (sw.type === "high") {
+        if (sw.price <= lastPrice) continue;
+        if (!isLevelClean(candles, sw.price, sw.idx, true, epsilon)) continue;
 
-      const touchIndices = [sw.idx];
-      const touchTol = range * 0.18;
-      for (let i = sw.idx + 2; i < candles.length - 1; i++) {
-        const wick = resistance ? candles[i].h : candles[i].l;
-        if (Math.abs(wick - sw.price) <= touchTol && i - touchIndices[touchIndices.length - 1] > 1) {
-          touchIndices.push(i);
+        const touchIndices = [sw.idx];
+        const touchTol = range * 0.18;
+        for (let i = sw.idx + 2; i < candles.length - 1; i++) {
+          if (Math.abs(candles[i].h - sw.price) <= touchTol && i - touchIndices[touchIndices.length - 1] > 1) {
+            touchIndices.push(i);
+          }
+        }
+
+        upCandidates.push({
+          price: sw.price,
+          endPrice: sw.price,
+          swingIdx: sw.idx,
+          direction: "up",
+          touchIndices,
+          touches: touchIndices.length,
+          age: candles.length - 1 - sw.idx,
+        });
+      } else if (sw.type === "low") {
+        if (sw.price >= lastPrice) continue;
+        if (!isLevelClean(candles, sw.price, sw.idx, false, epsilon)) continue;
+
+        const touchIndices = [sw.idx];
+        const touchTol = range * 0.18;
+        for (let i = sw.idx + 2; i < candles.length - 1; i++) {
+          if (Math.abs(candles[i].l - sw.price) <= touchTol && i - touchIndices[touchIndices.length - 1] > 1) {
+            touchIndices.push(i);
+          }
+        }
+
+        downCandidates.push({
+          price: sw.price,
+          endPrice: sw.price,
+          swingIdx: sw.idx,
+          direction: "down",
+          touchIndices,
+          touches: touchIndices.length,
+          age: candles.length - 1 - sw.idx,
+        });
+      }
+    }
+
+    function dedupeLevels(list, isUp) {
+      list.sort((a, b) => b.touches - a.touches || a.age - b.age);
+      const kept = [];
+      for (const item of list) {
+        if (!kept.some(other => Math.abs(other.price - item.price) <= range * 0.12)) {
+          kept.push(item);
         }
       }
-
-      if (touchIndices.length < minT) continue;
-      const age = candles.length - 1 - sw.idx;
-      if (age > 350) continue;
-
-      candidates.push({
-        price: sw.price,
-        endPrice: sw.price,
-        swingIdx: sw.idx,
-        direction: resistance ? "up" : "down",
-        touchIndices,
-        touches: touchIndices.length,
-        age,
-        strength: touchIndices.length * 4 - age / 90 - Math.abs(sw.price - lastPrice) / range,
-      });
+      if (isUp) kept.sort((a, b) => a.price - b.price);
+      else kept.sort((a, b) => b.price - a.price);
+      return kept;
     }
 
-    candidates.sort((a, b) => b.strength - a.strength);
-    const kept = [];
-    for (const item of candidates) {
-      if (!kept.some(other => other.direction === item.direction && Math.abs(other.price - item.price) <= range * 0.12)) {
-        kept.push(item);
-      }
-      if (kept.length >= 10) break;
+    const dedupedUp = dedupeLevels(upCandidates, true);
+    const dedupedDown = dedupeLevels(downCandidates, false);
+
+    const out = [];
+    if (dedupedUp.length >= minCascadeCount) {
+      out.push(...dedupedUp.slice(0, 6));
     }
-    return kept;
+    if (dedupedDown.length >= minCascadeCount) {
+      out.push(...dedupedDown.slice(0, 6));
+    }
+
+    return out;
   }
 
   function detectTrendlines(raw, minTouches) {
