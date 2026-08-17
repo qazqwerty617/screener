@@ -132,17 +132,32 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
     if (angle < minAngle) return null;
 
     let touches = 2;
-    // A trendline is valid only while it remains a tangent to every closed
-    // candle after the first anchor. A single wick through it invalidates it.
-    for (let i = p1.idx + 1; i < candles.length - 1; i++) {
+    let departed = false;
+    let lastTouch = p2.idx;
+    const minDeparturePct = cfg.levelTolerance * 2.5;
+
+    // Check every single candle through the end of array (i < candles.length)
+    for (let i = p1.idx + 1; i < candles.length; i++) {
       const lp = linePrice(p1, p2, i);
-      if (type === 'asc'  && candles[i].l < lp * (1 - cfg.levelTolerance)) return null;
-      if (type === 'desc' && candles[i].h > lp * (1 + cfg.levelTolerance)) return null;
-      const dist = type === 'asc'
-        ? Math.abs(candles[i].l - lp) / lp
-        : Math.abs(candles[i].h - lp) / lp;
-      if (dist < cfg.levelTolerance * 2) touches++;
+      const c = candles[i];
+      if (type === 'asc'  && (c.c < lp * (1 - cfg.levelTolerance * 0.8) || c.l < lp * (1 - cfg.levelTolerance * 1.5))) return null;
+      if (type === 'desc' && (c.c > lp * (1 + cfg.levelTolerance * 0.8) || c.h > lp * (1 + cfg.levelTolerance * 1.5))) return null;
+
+      // Measure departure from line
+      const dist = type === 'asc' ? (c.c - lp) / lp : (lp - c.c) / lp;
+      if (dist >= minDeparturePct) {
+        departed = true;
+      }
+
+      // Check if this candle represents a discrete re-touch after departure
+      const wickDist = type === 'asc' ? Math.abs(c.l - lp) / lp : Math.abs(c.h - lp) / lp;
+      if (departed && i > p2.idx && wickDist <= cfg.levelTolerance * 1.6 && (i - lastTouch) >= 6) {
+        touches++;
+        lastTouch = i;
+        departed = false;
+      }
     }
+
     return { type, p1, p2, touches, slope: slopeDegrees(p1, p2) };
   }
 
@@ -418,6 +433,10 @@ function scanCandles(meta, candles, cfgOverride = {}) {
   // Active trendlines near price
   for (const tl of trendlines.slice(0, 5)) {
     const tlPrice = linePrice(tl.p1, tl.p2, candles.length - 1);
+    // Reject pierced lines (when price has already broken through)
+    if (tl.type === 'asc' && priceNow < tlPrice * 0.999) continue;
+    if (tl.type === 'desc' && priceNow > tlPrice * 1.001) continue;
+
     const dist    = Math.abs(priceNow - tlPrice) / priceNow;
     if (dist > 0.04) continue;
     signals.push({

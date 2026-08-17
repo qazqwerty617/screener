@@ -14276,14 +14276,27 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     // Right-side alert notification title
     ctx.textAlign = "right";
     if (alertOptions && alertOptions.isFormation) {
-      const fInfo = alertOptions.formationInfo || { touches: 3, distPct: 0.28 };
+      let realTouches = 2;
+      if (typeof FormationEngine !== "undefined" && typeof FormationEngine.detectTrendlines === "function") {
+        try {
+          const detected = FormationEngine.detectTrendlines(candleList, 2);
+          if (detected && detected.length > 0) {
+            realTouches = detected[0].touches || 2;
+          }
+        } catch (_) {}
+      }
+      if (alertOptions.formationInfo) {
+        alertOptions.formationInfo.touches = realTouches;
+      }
+      const distStr = alertOptions?.formationInfo?.distPct || "0.28";
+
       ctx.fillStyle = "#c084fc";
       ctx.font = "bold 12.5px Inter, sans-serif";
       ctx.fillText(`⚡ OBSIDIAN FORMATION ALERT`, W - 22, 20);
 
       ctx.fillStyle = "#94a3b8";
       ctx.font = "500 10.5px Inter, sans-serif";
-      ctx.fillText(`📐 Наклонка: ${fInfo.touches || 3} касания · до линии ${fInfo.distPct || 0.28}%`, W - 22, 34);
+      ctx.fillText(`📐 Наклонка: ${realTouches} касания · до линии ${distStr}%`, W - 22, 34);
     } else {
       ctx.fillStyle = "#f59e0b";
       ctx.font = "bold 13px Inter, sans-serif";
@@ -14490,12 +14503,11 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
         y1 = toY(p1);
         y2 = toY(p2);
         slope = (y2 - y1) / Math.max(1, x2 - x1);
-        if (Array.isArray(bestTl.touchIndices)) {
-          touchPts = bestTl.touchIndices.map(idx => ({
-            x: idx * candleStepW + candleStepW / 2,
-            y: toY(p1 + bestTl.slope * (idx - bestTl.p1.idx))
-          }));
-        }
+        const indices = bestTl.swingIndices || bestTl.touchIndices || [bestTl.p1.idx, bestTl.p2.idx];
+        touchPts = indices.map(idx => ({
+          x: idx * candleStepW + candleStepW / 2,
+          y: toY(p1 + bestTl.slope * (idx - bestTl.p1.idx))
+        }));
       } else {
         // Fallback: Accurate high swing tangent on last 70 candles
         const lookback = Math.min(70, numCandles);
@@ -15703,7 +15715,37 @@ function initNotificationsUI() {
 
   // ═══ 24/7 Background Formation Alert Scanner Engine ═══
   const formationAlertCooldownMap = new Map();
+  const formationAlertQueue = [];
+  let isProcessingFormationQueue = false;
   let isScanningFormationAlerts = false;
+  let hasCompletedInitialWarmup = false;
+
+  function enqueueFormationAlert(data) {
+    const exists = formationAlertQueue.some(item => item.ex === data.ex && item.sym === data.sym && item.type === data.type);
+    if (exists) return;
+    formationAlertQueue.push(data);
+    processFormationAlertQueue();
+  }
+
+  async function processFormationAlertQueue() {
+    if (isProcessingFormationQueue || formationAlertQueue.length === 0) return;
+    isProcessingFormationQueue = true;
+
+    try {
+      while (formationAlertQueue.length > 0) {
+        const item = formationAlertQueue.shift();
+        await triggerMatchedFormationAlert(item);
+        if (formationAlertQueue.length > 0) {
+          // Paced 4-second delay between dispatches so alerts arrive 1 by 1 cleanly
+          await new Promise(r => setTimeout(r, 4000));
+        }
+      }
+    } catch (err) {
+      console.error("[ALERT QUEUE ERROR]", err);
+    } finally {
+      isProcessingFormationQueue = false;
+    }
+  }
 
   async function triggerMatchedFormationAlert(data) {
     const s = currentFormationAlertSettings;
@@ -15780,6 +15822,7 @@ function initNotificationsUI() {
       const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
       const isAllowedEx = (e) => allowedExs.includes("all") || allowedExs.includes(e) || allowedExs.includes(String(e).toUpperCase());
       const now = Date.now();
+      const isFirstRun = !hasCompletedInitialWarmup;
 
       // 1. Scan Trendlines if enabled
       if (isTl) {
@@ -15818,6 +15861,11 @@ function initNotificationsUI() {
 
                 const lineEndP = item.endPrice || (item.p2 ? item.p2.price : item.price);
                 if (!lineEndP || lineEndP <= 0) continue;
+
+                // Reject pierced lines (when price has already broken through the trendline)
+                if (item.direction === "down" && curPrice < lineEndP * 0.998) continue;
+                if (item.direction === "up" && curPrice > lineEndP * 1.002) continue;
+
                 const distPct = Math.abs(curPrice - lineEndP) / curPrice * 100;
                 if (distPct > maxDist) continue;
 
@@ -15827,24 +15875,26 @@ function initNotificationsUI() {
 
                 formationAlertCooldownMap.set(cdKey, now);
 
-                await triggerMatchedFormationAlert({
-                  ex,
-                  sym,
-                  tf,
-                  type: "trendline",
-                  typeName: "Наклонный уровень (Наклонка)",
-                  touches,
-                  distPct: distPct.toFixed(2),
-                  targetPrice: lineEndP,
-                  curPrice,
-                  vol24,
-                  formationInfo: {
-                    touches,
+                if (!isFirstRun) {
+                  enqueueFormationAlert({
+                    ex,
+                    sym,
+                    tf,
+                    type: "trendline",
+                    typeName: "Наклонный уровень (Наклонка)",
+                    touches: Math.min(6, touches),
                     distPct: distPct.toFixed(2),
-                    p1: item.p1?.price,
-                    p2: item.p2?.price
-                  }
-                });
+                    targetPrice: lineEndP,
+                    curPrice,
+                    vol24,
+                    formationInfo: {
+                      touches: Math.min(6, touches),
+                      distPct: distPct.toFixed(2),
+                      p1: item.p1?.price,
+                      p2: item.p2?.price
+                    }
+                  });
+                }
               }
             }
           } catch (_) {}
@@ -15897,24 +15947,26 @@ function initNotificationsUI() {
 
                 formationAlertCooldownMap.set(cdKey, now);
 
-                await triggerMatchedFormationAlert({
-                  ex,
-                  sym,
-                  tf,
-                  type: "level",
-                  typeName: "Горизонтальный уровень (Горизонталка)",
-                  touches,
-                  distPct: distPct.toFixed(2),
-                  targetPrice: lvlPrice,
-                  curPrice,
-                  vol24,
-                  formationInfo: {
-                    touches,
+                if (!isFirstRun) {
+                  enqueueFormationAlert({
+                    ex,
+                    sym,
+                    tf,
+                    type: "level",
+                    typeName: "Горизонтальный уровень (Горизонталка)",
+                    touches: Math.min(6, touches),
                     distPct: distPct.toFixed(2),
-                    p1: lvlPrice,
-                    p2: lvlPrice
-                  }
-                });
+                    targetPrice: lvlPrice,
+                    curPrice,
+                    vol24,
+                    formationInfo: {
+                      touches: Math.min(6, touches),
+                      distPct: distPct.toFixed(2),
+                      p1: lvlPrice,
+                      p2: lvlPrice
+                    }
+                  });
+                }
               }
             }
           } catch (_) {}
@@ -15961,29 +16013,33 @@ function initNotificationsUI() {
 
                 formationAlertCooldownMap.set(cdKey, now);
 
-                await triggerMatchedFormationAlert({
-                  ex,
-                  sym,
-                  tf,
-                  type: "retest",
-                  typeName: "Подтвержденный ретест (Ретест)",
-                  touches: item.touches || 2,
-                  distPct: distPct.toFixed(2),
-                  targetPrice: lvlPrice,
-                  curPrice,
-                  vol24,
-                  formationInfo: {
+                if (!isFirstRun) {
+                  enqueueFormationAlert({
+                    ex,
+                    sym,
+                    tf,
+                    type: "retest",
+                    typeName: "Подтвержденный ретест (Ретест)",
                     touches: item.touches || 2,
                     distPct: distPct.toFixed(2),
-                    p1: lvlPrice,
-                    p2: lvlPrice
-                  }
-                });
+                    targetPrice: lvlPrice,
+                    curPrice,
+                    vol24,
+                    formationInfo: {
+                      touches: item.touches || 2,
+                      distPct: distPct.toFixed(2),
+                      p1: lvlPrice,
+                      p2: lvlPrice
+                    }
+                  });
+                }
               }
             }
           } catch (_) {}
         }
       }
+
+      hasCompletedInitialWarmup = true;
     } catch (err) {
       console.error("[FORMATION ALERT SCANNER ERROR]", err);
     } finally {
