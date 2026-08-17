@@ -2417,7 +2417,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
     if (chartFovNearest && trendlines.length > 0) {
       trendlines.sort((a, b) => Math.abs((a.endPrice || lastPrice) - lastPrice) - Math.abs((b.endPrice || lastPrice) - lastPrice));
-      trendlines = trendlines.slice(0, 3);
+      trendlines = trendlines.slice(0, 6);
     }
 
     for (const tl of trendlines) {

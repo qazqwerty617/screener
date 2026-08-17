@@ -245,29 +245,25 @@
 
   function detectTrendlines(raw, minTouches) {
     const candles = normalize(raw);
-    if (candles.length < 40) return [];
+    if (candles.length < 30) return [];
     const range = atr(candles, 24);
     const lastPrice = candles[candles.length - 1].c;
-    const touchTol = Math.min(range * 0.12, lastPrice * 0.002);
-    const crossTol = Math.min(range * 0.02, lastPrice * 0.0004);
+    const touchTol = Math.min(range * 0.15, lastPrice * 0.0025);
+    const crossTol = Math.min(range * 0.025, lastPrice * 0.0005);
     const minimum = Math.max(2, Number(minTouches) || 2);
     const candidates = [];
 
     function collect(points, resistance) {
-      const recent = points.slice(-80);
+      const recent = points.slice(-150);
       for (let i = 0; i < recent.length - 1; i++) {
         for (let j = i + 1; j < recent.length; j++) {
           const p1 = recent[i], p2 = recent[j];
           const span = p2.idx - p1.idx;
-          if (span < 12) continue;
-
-          // Descending trendline must have p2.price < p1.price (downward slope)
-          // Ascending trendline must have p2.price > p1.price (upward slope)
-          if (resistance ? p2.price >= p1.price : p2.price <= p1.price) continue;
+          if (span < 8) continue;
 
           const slope = (p2.price - p1.price) / span;
-          // Filter out steep vertical angles (cliffs)
-          if (Math.abs(slope) > range * 0.25 || Math.abs(slope) < range * 0.001) continue;
+          // Filter out steep near-vertical angles (cliffs)
+          if (Math.abs(slope) > range * 0.35 || Math.abs(slope) < range * 0.0005) continue;
 
           // Check that trendline is STRICTLY unbroken from p1.idx to current candle
           let crossed = false;
@@ -284,7 +280,7 @@
           if (crossed) continue;
 
           // Count distinct bounces with wave departure
-          const minDeparture = range * 0.25;
+          const minDeparture = range * 0.20;
           const touches = [p1.idx];
           let departed = false;
           let lastTouch = p1.idx;
@@ -300,7 +296,7 @@
               departed = true;
             }
 
-            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 5) {
+            if (departed && Math.abs(wick - line) <= touchTol && (k - lastTouch) >= 4) {
               touches.push(k);
               lastTouch = k;
               departed = false;
@@ -314,13 +310,13 @@
           if (resistance ? lastPrice > endPrice : lastPrice < endPrice) continue;
 
           const distanceAtr = Math.abs(endPrice - lastPrice) / range;
-          if (distanceAtr > 8) continue;
+          if (distanceAtr > 10) continue;
 
           candidates.push({
             p1, p2, slope, endPrice, direction: resistance ? "up" : "down",
             swingIndices: touches, touches: touches.length, isTrendline: true,
             span: candles.length - 1 - p1.idx,
-            strength: touches.length * 7 + span / 20 - distanceAtr * 2,
+            strength: touches.length * 8 + span / 15 - distanceAtr * 2,
           });
         }
       }
@@ -336,7 +332,7 @@
       if (!kept.some(other => other.direction === item.direction && Math.abs(other.endPrice - item.endPrice) <= range * 0.15 && Math.abs(other.slope - item.slope) <= range * 0.015)) {
         kept.push(item);
       }
-      if (kept.length >= 6) break;
+      if (kept.length >= 8) break;
     }
     return kept;
   }
