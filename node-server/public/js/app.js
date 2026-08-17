@@ -15467,8 +15467,43 @@ function initNotificationsUI() {
     }
   }
 
+  async function triggerTestFormationTgAlert() {
+    playAlertSound("chime");
+    showToast({ title: "Генерация 4K снимка...", message: "Рендеринг 300 свечей и отправка в Telegram...", type: "info" });
+    
+    const sym = activeSym || "BTCUSDT";
+    const ex = activeEx || "BN";
+    const tf = activeTf || "5m";
+    const curP = (typeof activePrice === "number" && activePrice > 0) ? activePrice : 95000;
+    const targetP = curP * 1.0028;
+    const exFull = getFullExchangeName(ex);
+    const formattedPrice = typeof fP === "function" ? fP(curP) : curP.toLocaleString();
+    const formattedTarget = typeof fP === "function" ? fP(targetP) : targetP.toLocaleString();
+
+    let photoDataUrl = null;
+    try {
+      photoDataUrl = await captureChartSnapshot(sym, curP, targetP, tf, ex);
+    } catch (err) {
+      console.warn("Capture snapshot error during test:", err);
+    }
+
+    const telegramMsg =
+      `📐 <b>Сигнал формации: Наклонный уровень (Тест)</b>\n` +
+      `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+      `• <b>Таймфрейм:</b> ${tf}\n` +
+      `• <b>Касания:</b> 3 касания\n` +
+      `• <b>Дистанция:</b> 0.28% до наклонки\n` +
+      `• <b>Текущая цена:</b> $${formattedPrice} → Уровень: $${formattedTarget}\n` +
+      `─────────────────────────\n` +
+      `⚡ <b>Obsidian Formation Scanner</b>`;
+
+    sendTelegramAlert(telegramMsg, photoDataUrl);
+    showToast({ title: "Telegram", message: "✅ 4K снимок и сигнал формации отправлены в Telegram!", type: "success" });
+  }
+
   $("btn-test-sound")?.addEventListener("click", triggerTestAlert);
   $("btn-test-sound-fmt")?.addEventListener("click", triggerTestAlert);
+  $("btn-test-tg-photo-fmt")?.addEventListener("click", triggerTestFormationTgAlert);
 
   // Formation Modal Save button
   $("btn-save-formation-alerts")?.addEventListener("click", () => {
