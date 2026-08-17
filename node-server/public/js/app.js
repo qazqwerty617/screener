@@ -6365,44 +6365,48 @@ let currentLoadedSym = null;
 let currentLoadedTf = null;
 
 async function fetchDirectKlines(ex, sym, tf) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 900);
+
   try {
     let resultCandles = [];
     const tfMs = TF_MS[tf] || 60000;
     const now = Date.now();
+    const encSym = encodeURIComponent(sym);
 
     if (ex === "BN" || ex === "AD") {
       const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
       const [r1, r2] = await Promise.all([
-        fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000`).then(r => r.json()).catch(() => []),
-        fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${now - 1000 * tfMs}`).then(r => r.json()).catch(() => [])
+        fetch(`https://${domain}/fapi/v1/klines?symbol=${encSym}&interval=${TFB[tf] || tf}&limit=1000`, { signal: controller.signal }).then(r => r.json()).catch(() => []),
+        fetch(`https://${domain}/fapi/v1/klines?symbol=${encSym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => [])
       ]);
       const merged = [...(Array.isArray(r2) ? r2 : []), ...(Array.isArray(r1) ? r1 : [])];
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] })));
     } else if (ex === "BB") {
       const [r1, r2] = await Promise.all([
-        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000`).then(r => r.json()).catch(() => null),
-        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${now - 1000 * tfMs}`).then(r => r.json()).catch(() => null)
+        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${encSym}&interval=${TFBB[tf] || "60"}&limit=1000`, { signal: controller.signal }).then(r => r.json()).catch(() => null),
+        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${encSym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => null)
       ]);
       const l1 = r1?.result?.list || [];
       const l2 = r2?.result?.list || [];
       const merged = [...l2, ...l1];
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "OX") {
-      const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TFOK[tf] || "1H"}&limit=300`);
+      const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${encSym}&bar=${TFOK[tf] || "1H"}&limit=300`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[6] || +k[5] })));
     } else if (ex === "BG") {
-      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=1000`);
+      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${encSym}&granularity=${TFOK[tf] || "1H"}&limit=1000`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "GT") {
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000`);
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000`, { signal: controller.signal });
       const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
       const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
       const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
-      const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${mxTfMap[tf] || "Min60"}`);
+      const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(mxSym)}?interval=${mxTfMap[tf] || "Min60"}`, { signal: controller.signal });
       const data = await r.json();
       if (data.data?.time) resultCandles = sanitizeCandles(data.data.time.map((t, i) => {
         const c = +data.data.close[i];
@@ -6411,15 +6415,15 @@ async function fetchDirectKlines(ex, sym, tf) {
       }));
     } else if (ex === "KC") {
       const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
-      const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${kcTfMap[tf] || 60}`);
+      const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${encSym}&granularity=${kcTfMap[tf] || 60}`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "BX") {
       const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
       const [r1, r2] = await Promise.all([
-        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000`).then(r => r.json()).catch(() => null),
-        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000&endTime=${now - 1000 * tfMs}`).then(r => r.json()).catch(() => null)
+        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000`, { signal: controller.signal }).then(r => r.json()).catch(() => null),
+        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000&endTime=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => null)
       ]);
       const l1 = r1?.data || [];
       const l2 = r2?.data || [];
@@ -6427,16 +6431,41 @@ async function fetchDirectKlines(ex, sym, tf) {
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
       const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day" };
-      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${htTfMap[tf] || "60min"}&size=1000`);
+      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${encSym}&period=${htTfMap[tf] || "60min"}&size=1000`, { signal: controller.signal });
       const data = await r.json();
-      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
+      if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.l, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
     } else if (ex === "HL") {
-      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (2000 * tfMs), endTime: Date.now() } }) });
+      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (2000 * tfMs), endTime: Date.now() } }) });
       const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c })));
     }
     return resultCandles;
   } catch (e) {
+    return [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchServerKlines(ex, sym, tf, lite = 1) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const r = await fetch(`/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&lite=${lite}`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    const data = await r.json();
+    if (Array.isArray(data) && data.length > 0) {
+      if (typeof data[0] === 'number') {
+        const flat = [];
+        for (let i = 0; i < data.length; i += 6) {
+          flat.push({ t: data[i], o: data[i + 1], h: data[i + 2], l: data[i + 3], c: data[i + 4], v: data[i + 5] });
+        }
+        return sanitizeCandles(flat);
+      }
+      return sanitizeCandles(data);
+    }
+    return [];
+  } catch (_) {
     return [];
   }
 }
@@ -6495,29 +6524,16 @@ async function fetchKlines(ex, sym, tf) {
       }
     }
 
-    // 2. Ultra-fast fetch for unopened coins: Direct Exchange REST API (<40ms) with Proxy Server fallback
+    // 2. Ultra-fast parallel racer: Direct Exchange REST API and Server Proxy in parallel
     if (!loadedSuccess) {
-      let fastCandles = await fetchDirectKlines(ex, sym, tf).catch(() => []);
-      
-      if (!fastCandles || fastCandles.length === 0) {
-        try {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 6000);
-          const rLite = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=1`, { signal: controller.signal });
-          clearTimeout(timeoutId);
-          const dataLite = await rLite.json();
-          if (Array.isArray(dataLite) && dataLite.length > 0) {
-            const flat = [];
-            if (typeof dataLite[0] === 'number') {
-              for (let i = 0; i < dataLite.length; i += 6) {
-                flat.push({ t: dataLite[i], o: dataLite[i + 1], h: dataLite[i + 2], l: dataLite[i + 3], c: dataLite[i + 4], v: dataLite[i + 5] });
-              }
-              fastCandles = sanitizeCandles(flat);
-            } else {
-              fastCandles = sanitizeCandles(dataLite);
-            }
-          }
-        } catch (_) {}
+      const directPromise = fetchDirectKlines(ex, sym, tf).then(c => (c && c.length > 0 ? c : Promise.reject()));
+      const serverPromise = fetchServerKlines(ex, sym, tf, 1).then(c => (c && c.length > 0 ? c : Promise.reject()));
+
+      let fastCandles = [];
+      try {
+        fastCandles = await Promise.any([directPromise, serverPromise]);
+      } catch (_) {
+        fastCandles = await fetchServerKlines(ex, sym, tf, 0);
       }
 
       if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf) {
@@ -6536,28 +6552,14 @@ async function fetchKlines(ex, sym, tf) {
     // 3. Background full history fetch without blocking initial rendering
     setTimeout(() => {
       if (fetchToken !== klFetchToken) return;
-      fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&lite=0`)
-        .then(res => res.json())
-        .then(dataFull => {
+      fetchServerKlines(ex, sym, tf, 0)
+        .then(parsed => {
           if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
-          if (Array.isArray(dataFull) && dataFull.length > 0) {
-            let parsed = [];
-            if (typeof dataFull[0] === 'number') {
-              const flat = [];
-              for (let i = 0; i < dataFull.length; i += 6) {
-                flat.push({ t: dataFull[i], o: dataFull[i + 1], h: dataFull[i + 2], l: dataFull[i + 3], c: dataFull[i + 4], v: dataFull[i + 5] });
-              }
-              parsed = sanitizeCandles(flat);
-            } else {
-              parsed = sanitizeCandles(dataFull);
-            }
-
-            if (parsed.length > 0) {
-              candles = parsed;
-              KLINES_CACHE.set(key, { ts: Date.now(), data: parsed });
-              chartNeedsDraw = true;
-              drawChart();
-            }
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            candles = parsed;
+            KLINES_CACHE.set(key, { ts: Date.now(), data: parsed });
+            chartNeedsDraw = true;
+            drawChart();
           }
         })
         .catch(err => console.error("BG fetch error:", err));
@@ -9337,7 +9339,7 @@ class ChartInstance {
 
     try {
       // 1. Instant lite fetch for ultra-fast initial response (<50ms for all grid cells)
-      const rLite = await fetch(`/api/klines?ex=${this.ex}&sym=${this.sym}&tf=${this.tf}&lite=1`);
+      const rLite = await fetch(`/api/klines?ex=${encodeURIComponent(this.ex)}&sym=${encodeURIComponent(this.sym)}&tf=${encodeURIComponent(this.tf)}&lite=1`);
       if (this._loadToken !== myToken) return;
       const dataLite = await rLite.json();
       if (this._loadToken !== myToken) return;
@@ -9358,7 +9360,7 @@ class ChartInstance {
       }
 
       // 2. Background full fetch for complete history without clogging cache with lite data
-      const rFull = await fetch(`/api/klines?ex=${this.ex}&sym=${this.sym}&tf=${this.tf}&lite=0`);
+      const rFull = await fetch(`/api/klines?ex=${encodeURIComponent(this.ex)}&sym=${encodeURIComponent(this.sym)}&tf=${encodeURIComponent(this.tf)}&lite=0`);
       if (this._loadToken !== myToken) return;
       const dataFull = await rFull.json();
       if (this._loadToken !== myToken) return;
