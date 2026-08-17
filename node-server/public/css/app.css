@@ -7681,36 +7681,36 @@ body {
     color: #f1f5f9;
 }
 
-/* ═══ Formation Alert Settings Modal (Black & Deep Violet Obsidian Theme) ═══ */
+/* ═══ Formation Alert Settings Modal (Deep Matte Black & Muted Dark Violet) ═══ */
 .formation-alerts-modal {
     width: 980px;
     max-width: 95vw;
     max-height: 90vh;
     display: flex;
     flex-direction: column;
-    background: #0a0c14;
-    border: 1px solid rgba(139, 92, 246, 0.22);
+    background: #08090d;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 10px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85), 0 0 30px rgba(124, 58, 237, 0.08);
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.95);
     overflow: hidden;
     animation: modalScaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .fmt-modal-header {
     padding: 14px 22px;
-    border-bottom: 1px solid rgba(139, 92, 246, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: rgba(124, 58, 237, 0.04);
+    background: #0c0d12;
 }
 
 .fmt-modal-icon {
     width: 32px;
     height: 32px;
     border-radius: 6px;
-    background: rgba(124, 58, 237, 0.16);
-    border: 1px solid rgba(139, 92, 246, 0.35);
+    background: rgba(139, 92, 246, 0.1);
+    border: 1px solid rgba(139, 92, 246, 0.22);
     color: #c4b5fd;
     display: flex;
     align-items: center;
@@ -7722,20 +7722,20 @@ body {
 .fmt-modal-title {
     font-size: 14px;
     font-weight: 600;
-    color: #f8fafc;
+    color: #f1f5f9;
     letter-spacing: -0.1px;
 }
 
 .fmt-modal-subtitle {
     font-size: 11px;
-    color: #94a3b8;
+    color: #64748b;
     margin-top: 2px;
 }
 
 .fmt-modal-close {
     background: none;
     border: none;
-    color: #94a3b8;
+    color: #64748b;
     font-size: 22px;
     cursor: pointer;
     line-height: 1;
@@ -7746,13 +7746,14 @@ body {
 
 .fmt-modal-close:hover {
     color: #fff;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 .fmt-modal-content {
     padding: 16px 20px;
     overflow-y: auto;
     max-height: calc(90vh - 120px);
+    background: #08090d;
 }
 
 .fmt-modal-grid {
@@ -7777,20 +7778,20 @@ body {
 }
 
 .fmt-card {
-    background: #11131e;
-    border: 1px solid rgba(139, 92, 246, 0.12);
+    background: #0f1016;
+    border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 8px;
     padding: 14px 16px;
     transition: border-color 0.2s ease;
 }
 
 .fmt-card:hover {
-    border-color: rgba(139, 92, 246, 0.25);
+    border-color: rgba(255, 255, 255, 0.12);
 }
 
 .fmt-card.active {
-    border-color: rgba(139, 92, 246, 0.45);
-    background: #131522;
+    border-color: rgba(139, 92, 246, 0.28);
+    background: #11121a;
 }
 
 .fmt-card-header {
@@ -7820,12 +7821,12 @@ body {
 .fmt-card-title {
     font-size: 12.5px;
     font-weight: 600;
-    color: #f1f5f9;
+    color: #e2e8f0;
 }
 
 .fmt-card-sub {
     font-size: 10.5px;
-    color: #64748b;
+    color: #555e6d;
     margin-top: 1px;
 }
 
@@ -7848,7 +7849,7 @@ body {
 
 .fmt-setting-label {
     font-size: 11.5px;
-    color: #8492a6;
+    color: #717a8a;
     font-weight: 500;
     white-space: nowrap;
 }
@@ -7857,7 +7858,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 3px;
-    background: rgba(0, 0, 0, 0.4);
+    background: #08090e;
     padding: 2.5px;
     border-radius: 5px;
     border: 1px solid rgba(255, 255, 255, 0.05);
@@ -7868,7 +7869,7 @@ body {
     padding: 3.5px 8px;
     background: transparent;
     border: 1px solid transparent;
-    color: #8492a6;
+    color: #717a8a;
     border-radius: 3.5px;
     font-size: 11px;
     font-weight: 500;
@@ -7880,22 +7881,22 @@ body {
 
 .fmt-btn:hover {
     color: #fff;
-    background: rgba(139, 92, 246, 0.12);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .fmt-btn.active {
-    background: #7c3aed;
-    border-color: #8b5cf6;
-    color: #ffffff;
+    background: #251d38;
+    border-color: #5b3aa3;
+    color: #ede9fe;
     font-weight: 600;
-    box-shadow: 0 0 8px rgba(124, 58, 237, 0.35);
+    box-shadow: none;
 }
 
 .fmt-input {
     width: 48px;
     padding: 2.5px 5px;
-    background: rgba(0, 0, 0, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: #08090e;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     color: #fff;
     border-radius: 4px;
     font-size: 11px;
@@ -7906,27 +7907,27 @@ body {
 }
 
 .fmt-input:focus {
-    border-color: #8b5cf6;
+    border-color: #6d28d9;
 }
 
 .fmt-modal-footer {
     padding: 12px 20px;
-    border-top: 1px solid rgba(139, 92, 246, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: #090a10;
+    background: #0c0d12;
 }
 
 .formations-alert-btn {
-    background: rgba(124, 58, 237, 0.12) !important;
-    border: 1px solid rgba(139, 92, 246, 0.35) !important;
+    background: rgba(139, 92, 246, 0.1) !important;
+    border: 1px solid rgba(139, 92, 246, 0.25) !important;
     color: #c4b5fd !important;
 }
 
 .formations-alert-btn:hover {
-    background: rgba(124, 58, 237, 0.25) !important;
-    border-color: rgba(139, 92, 246, 0.7) !important;
+    background: rgba(139, 92, 246, 0.2) !important;
+    border-color: rgba(139, 92, 246, 0.5) !important;
     color: #fff !important;
 }
 
