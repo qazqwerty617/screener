@@ -156,9 +156,6 @@
                     <div class="stat">
                         <span class="sl">Фандинг:</span><span class="sv" id="sfun">–</span>
                     </div>
-                    <div class="stat">
-                        <span class="sl">OI:</span><span class="sv pos" id="soi">–</span>
-                    </div>
 
                     <div class="sep"></div>
                     <div class="view-toggle" id="view-toggle">
@@ -472,6 +469,8 @@
                             <div class="chart-density-indicators-grid">
                                 <button class="chart-indicator-grid-btn" id="ind-cvd"
                                     data-desc="CVD — разница покупок и продаж по рынку. Показывает скрытое давление покупателей или продавцов.">CVD</button>
+                                <button class="chart-indicator-grid-btn" id="ind-oi"
+                                    data-desc="OI (Open Interest) — открытый интерес: общая сумма и динамика открытых позиций по деривативам.">OI</button>
                                 <button class="chart-indicator-grid-btn" id="ind-ema20"
                                     data-desc="EMA 20 — краткосрочный тренд. Удобно для поиска точек входа по текущему движению.">EMA
                                     20</button>
@@ -655,7 +654,6 @@
                     <div class="sh" id="sh-chg" data-col="chg">24Ч</div>
                     <div class="sh" id="sh-v" data-col="v">ОБЪЁМ</div>
                     <div class="sh" id="sh-trades" data-col="trades">NATR</div>
-                    <div class="sh" id="sh-oi" data-col="oi">OI</div>
                     <div class="sh" id="sh-corr" data-col="corr">КОРР</div>
                     <div class="sh" id="sh-funding" data-col="funding">ФАНД</div>
                 </div>
@@ -2062,11 +2060,6 @@
                             <div class="s-row">
                                 <span>Объем за 24ч (ОБЪЁМ)</span>
                                 <label class="switch"><input type="checkbox" id="col-v" checked><span
-                                        class="slider"></span></label>
-                            </div>
-                            <div class="s-row">
-                                <span>Открытый Интерес (OI)</span>
-                                <label class="switch"><input type="checkbox" id="col-oi" checked><span
                                         class="slider"></span></label>
                             </div>
                             <div class="s-row">

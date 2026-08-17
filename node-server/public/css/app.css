@@ -28,7 +28,7 @@
     --ox: #8b5cf6;
     --radius: 6px;
     --font: "Inter", -apple-system, sans-serif;
-    --table-grid: minmax(56px, 1.5fr) 42px 50px 30px 36px 42px 28px;
+    --table-grid: minmax(60px, 1.5fr) 46px 52px 34px 44px 34px;
 }
 
 html,
