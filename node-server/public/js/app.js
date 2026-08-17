@@ -14180,13 +14180,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       fundStr += ` (${fh}:${String(fm).padStart(2, "0")}:${String(fs).padStart(2, "0")})`;
     }
 
-    // 3. Render Dedicated HiDPI Ultra-HD (4K Crisp) Offscreen Canvas (2400 x 1360 physical pixels)
+    // 3. Render Dedicated HiDPI Ultra-HD (4K Razor-Sharp) Offscreen Canvas (3000 x 1700 physical pixels)
     const W = 1200;
     const H = 680;
-    const DPR = 2; // HiDPI 2x Supersampling for ultra-crisp lines & text
+    const DPR = 2.5; // High-resolution HiDPI supersampling for razor-sharp clarity
     const shot = document.createElement("canvas");
-    shot.width = W * DPR;
-    shot.height = H * DPR;
+    shot.width = Math.round(W * DPR);
+    shot.height = Math.round(H * DPR);
     const ctx = shot.getContext("2d");
     ctx.scale(DPR, DPR);
 
@@ -14199,8 +14199,8 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     const PH = H - TOP - VOL_H - BTM_TIME;
     const volY = TOP + PH;
 
-    // Deep Obsidian Solid Background
-    ctx.fillStyle = "#0c0e14";
+    // Deep Rich Obsidian Background
+    ctx.fillStyle = "#07090e";
     ctx.fillRect(0, 0, W, H);
 
     // ── Header (Symbol + Timeframe Badge + Stats HUD + Alert Title) ──
@@ -14247,13 +14247,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.save();
       if (typeof roundRect === "function") roundRect(ctx, curStatX, 14, pillW, 23, 5);
       else ctx.fillRect(curStatX, 14, pillW, 23);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.055)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
       ctx.fill();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
       ctx.font = "600 10px Inter, sans-serif";
       ctx.textAlign = "left";
       ctx.fillText(label, curStatX + 7, 26);
@@ -14266,10 +14266,10 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       curStatX += pillW + 8;
     };
 
-    renderStatPill("ИЗМ", chgText, isChgUp ? "#22c55e" : "#ef4444");
+    renderStatPill("ИЗМ", chgText, isChgUp ? "#00e676" : "#ff334b");
     renderStatPill("ОБЪЕМ", vol24Str, "#ffffff");
-    renderStatPill("NATR", natrVal.toFixed(1) + "%", "#a855f7");
-    renderStatPill("ФАНДИНГ", fundStr, fundingVal > 0 ? "#fbbf24" : fundingVal < 0 ? "#ef4444" : "#94a3b8");
+    renderStatPill("NATR", natrVal.toFixed(1) + "%", "#38bdf8");
+    renderStatPill("ФАНДИНГ", fundStr, fundingVal > 0 ? "#fbbf24" : fundingVal < 0 ? "#ff334b" : "#94a3b8");
 
     // Right-side alert notification title
     ctx.textAlign = "right";
@@ -14300,7 +14300,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     // Helper functions for coordinates on snapshot canvas
     const numCandles = candleList.length;
     const candleStepW = PW / numCandles;
-    const candleBodyW = Math.max(1.8, Math.min(candleStepW * 0.76, candleStepW - 1.2));
+    const candleBodyW = Math.max(2, Math.min(candleStepW * 0.78, candleStepW - 1));
 
     function getSnapX(t) {
       if (typeof t !== "number") return -1;
@@ -14319,14 +14319,14 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       return t * candleStepW + candleStepW / 2;
     }
 
-    // ── Grid Lines ──
+    // ── Pixel-Snapped Crisp Grid Lines ──
     const gridStep = typeof calcNiceStep === "function" ? calcNiceStep(priceRange, 7) : priceRange / 7;
     let gp = Math.ceil(minP / gridStep) * gridStep;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.045)";
     ctx.lineWidth = 1;
     ctx.setLineDash([]);
     while (gp <= maxP) {
-      const y = toY(gp);
+      const y = Math.round(toY(gp)) + 0.5;
       if (y >= TOP && y <= TOP + PH) {
         ctx.beginPath();
         ctx.moveTo(0, y);
@@ -14337,41 +14337,50 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     }
 
     // Volume divider
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.09)";
     ctx.beginPath();
-    ctx.moveTo(0, volY);
-    ctx.lineTo(W, volY);
+    ctx.moveTo(0, Math.round(volY) + 0.5);
+    ctx.lineTo(W, Math.round(volY) + 0.5);
     ctx.stroke();
 
-    // ── Candlesticks & Volume Bars (300 bars) ──
+    // ── Pixel-Snapped Razor-Sharp Candlesticks & Volume Bars (300 bars) ──
     for (let i = 0; i < numCandles; i++) {
       const c = candleList[i];
-      const cx = i * candleStepW + candleStepW / 2;
+      const cx = Math.round(i * candleStepW + candleStepW / 2);
+      const wickX = cx + 0.5;
       const isUp = c.c >= c.o;
-      const col = isUp ? "#22c55e" : "#ef4444";
+      const col = isUp ? "#00e676" : "#ff334b";
+      const borderCol = isUp ? "#00c853" : "#d50000";
 
-      // Wick
-      const yH = toY(c.h);
-      const yL = toY(c.l);
+      // Wick (1px snapped)
+      const yH = Math.round(toY(c.h));
+      const yL = Math.round(toY(c.l));
       ctx.strokeStyle = col;
-      ctx.lineWidth = 1.1;
+      ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.moveTo(cx, yH);
-      ctx.lineTo(cx, yL);
+      ctx.moveTo(wickX, yH);
+      ctx.lineTo(wickX, yL);
       ctx.stroke();
 
-      // Body
-      const yO = toY(c.o);
-      const yC = toY(c.c);
+      // Body (pixel snapped with crisp 1px outline)
+      const yO = Math.round(toY(c.o));
+      const yC = Math.round(toY(c.c));
       const bTop = Math.min(yO, yC);
-      const bH = Math.max(1.5, Math.abs(yC - yO));
+      const bH = Math.max(2, Math.abs(yC - yO));
+      const bodyW = Math.max(2, Math.round(candleBodyW));
+      const bodyLeft = Math.round(cx - bodyW / 2);
+
       ctx.fillStyle = col;
-      ctx.fillRect(cx - candleBodyW / 2, bTop, candleBodyW, bH);
+      ctx.fillRect(bodyLeft, bTop, bodyW, bH);
+      ctx.strokeStyle = borderCol;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bodyLeft + 0.5, bTop + 0.5, bodyW, bH);
 
       // Volume bar
-      const vTop = toVolY(c.v);
-      ctx.fillStyle = isUp ? "rgba(34, 197, 94, 0.45)" : "rgba(239, 68, 68, 0.45)";
-      ctx.fillRect(cx - candleBodyW / 2, vTop, candleBodyW, volY + VOL_H - vTop);
+      const vTop = Math.round(toVolY(c.v));
+      const vH = Math.max(0, Math.round(volY + VOL_H - vTop));
+      ctx.fillStyle = isUp ? "rgba(0, 230, 118, 0.6)" : "rgba(255, 51, 75, 0.6)";
+      ctx.fillRect(bodyLeft, vTop, bodyW, vH);
     }
 
     // ── Render User Drawings / Markups on the Chart ──
