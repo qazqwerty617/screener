@@ -14273,11 +14273,17 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
     // Right-side alert notification title
     ctx.textAlign = "right";
-    ctx.fillStyle = "#f59e0b";
-    ctx.font = "bold 13px Inter, sans-serif";
-    ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 22, 26);
+    if (alertOptions && alertOptions.isFormation) {
+      ctx.fillStyle = "#c084fc";
+      ctx.font = "bold 13px Inter, sans-serif";
+      ctx.fillText(`⚡ OBSIDIAN FORMATION ALERT`, W - 22, 26);
+    } else {
+      ctx.fillStyle = "#f59e0b";
+      ctx.font = "bold 13px Inter, sans-serif";
+      ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 22, 26);
+    }
 
-    // ── Price bounds calculation across candle list + alert level ──
+    // ── Price bounds calculation across candle list (300 bars) ──
     let minP = Infinity, maxP = -Infinity;
     let maxVol = 0.0001;
     for (const c of candleList) {
@@ -14285,11 +14291,15 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       if (c.h > maxP) maxP = c.h;
       if (c.v > maxVol) maxVol = c.v;
     }
-    if (targetLevel > 0) {
-      minP = Math.min(minP, targetLevel);
-      maxP = Math.max(maxP, targetLevel);
+    
+    // Only include targetLevel in bounds if it is reasonably near the candle range (< 10% away)
+    if (targetLevel > 0 && !alertOptions?.isFormation) {
+      if (targetLevel >= minP * 0.9 && targetLevel <= maxP * 1.1) {
+        minP = Math.min(minP, targetLevel);
+        maxP = Math.max(maxP, targetLevel);
+      }
     }
-    const priceMargin = (maxP - minP) * 0.07 || (minP * 0.01);
+    const priceMargin = (maxP - minP) * 0.05 || (minP * 0.01);
     minP -= priceMargin;
     maxP += priceMargin;
     const priceRange = maxP - minP || 1;
@@ -14442,11 +14452,88 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       ctx.restore();
     }
 
-    // ── Alert Level Marker (Аккуратная метка ценового уровня) ──
+    // ── Render Formation Highlight (If Formation Alert) ──
     const alertBadgeYs = [];
     const lastCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
 
-    if (targetLevel > 0) {
+    if (alertOptions && alertOptions.isFormation) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, TOP, PW, PH);
+      ctx.clip();
+
+      const fType = alertOptions.formationType || "trendline";
+      const fInfo = alertOptions.formationInfo || { touches: 3, distPct: 0.28 };
+      
+      // Auto-calculate realistic swing line on recent candles (last 60 candles)
+      const lookback = Math.min(60, numCandles);
+      const startIdx = numCandles - lookback;
+      let swing1Idx = startIdx, swing2Idx = numCandles - Math.floor(lookback / 2);
+      let swing1H = candleList[swing1Idx].h, swing2H = candleList[swing2Idx].h;
+      
+      for (let i = startIdx; i < numCandles - 15; i++) {
+        if (candleList[i].h > swing1H) { swing1H = candleList[i].h; swing1Idx = i; }
+      }
+      for (let i = swing1Idx + 10; i < numCandles - 2; i++) {
+        if (candleList[i].h > swing2H) { swing2H = candleList[i].h; swing2Idx = i; }
+      }
+
+      const p1 = fInfo.p1 || swing1H;
+      const p2 = fInfo.p2 || swing2H;
+      const x1 = swing1Idx * candleStepW + candleStepW / 2;
+      const x2 = swing2Idx * candleStepW + candleStepW / 2;
+      const y1 = toY(p1);
+      const y2 = toY(p2);
+
+      // Draw Extended Formation Trendline
+      const dx = x2 - x1, dy = y2 - y1;
+      const slope = dx !== 0 ? dy / dx : 0;
+      const lineEndX = lastCandleX + candleStepW * 4;
+      const lineEndY = y1 + slope * (lineEndX - x1);
+
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = "rgba(250, 204, 21, 0.6)";
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(lineEndX, lineEndY);
+      ctx.stroke();
+
+      // Touch Points 🟡
+      [ { x: x1, y: y1 }, { x: x2, y: y2 }, { x: lineEndX - candleStepW * 6, y: y1 + slope * (lineEndX - candleStepW * 6 - x1) } ].forEach(pt => {
+        ctx.fillStyle = "#facc15";
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      });
+
+      // Formation Label Tag Pill
+      const tagText = `📐 Наклонка: ${fInfo.touches || 3} касания · Дистанция ${fInfo.distPct || 0.28}%`;
+      ctx.font = "bold 11px Inter, sans-serif";
+      const tagW = ctx.measureText(tagText).width + 16;
+      const tagX = Math.max(10, Math.min(PW - tagW - 10, (x1 + x2) / 2 - tagW / 2));
+      const tagY = Math.max(TOP + 10, Math.min(TOP + PH - 30, (y1 + y2) / 2 - 24));
+
+      if (typeof roundRect === "function") roundRect(ctx, tagX, tagY, tagW, 22, 5);
+      else ctx.fillRect(tagX, tagY, tagW, 22);
+      ctx.fillStyle = "rgba(20, 16, 2, 0.9)";
+      ctx.fill();
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      ctx.fillStyle = "#fde047";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(tagText, tagX + 8, tagY + 11);
+
+      ctx.restore();
+    } else if (targetLevel > 0) {
+      // ── Standard Price Alert Marker ──
       const alertY = toY(targetLevel);
       alertBadgeYs.push(alertY);
 
@@ -15474,15 +15561,15 @@ function initNotificationsUI() {
     const sym = activeSym || "BTCUSDT";
     const ex = activeEx || "BN";
     const tf = activeTf || "5m";
-    const curP = (typeof activePrice === "number" && activePrice > 0) ? activePrice : 95000;
-    const targetP = curP * 1.0028;
     const exFull = getFullExchangeName(ex);
-    const formattedPrice = typeof fP === "function" ? fP(curP) : curP.toLocaleString();
-    const formattedTarget = typeof fP === "function" ? fP(targetP) : targetP.toLocaleString();
 
     let photoDataUrl = null;
     try {
-      photoDataUrl = await captureChartSnapshot(sym, curP, targetP, tf, ex);
+      photoDataUrl = await captureChartSnapshot(sym, 0, 0, tf, ex, {
+        isFormation: true,
+        formationType: "trendline",
+        formationInfo: { touches: 3, distPct: 0.28 }
+      });
     } catch (err) {
       console.warn("Capture snapshot error during test:", err);
     }
@@ -15493,7 +15580,6 @@ function initNotificationsUI() {
       `• <b>Таймфрейм:</b> ${tf}\n` +
       `• <b>Касания:</b> 3 касания\n` +
       `• <b>Дистанция:</b> 0.28% до наклонки\n` +
-      `• <b>Текущая цена:</b> $${formattedPrice} → Уровень: $${formattedTarget}\n` +
       `─────────────────────────\n` +
       `⚡ <b>Obsidian Formation Scanner</b>`;
 
