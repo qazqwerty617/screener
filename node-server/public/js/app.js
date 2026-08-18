@@ -1192,13 +1192,53 @@ function resizeChart() {
   if (candles.length && chartW) requestDraw();
 }
 
+let chartUtcOffset = parseInt(localStorage.getItem("obsidian_utc_offset") ?? "3", 10);
+if (isNaN(chartUtcOffset)) chartUtcOffset = 3;
+window.chartUtcOffset = chartUtcOffset;
+
+function formatTimestampWithOffset(ts, tf = (typeof activeTf !== "undefined" ? activeTf : "5m"), offsetHours = window.chartUtcOffset) {
+  const d = new Date(ts + (offsetHours * 3600000));
+  const isDaily = (tf === "1d" || tf === "3d" || tf === "1w");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  if (isDaily) {
+    return `${day}.${month}`;
+  }
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function formatFullTimestampWithOffset(ts, tf = (typeof activeTf !== "undefined" ? activeTf : "5m"), offsetHours = window.chartUtcOffset) {
+  const d = new Date(ts + (offsetHours * 3600000));
+  const isDaily = (tf === "1d" || tf === "3d" || tf === "1w");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  if (isDaily) {
+    return `${day}.${month}`;
+  }
+  return `${day}.${month} ${hh}:${mm}`;
+}
+
+function cycleTimezoneOffset(delta = 1) {
+  let off = window.chartUtcOffset;
+  off += delta;
+  if (off > 14) off = -12;
+  if (off < -12) off = 14;
+  window.chartUtcOffset = off;
+  localStorage.setItem("obsidian_utc_offset", String(off));
+  if (typeof requestDraw === "function") requestDraw();
+  else if (typeof drawChart === "function") drawChart();
+  if (typeof showToast === "function") {
+    const sign = off >= 0 ? `+${off}` : `${off}`;
+    showToast({ title: `Часовой пояс: UTC${sign}`, message: `График переключен на UTC${sign}`, type: "info", durationMs: 2000 });
+  }
+}
+
 function fTime(ts) {
-  const d = new Date(ts);
-  if (activeTf === "1d" || activeTf === "3d" || activeTf === "1w")
-    return d.toLocaleDateString("ru", { day: "2-digit", month: "2-digit" });
-  const h = String(d.getHours()).padStart(2, "0"),
-    m = String(d.getMinutes()).padStart(2, "0");
-  return h + ":" + m;
+  return formatTimestampWithOffset(ts, typeof activeTf !== "undefined" ? activeTf : "5m", window.chartUtcOffset);
 }
 
 // тФАтФАтФА Chart draw helpers тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -3398,8 +3438,8 @@ function drawChart() {
   vCtx.lineTo(PW + 0.5, timeYStart + timeBarHeight);
   vCtx.stroke();
 
-  // Draw time labels across visible candles
-  if (vis.length > 0 && PW > 50) {
+  // Draw time labels across the entire chart width (including future space up to PW)
+  if (candles.length > 0 && PW > 50) {
     const minPxStep = 80;
     const stepBars = Math.max(1, Math.round(minPxStep / candleW));
 
@@ -3410,22 +3450,23 @@ function drawChart() {
     ctx.lineWidth = 1;
     ctx.beginPath();
 
-    vCtx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
     vCtx.font = "10px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
     vCtx.textAlign = "center";
     vCtx.textBaseline = "middle";
 
-    for (let i = 0; i < vis.length; i++) {
-      const globalIdx = s + i;
-      if (globalIdx % stepBars !== 0) continue;
-      const c = vis[i];
-      if (!c) continue;
+    const totalBarsOnScreen = Math.ceil(PW / candleW);
+    const startBarIdx = Math.floor(viewStart);
+    const endBarIdx = Math.ceil(viewStart + totalBarsOnScreen + 2);
 
-      const rawX = (globalIdx - viewStart) * candleW + candleW / 2;
-      if (rawX < 20 || rawX > PW - 20) continue;
+    for (let idx = startBarIdx; idx <= endBarIdx; idx++) {
+      if (idx % stepBars !== 0) continue;
+
+      const rawX = (idx - viewStart) * candleW + candleW / 2;
+      if (rawX < 15 || rawX > PW - 15) continue;
 
       // Small vertical tick mark on time bar
-      vCtx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.18)";
       vCtx.lineWidth = 1;
       vCtx.beginPath();
       vCtx.moveTo(rawX, timeYStart + 0.5);
@@ -3436,16 +3477,9 @@ function drawChart() {
       ctx.moveTo(rawX, TOP);
       ctx.lineTo(rawX, TOP + PH);
 
-      // Format time label
-      const dt = new Date(c.t);
-      let timeStr = "";
-      if (activeTf === "1d" || activeTf === "3d" || activeTf === "1w") {
-        timeStr = String(dt.getDate()).padStart(2, "0") + "." + String(dt.getMonth() + 1).padStart(2, "0");
-      } else {
-        const hh = String(dt.getHours()).padStart(2, "0");
-        const mm = String(dt.getMinutes()).padStart(2, "0");
-        timeStr = `${hh}:${mm}`;
-      }
+      // Format time label with active UTC offset
+      const barTime = getTimeFromIdx(idx);
+      const timeStr = formatTimestampWithOffset(barTime, activeTf, window.chartUtcOffset);
 
       vCtx.fillText(timeStr, rawX, timeYStart + 11.5);
     }
@@ -3454,46 +3488,63 @@ function drawChart() {
     ctx.restore();
   }
 
-  // Timezone label in bottom-right corner
-  vCtx.fillStyle = "rgba(255, 255, 255, 0.35)";
-  vCtx.font = "9px Inter, sans-serif";
+  // Timezone interactive button in bottom-right corner
+  const tzSign = (window.chartUtcOffset >= 0 ? `+${window.chartUtcOffset}` : `${window.chartUtcOffset}`);
+  const tzText = `UTC${tzSign}`;
+
+  const tzBtnX = PW + 4;
+  const tzBtnY = timeYStart + 2;
+  const tzBtnW = PR - 8;
+  const tzBtnH = timeBarHeight - 4;
+
+  const isTzHover = (mX >= PW && mX <= chartW && mY >= timeYStart && mY <= chartH);
+
+  if (isTzHover) {
+    roundRect(vCtx, tzBtnX, tzBtnY, tzBtnW, tzBtnH, 3.5);
+    vCtx.fillStyle = "rgba(124, 58, 237, 0.28)";
+    vCtx.fill();
+    vCtx.strokeStyle = "rgba(167, 139, 250, 0.75)";
+    vCtx.lineWidth = 1;
+    vCtx.stroke();
+    vCtx.fillStyle = "#ffffff";
+  } else {
+    roundRect(vCtx, tzBtnX, tzBtnY, tzBtnW, tzBtnH, 3.5);
+    vCtx.fillStyle = "rgba(255, 255, 255, 0.05)";
+    vCtx.fill();
+    vCtx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+    vCtx.lineWidth = 1;
+    vCtx.stroke();
+    vCtx.fillStyle = "rgba(255, 255, 255, 0.7)";
+  }
+
+  vCtx.font = "bold 9.5px Inter, sans-serif";
   vCtx.textAlign = "center";
   vCtx.textBaseline = "middle";
-  vCtx.fillText("UTC+3", PW + PR / 2, timeYStart + 11.5);
+  vCtx.fillText(tzText, tzBtnX + tzBtnW / 2, tzBtnY + tzBtnH / 2);
 
   // Time hover pill when crosshair is active
   if (mX >= 0 && mX < PW && mY >= 0 && mY <= chartH) {
-    const visIdx = Math.round(mX / candleW - futureGap);
-    const ci = clamp(visIdx, 0, vis.length - 1);
-    if (vis[ci]) {
-      const c = vis[ci];
-      const dt = new Date(c.t);
-      const day = String(dt.getDate()).padStart(2, "0");
-      const month = String(dt.getMonth() + 1).padStart(2, "0");
-      const hh = String(dt.getHours()).padStart(2, "0");
-      const mm = String(dt.getMinutes()).padStart(2, "0");
-      const hoverTimeStr = (activeTf === "1d" || activeTf === "3d" || activeTf === "1w") 
-        ? `${day}.${month}` 
-        : `${day}.${month} ${hh}:${mm}`;
+    const hoverIdx = mX / candleW + viewStart;
+    const hoverTime = getTimeFromIdx(hoverIdx);
+    const hoverTimeStr = formatFullTimestampWithOffset(hoverTime, activeTf, window.chartUtcOffset);
 
-      const tPillW = Math.max(58, (vCtx.measureText ? vCtx.measureText(hoverTimeStr).width : 50) + 14);
-      const tPillH = 17;
-      const tPillX = clamp(mX - tPillW / 2, 2, PW - tPillW - 2);
-      const tPillY = timeYStart + 2.5;
+    const tPillW = Math.max(58, (vCtx.measureText ? vCtx.measureText(hoverTimeStr).width : 50) + 14);
+    const tPillH = 17;
+    const tPillX = clamp(mX - tPillW / 2, 2, PW - tPillW - 2);
+    const tPillY = timeYStart + 2.5;
 
-      roundRect(vCtx, tPillX, tPillY, tPillW, tPillH, 3.5);
-      vCtx.fillStyle = "#1e1f2e";
-      vCtx.fill();
-      vCtx.strokeStyle = "rgba(124, 58, 237, 0.6)";
-      vCtx.lineWidth = 1;
-      vCtx.stroke();
+    roundRect(vCtx, tPillX, tPillY, tPillW, tPillH, 3.5);
+    vCtx.fillStyle = "#1e1f2e";
+    vCtx.fill();
+    vCtx.strokeStyle = "rgba(124, 58, 237, 0.6)";
+    vCtx.lineWidth = 1;
+    vCtx.stroke();
 
-      vCtx.fillStyle = "#ffffff";
-      vCtx.font = "bold 9.5px Inter, sans-serif";
-      vCtx.textAlign = "center";
-      vCtx.textBaseline = "middle";
-      vCtx.fillText(hoverTimeStr, tPillX + tPillW / 2, tPillY + tPillH / 2);
-    }
+    vCtx.fillStyle = "#ffffff";
+    vCtx.font = "bold 9.5px Inter, sans-serif";
+    vCtx.textAlign = "center";
+    vCtx.textBaseline = "middle";
+    vCtx.fillText(hoverTimeStr, tPillX + tPillW / 2, tPillY + tPillH / 2);
   }
 
   vCtx.restore();
@@ -4794,6 +4845,17 @@ canvas.addEventListener("mousedown", (e) => {
   const py = e.clientY - r.top;
   const PW = chartW - PR_WIDTH;
 
+  // Timezone button click in bottom-right corner
+  const timeBarH = 22;
+  if (px >= PW && py >= chartH - timeBarH) {
+    if (e.button === 2) {
+      cycleTimezoneOffset(-1);
+    } else {
+      cycleTimezoneOffset(1);
+    }
+    return;
+  }
+
   // Price axis drag
   if (px >= PW) {
     isDragYScale = true;
@@ -5008,8 +5070,13 @@ canvas.addEventListener("mousemove", (e) => {
   }
 
   // Cursor style
-  if (mX >= PW2) {
+  const timeBarH = 22;
+  if (mX >= PW2 && mY >= chartH - timeBarH) {
+    canvas.style.cursor = 'pointer';
+  } else if (mX >= PW2) {
     canvas.style.cursor = 'ns-resize';
+  } else if (mY >= chartH - timeBarH) {
+    canvas.style.cursor = 'ew-resize';
   } else if (dragDrawing) {
     canvas.style.cursor = 'grabbing';
   } else if (activeTool !== 'none') {
