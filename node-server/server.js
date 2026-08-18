@@ -2823,15 +2823,6 @@ server.listen(PORT, () => {
               const meta = { ex, sym, base, tf };
               const signals = patternDetector.scanCandles(meta, candles);
 
-              patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-              for (const sig of signals) {
-                patternsCache.push(sig);
-                newSignalsCount++;
-              }
-
-              // Autonomous 24/7 server-side formation alert dispatch
-              checkAndDispatchServerFormationAlerts(signals);
-
               // 24/7 Server-side pre-computation of formations levels
               const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
               const coinKey = `${ex}:${sym}`;
@@ -2839,10 +2830,45 @@ server.listen(PORT, () => {
               if (detectedLvls && detectedLvls.length > 0) {
                 serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedLvls);
                 cachedTfMaps[tf][coinKey] = detectedLvls;
+
+                const lastCandle = candles[candles.length - 1];
+                if (lastCandle) {
+                  for (const dLvl of detectedLvls) {
+                    const dist = Math.abs(lastCandle.c - dLvl.price) / lastCandle.c;
+                    if (dist <= 0.05) {
+                      signals.push({
+                        type: 'level',
+                        ex,
+                        sym,
+                        base,
+                        tf,
+                        price: dLvl.price,
+                        curPrice: lastCandle.c,
+                        direction: dLvl.direction === 'down' ? 'long' : 'short',
+                        confidence: dLvl.touches || 2,
+                        ts: Date.now(),
+                        meta: {
+                          touches: dLvl.touches || 2,
+                          dist: +(dist * 100).toFixed(2),
+                          direction: dLvl.direction
+                        }
+                      });
+                    }
+                  }
+                }
               } else {
                 serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
                 delete cachedTfMaps[tf][coinKey];
               }
+
+              patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
+              for (const sig of signals) {
+                patternsCache.push(sig);
+                newSignalsCount++;
+              }
+
+              // Autonomous 24/7 server-side formation alert dispatch
+              checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c);
             } catch (e) {}
           }
         }));
@@ -2867,7 +2893,7 @@ server.listen(PORT, () => {
   const serverFormationAlertCooldown = new Map();
   let serverAlertWarmupCompleted = false;
 
-  function checkAndDispatchServerFormationAlerts(signals) {
+  function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice) {
     if (!serverAlertWarmupCompleted) return;
     if (!Array.isArray(signals) || signals.length === 0) return;
     const now = Date.now();
@@ -2941,6 +2967,12 @@ server.listen(PORT, () => {
           }
         } else if (type === "retest") {
           if (!s.retest?.enabled) continue;
+          const targetDir = s.retest.direction || "all";
+          if (targetDir !== "all") {
+            const sigDir = signal.direction === "long" ? "up" : "down";
+            if ((targetDir === "up" || targetDir === "long") && sigDir !== "up") continue;
+            if ((targetDir === "down" || targetDir === "short") && sigDir !== "down") continue;
+          }
         } else {
           continue;
         }
@@ -2953,37 +2985,59 @@ server.listen(PORT, () => {
 
         serverFormationAlertCooldown.set(cdKey, now);
 
-        // Build notification text
-        const typeTitles = {
-          trendline: "Наклонный уровень (Наклонка)",
-          level: "Горизонтальный уровень (Горизонталка)",
-          retest: "Подтвержденный ретест (Ретест)"
-        };
-        const typeIcons = {
-          trendline: "📐",
-          level: "➖",
-          retest: "🔄"
-        };
-
-        const icon = typeIcons[type] || "🔔";
-        const title = typeTitles[type] || type;
         const exFull = ex === "BN" ? "Binance" : ex === "BB" ? "Bybit" : ex === "OX" ? "OKX" : ex === "BG" ? "Bitget" : ex === "GT" ? "Gate.io" : ex === "MX" ? "MEXC" : ex === "HL" ? "Hyperliquid" : ex;
         const nowD = new Date(now + 3 * 3600000);
         const timeStr = nowD.toISOString().substring(11, 19);
         const dateStr = nowD.toISOString().substring(8, 10) + "." + nowD.toISOString().substring(5, 7);
+        const actualPrice = signal.curPrice || fallbackCurPrice || price;
 
-        const msg =
-          `${icon} <b>Сигнал формации: ${title}</b>\n` +
-          `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
-          `• <b>Таймфрейм:</b> ${tf}\n` +
-          `• <b>Касания:</b> ${touches} касания\n` +
-          `• <b>Дистанция:</b> ${dist}% до уровня\n` +
-          `• <b>Текущая цена:</b> $${price}\n` +
-          `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
-          `─────────────────────────\n` +
-          `⚡ <b>Obsidian 24/7 Scanner</b>`;
+        let msg = "";
+        if (type === "trendline") {
+          const dirLabel = signal.direction === "long" ? "Поддержка (Long) 🟢" : "Сопротивление (Short) 🔴";
+          msg =
+            `📐 <b>Сигнал формации: Наклонный уровень (Наклонка)</b>\n` +
+            `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+            `• <b>Таймфрейм:</b> ${tf}\n` +
+            `• <b>Направление:</b> ${dirLabel}\n` +
+            `• <b>Касания:</b> ${touches} касания\n` +
+            `• <b>Дистанция:</b> ${dist}% до линии\n` +
+            `• <b>Цена наклона:</b> $${price}\n` +
+            `• <b>Текущая цена:</b> $${actualPrice}\n` +
+            `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
+            `─────────────────────────\n` +
+            `⚡ <b>Obsidian 24/7 Scanner</b>`;
+        } else if (type === "level") {
+          const dirLabel = signal.direction === "long" ? "Поддержка (Support) 🟢" : "Сопротивление (Resistance) 🔴";
+          msg =
+            `➖ <b>Сигнал формации: Горизонтальный уровень (Горизонталка)</b>\n` +
+            `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+            `• <b>Таймфрейм:</b> ${tf}\n` +
+            `• <b>Тип уровня:</b> ${dirLabel}\n` +
+            `• <b>Касания:</b> ${touches} касания\n` +
+            `• <b>Дистанция:</b> ${dist}% до уровня\n` +
+            `• <b>Цена уровня:</b> $${price}\n` +
+            `• <b>Текущая цена:</b> $${actualPrice}\n` +
+            `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
+            `─────────────────────────\n` +
+            `⚡ <b>Obsidian 24/7 Scanner</b>`;
+        } else if (type === "retest") {
+          const dirLabel = signal.direction === "long" ? "Ретест пробоя вверх (Long) 🟢" : "Ретест пробоя вниз (Short) 🔴";
+          const srcLabel = meta.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";
+          msg =
+            `🔄 <b>Сигнал формации: Подтвержденный ретест (Ретест)</b>\n` +
+            `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+            `• <b>Таймфрейм:</b> ${tf}\n` +
+            `• <b>Тип ретеста:</b> ${dirLabel}\n` +
+            `• <b>Основа:</b> ${srcLabel}\n` +
+            `• <b>Статус:</b> Подтвержденный отскок (Confirmed) ✅\n` +
+            `• <b>Цена уровня:</b> $${price}\n` +
+            `• <b>Текущая цена:</b> $${actualPrice}\n` +
+            `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
+            `─────────────────────────\n` +
+            `⚡ <b>Obsidian 24/7 Scanner</b>`;
+        }
 
-        if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+        if (msg && telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
           telegramBot.sendTelegramMessage(chatId, msg).catch(err => {
             console.warn(`[24/7 ALERT ERROR] Failed to send to ${chatId}:`, err.message);
           });

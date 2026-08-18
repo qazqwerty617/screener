@@ -15982,6 +15982,8 @@ function initNotificationsUI() {
       }
     }
 
+    const typeIcon = data.type === "trendline" ? "📐" : data.type === "level" ? "➖" : "🔄";
+
     if (s.soundEnabled) {
       try { playAlertSound("chime"); } catch (_) {}
     }
@@ -15989,7 +15991,7 @@ function initNotificationsUI() {
     if (s.toastEnabled) {
       try {
         showToast({
-          title: `📐 ${data.typeName}`,
+          title: `${typeIcon} ${data.typeName}`,
           message: `<b>${symDisp} (${exFull}) [${data.tf}]</b>: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
           type: "price_alert"
         });
@@ -15998,7 +16000,7 @@ function initNotificationsUI() {
 
     if (s.tgEnabled) {
       const telegramMsg =
-        `📐 <b>Сигнал формации: ${data.typeName}</b>\n` +
+        `${typeIcon} <b>Сигнал формации: ${data.typeName}</b>\n` +
         `• <b>Монета:</b> ${symDisp} (${exFull})\n` +
         `• <b>Таймфрейм:</b> ${data.tf}\n` +
         `• <b>Касания:</b> ${data.touches} касания\n` +
