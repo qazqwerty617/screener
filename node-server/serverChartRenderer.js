@@ -328,27 +328,80 @@ function renderServerChartSnapshot(candles, meta, signal) {
     gp += gridStep;
   }
 
-  // ── Bottom Time Labels ──
+  // ── Bottom Time Labels & Ticks (Clean Round Time intervals + UTC+3 tag) ──
   const timeY = H - BTM_TIME / 2;
+  const tfLow = tf.toLowerCase();
+
+  // Determine ideal milestone time interval in milliseconds
+  let intervalMs = 3600000; // 1 hour default
+  if (tfLow === "1m") intervalMs = 15 * 60000; // 15 mins
+  else if (tfLow === "3m" || tfLow === "5m") intervalMs = 30 * 60000; // 30 mins
+  else if (tfLow === "15m" || tfLow === "30m") intervalMs = 2 * 3600000; // 2 hours
+  else if (tfLow === "1h") intervalMs = 4 * 3600000; // 4 hours
+  else if (tfLow === "4h") intervalMs = 8 * 3600000; // 8 hours
+  else if (tfLow === "1d") intervalMs = 3 * 86400000; // 3 days
+
   ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
   ctx.font = "10.5px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  const timeStep = Math.floor(numCandles / 7);
-  for (let i = Math.floor(timeStep / 2); i < numCandles; i += timeStep) {
+  let lastDrawnX = -100;
+  for (let i = 0; i < numCandles; i++) {
     const c = candleList[i];
-    if (c && c.t) {
-      const d = new Date(c.t + 3 * 3600000);
-      const timeStr = `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
-      const dateStr = `${String(d.getUTCDate()).padStart(2, "0")}.${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-      const label = tf.includes("D") ? dateStr : `${dateStr} ${timeStr}`;
-      const tx = i * candleStepW + candleStepW / 2;
-      if (tx > 40 && tx < PW - 40) {
-        ctx.fillText(label, tx, timeY);
+    if (!c || !c.t) continue;
+    const t = c.t;
+    const prevT = i > 0 ? candleList[i - 1].t : 0;
+    const curIntervalBucket = Math.floor(t / intervalMs);
+    const prevIntervalBucket = Math.floor(prevT / intervalMs);
+
+    if (curIntervalBucket !== prevIntervalBucket || (i === 0 && numCandles < 30)) {
+      const cx = i * candleStepW + candleStepW / 2;
+      if (cx >= 45 && cx <= PW - 45 && (cx - lastDrawnX) >= 65) {
+        const d = new Date(t + 3 * 3600000); // UTC+3
+        const hh = String(d.getUTCHours()).padStart(2, "0");
+        const mm = String(d.getUTCMinutes()).padStart(2, "0");
+        const day = String(d.getUTCDate()).padStart(2, "0");
+        const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+
+        let timeStr = `${hh}:${mm}`;
+        if (tfLow === "1d") timeStr = `${day}.${month}`;
+        else if (hh === "00" && mm === "00") timeStr = `${day}.${month}`;
+
+        // Small vertical tick mark on time bar
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx, TOP + PH + VOL_H);
+        ctx.lineTo(cx, TOP + PH + VOL_H + 4);
+        ctx.stroke();
+
+        ctx.fillText(timeStr, cx, timeY);
+        lastDrawnX = cx;
       }
     }
   }
+
+  // UTC+3 Badge in bottom-right corner matching screener chart
+  const tzX = PW + 6;
+  const tzY = H - BTM_TIME + 4;
+  const tzW = PR - 12;
+  const tzH = BTM_TIME - 8;
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(tzX, tzY, tzW, tzH, 3.5) : ctx.rect(tzX, tzY, tzW, tzH);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
+  ctx.font = "bold 10px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("UTC+3", tzX + tzW / 2, tzY + tzH / 2);
+  ctx.restore();
 
   return canvas.toBuffer("image/png");
 }
