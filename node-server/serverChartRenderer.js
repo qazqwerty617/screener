@@ -175,39 +175,77 @@ function renderServerChartSnapshot(candles, meta, signal) {
   ctx.clip();
 
   if (sigType === "trendline") {
-    // Tangent trendline
-    const p1Idx = Math.max(0, numCandles - 45);
-    const p2Idx = numCandles - 10;
-    const x1 = p1Idx * candleStepW + candleStepW / 2;
-    const x2 = p2Idx * candleStepW + candleStepW / 2;
-    const p1Price = candleList[p1Idx] ? candleList[p1Idx].h : lastCandle.h;
-    const p2Price = candleList[p2Idx] ? candleList[p2Idx].h : lastCandle.h;
-    const y1 = toY(p1Price);
-    const y2 = toY(p2Price);
-    const slope = (y2 - y1) / Math.max(1, x2 - x1);
-    const endX = (numCandles - 1) * candleStepW + candleStepW * 2;
-    const endY = y1 + slope * (endX - x1);
+    let x1, y1, x2, y2;
+    const offset = candles.length - numCandles;
+    const p1Idx = signal?.meta?.p1Idx !== undefined ? signal.meta.p1Idx - offset : -1;
+    const p2Idx = signal?.meta?.p2Idx !== undefined ? signal.meta.p2Idx - offset : -1;
+    const p1Price = signal?.meta?.p1Price;
+    const p2Price = signal?.meta?.p2Price;
 
-    ctx.strokeStyle = "#eab308";
-    ctx.lineWidth = 1.8;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(endX, endY);
-    ctx.stroke();
+    if (p1Idx >= 0 && p2Idx >= 0 && p1Price && p2Price && p2Idx > p1Idx) {
+      x1 = p1Idx * candleStepW + candleStepW / 2;
+      y1 = toY(p1Price);
+      x2 = p2Idx * candleStepW + candleStepW / 2;
+      y2 = toY(p2Price);
+    } else {
+      // Clean fallback: find swing extrema on the visible candleList
+      const isAsc = signal?.direction === "long" || signal?.meta?.tlType === "asc";
+      const swings = [];
+      for (let i = 2; i < numCandles - 2; i++) {
+        if (isAsc) {
+          if (candleList[i].l <= candleList[i - 1].l && candleList[i].l <= candleList[i + 1].l) {
+            swings.push({ idx: i, p: candleList[i].l });
+          }
+        } else {
+          if (candleList[i].h >= candleList[i - 1].h && candleList[i].h >= candleList[i + 1].h) {
+            swings.push({ idx: i, p: candleList[i].h });
+          }
+        }
+      }
+      if (swings.length >= 2) {
+        const s1 = swings[Math.max(0, swings.length - 3)];
+        const s2 = swings[swings.length - 1];
+        x1 = s1.idx * candleStepW + candleStepW / 2;
+        y1 = toY(s1.p);
+        x2 = s2.idx * candleStepW + candleStepW / 2;
+        y2 = toY(s2.p);
+      } else {
+        x1 = Math.max(0, numCandles - 30) * candleStepW + candleStepW / 2;
+        y1 = toY(isAsc ? lastCandle.l : lastCandle.h);
+        x2 = (numCandles - 1) * candleStepW + candleStepW / 2;
+        y2 = toY(signal?.price || lastCandle.c);
+      }
+    }
 
-    // Touch Points
-    [ { x: x1, y: y1 }, { x: x2, y: y2 } ].forEach(pt => {
-      ctx.fillStyle = "#eab308";
+    if (x2 > x1) {
+      const slope = (y2 - y1) / (x2 - x1);
+      const endX = (numCandles - 1) * candleStepW + candleStepW / 2;
+      const endY = y1 + slope * (endX - x1);
+
+      ctx.strokeStyle = "#eab308";
+      ctx.lineWidth = 2.0;
       ctx.beginPath();
-      ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    });
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+
+      // Touch Points
+      [ { x: x1, y: y1 }, { x: x2, y: y2 } ].forEach(pt => {
+        ctx.fillStyle = "#eab308";
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+    }
   } else if (sigType === "level" || sigType === "retest") {
     const lvlPrice = signal?.price || lastCandle.c;
     const ly = toY(lvlPrice);
 
     ctx.strokeStyle = sigType === "retest" ? "#38bdf8" : "#f59e0b";
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.8;
     ctx.setLineDash([5, 4]);
     ctx.beginPath();
     ctx.moveTo(0, ly);

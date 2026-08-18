@@ -2822,9 +2822,14 @@ server.listen(PORT, () => {
 
     try {
       const list = Array.from(tickers.values())
-        .filter(t => t.v > 0)
+        .filter(t => {
+          if (!t || t.v < 300000) return false;
+          const k = String(t.key || "").toUpperCase();
+          if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") || k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) return false;
+          return true;
+        })
         .sort((a, b) => b.v - a.v)
-        .slice(0, 250);
+        .slice(0, 200);
 
       if (list.length === 0) {
         isScanningPatterns = false;
@@ -2832,7 +2837,7 @@ server.listen(PORT, () => {
         return;
       }
 
-      console.log(`[PATTERNS 24/7] Starting scan cycle for top ${list.length} pairs across timeframes...`);
+      console.log(`[PATTERNS 24/7] Starting scan cycle for top ${list.length} liquid crypto pairs...`);
       const timeframes = ["15m", "1h", "4h", "5m", "1d"];
       let newSignalsCount = 0;
 
@@ -2870,7 +2875,7 @@ server.listen(PORT, () => {
                 if (lastCandle) {
                   for (const dLvl of detectedLvls) {
                     const dist = Math.abs(lastCandle.c - dLvl.price) / lastCandle.c;
-                    if (dist <= 0.05) {
+                    if (dist <= 0.015 && (dLvl.touches || 2) >= 2) {
                       signals.push({
                         type: 'level',
                         ex,
