@@ -3,12 +3,12 @@
 const formationEngine = require("./public/js/formationEngine");
 
 /**
- * Shared server/browser cascade detector. Keeping one implementation prevents
- * the formations tab and screener chart from disagreeing about geometry.
+ * Clean unbroken horizontal S/R detector for server-side 24/7 scanning.
+ * Rejects pierced levels and ensures at least 2 distinct swing bounces.
  */
 function detectChartLevelsAndTouches(rawCandles) {
   try {
-    return formationEngine.detectCascades(rawCandles, 1);
+    return formationEngine.detectHorizontals(rawCandles, 2);
   } catch (_) {
     return [];
   }

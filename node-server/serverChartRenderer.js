@@ -2,84 +2,119 @@ const { createCanvas } = require("@napi-rs/canvas");
 
 /**
  * Server-Side Chart Snapshot Renderer using @napi-rs/canvas
- * Generates crisp 860x480 PNG buffer matching the screener aesthetic.
+ * Generates identical Ultra-HD 1200x680 PNG buffer matching the screener HUD aesthetic.
  */
 function renderServerChartSnapshot(candles, meta, signal) {
-  const W = 860;
-  const H = 480;
+  const W = 1200;
+  const H = 680;
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
 
-  // Background
-  ctx.fillStyle = "#0a0914";
+  // Deep Obsidian Background
+  ctx.fillStyle = "#0c0e14";
   ctx.fillRect(0, 0, W, H);
 
   if (!Array.isArray(candles) || candles.length < 5) {
     return canvas.toBuffer("image/png");
   }
 
-  const numCandles = Math.min(candles.length, 120);
+  const numCandles = Math.min(candles.length, 140);
   const candleList = candles.slice(-numCandles);
   const lastCandle = candleList[candleList.length - 1];
   const firstCandle = candleList[0];
 
   const ex = meta?.ex || "BN";
-  const sym = meta?.sym || "UNKNOWN";
-  const tf = meta?.tf || "15m";
+  const sym = (meta?.sym || "UNKNOWN").toUpperCase();
+  const tf = (meta?.tf || "15m").toUpperCase();
   const exFull = ex === "BN" ? "Binance" : ex === "BB" ? "Bybit" : ex === "OX" ? "OKX" : ex === "BG" ? "Bitget" : ex === "GT" ? "Gate.io" : ex === "MX" ? "MEXC" : ex === "HL" ? "Hyperliquid" : ex === "BX" ? "BingX" : ex === "KC" ? "KuCoin" : ex === "HT" ? "HTX" : ex;
 
-  const TOP = 48;
-  const BOTTOM = 32;
-  const VOL_H = 65;
-  const PR = 80; // right price scale width
+  const TOP = 52;
+  const PR = 105;
   const PW = W - PR;
-  const PH = H - TOP - BOTTOM - VOL_H;
+  const BTM_TIME = 28;
+  const VOL_H = 105;
+  const PH = H - TOP - VOL_H - BTM_TIME;
   const volY = TOP + PH;
 
-  // ── Header Badges ──
+  // ── Header (Symbol + Timeframe Badge + Stats HUD + Alert Title) ──
   ctx.save();
+  ctx.font = "bold 20px sans-serif";
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 15px sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText(sym.toUpperCase(), 16, 28);
-
-  const symWidth = ctx.measureText(sym.toUpperCase()).width;
-  let curBadgeX = 16 + symWidth + 10;
+  ctx.textBaseline = "middle";
+  ctx.fillText(sym, 22, 26);
+  const symW = ctx.measureText(sym).width;
 
   // Timeframe Badge
-  ctx.fillStyle = "#f97316";
-  ctx.fillRect(curBadgeX, 13, 34, 18);
+  const tfColors = { "1M": "#38bdf8", "3M": "#38bdf8", "5M": "#22c55e", "15M": "#a855f7", "30M": "#ec4899", "1H": "#f59e0b", "4H": "#f97316", "1D": "#e11d48" };
+  const tfBg = tfColors[tf] || "#a855f7";
+  const badgeX = 22 + symW + 12;
+  const tfBadgeW = Math.max(36, tf.length * 9 + 16);
+
+  ctx.fillStyle = tfBg;
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(badgeX, 14, tfBadgeW, 23, 5) : ctx.rect(badgeX, 14, tfBadgeW, 23);
+  ctx.fill();
+
   ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 11px sans-serif";
+  ctx.font = "bold 11.5px sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(tf.toUpperCase(), curBadgeX + 17, 26);
-  curBadgeX += 42;
+  ctx.fillText(tf, badgeX + tfBadgeW / 2, 26);
 
-  // Exchange Badge
-  ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-  ctx.fillRect(curBadgeX, 13, 56, 18);
-  ctx.fillStyle = "#94a3b8";
-  ctx.font = "600 10.5px sans-serif";
-  ctx.fillText(exFull, curBadgeX + 28, 26);
-  curBadgeX += 64;
+  // ── Coin Stats HUD Card (Изм, Объем, NATR, Фандинг) ──
+  const hudX = badgeX + tfBadgeW + 16;
+  const chg24 = firstCandle.o > 0 ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : 0;
+  const isChgUp = chg24 >= 0;
+  const chgText = (isChgUp ? "+" : "") + chg24.toFixed(2) + "%";
 
-  // Price Change %
-  const chgPct = firstCandle.c > 0 ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : 0;
-  const isUp = chgPct >= 0;
-  const chgText = (isUp ? "+" : "") + chgPct.toFixed(2) + "%";
-  ctx.fillStyle = isUp ? "rgba(34, 197, 94, 0.15)" : "rgba(239, 68, 68, 0.15)";
-  ctx.fillRect(curBadgeX, 13, 62, 18);
-  ctx.fillStyle = isUp ? "#22c55e" : "#ef4444";
-  ctx.font = "bold 11px sans-serif";
-  ctx.fillText(chgText, curBadgeX + 31, 26);
-  ctx.restore();
+  let sumVol = 0;
+  for (const c of candleList) sumVol += (c.v || 0) * (c.c || 1);
+  const vol24Str = sumVol >= 1e9 ? `$${(sumVol / 1e9).toFixed(1)}B` : sumVol >= 1e6 ? `$${(sumVol / 1e6).toFixed(1)}M` : `$${(sumVol / 1e3).toFixed(0)}K`;
+
+  let lH = 0, lL = Infinity;
+  for (const c of candleList) { if (c.h > lH) lH = c.h; if (c.l < lL) lL = c.l; }
+  const natrVal = lastCandle.c > 0 && lH >= lL ? Math.max(0, Math.min(100, ((lH - lL) / lastCandle.c) * 100 * 0.45)) : 12.5;
+
+  let curStatX = hudX;
+  const renderStatPill = (label, val, valCol) => {
+    ctx.font = "600 10.5px sans-serif";
+    const lblW = ctx.measureText(label).width;
+    ctx.font = "bold 11px sans-serif";
+    const valW = ctx.measureText(val).width;
+    const pillW = lblW + valW + 18;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(curStatX, 14, pillW, 23, 5) : ctx.rect(curStatX, 14, pillW, 23);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.055)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    ctx.font = "600 10px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(label, curStatX + 7, 26);
+
+    ctx.fillStyle = valCol;
+    ctx.font = "bold 11px monospace";
+    ctx.fillText(val, curStatX + 7 + lblW + 4, 26);
+    ctx.restore();
+
+    curStatX += pillW + 8;
+  };
+
+  renderStatPill("ИЗМ", chgText, isChgUp ? "#22c55e" : "#ef4444");
+  renderStatPill("ОБЪЕМ", vol24Str, "#ffffff");
+  renderStatPill("NATR", natrVal.toFixed(1) + "%", "#a855f7");
+  renderStatPill("ФАНДИНГ", "+0.0100%", "#fbbf24");
 
   // Top Right Title (Clean, NO Emojis)
-  ctx.save();
   ctx.textAlign = "right";
   ctx.fillStyle = "#c084fc";
   ctx.font = "bold 12px sans-serif";
-  ctx.fillText("OBSIDIAN FORMATION ALERT", W - 18, 20);
+  ctx.fillText("OBSIDIAN FORMATION ALERT", W - 22, 20);
 
   const sigType = signal?.type || "trendline";
   const touches = signal?.meta?.touches || 2;
@@ -90,7 +125,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
 
   ctx.fillStyle = "#94a3b8";
   ctx.font = "500 10.5px sans-serif";
-  ctx.fillText(subtitle, W - 18, 34);
+  ctx.fillText(subtitle, W - 22, 34);
   ctx.restore();
 
   // ── Price Bounds ──
@@ -106,30 +141,25 @@ function renderServerChartSnapshot(candles, meta, signal) {
   const priceRange = maxP - minP || 1;
 
   const toY = (p) => TOP + (maxP - p) * (PH / priceRange);
-  const toVolY = (v) => volY + VOL_H - (v / maxVol) * (VOL_H - 12);
+  const toVolY = (v) => volY + VOL_H - (v / maxVol) * (VOL_H - 15);
 
   const candleStepW = PW / numCandles;
-  const candleBodyW = Math.max(2, Math.min(candleStepW * 0.76, candleStepW - 1.2));
+  const candleBodyW = Math.max(1.8, Math.min(candleStepW * 0.76, candleStepW - 1.2));
 
   // ── Background Grid ──
+  const gridStep = priceRange / 7;
+  let gp = Math.ceil(minP / gridStep) * gridStep;
   ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
   ctx.lineWidth = 1;
-  const numGrid = 6;
-  for (let i = 0; i <= numGrid; i++) {
-    const p = minP + (priceRange / numGrid) * i;
-    const y = toY(p);
+  while (gp <= maxP) {
+    const y = toY(gp);
     if (y >= TOP && y <= TOP + PH) {
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(PW, y);
       ctx.stroke();
-
-      // Right price scale label
-      ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
-      ctx.font = "10px monospace";
-      ctx.textAlign = "left";
-      ctx.fillText(p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p.toFixed(6), PW + 8, y + 3);
     }
+    gp += gridStep;
   }
 
   // Volume Separator Line
@@ -143,12 +173,12 @@ function renderServerChartSnapshot(candles, meta, signal) {
   for (let i = 0; i < numCandles; i++) {
     const c = candleList[i];
     const cx = i * candleStepW + candleStepW / 2;
-    const isGreen = c.c >= c.o;
-    const col = isGreen ? "#22c55e" : "#ef4444";
+    const isUp = c.c >= c.o;
+    const col = isUp ? "#22c55e" : "#ef4444";
 
     // Wick
     ctx.strokeStyle = col;
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = 1.1;
     ctx.beginPath();
     ctx.moveTo(cx, toY(c.h));
     ctx.lineTo(cx, toY(c.l));
@@ -164,15 +194,17 @@ function renderServerChartSnapshot(candles, meta, signal) {
 
     // Volume Bar
     const vTop = toVolY(c.v);
-    ctx.fillStyle = isGreen ? "rgba(34, 197, 94, 0.35)" : "rgba(239, 68, 68, 0.35)";
+    ctx.fillStyle = isUp ? "rgba(34, 197, 94, 0.45)" : "rgba(239, 68, 68, 0.45)";
     ctx.fillRect(cx - candleBodyW / 2, vTop, candleBodyW, volY + VOL_H - vTop);
   }
 
-  // ── Formation Overlay ──
+  // ── Formation Highlight ──
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, TOP, PW, PH);
   ctx.clip();
+
+  const lastCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
 
   if (sigType === "trendline") {
     let x1, y1, x2, y2;
@@ -188,7 +220,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
       x2 = p2Idx * candleStepW + candleStepW / 2;
       y2 = toY(p2Price);
     } else {
-      // Clean fallback: find swing extrema on the visible candleList
+      // Find clean tangent swing extrema
       const isAsc = signal?.direction === "long" || signal?.meta?.tlType === "asc";
       const swings = [];
       for (let i = 2; i < numCandles - 2; i++) {
@@ -210,7 +242,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
         x2 = s2.idx * candleStepW + candleStepW / 2;
         y2 = toY(s2.p);
       } else {
-        x1 = Math.max(0, numCandles - 30) * candleStepW + candleStepW / 2;
+        x1 = Math.max(0, numCandles - 35) * candleStepW + candleStepW / 2;
         y1 = toY(isAsc ? lastCandle.l : lastCandle.h);
         x2 = (numCandles - 1) * candleStepW + candleStepW / 2;
         y2 = toY(signal?.price || lastCandle.c);
@@ -219,21 +251,21 @@ function renderServerChartSnapshot(candles, meta, signal) {
 
     if (x2 > x1) {
       const slope = (y2 - y1) / (x2 - x1);
-      const endX = (numCandles - 1) * candleStepW + candleStepW / 2;
-      const endY = y1 + slope * (endX - x1);
+      const lineEndX = lastCandleX + candleStepW * 3;
+      const lineEndY = y1 + slope * (lineEndX - x1);
 
       ctx.strokeStyle = "#eab308";
-      ctx.lineWidth = 2.0;
+      ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      ctx.lineTo(endX, endY);
+      ctx.lineTo(lineEndX, lineEndY);
       ctx.stroke();
 
-      // Touch Points
+      // Subtle touch dots
       [ { x: x1, y: y1 }, { x: x2, y: y2 } ].forEach(pt => {
         ctx.fillStyle = "#eab308";
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, 2.8, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = "#000000";
         ctx.lineWidth = 1;
@@ -245,8 +277,8 @@ function renderServerChartSnapshot(candles, meta, signal) {
     const ly = toY(lvlPrice);
 
     ctx.strokeStyle = sigType === "retest" ? "#38bdf8" : "#f59e0b";
-    ctx.lineWidth = 1.8;
-    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.moveTo(0, ly);
     ctx.lineTo(PW, ly);
@@ -255,29 +287,114 @@ function renderServerChartSnapshot(candles, meta, signal) {
   }
   ctx.restore();
 
-  // ── Current Price Badge on Right Scale ──
-  const curY = toY(lastCandle.c);
-  const isCurUp = lastCandle.c >= lastCandle.o;
-  ctx.fillStyle = isCurUp ? "#22c55e" : "#ef4444";
-  ctx.fillRect(PW + 2, curY - 10, PR - 4, 20);
-  ctx.fillStyle = "#000000";
-  ctx.font = "bold 10.5px monospace";
+  // ── Bottom Semi-Transparent HUD Card (Obsidian Formation Scanner) ──
+  const hudW = 340;
+  const hudH = 175;
+  const hudCardX = (PW - hudW) / 2;
+  const hudCardY = H - hudH - 24;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(hudCardX, hudCardY, hudW, hudH, 8) : ctx.rect(hudCardX, hudCardY, hudW, hudH);
+  ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 11.5px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+
+  let typeName = "Наклонный уровень (Наклонка)";
+  if (sigType === "level") typeName = "Горизонтальный уровень (Горизонталка)";
+  else if (sigType === "retest") typeName = "Подтвержденный ретест (Ретест)";
+
+  let lineY = hudCardY + 12;
+  ctx.fillText(`Сигнал формации: ${typeName}`, hudCardX + 14, lineY);
+  lineY += 18;
+
+  ctx.font = "500 10.5px sans-serif";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+  ctx.fillText(`• Монета: ${sym} (${exFull})`, hudCardX + 14, lineY); lineY += 16;
+  ctx.fillText(`• Таймфрейм: ${tf.toLowerCase()}`, hudCardX + 14, lineY); lineY += 16;
+  ctx.fillText(`• Касания: ${touches} касания`, hudCardX + 14, lineY); lineY += 16;
+  ctx.fillText(`• Дистанция: ${dist}% до формации`, hudCardX + 14, lineY); lineY += 16;
+  ctx.fillText(`• Текущая цена: $${lastCandle.c >= 100 ? lastCandle.c.toFixed(2) : lastCandle.c >= 1 ? lastCandle.c.toFixed(4) : lastCandle.c.toFixed(6)}`, hudCardX + 14, lineY); lineY += 16;
+  ctx.fillText(`• Объем 24ч: ${vol24Str}`, hudCardX + 14, lineY); lineY += 16;
+
+  const nowD = new Date(Date.now() + 3 * 3600000);
+  const timeStr = nowD.toISOString().substring(11, 19);
+  const dateStr = nowD.toISOString().substring(8, 10) + "." + nowD.toISOString().substring(5, 7);
+  ctx.fillText(`• Время: ${dateStr} ${timeStr}`, hudCardX + 14, lineY); lineY += 20;
+
+  ctx.font = "bold 10px sans-serif";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText("Obsidian Formation Scanner", hudCardX + 14, lineY);
+  ctx.restore();
+
+  // ── Live / Last Candle Price Badge on Right Scale ──
+  const liveY = toY(lastCandle.c);
+  const isUp = lastCandle.c >= lastCandle.o;
+  const bH = 22;
+  const bW = PR - 8;
+  const bX = PW + 4;
+  const bY = liveY - bH / 2;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(bX, bY, bW, bH, 5) : ctx.rect(bX, bY, bW, bH);
+  ctx.fillStyle = "#131722";
+  ctx.fill();
+  ctx.strokeStyle = isUp ? "#22c55e" : "#ef4444";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold 11px monospace";
   ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   const pStr = lastCandle.c >= 100 ? lastCandle.c.toFixed(2) : lastCandle.c >= 1 ? lastCandle.c.toFixed(4) : lastCandle.c.toFixed(6);
-  ctx.fillText(pStr, PW + PR / 2, curY + 4);
+  ctx.fillText(pStr, bX + bW / 2, liveY);
+  ctx.restore();
+
+  // ── Price Scale Labels (Right) ──
+  gp = Math.ceil(minP / gridStep) * gridStep;
+  ctx.font = "10.5px sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  while (gp <= maxP) {
+    const y = toY(gp);
+    if (y >= TOP + 12 && y <= TOP + PH - 12) {
+      if (Math.abs(liveY - y) >= 16) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+        ctx.fillText(gp >= 100 ? gp.toFixed(2) : gp >= 1 ? gp.toFixed(4) : gp.toFixed(6), PW + 8, y);
+      }
+    }
+    gp += gridStep;
+  }
 
   // ── Bottom Time Labels ──
+  const timeY = H - BTM_TIME / 2;
   ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
-  ctx.font = "10px monospace";
+  ctx.font = "10.5px sans-serif";
   ctx.textAlign = "center";
-  const stepIdx = Math.floor(numCandles / 5);
-  for (let i = 0; i < numCandles; i += stepIdx) {
+  ctx.textBaseline = "middle";
+
+  const timeStep = Math.floor(numCandles / 7);
+  for (let i = Math.floor(timeStep / 2); i < numCandles; i += timeStep) {
     const c = candleList[i];
-    if (!c || !c.t) continue;
-    const d = new Date(c.t + 3 * 3600000); // UTC+3
-    const dStr = d.toISOString().substring(8, 10) + "." + d.toISOString().substring(5, 7) + " " + d.toISOString().substring(11, 16);
-    const x = i * candleStepW + candleStepW / 2;
-    ctx.fillText(dStr, x, H - 10);
+    if (c && c.t) {
+      const d = new Date(c.t + 3 * 3600000);
+      const timeStr = `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+      const dateStr = `${String(d.getUTCDate()).padStart(2, "0")}.${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      const label = tf.includes("D") ? dateStr : `${dateStr} ${timeStr}`;
+      const tx = i * candleStepW + candleStepW / 2;
+      if (tx > 40 && tx < PW - 40) {
+        ctx.fillText(label, tx, timeY);
+      }
+    }
   }
 
   return canvas.toBuffer("image/png");
