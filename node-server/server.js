@@ -441,6 +441,7 @@ const telegramBot = require("./telegramBot");
 const paymentGateway = require("./paymentGateway");
 const adminBot = require("./adminBot");
 const { registerPaymentRoutes, createSlidingWindowLimiter } = require("./paymentRoutes");
+const { renderServerChartSnapshot } = require("./serverChartRenderer");
 
 // ── HTTP + WebSocket server ──
 const app = express();
@@ -2902,7 +2903,7 @@ server.listen(PORT, () => {
               }
 
               // Autonomous 24/7 server-side formation alert dispatch
-              checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c);
+              checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c, candles);
             } catch (e) {}
           }));
         }));
@@ -2925,7 +2926,46 @@ server.listen(PORT, () => {
   // 24/7 Autonomous Server-Side Formation Alert Dispatcher
   const serverFormationAlertCooldown = new Map();
 
-  function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice) {
+  async function sendServerTelegramAlert(chatId, caption, photoBuffer) {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+        return telegramBot.sendTelegramMessage(chatId, caption);
+      }
+      return;
+    }
+
+    if (photoBuffer && Buffer.isBuffer(photoBuffer)) {
+      try {
+        const blob = new Blob([photoBuffer], { type: "image/png" });
+        const form = new FormData();
+        form.append("chat_id", String(chatId));
+        form.append("caption", caption);
+        form.append("parse_mode", "HTML");
+        form.append("photo", blob, "chart_alert.png");
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: "POST",
+          body: form
+        });
+        const parsed = await tgRes.json();
+        if (parsed.ok) {
+          console.log(`[24/7 TG PHOTO SENT] Sent chart photo for alert to ${chatId}`);
+          return true;
+        }
+        console.warn(`[24/7 TG PHOTO FAIL]`, parsed.description);
+      } catch (e) {
+        console.warn(`[24/7 TG PHOTO SEND FAIL]`, e.message);
+      }
+    }
+
+    // Fallback to text message
+    if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+      return telegramBot.sendTelegramMessage(chatId, caption);
+    }
+  }
+
+  function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice, rawCandles) {
     if (!Array.isArray(signals) || signals.length === 0) return;
     const now = Date.now();
     const allUsers = Object.values(userStore.getAllUsersRaw ? userStore.getAllUsersRaw() : {});
@@ -3074,9 +3114,18 @@ server.listen(PORT, () => {
             `<b>Obsidian 24/7 Scanner</b>`;
         }
 
-        if (msg && telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
-          console.log(`[24/7 TG ALERT] Dispatching ${type} for ${sym} (${tf}) to chatId ${chatId}`);
-          telegramBot.sendTelegramMessage(chatId, msg).catch(err => {
+        let photoBuffer = null;
+        if (Array.isArray(rawCandles) && rawCandles.length > 5 && typeof renderServerChartSnapshot === "function") {
+          try {
+            photoBuffer = renderServerChartSnapshot(rawCandles, { ex, sym, tf, base }, signal);
+          } catch (e) {
+            console.warn(`[24/7 CHART RENDER FAIL]`, e.message);
+          }
+        }
+
+        if (msg) {
+          console.log(`[24/7 TG ALERT] Dispatching ${type} ${photoBuffer ? "with photo" : ""} for ${sym} (${tf}) to chatId ${chatId}`);
+          sendServerTelegramAlert(chatId, msg, photoBuffer).catch(err => {
             console.warn(`[24/7 ALERT ERROR] Failed to send to ${chatId}:`, err.message);
           });
         }
