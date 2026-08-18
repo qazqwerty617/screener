@@ -287,53 +287,6 @@ function renderServerChartSnapshot(candles, meta, signal) {
   }
   ctx.restore();
 
-  // ── Bottom Semi-Transparent HUD Card (Obsidian Formation Scanner) ──
-  const hudW = 340;
-  const hudH = 175;
-  const hudCardX = (PW - hudW) / 2;
-  const hudCardY = H - hudH - 24;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.roundRect ? ctx.roundRect(hudCardX, hudCardY, hudW, hudH, 8) : ctx.rect(hudCardX, hudCardY, hudW, hudH);
-  ctx.fillStyle = "rgba(10, 12, 18, 0.88)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 11.5px sans-serif";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-
-  let typeName = "Наклонный уровень (Наклонка)";
-  if (sigType === "level") typeName = "Горизонтальный уровень (Горизонталка)";
-  else if (sigType === "retest") typeName = "Подтвержденный ретест (Ретест)";
-
-  let lineY = hudCardY + 12;
-  ctx.fillText(`Сигнал формации: ${typeName}`, hudCardX + 14, lineY);
-  lineY += 18;
-
-  ctx.font = "500 10.5px sans-serif";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
-  ctx.fillText(`• Монета: ${sym} (${exFull})`, hudCardX + 14, lineY); lineY += 16;
-  ctx.fillText(`• Таймфрейм: ${tf.toLowerCase()}`, hudCardX + 14, lineY); lineY += 16;
-  ctx.fillText(`• Касания: ${touches} касания`, hudCardX + 14, lineY); lineY += 16;
-  ctx.fillText(`• Дистанция: ${dist}% до формации`, hudCardX + 14, lineY); lineY += 16;
-  ctx.fillText(`• Текущая цена: $${lastCandle.c >= 100 ? lastCandle.c.toFixed(2) : lastCandle.c >= 1 ? lastCandle.c.toFixed(4) : lastCandle.c.toFixed(6)}`, hudCardX + 14, lineY); lineY += 16;
-  ctx.fillText(`• Объем 24ч: ${vol24Str}`, hudCardX + 14, lineY); lineY += 16;
-
-  const nowD = new Date(Date.now() + 3 * 3600000);
-  const timeStr = nowD.toISOString().substring(11, 19);
-  const dateStr = nowD.toISOString().substring(8, 10) + "." + nowD.toISOString().substring(5, 7);
-  ctx.fillText(`• Время: ${dateStr} ${timeStr}`, hudCardX + 14, lineY); lineY += 20;
-
-  ctx.font = "bold 10px sans-serif";
-  ctx.fillStyle = "#ffffff";
-  ctx.fillText("Obsidian Formation Scanner", hudCardX + 14, lineY);
-  ctx.restore();
-
   // ── Live / Last Candle Price Badge on Right Scale ──
   const liveY = toY(lastCandle.c);
   const isUp = lastCandle.c >= lastCandle.o;

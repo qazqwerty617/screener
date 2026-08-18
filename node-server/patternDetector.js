@@ -428,9 +428,11 @@ function detectImpulses(candles, cfg = DEFAULT_CONFIG) {
 
 // ─── Master Scan ─────────────────────────────────────────────────────────────
 
+const formationEngine = require("./public/js/formationEngine");
+
 function scanCandles(meta, candles, cfgOverride = {}) {
   const cfg    = { ...DEFAULT_CONFIG, ...cfgOverride };
-  if (candles.length < 30) return [];
+  if (!candles || candles.length < 30) return [];
 
   const signals = [];
   const now     = Date.now();
@@ -447,43 +449,57 @@ function scanCandles(meta, candles, cfgOverride = {}) {
   const structs    = detectStructureBreaks(candles, swings);
   const impulses   = detectImpulses(candles, cfg);
 
-  // Levels near price
-  for (const lv of levels.slice(0, 10)) {
-    const dist = Math.abs(priceNow - lv.price) / priceNow;
-    if (dist > 0.05) continue;
-    signals.push({
-      type: 'level', ex, sym, base, tf, price: lv.price,
-      direction: priceNow >= lv.price ? 'long' : 'short',
-      confidence: lv.strength, ts: now,
-      meta: { touches: lv.touches, zone: lv.zone, dist: +(dist * 100).toFixed(2) }
-    });
-  }
-
-  // Active trendlines near price
-  for (const tl of trendlines.slice(0, 5)) {
-    const tlPrice = linePrice(tl.p1, tl.p2, candles.length - 1);
-    // Reject pierced lines (when price has already broken through)
-    if (tl.type === 'asc' && priceNow < tlPrice * 0.999) continue;
-    if (tl.type === 'desc' && priceNow > tlPrice * 1.001) continue;
-
-    const dist    = Math.abs(priceNow - tlPrice) / priceNow;
-    if (dist > 0.04) continue;
-    signals.push({
-      type: 'trendline', ex, sym, base, tf, price: +tlPrice.toFixed(4),
-      direction: tl.type === 'asc' ? 'long' : 'short',
-      confidence: Math.min(5, Math.round(tl.touches / 2 + 1)), ts: now,
-      meta: {
-        tlType: tl.type,
-        slope: +tl.slope.toFixed(2),
-        touches: tl.touches,
-        dist: +(dist * 100).toFixed(2),
-        p1Idx: tl.p1.idx,
-        p1Price: tl.p1.price,
-        p2Idx: tl.p2.idx,
-        p2Price: tl.p2.price
+  // 1. Dominant Unbroken Trendlines (1-in-1 identical to Screener Tab)
+  try {
+    const rawTls = formationEngine.detectTrendlines(candles, 2);
+    for (const tl of rawTls) {
+      const endPrice = tl.endPrice;
+      const dist = Math.abs(priceNow - endPrice) / priceNow;
+      if (dist <= 0.035) {
+        signals.push({
+          type: 'trendline',
+          ex, sym, base, tf,
+          price: +endPrice.toFixed(4),
+          direction: tl.direction === 'down' ? 'long' : 'short',
+          confidence: Math.min(5, Math.max(2, tl.touches || 2)),
+          ts: now,
+          meta: {
+            tlType: tl.direction === 'down' ? 'asc' : 'desc',
+            slope: +(tl.slope || 0).toFixed(4),
+            touches: tl.touches || 2,
+            dist: +(dist * 100).toFixed(2),
+            p1Idx: tl.p1.idx,
+            p1Price: tl.p1.price,
+            p2Idx: tl.p2.idx,
+            p2Price: tl.p2.price
+          }
+        });
       }
-    });
-  }
+    }
+  } catch (_) {}
+
+  // 2. Clean Unbroken Horizontal Levels (1-in-1 identical to Screener Tab)
+  try {
+    const rawHoriz = formationEngine.detectHorizontals(candles, 2);
+    for (const hl of rawHoriz) {
+      const dist = Math.abs(priceNow - hl.price) / priceNow;
+      if (dist <= 0.03) {
+        signals.push({
+          type: 'level',
+          ex, sym, base, tf,
+          price: +hl.price.toFixed(4),
+          direction: hl.direction === 'down' ? 'long' : 'short',
+          confidence: Math.min(5, Math.max(2, hl.touches || 2)),
+          ts: now,
+          meta: {
+            touches: hl.touches || 2,
+            dist: +(dist * 100).toFixed(2),
+            direction: hl.direction
+          }
+        });
+      }
+    }
+  } catch (_) {}
 
   // Breakouts
   for (const br of breakouts) {
