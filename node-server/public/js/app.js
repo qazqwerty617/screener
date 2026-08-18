@@ -14588,16 +14588,19 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       const distStr = alertOptions?.formationInfo?.distPct || "0.28";
 
       ctx.fillStyle = "#c084fc";
-      ctx.font = "bold 12.5px Inter, sans-serif";
-      ctx.fillText(`⚡ OBSIDIAN FORMATION ALERT`, W - 22, 20);
+      ctx.font = "bold 12px Inter, sans-serif";
+      ctx.fillText(`OBSIDIAN FORMATION ALERT`, W - 22, 20);
 
       ctx.fillStyle = "#94a3b8";
       ctx.font = "500 10.5px Inter, sans-serif";
-      ctx.fillText(`📐 Наклонка: ${realTouches} касания · до линии ${distStr}%`, W - 22, 34);
+      let fmtLabel = "Наклонка";
+      if (alertOptions?.formationType === "level") fmtLabel = "Горизонтальный уровень";
+      else if (alertOptions?.formationType === "retest") fmtLabel = "Подтвержденный ретест";
+      ctx.fillText(`${fmtLabel}: ${realTouches} касания · до линии ${distStr}%`, W - 22, 34);
     } else {
       ctx.fillStyle = "#f59e0b";
-      ctx.font = "bold 13px Inter, sans-serif";
-      ctx.fillText(`🔔 OBSIDIAN PRICE ALERT`, W - 22, 26);
+      ctx.font = "bold 12.5px Inter, sans-serif";
+      ctx.fillText(`OBSIDIAN PRICE ALERT`, W - 22, 26);
     }
 
     // ── Price bounds calculation across candle list (300 bars) ──
