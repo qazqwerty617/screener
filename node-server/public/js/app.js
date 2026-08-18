@@ -2621,10 +2621,11 @@ function drawChart() {
   if (chartActiveIndicators.has("ATR")) activeIndicators.push("ATR");
   if (chartActiveIndicators.has("OI")) activeIndicators.push("OI");
 
-  // Volume takes 75px, indicators take 80px each for clean professional charts
-  const fixedVolumeHeight = 75;
+  // Volume takes 65px, bottom time bar takes 22px, indicators take 80px each for clean professional charts
+  const fixedVolumeHeight = 65;
+  const timeBarHeight = 22;
   const indicatorHeightPer = 80;
-  const newVolH = fixedVolumeHeight + (activeIndicators.length * indicatorHeightPer);
+  const newVolH = fixedVolumeHeight + timeBarHeight + (activeIndicators.length * indicatorHeightPer);
 
   // Update volH if needed and adjust canvas
   const dpr = window.devicePixelRatio || 1;
@@ -3375,13 +3376,129 @@ function drawChart() {
   }
   vCtx.restore();
 
-  // тФАтФА Right axis panel (thin divider line) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-  // Note: Background is already filled once at the start of drawChart
-  // ctx.fillStyle = getCanvasBgColor();
-  // ctx.fillRect(PW, 0, PR, chartH);
-  // vCtx.fillStyle = getCanvasBgColor();
-  // vCtx.fillRect(PW, 0, PR, volH);
+  // ─── Time Scale Strip (Underneath Volume) ───
+  const timeYStart = volumeYStart + volumeHeight;
+  vCtx.save();
 
+  // Background of time bar
+  vCtx.fillStyle = getCanvasBgColor();
+  vCtx.fillRect(0, timeYStart, chartW, timeBarHeight);
+
+  // Top border line separating volume histogram from time bar
+  vCtx.strokeStyle = "rgba(255, 255, 255, 0.09)";
+  vCtx.lineWidth = 1;
+  vCtx.beginPath();
+  vCtx.moveTo(0, timeYStart + 0.5);
+  vCtx.lineTo(chartW, timeYStart + 0.5);
+  vCtx.stroke();
+
+  // Right axis divider across time bar
+  vCtx.beginPath();
+  vCtx.moveTo(PW + 0.5, timeYStart);
+  vCtx.lineTo(PW + 0.5, timeYStart + timeBarHeight);
+  vCtx.stroke();
+
+  // Draw time labels across visible candles
+  if (vis.length > 0 && PW > 50) {
+    const minPxStep = 80;
+    const stepBars = Math.max(1, Math.round(minPxStep / candleW));
+
+    // Draw subtle vertical grid lines on the main price chart aligned with timestamps
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.035)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    vCtx.fillStyle = "rgba(255, 255, 255, 0.45)";
+    vCtx.font = "10px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    vCtx.textAlign = "center";
+    vCtx.textBaseline = "middle";
+
+    for (let i = 0; i < vis.length; i++) {
+      const globalIdx = s + i;
+      if (globalIdx % stepBars !== 0) continue;
+      const c = vis[i];
+      if (!c) continue;
+
+      const rawX = (globalIdx - viewStart) * candleW + candleW / 2;
+      if (rawX < 20 || rawX > PW - 20) continue;
+
+      // Small vertical tick mark on time bar
+      vCtx.strokeStyle = "rgba(255, 255, 255, 0.16)";
+      vCtx.lineWidth = 1;
+      vCtx.beginPath();
+      vCtx.moveTo(rawX, timeYStart + 0.5);
+      vCtx.lineTo(rawX, timeYStart + 4.5);
+      vCtx.stroke();
+
+      // Main chart vertical grid line
+      ctx.moveTo(rawX, TOP);
+      ctx.lineTo(rawX, TOP + PH);
+
+      // Format time label
+      const dt = new Date(c.t);
+      let timeStr = "";
+      if (activeTf === "1d" || activeTf === "3d" || activeTf === "1w") {
+        timeStr = String(dt.getDate()).padStart(2, "0") + "." + String(dt.getMonth() + 1).padStart(2, "0");
+      } else {
+        const hh = String(dt.getHours()).padStart(2, "0");
+        const mm = String(dt.getMinutes()).padStart(2, "0");
+        timeStr = `${hh}:${mm}`;
+      }
+
+      vCtx.fillText(timeStr, rawX, timeYStart + 11.5);
+    }
+
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Timezone label in bottom-right corner
+  vCtx.fillStyle = "rgba(255, 255, 255, 0.35)";
+  vCtx.font = "9px Inter, sans-serif";
+  vCtx.textAlign = "center";
+  vCtx.textBaseline = "middle";
+  vCtx.fillText("UTC+3", PW + PR / 2, timeYStart + 11.5);
+
+  // Time hover pill when crosshair is active
+  if (mX >= 0 && mX < PW && mY >= 0 && mY <= chartH) {
+    const visIdx = Math.round(mX / candleW - futureGap);
+    const ci = clamp(visIdx, 0, vis.length - 1);
+    if (vis[ci]) {
+      const c = vis[ci];
+      const dt = new Date(c.t);
+      const day = String(dt.getDate()).padStart(2, "0");
+      const month = String(dt.getMonth() + 1).padStart(2, "0");
+      const hh = String(dt.getHours()).padStart(2, "0");
+      const mm = String(dt.getMinutes()).padStart(2, "0");
+      const hoverTimeStr = (activeTf === "1d" || activeTf === "3d" || activeTf === "1w") 
+        ? `${day}.${month}` 
+        : `${day}.${month} ${hh}:${mm}`;
+
+      const tPillW = Math.max(58, (vCtx.measureText ? vCtx.measureText(hoverTimeStr).width : 50) + 14);
+      const tPillH = 17;
+      const tPillX = clamp(mX - tPillW / 2, 2, PW - tPillW - 2);
+      const tPillY = timeYStart + 2.5;
+
+      roundRect(vCtx, tPillX, tPillY, tPillW, tPillH, 3.5);
+      vCtx.fillStyle = "#1e1f2e";
+      vCtx.fill();
+      vCtx.strokeStyle = "rgba(124, 58, 237, 0.6)";
+      vCtx.lineWidth = 1;
+      vCtx.stroke();
+
+      vCtx.fillStyle = "#ffffff";
+      vCtx.font = "bold 9.5px Inter, sans-serif";
+      vCtx.textAlign = "center";
+      vCtx.textBaseline = "middle";
+      vCtx.fillText(hoverTimeStr, tPillX + tPillW / 2, tPillY + tPillH / 2);
+    }
+  }
+
+  vCtx.restore();
+
+  // ─── Right axis panel (thin divider line) ───
   // Thin 1px divider
   ctx.strokeStyle = "rgba(255,255,255,.06)";
   ctx.lineWidth = 1;
