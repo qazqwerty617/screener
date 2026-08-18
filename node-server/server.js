@@ -3128,7 +3128,7 @@ server.listen(PORT, () => {
             `• <b>Цена наклона:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `─────────────────────────\n` +
-            `<b>Obsidian 24/7 Scanner</b>`;
+            `<b>Obsidian Screener</b>`;
         } else if (type === "level") {
           const dirLabel = signal.direction === "long" ? "Поддержка (Support)" : "Сопротивление (Resistance)";
           msg =
@@ -3141,7 +3141,7 @@ server.listen(PORT, () => {
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `─────────────────────────\n` +
-            `<b>Obsidian 24/7 Scanner</b>`;
+            `<b>Obsidian Screener</b>`;
         } else if (type === "retest") {
           const dirLabel = signal.direction === "long" ? "Ретест пробоя вверх (Long)" : "Ретест пробоя вниз (Short)";
           const srcLabel = meta.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";
@@ -3155,7 +3155,7 @@ server.listen(PORT, () => {
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `─────────────────────────\n` +
-            `<b>Obsidian 24/7 Scanner</b>`;
+            `<b>Obsidian Screener</b>`;
         }
 
         let photoBuffer = null;

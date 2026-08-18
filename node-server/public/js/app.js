@@ -16031,7 +16031,7 @@ function initNotificationsUI() {
       `• Касания: 3 касания\n` +
       `• Дистанция: 0.28% до наклонки\n` +
       `─────────────────────────\n` +
-      `Obsidian Formation Scanner`;
+      `Obsidian Screener`;
 
     sendTelegramAlert(telegramMsg, photoDataUrl);
     showToast({ title: "Telegram", message: "Тестовое сообщение отправлено в Telegram!", type: "success" });
