@@ -1207,8 +1207,7 @@ const TF_MAP = {
 
 function getKlinesUrl(ex, sym, tf, limit, before) {
   if (ex === "BN" || ex === "AD") {
-    const bnMirrors = ["fapi.binance.com", "fapi1.binance.com", "fapi2.binance.com", "fapi3.binance.com"];
-    const base = ex === "BN" ? bnMirrors[Math.floor(Math.random() * bnMirrors.length)] : "fapi.asterdex.com";
+    const base = ex === "BN" ? "fapi.binance.com" : "fapi.asterdex.com";
     return `https://${base}/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
   }
   if (ex === "BB") {
@@ -1295,19 +1294,6 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     return 60000;
   })();
 
-  // 1. Ultra-fast path: Try Go Scanner RAM cache for Binance
-  if (fetchEx === "BN") {
-    try {
-      const goRes = await fetch(`${GO_SCANNER_URL}/api/klines?ex=BN&sym=${sym}&tf=${tf}&limit=${lite ? 300 : 1000}`);
-      if (goRes.ok) {
-        const goData = await goRes.json();
-        if (Array.isArray(goData) && goData.length >= 10) {
-          return goData.map(c => ({ t: +c.t, o: +c.o, h: +c.h, l: +c.l, c: +c.c, v: +c.v }));
-        }
-      }
-    } catch (_) {}
-  }
-
   const pages = { BN: 3, BB: 3, OX: 5, BG: 3, GT: 3, MX: 2, KC: 8, BX: 3, HT: 1, AD: 3 };
   const limits = { BN: 1000, BB: 1000, OX: 100, BG: 1000, GT: 1000, MX: 1000, KC: 200, BX: 1000, HT: 1000, AD: 1000 };
   const maxP = lite ? 1 : (pages[fetchEx] || 3);
@@ -1323,25 +1309,8 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
         if (!url) return [];
         data = await apiFetch(url, 6000, 1);
       }
-      let parsed = parseKlines(ex, data);
-      if (parsed.length === 0 && fetchEx === "BN") {
-        try {
-          const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=1000`;
-          data = await apiFetch(spotUrl, 4000, 1);
-          parsed = parseKlines(ex, data);
-        } catch (_) {}
-      }
-      return parsed;
-    } catch (e) {
-      if (fetchEx === "BN") {
-        try {
-          const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=1000`;
-          const data = await apiFetch(spotUrl, 4000, 1);
-          return parseKlines(ex, data);
-        } catch (_) {}
-      }
-      return [];
-    }
+      return parseKlines(ex, data);
+    } catch (e) { return []; }
   }
 
   let all = [];
@@ -1370,13 +1339,6 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     const results = await Promise.all(promises);
     for (const batch of results) {
       if (Array.isArray(batch)) all.push(...batch);
-    }
-    if (all.length === 0 && fetchEx === "BN") {
-      try {
-        const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${limit}`;
-        const data = await apiFetch(spotUrl, 4000, 0);
-        all = parseKlines(fetchEx, data);
-      } catch (_) {}
     }
   }
   const seen = new Set();
@@ -2851,8 +2813,53 @@ server.listen(PORT, () => {
     }
   });
 
-  // ═══ Pattern Scanner Engine (24/7 Continuous Loop) ═══
+  // ═══ Pattern Scanner Engine (24/7 Continuous Loop with Smart TTL Caching & Pacing) ═══
   let isScanningPatterns = false;
+  const scannerCandleCache = new Map(); // key -> { candles, expiresAt }
+  const exchangeBackoffs = new Map(); // ex -> backoffUntilTimestamp
+
+  function getTfTtlMs(tf) {
+    const low = String(tf || "").toLowerCase();
+    if (low === "1d") return 15 * 60 * 1000; // 15 min cache for 1D
+    if (low === "4h") return 8 * 60 * 1000;  // 8 min cache for 4H
+    if (low === "1h") return 4 * 60 * 1000;  // 4 min cache for 1H
+    if (low === "15m") return 2 * 60 * 1000; // 2 min cache for 15M
+    if (low === "5m") return 60 * 1000;      // 1 min cache for 5M
+    return 30 * 1000;
+  }
+
+  async function getCachedCandlesForScanner(ex, sym, tf) {
+    const key = `${ex}:${sym}:${tf}`;
+    const now = Date.now();
+    const cached = scannerCandleCache.get(key);
+    if (cached && cached.expiresAt > now && Array.isArray(cached.candles) && cached.candles.length > 20) {
+      return cached.candles;
+    }
+
+    const backoffUntil = exchangeBackoffs.get(ex) || 0;
+    if (backoffUntil > now) {
+      return cached ? cached.candles : [];
+    }
+
+    try {
+      const candlesPromise = fetchFullHistory(ex, sym, tf, true);
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2500));
+      const candles = await Promise.race([candlesPromise, timeoutPromise]);
+      if (Array.isArray(candles) && candles.length >= 20) {
+        scannerCandleCache.set(key, {
+          candles,
+          expiresAt: now + getTfTtlMs(tf)
+        });
+        return candles;
+      }
+    } catch (e) {
+      if (String(e).includes("418") || String(e).includes("429")) {
+        exchangeBackoffs.set(ex, now + 60000);
+      }
+    }
+    return cached ? cached.candles : [];
+  }
+
   async function scanAllPatterns() {
     if (isScanningPatterns) return;
     isScanningPatterns = true;
@@ -2861,13 +2868,13 @@ server.listen(PORT, () => {
     try {
       const list = Array.from(tickers.values())
         .filter(t => {
-          if (!t || t.v < 500000) return false;
+          if (!t || t.v < 300000) return false;
           const k = String(t.key || "").toUpperCase();
           if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") || k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) return false;
           return true;
         })
         .sort((a, b) => b.v - a.v)
-        .slice(0, 60);
+        .slice(0, 100);
 
       if (list.length === 0) {
         isScanningPatterns = false;
@@ -2875,82 +2882,76 @@ server.listen(PORT, () => {
         return;
       }
 
-      console.log(`[PATTERNS 24/7] Starting scan cycle for top ${list.length} liquid crypto pairs...`);
+      console.log(`[PATTERNS 24/7] Starting scan cycle for top ${list.length} liquid crypto pairs (Paced & TTL-cached)...`);
       const timeframes = ["15m", "1h", "4h", "5m", "1d"];
       let newSignalsCount = 0;
 
-      // Safe concurrency batching (4 tickers per batch with 120ms breathing room)
-      const BATCH_SIZE = 4;
-      for (let i = 0; i < list.length; i += BATCH_SIZE) {
-        const batch = list.slice(i, i + BATCH_SIZE);
-        await Promise.all(batch.map(async (t) => {
-          const colonIdx = t.key.indexOf(':');
-          if (colonIdx <= 0) return;
-          const ex = t.key.substring(0, colonIdx);
-          const sym = t.key.substring(colonIdx + 1);
-          const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
+      // Safe, paced sequential scanning (< 5 req/sec with smart TTL caching)
+      for (const t of list) {
+        const colonIdx = t.key.indexOf(':');
+        if (colonIdx <= 0) continue;
+        const ex = t.key.substring(0, colonIdx);
+        const sym = t.key.substring(colonIdx + 1);
+        const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
 
-          for (const tf of timeframes) {
-            try {
-              // Timeout fetch to prevent hung requests from blocking the cycle
-              const candlesPromise = fetchFullHistory(ex, sym, tf, true);
-              const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2000));
-              const candles = await Promise.race([candlesPromise, timeoutPromise]);
-              if (!candles || candles.length < 30) continue;
+        for (const tf of timeframes) {
+          try {
+            const candles = await getCachedCandlesForScanner(ex, sym, tf);
+            if (!candles || candles.length < 30) continue;
 
-              const meta = { ex, sym, base, tf };
-              const signals = patternDetector.scanCandles(meta, candles);
+            const meta = { ex, sym, base, tf };
+            const signals = patternDetector.scanCandles(meta, candles);
 
-              // 24/7 Server-side pre-computation of formations levels
-              const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
-              const coinKey = `${ex}:${sym}`;
-              if (!cachedTfMaps[tf]) cachedTfMaps[tf] = {};
-              if (detectedLvls && detectedLvls.length > 0) {
-                serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedLvls);
-                cachedTfMaps[tf][coinKey] = detectedLvls;
+            // 24/7 Server-side pre-computation of formations levels
+            const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
+            const coinKey = `${ex}:${sym}`;
+            if (!cachedTfMaps[tf]) cachedTfMaps[tf] = {};
+            if (detectedLvls && detectedLvls.length > 0) {
+              serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedLvls);
+              cachedTfMaps[tf][coinKey] = detectedLvls;
 
-                const lastCandle = candles[candles.length - 1];
-                if (lastCandle) {
-                  for (const dLvl of detectedLvls) {
-                    const dist = Math.abs(lastCandle.c - dLvl.price) / lastCandle.c;
-                    if (dist <= 0.015 && (dLvl.touches || 2) >= 2) {
-                      signals.push({
-                        type: 'level',
-                        ex,
-                        sym,
-                        base,
-                        tf,
-                        price: dLvl.price,
-                        curPrice: lastCandle.c,
-                        direction: dLvl.direction === 'down' ? 'long' : 'short',
-                        confidence: dLvl.touches || 2,
-                        ts: Date.now(),
-                        meta: {
-                          touches: dLvl.touches || 2,
-                          dist: +(dist * 100).toFixed(2),
-                          direction: dLvl.direction
-                        }
-                      });
-                    }
+              const lastCandle = candles[candles.length - 1];
+              if (lastCandle) {
+                for (const dLvl of detectedLvls) {
+                  const dist = Math.abs(lastCandle.c - dLvl.price) / lastCandle.c;
+                  if (dist <= 0.015 && (dLvl.touches || 2) >= 2) {
+                    signals.push({
+                      type: 'level',
+                      ex,
+                      sym,
+                      base,
+                      tf,
+                      price: dLvl.price,
+                      curPrice: lastCandle.c,
+                      direction: dLvl.direction === 'down' ? 'long' : 'short',
+                      confidence: dLvl.touches || 2,
+                      ts: Date.now(),
+                      meta: {
+                        touches: dLvl.touches || 2,
+                        dist: +(dist * 100).toFixed(2),
+                        direction: dLvl.direction
+                      }
+                    });
                   }
                 }
-              } else {
-                serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
-                delete cachedTfMaps[tf][coinKey];
               }
+            } else {
+              serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
+              delete cachedTfMaps[tf][coinKey];
+            }
 
-              patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-              for (const sig of signals) {
-                patternsCache.push(sig);
-                newSignalsCount++;
-              }
+            patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
+            for (const sig of signals) {
+              patternsCache.push(sig);
+              newSignalsCount++;
+            }
 
-              // Autonomous 24/7 server-side formation alert dispatch
-              checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c, candles);
-            } catch (e) {}
-          }
-        }));
-        await new Promise(r => setTimeout(r, 120));
+            // Autonomous 24/7 server-side formation alert dispatch
+            checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c, candles);
+          } catch (e) {}
+        }
+        // Micro-sleep to keep exchange API completely relaxed and zero chance of rate limits
+        await new Promise(r => setTimeout(r, 60));
       }
 
       patternsCache.sort((a, b) => b.ts - a.ts);
