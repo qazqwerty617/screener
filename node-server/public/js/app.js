@@ -14388,13 +14388,13 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
     // 1. Fetch / collect up to 300 candles of the alert timeframe
     let candleList = [];
-    if (sym === activeSym && targetTf === activeTf && Array.isArray(candles) && candles.length >= 50) {
+    if (sym === activeSym && targetTf === activeTf && Array.isArray(candles) && candles.length >= 20) {
       candleList = candles.slice(-300);
     }
 
-    if (candleList.length < 150) {
+    if (candleList.length < 50) {
       try {
-        const res = await fetch(`/api/klines?ex=${targetEx}&sym=${targetSym}&tf=${targetTf}&lite=1`);
+        const res = await fetch(`/api/klines?ex=${targetEx}&sym=${encodeURIComponent(targetSym)}&tf=${targetTf}&lite=1`);
         if (res.ok) {
           const raw = await res.json();
           if (Array.isArray(raw) && raw.length >= 6) {
@@ -14417,21 +14417,19 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
       }
     }
 
-    if (!candleList || candleList.length === 0) {
-      if (Array.isArray(candles) && candles.length > 0) {
-        candleList = candles.slice(-300);
-      }
+    // Do NOT fall back to active chart if this snapshot is for a different coin!
+    if (!candleList || candleList.length < 5) {
+      console.warn(`[SNAPSHOT] No candles found for ${targetEx}:${targetSym} (${targetTf})`);
+      return null;
     }
-
-    if (!candleList || candleList.length === 0) return null;
 
     // 2. Retrieve live coin stats for the HUD card
     let coinInfo = null;
     if (typeof coins !== "undefined" && coins && typeof coins.get === "function") {
-      coinInfo = coins.get(`${targetEx}:${targetSym}`) || coins.get(`${activeEx}:${activeSym}`);
+      coinInfo = coins.get(`${targetEx}:${targetSym}`);
       if (!coinInfo) {
         for (const [_, v] of coins.entries()) {
-          if (v && (v.sym === targetSym || normSymCode(v.sym) === normSymCode(targetSym))) {
+          if (v && (v.sym === targetSym || v.key === `${targetEx}:${targetSym}` || normSymCode(v.sym) === normSymCode(targetSym))) {
             coinInfo = v;
             break;
           }
@@ -14440,15 +14438,16 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
     }
 
     const lastCandle = candleList[candleList.length - 1];
+    const firstCandle = candleList[0];
     const liveClose = lastCandle ? lastCandle.c : (coinInfo?.p || targetLevel);
     
     // 24h Change
     const chg24 = (coinInfo && coinInfo.o > 0)
       ? (((liveClose || coinInfo.p) - coinInfo.o) / coinInfo.o) * 100
-      : (coinInfo?.chg !== undefined ? coinInfo.chg : (candleList.length > 1 ? ((liveClose - candleList[0].o) / candleList[0].o) * 100 : 0));
+      : (coinInfo?.chg !== undefined ? coinInfo.chg : (candleList.length > 1 && firstCandle && firstCandle.o > 0 ? ((liveClose - firstCandle.o) / firstCandle.o) * 100 : 0));
 
     // Volume
-    const vol24Str = coinInfo?.v ? (typeof fV === "function" ? fV(coinInfo.v) : `$${(coinInfo.v/1e6).toFixed(1)}M`) : (typeof fV === "function" ? fV(liveClose * 50000) : "—");
+    const vol24Str = coinInfo?.v ? (typeof fV === "function" ? fV(coinInfo.v) : `$${(coinInfo.v/1e6).toFixed(1)}M`) : (typeof fV === "function" ? fV(lastCandle ? lastCandle.v * lastCandle.c * 50 : 0) : "—");
 
     // NATR
     let natrVal = 0;
@@ -16181,22 +16180,6 @@ function initNotificationsUI() {
           type: "price_alert"
         });
       } catch (_) {}
-    }
-
-    if (s.tgEnabled) {
-      const telegramMsg =
-        `<b>Сигнал формации: ${data.typeName}</b>\n` +
-        `• <b>Монета:</b> ${symDisp} (${exFull})\n` +
-        `• <b>Таймфрейм:</b> ${data.tf}\n` +
-        `• <b>Касания:</b> ${data.touches} касания\n` +
-        `• <b>Дистанция:</b> ${data.distPct}% до формации\n` +
-        `• <b>Текущая цена:</b> $${formattedPrice}\n` +
-        `• <b>Объем 24ч:</b> $${formattedVol}\n` +
-        `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
-        `─────────────────────────\n` +
-        `<b>Obsidian Formation Scanner</b>`;
-
-      sendTelegramAlert(telegramMsg, photoDataUrl);
     }
   }
 

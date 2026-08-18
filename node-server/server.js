@@ -2988,18 +2988,10 @@ server.listen(PORT, () => {
         const chatId = user.telegramChatId || user.telegramId;
         if (!chatId) continue;
 
-        const s = user.preferences?.formationAlerts || {
-          trendline: { enabled: true, minTouches: 2, distancePct: 1.0, direction: "all" },
-          level: { enabled: true, minTouches: 2, distancePct: 1.0, direction: "all" },
-          retest: { enabled: true, minTouches: 2, direction: "all" },
-          exchanges: ["all"],
-          blacklist: ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"],
-          blacklistCustom: "",
-          tgEnabled: true,
-          cooldownSeconds: 300
-        };
-
-        if (s.tgEnabled === false) continue;
+        // STRICT USER ISOLATION: Each user has their own independent personal settings
+        const s = user.preferences?.formationAlerts;
+        // If this specific user has not explicitly configured and turned ON Telegram formation alerts, SKIP!
+        if (!s || s.tgEnabled !== true) continue;
 
         // Check exchange
         const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
