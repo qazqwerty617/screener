@@ -15482,6 +15482,22 @@ function saveFormationAlertSettings(settings) {
   currentFormationAlertSettings = settings || currentFormationAlertSettings;
   localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
   window.formationAlertSettings = currentFormationAlertSettings;
+  syncFormationAlertSettingsToServer(currentFormationAlertSettings);
+}
+
+async function syncFormationAlertSettingsToServer(settings) {
+  try {
+    const token = localStorage.getItem("obsidian_auth_token");
+    if (!token) return;
+    await fetch("/api/user/formation-alerts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify(settings)
+    });
+  } catch (_) {}
 }
 
 function initNotificationsUI() {
@@ -16013,7 +16029,7 @@ function initNotificationsUI() {
     isScanningFormationAlerts = true;
 
     try {
-      const cooldownMs = Math.max(1, s.cooldownMinutes || 5) * 60 * 1000;
+      const cooldownMs = (s.cooldownSeconds ? Number(s.cooldownSeconds) * 1000 : (Number(s.cooldownMinutes) || 5) * 60 * 1000);
       const minVol = Number(s.minVol24h) || 0;
       const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
       const isAllowedEx = (e) => allowedExs.includes("all") || allowedExs.includes(e) || allowedExs.includes(String(e).toUpperCase());
@@ -16053,8 +16069,10 @@ function initNotificationsUI() {
                 const touches = item.touches || item.swingIndices?.length || 2;
                 if (touches < minTouches) continue;
 
-                if (targetDir === "long" && item.direction !== "up") continue;
-                if (targetDir === "short" && item.direction !== "down") continue;
+                if (targetDir !== "all") {
+                  if ((targetDir === "down" || targetDir === "support" || targetDir === "long") && item.direction !== "down") continue;
+                  if ((targetDir === "up" || targetDir === "resistance" || targetDir === "short") && item.direction !== "up") continue;
+                }
 
                 const lineEndP = item.endPrice || (item.p2 ? item.p2.price : item.price);
                 if (!lineEndP || lineEndP <= 0) continue;
@@ -16131,8 +16149,10 @@ function initNotificationsUI() {
                 const touches = item.touches || item.touchIndices?.length || 1;
                 if (touches < minTouches) continue;
 
-                if (targetDir === "support" && item.direction !== "down") continue;
-                if (targetDir === "resistance" && item.direction !== "up") continue;
+                if (targetDir !== "all") {
+                  if ((targetDir === "support" || targetDir === "down" || targetDir === "long") && item.direction !== "down") continue;
+                  if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short") && item.direction !== "up") continue;
+                }
 
                 const lvlPrice = item.price || item.endPrice;
                 if (!lvlPrice || lvlPrice <= 0) continue;
@@ -16199,8 +16219,10 @@ function initNotificationsUI() {
               if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
 
               for (const item of items) {
-                if (targetDir === "long" && item.direction !== "up") continue;
-                if (targetDir === "short" && item.direction !== "down") continue;
+                if (targetDir !== "all") {
+                  if ((targetDir === "up" || targetDir === "long") && item.direction !== "up") continue;
+                  if ((targetDir === "down" || targetDir === "short") && item.direction !== "down") continue;
+                }
 
                 const lvlPrice = item.price || item.endPrice;
                 if (!lvlPrice || lvlPrice <= 0) continue;

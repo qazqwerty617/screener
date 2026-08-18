@@ -7,9 +7,9 @@
 
 const DEFAULT_CONFIG = {
   swingWindow:       3,
-  levelTolerance:    0.0015,
+  levelTolerance:    0.0035,
   minTouches:        2,
-  trendlineBars:     60,
+  trendlineBars:     120,
   minTrendlineAngle: 0.5,
   breakoutVolMult:   1.4,
   breakoutVolBars:   20,
@@ -48,53 +48,57 @@ function avgVol(candles, endIdx, bars) {
 
 function linePrice(p1, p2, idx) {
   if (p2.idx === p1.idx) return p1.price;
-  return p1.price + (p2.price - p1.price) * (idx - p1.idx) / (p2.idx - p1.idx);
+  const slope = (p2.price - p1.price) / (p2.idx - p1.idx);
+  return p1.price + slope * (idx - p1.idx);
 }
 
 function slopeDegrees(p1, p2) {
-  const rise = p2.price - p1.price;
-  const run  = Math.max(1, p2.idx - p1.idx);
-  return Math.atan2(rise, run) * 180 / Math.PI;
+  const dx = p2.idx - p1.idx;
+  if (dx === 0) return 0;
+  const dy = (p2.price - p1.price) / p1.price;
+  return Math.atan2(dy * 100, dx) * (180 / Math.PI);
 }
 
-// ─── 1. Swing Detection ───────────────────────────────────────────────────────
+// ─── 1. Swing Point Detection ─────────────────────────────────────────────────
 
 function detectSwings(candles, window = 3) {
   const swings = [];
   for (let i = window; i < candles.length - window; i++) {
     const c = candles[i];
-    let isHigh = true, isLow = true;
-    for (let j = i - window; j <= i + window; j++) {
-      if (j === i) continue;
-      if (candles[j].h >= c.h) isHigh = false;
-      if (candles[j].l <= c.l) isLow  = false;
+    let isHigh = true;
+    let isLow  = true;
+    for (let j = 1; j <= window; j++) {
+      if (candles[i - j].h >= c.h || candles[i + j].h > c.h) isHigh = false;
+      if (candles[i - j].l <= c.l || candles[i + j].l < c.l) isLow  = false;
     }
-    if (isHigh) swings.push({ idx: i, price: c.h, type: 'high' });
-    if (isLow)  swings.push({ idx: i, price: c.l, type: 'low'  });
+    if (isHigh) swings.push({ idx: i, price: c.h, type: 'high', t: c.t, v: c.v });
+    if (isLow)  swings.push({ idx: i, price: c.l, type: 'low',  t: c.t, v: c.v });
   }
   return swings;
 }
 
-// ─── 2. Level Detection ───────────────────────────────────────────────────────
+// ─── 2. Horizontal S/R Levels ─────────────────────────────────────────────────
 
 function detectLevels(candles, swings, cfg = DEFAULT_CONFIG) {
   const tol = cfg.levelTolerance;
   const clusters = [];
 
   for (const sw of swings) {
-    let merged = false;
-    for (const cl of clusters) {
-      if (Math.abs(sw.price - cl.price) / cl.price < tol) {
-        cl.price    = (cl.price * cl.touches + sw.price) / (cl.touches + 1);
-        cl.touches++;
-        cl.lastTouch = Math.max(cl.lastTouch, sw.idx);
-        cl.volSum   += candles[sw.idx].v;
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) {
-      clusters.push({ price: sw.price, touches: 1, lastTouch: sw.idx, volSum: candles[sw.idx].v });
+    const found = clusters.find(cl => Math.abs(cl.price - sw.price) / cl.price <= tol);
+    if (found) {
+      found.swings.push(sw);
+      found.touches++;
+      found.lastTouch = Math.max(found.lastTouch, sw.idx);
+      found.volSum += sw.v;
+      found.price = found.swings.reduce((s, x) => s + x.price, 0) / found.swings.length;
+    } else {
+      clusters.push({
+        price: sw.price,
+        touches: 1,
+        lastTouch: sw.idx,
+        volSum: sw.v,
+        swings: [sw]
+      });
     }
   }
 
@@ -117,31 +121,32 @@ function detectLevels(candles, swings, cfg = DEFAULT_CONFIG) {
 // ─── 3. Trendline Detection ───────────────────────────────────────────────────
 
 function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
-  const bars     = cfg.trendlineBars;
+  const bars     = cfg.trendlineBars || 120;
   const start    = Math.max(0, candles.length - bars);
-  const minAngle = cfg.minTrendlineAngle;
+  const minAngle = cfg.minTrendlineAngle || 0.5;
   const recent   = swings.filter(s => s.idx >= start);
   const lows     = recent.filter(s => s.type === 'low');
   const highs    = recent.filter(s => s.type === 'high');
-  const lines    = [];
+  const candidateLines = [];
 
   function tryPair(p1, p2, type) {
     const span = p2.idx - p1.idx;
-    if (span < 18) return null;
+    if (span < 10) return null;
     const angle = Math.abs(slopeDegrees(p1, p2));
     if (angle < minAngle) return null;
 
     let touches = 2;
     let departed = false;
     let lastTouch = p2.idx;
-    const minDeparturePct = cfg.levelTolerance * 2.5;
+    const tol = cfg.levelTolerance || 0.0035;
+    const minDeparturePct = tol * 1.8;
 
     // Check every single candle through the end of array (i < candles.length)
     for (let i = p1.idx + 1; i < candles.length; i++) {
       const lp = linePrice(p1, p2, i);
       const c = candles[i];
-      if (type === 'asc'  && (c.c < lp * (1 - cfg.levelTolerance * 0.8) || c.l < lp * (1 - cfg.levelTolerance * 1.5))) return null;
-      if (type === 'desc' && (c.c > lp * (1 + cfg.levelTolerance * 0.8) || c.h > lp * (1 + cfg.levelTolerance * 1.5))) return null;
+      if (type === 'asc'  && (c.c < lp * (1 - tol * 1.2) || c.l < lp * (1 - tol * 2.0))) return null;
+      if (type === 'desc' && (c.c > lp * (1 + tol * 1.2) || c.h > lp * (1 + tol * 2.0))) return null;
 
       // Measure departure from line
       const dist = type === 'asc' ? (c.c - lp) / lp : (lp - c.c) / lp;
@@ -151,7 +156,7 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
 
       // Check if this candle represents a discrete re-touch after departure
       const wickDist = type === 'asc' ? Math.abs(c.l - lp) / lp : Math.abs(c.h - lp) / lp;
-      if (departed && i > p2.idx && wickDist <= cfg.levelTolerance * 1.6 && (i - lastTouch) >= 6) {
+      if (departed && i > p2.idx && wickDist <= tol * 1.6 && (i - lastTouch) >= 5) {
         touches++;
         lastTouch = i;
         departed = false;
@@ -165,7 +170,7 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
     for (let j = i + 1; j < lows.length; j++) {
       if (lows[j].price > lows[i].price) {
         const line = tryPair(lows[i], lows[j], 'asc');
-        if (line) lines.push(line);
+        if (line) candidateLines.push(line);
       }
     }
   }
@@ -173,12 +178,36 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
     for (let j = i + 1; j < highs.length; j++) {
       if (highs[j].price < highs[i].price) {
         const line = tryPair(highs[i], highs[j], 'desc');
-        if (line) lines.push(line);
+        if (line) candidateLines.push(line);
       }
     }
   }
 
-  return lines.sort((a, b) => b.touches - a.touches).slice(0, 10);
+  // Deduplicate overlapping / nearly identical trendlines
+  candidateLines.sort((a, b) => {
+    if (b.touches !== a.touches) return b.touches - a.touches;
+    const spanA = a.p2.idx - a.p1.idx;
+    const spanB = b.p2.idx - b.p1.idx;
+    return spanB - spanA;
+  });
+
+  const filteredLines = [];
+  for (const line of candidateLines) {
+    const overlaps = filteredLines.some(existing => {
+      if (existing.type !== line.type) return false;
+      if (existing.p1.idx === line.p1.idx || existing.p2.idx === line.p2.idx) return true;
+      const slopeDiff = Math.abs(existing.slope - line.slope);
+      const p2Diff = Math.abs(existing.p2.idx - line.p2.idx);
+      if (slopeDiff < 3.0 && p2Diff < 8) return true;
+      return false;
+    });
+
+    if (!overlaps) {
+      filteredLines.push(line);
+    }
+  }
+
+  return filteredLines.slice(0, 10);
 }
 
 // ─── 4. Breakout Detection ────────────────────────────────────────────────────

@@ -2829,6 +2829,9 @@ server.listen(PORT, () => {
                 newSignalsCount++;
               }
 
+              // Autonomous 24/7 server-side formation alert dispatch
+              checkAndDispatchServerFormationAlerts(signals);
+
               // 24/7 Server-side pre-computation of formations levels
               const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
               const coinKey = `${ex}:${sym}`;
@@ -2850,6 +2853,7 @@ server.listen(PORT, () => {
         patternsCache = patternsCache.slice(0, 3000);
       }
 
+      serverAlertWarmupCompleted = true;
       console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
@@ -2859,7 +2863,151 @@ server.listen(PORT, () => {
     }
   }
 
+  // 24/7 Autonomous Server-Side Formation Alert Dispatcher
+  const serverFormationAlertCooldown = new Map();
+  let serverAlertWarmupCompleted = false;
+
+  function checkAndDispatchServerFormationAlerts(signals) {
+    if (!serverAlertWarmupCompleted) return;
+    if (!Array.isArray(signals) || signals.length === 0) return;
+    const now = Date.now();
+    const allUsers = Object.values(userStore.getAllUsersRaw ? userStore.getAllUsersRaw() : {});
+
+    const proUsersWithTg = allUsers.filter(u => 
+      !u.blocked && 
+      (u.plan === "pro" || (u.planExpiresAt && new Date(u.planExpiresAt).getTime() > now)) &&
+      (u.telegramChatId || u.telegramId)
+    );
+
+    if (proUsersWithTg.length === 0) return;
+
+    for (const signal of signals) {
+      if (!signal || !signal.type || !signal.sym) continue;
+      const { ex, sym, base, tf, type, price, meta } = signal;
+      const touches = meta?.touches || (meta?.p1Idx !== undefined ? 2 : 1);
+      const dist = meta?.dist !== undefined ? Number(meta.dist) : 0.5;
+
+      for (const user of proUsersWithTg) {
+        const chatId = user.telegramChatId || user.telegramId;
+        if (!chatId) continue;
+
+        const s = user.preferences?.formationAlerts || {
+          trendline: { enabled: true, minTouches: 2, distancePct: 1.0, direction: "all" },
+          level: { enabled: true, minTouches: 2, distancePct: 1.0, direction: "all" },
+          retest: { enabled: true, minTouches: 2, direction: "all" },
+          exchanges: ["all"],
+          blacklist: ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"],
+          blacklistCustom: "",
+          tgEnabled: true,
+          cooldownSeconds: 300
+        };
+
+        if (s.tgEnabled === false) continue;
+
+        // Check exchange
+        const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
+        if (!allowedExs.includes("all") && !allowedExs.includes(ex) && !allowedExs.includes(String(ex).toUpperCase())) continue;
+
+        // Check blacklist
+        const rawSym = String(sym).toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const baseSym = String(base || sym).toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const bl = Array.isArray(s.blacklist) ? s.blacklist.map(x => x.toUpperCase()) : ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+        const customBl = typeof s.blacklistCustom === "string" ? s.blacklistCustom.toUpperCase().split(/[,;\s]+/).map(x => x.trim()).filter(Boolean) : [];
+        const allBl = new Set([...bl, ...customBl]);
+        if (allBl.has(rawSym) || allBl.has(baseSym)) continue;
+
+        // Check pattern type enabled & thresholds
+        if (type === "trendline") {
+          if (!s.trendline?.enabled) continue;
+          const minT = Number(s.trendline.minTouches) || 2;
+          const maxD = Number(s.trendline.distancePct) || 1.0;
+          const targetDir = s.trendline.direction || "all";
+          if (touches < minT || dist > maxD) continue;
+          if (targetDir !== "all") {
+            const sigDir = signal.direction === "long" ? "down" : "up";
+            if ((targetDir === "down" || targetDir === "support" || targetDir === "long") && sigDir !== "down") continue;
+            if ((targetDir === "up" || targetDir === "resistance" || targetDir === "short") && sigDir !== "up") continue;
+          }
+        } else if (type === "level") {
+          if (!s.level?.enabled) continue;
+          const minT = Number(s.level.minTouches) || 2;
+          const maxD = Number(s.level.distancePct) || 1.0;
+          const targetDir = s.level.direction || "all";
+          if (touches < minT || dist > maxD) continue;
+          if (targetDir !== "all") {
+            const sigDir = signal.direction === "long" ? "down" : "up";
+            if ((targetDir === "support" || targetDir === "down" || targetDir === "long") && sigDir !== "down") continue;
+            if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short") && sigDir !== "up") continue;
+          }
+        } else if (type === "retest") {
+          if (!s.retest?.enabled) continue;
+        } else {
+          continue;
+        }
+
+        // Cooldown check per user + coin + pattern + tf
+        const cooldownSec = Number(s.cooldownSeconds) || 300;
+        const cdKey = `${user.id}:${ex}:${sym}:${type}:${tf}`;
+        const lastSent = serverFormationAlertCooldown.get(cdKey) || 0;
+        if (now - lastSent < cooldownSec * 1000) continue;
+
+        serverFormationAlertCooldown.set(cdKey, now);
+
+        // Build notification text
+        const typeTitles = {
+          trendline: "Наклонный уровень (Наклонка)",
+          level: "Горизонтальный уровень (Горизонталка)",
+          retest: "Подтвержденный ретест (Ретест)"
+        };
+        const typeIcons = {
+          trendline: "📐",
+          level: "➖",
+          retest: "🔄"
+        };
+
+        const icon = typeIcons[type] || "🔔";
+        const title = typeTitles[type] || type;
+        const exFull = ex === "BN" ? "Binance" : ex === "BB" ? "Bybit" : ex === "OX" ? "OKX" : ex === "BG" ? "Bitget" : ex === "GT" ? "Gate.io" : ex === "MX" ? "MEXC" : ex === "HL" ? "Hyperliquid" : ex;
+        const nowD = new Date(now + 3 * 3600000);
+        const timeStr = nowD.toISOString().substring(11, 19);
+        const dateStr = nowD.toISOString().substring(8, 10) + "." + nowD.toISOString().substring(5, 7);
+
+        const msg =
+          `${icon} <b>Сигнал формации: ${title}</b>\n` +
+          `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+          `• <b>Таймфрейм:</b> ${tf}\n` +
+          `• <b>Касания:</b> ${touches} касания\n` +
+          `• <b>Дистанция:</b> ${dist}% до уровня\n` +
+          `• <b>Текущая цена:</b> $${price}\n` +
+          `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
+          `─────────────────────────\n` +
+          `⚡ <b>Obsidian 24/7 Scanner</b>`;
+
+        if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+          telegramBot.sendTelegramMessage(chatId, msg).catch(err => {
+            console.warn(`[24/7 ALERT ERROR] Failed to send to ${chatId}:`, err.message);
+          });
+        }
+      }
+    }
+  }
+
   setTimeout(scanAllPatterns, 1500);
+
+  // User formation alert settings sync endpoint
+  app.post("/api/user/formation-alerts", express.json(), (req, res) => {
+    setPublicCors(req, res);
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+    const user = userStore.getUserByToken(token);
+    if (!user) return res.status(401).json({ error: "Неавторизован" });
+
+    const settings = req.body;
+    if (!settings || typeof settings !== "object") return res.status(400).json({ error: "Неверный формат настроек" });
+
+    userStore.updateUserPreferences(user.id, { formationAlerts: settings });
+    res.json({ success: true, settings });
+  });
 
   app.post("/api/notifications/telegram", express.json(), (req, res) => {
     setPublicCors(req, res);
