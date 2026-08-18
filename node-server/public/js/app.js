@@ -15982,8 +15982,6 @@ function initNotificationsUI() {
       }
     }
 
-    const typeIcon = data.type === "trendline" ? "📐" : data.type === "level" ? "➖" : "🔄";
-
     if (s.soundEnabled) {
       try { playAlertSound("chime"); } catch (_) {}
     }
@@ -15991,7 +15989,7 @@ function initNotificationsUI() {
     if (s.toastEnabled) {
       try {
         showToast({
-          title: `${typeIcon} ${data.typeName}`,
+          title: data.typeName,
           message: `<b>${symDisp} (${exFull}) [${data.tf}]</b>: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
           type: "price_alert"
         });
@@ -16000,7 +15998,7 @@ function initNotificationsUI() {
 
     if (s.tgEnabled) {
       const telegramMsg =
-        `${typeIcon} <b>Сигнал формации: ${data.typeName}</b>\n` +
+        `<b>Сигнал формации: ${data.typeName}</b>\n` +
         `• <b>Монета:</b> ${symDisp} (${exFull})\n` +
         `• <b>Таймфрейм:</b> ${data.tf}\n` +
         `• <b>Касания:</b> ${data.touches} касания\n` +
@@ -16009,7 +16007,7 @@ function initNotificationsUI() {
         `• <b>Объем 24ч:</b> $${formattedVol}\n` +
         `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
         `─────────────────────────\n` +
-        `⚡ <b>Obsidian Formation Scanner</b>`;
+        `<b>Obsidian Formation Scanner</b>`;
 
       sendTelegramAlert(telegramMsg, photoDataUrl);
     }

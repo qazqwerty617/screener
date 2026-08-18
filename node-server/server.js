@@ -2993,9 +2993,9 @@ server.listen(PORT, () => {
 
         let msg = "";
         if (type === "trendline") {
-          const dirLabel = signal.direction === "long" ? "Поддержка (Long) 🟢" : "Сопротивление (Short) 🔴";
+          const dirLabel = signal.direction === "long" ? "Поддержка (Long)" : "Сопротивление (Short)";
           msg =
-            `📐 <b>Сигнал формации: Наклонный уровень (Наклонка)</b>\n` +
+            `<b>Сигнал формации: Наклонный уровень (Наклонка)</b>\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
             `• <b>Направление:</b> ${dirLabel}\n` +
@@ -3005,11 +3005,11 @@ server.listen(PORT, () => {
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
             `─────────────────────────\n` +
-            `⚡ <b>Obsidian 24/7 Scanner</b>`;
+            `<b>Obsidian 24/7 Scanner</b>`;
         } else if (type === "level") {
-          const dirLabel = signal.direction === "long" ? "Поддержка (Support) 🟢" : "Сопротивление (Resistance) 🔴";
+          const dirLabel = signal.direction === "long" ? "Поддержка (Support)" : "Сопротивление (Resistance)";
           msg =
-            `➖ <b>Сигнал формации: Горизонтальный уровень (Горизонталка)</b>\n` +
+            `<b>Сигнал формации: Горизонтальный уровень (Горизонталка)</b>\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
             `• <b>Тип уровня:</b> ${dirLabel}\n` +
@@ -3019,22 +3019,22 @@ server.listen(PORT, () => {
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
             `─────────────────────────\n` +
-            `⚡ <b>Obsidian 24/7 Scanner</b>`;
+            `<b>Obsidian 24/7 Scanner</b>`;
         } else if (type === "retest") {
-          const dirLabel = signal.direction === "long" ? "Ретест пробоя вверх (Long) 🟢" : "Ретест пробоя вниз (Short) 🔴";
+          const dirLabel = signal.direction === "long" ? "Ретест пробоя вверх (Long)" : "Ретест пробоя вниз (Short)";
           const srcLabel = meta.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";
           msg =
-            `🔄 <b>Сигнал формации: Подтвержденный ретест (Ретест)</b>\n` +
+            `<b>Сигнал формации: Подтвержденный ретест (Ретест)</b>\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
             `• <b>Тип ретеста:</b> ${dirLabel}\n` +
             `• <b>Основа:</b> ${srcLabel}\n` +
-            `• <b>Статус:</b> Подтвержденный отскок (Confirmed) ✅\n` +
+            `• <b>Статус:</b> Подтвержденный отскок (Confirmed)\n` +
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
             `─────────────────────────\n` +
-            `⚡ <b>Obsidian 24/7 Scanner</b>`;
+            `<b>Obsidian 24/7 Scanner</b>`;
         }
 
         if (msg && telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
