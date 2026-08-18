@@ -15998,13 +15998,13 @@ function initNotificationsUI() {
     playAlertSound("chime");
     showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
     if (currentFormationAlertSettings.tgEnabled) {
-      sendTelegramAlert("🔔 <b>Obsidian Formation & Price Alert</b>\n\nТестовый сигнал из скринера получен успешно!");
+      sendTelegramAlert("Obsidian Formation & Price Alert\n\nТестовый сигнал из скринера получен успешно!");
     }
   }
 
   async function triggerTestFormationTgAlert() {
     playAlertSound("chime");
-    showToast({ title: "Генерация 4K снимка...", message: "Рендеринг 300 свечей и отправка в Telegram...", type: "info" });
+    showToast({ title: "Отправка сообщения...", message: "Подготовка и отправка тестового сообщения в Telegram...", type: "info" });
     
     const sym = activeSym || "BTCUSDT";
     const ex = activeEx || "BN";
@@ -16023,16 +16023,16 @@ function initNotificationsUI() {
     }
 
     const telegramMsg =
-      `📐 <b>Сигнал формации: Наклонный уровень (Тест)</b>\n` +
-      `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
-      `• <b>Таймфрейм:</b> ${tf}\n` +
-      `• <b>Касания:</b> 3 касания\n` +
-      `• <b>Дистанция:</b> 0.28% до наклонки\n` +
+      `Сигнал формации: Наклонный уровень (Тест)\n` +
+      `• Монета: ${sym.toUpperCase()} (${exFull})\n` +
+      `• Таймфрейм: ${tf}\n` +
+      `• Касания: 3 касания\n` +
+      `• Дистанция: 0.28% до наклонки\n` +
       `─────────────────────────\n` +
-      `⚡ <b>Obsidian Formation Scanner</b>`;
+      `Obsidian Formation Scanner`;
 
     sendTelegramAlert(telegramMsg, photoDataUrl);
-    showToast({ title: "Telegram", message: "✅ 4K снимок и сигнал формации отправлены в Telegram!", type: "success" });
+    showToast({ title: "Telegram", message: "Тестовое сообщение отправлено в Telegram!", type: "success" });
   }
 
   $("btn-test-sound")?.addEventListener("click", triggerTestAlert);
