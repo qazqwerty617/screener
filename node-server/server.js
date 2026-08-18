@@ -3099,10 +3099,20 @@ server.listen(PORT, () => {
 
         serverFormationAlertCooldown.set(cdKey, now);
 
-        const exFull = ex === "BN" ? "Binance" : ex === "BB" ? "Bybit" : ex === "OX" ? "OKX" : ex === "BG" ? "Bitget" : ex === "GT" ? "Gate.io" : ex === "MX" ? "MEXC" : ex === "HL" ? "Hyperliquid" : ex;
-        const nowD = new Date(now + 3 * 3600000);
-        const timeStr = nowD.toISOString().substring(11, 19);
-        const dateStr = nowD.toISOString().substring(8, 10) + "." + nowD.toISOString().substring(5, 7);
+        const exNames = {
+          BN: "Binance",
+          BB: "Bybit",
+          OX: "OKX",
+          BG: "Bitget",
+          GT: "Gate.io",
+          MX: "MEXC",
+          HL: "Hyperliquid",
+          BX: "BingX",
+          KC: "KuCoin",
+          HT: "HTX",
+          AD: "AsterDex"
+        };
+        const exFull = exNames[ex] || ex;
         const actualPrice = signal.curPrice || fallbackCurPrice || price;
 
         let msg = "";
@@ -3117,7 +3127,6 @@ server.listen(PORT, () => {
             `• <b>Дистанция:</b> ${dist}% до линии\n` +
             `• <b>Цена наклона:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
-            `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
             `─────────────────────────\n` +
             `<b>Obsidian 24/7 Scanner</b>`;
         } else if (type === "level") {
@@ -3131,7 +3140,6 @@ server.listen(PORT, () => {
             `• <b>Дистанция:</b> ${dist}% до уровня\n` +
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
-            `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
             `─────────────────────────\n` +
             `<b>Obsidian 24/7 Scanner</b>`;
         } else if (type === "retest") {
@@ -3146,7 +3154,6 @@ server.listen(PORT, () => {
             `• <b>Статус:</b> Подтвержденный отскок (Confirmed)\n` +
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
-            `• <b>Время:</b> ${dateStr} ${timeStr} MSK\n` +
             `─────────────────────────\n` +
             `<b>Obsidian 24/7 Scanner</b>`;
         }
