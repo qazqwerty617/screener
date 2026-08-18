@@ -2812,7 +2812,7 @@ server.listen(PORT, () => {
     }
   });
 
-  // тФАтФАтФА Pattern Scanner Engine (24/7 Continuous Loop) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+  // ═══ Pattern Scanner Engine (24/7 Continuous Loop) ═══
   let isScanningPatterns = false;
   async function scanAllPatterns() {
     if (isScanningPatterns) return;
@@ -2823,15 +2823,20 @@ server.listen(PORT, () => {
       const list = Array.from(tickers.values())
         .filter(t => t.v > 0)
         .sort((a, b) => b.v - a.v)
-        .slice(0, 400);
+        .slice(0, 250);
 
-      // Populate the default formations timeframe first so the tab becomes
-      // useful early in the cycle instead of waiting for four other histories.
-      const timeframes = ["4h", "15m", "1h", "5m", "1d"];
+      if (list.length === 0) {
+        isScanningPatterns = false;
+        setTimeout(scanAllPatterns, 5000);
+        return;
+      }
+
+      console.log(`[PATTERNS 24/7] Starting scan cycle for top ${list.length} pairs across timeframes...`);
+      const timeframes = ["15m", "1h", "4h", "5m", "1d"];
       let newSignalsCount = 0;
 
-      // Safe concurrency batching
-      const BATCH_SIZE = 10;
+      // Safe concurrency batching (15 tickers per batch)
+      const BATCH_SIZE = 15;
       for (let i = 0; i < list.length; i += BATCH_SIZE) {
         const batch = list.slice(i, i + BATCH_SIZE);
         await Promise.all(batch.map(async (t) => {
@@ -2841,10 +2846,13 @@ server.listen(PORT, () => {
           const sym = t.key.substring(colonIdx + 1);
           const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
 
-          for (const tf of timeframes) {
+          await Promise.all(timeframes.map(async (tf) => {
             try {
-              const candles = await fetchFullHistory(ex, sym, tf, true);
-              if (!candles || candles.length < 30) continue;
+              // Timeout fetch to prevent hung requests from blocking the cycle
+              const candlesPromise = fetchFullHistory(ex, sym, tf, true);
+              const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2500));
+              const candles = await Promise.race([candlesPromise, timeoutPromise]);
+              if (!candles || candles.length < 30) return;
 
               const meta = { ex, sym, base, tf };
               const signals = patternDetector.scanCandles(meta, candles);
@@ -2896,7 +2904,7 @@ server.listen(PORT, () => {
               // Autonomous 24/7 server-side formation alert dispatch
               checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c);
             } catch (e) {}
-          }
+          }));
         }));
       }
 
@@ -2910,7 +2918,7 @@ server.listen(PORT, () => {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      setTimeout(scanAllPatterns, 30000);
+      setTimeout(scanAllPatterns, 10000);
     }
   }
 
