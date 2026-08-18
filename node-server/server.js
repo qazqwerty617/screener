@@ -2394,6 +2394,32 @@ app.post("/api/user/preferences", express.json({ limit: "5mb" }), (req, res) => 
   res.json({ success: true, preferences: updated });
 });
 
+app.get("/api/user/formation-alerts", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  const preferences = userStore.getUserPreferences(user.id) || {};
+  res.json({ success: true, settings: preferences.formationAlerts || null });
+});
+
+app.post("/api/user/formation-alerts", express.json({ limit: "5mb" }), (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  const user = userStore.getUserByToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Неавторизован" });
+  }
+  const settings = req.body || {};
+  const currentPrefs = userStore.getUserPreferences(user.id) || {};
+  currentPrefs.formationAlerts = settings;
+  const updated = userStore.updateUserPreferences(user.id, currentPrefs);
+  console.log(`[USER PREFS] Updated formationAlerts for user ${user.id} (${user.telegramId || user.telegramChatId || "no tg"}):`, JSON.stringify(settings));
+  res.json({ success: true, preferences: updated });
+});
+
 app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
   const { userId, plan } = req.body || {};
   if (!userId || !plan) {
@@ -2879,7 +2905,6 @@ server.listen(PORT, () => {
         patternsCache = patternsCache.slice(0, 3000);
       }
 
-      serverAlertWarmupCompleted = true;
       console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
@@ -2891,10 +2916,8 @@ server.listen(PORT, () => {
 
   // 24/7 Autonomous Server-Side Formation Alert Dispatcher
   const serverFormationAlertCooldown = new Map();
-  let serverAlertWarmupCompleted = false;
 
   function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice) {
-    if (!serverAlertWarmupCompleted) return;
     if (!Array.isArray(signals) || signals.length === 0) return;
     const now = Date.now();
     const allUsers = Object.values(userStore.getAllUsersRaw ? userStore.getAllUsersRaw() : {});
@@ -2945,6 +2968,8 @@ server.listen(PORT, () => {
         // Check pattern type enabled & thresholds
         if (type === "trendline") {
           if (!s.trendline?.enabled) continue;
+          const allowedTfs = Array.isArray(s.trendline.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"];
+          if (!allowedTfs.includes(tf)) continue;
           const minT = Number(s.trendline.minTouches) || 2;
           const maxD = Number(s.trendline.distancePct) || 1.0;
           const targetDir = s.trendline.direction || "all";
@@ -2956,6 +2981,8 @@ server.listen(PORT, () => {
           }
         } else if (type === "level") {
           if (!s.level?.enabled) continue;
+          const allowedTfs = Array.isArray(s.level.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"];
+          if (!allowedTfs.includes(tf)) continue;
           const minT = Number(s.level.minTouches) || 2;
           const maxD = Number(s.level.distancePct) || 1.0;
           const targetDir = s.level.direction || "all";
@@ -2967,6 +2994,8 @@ server.listen(PORT, () => {
           }
         } else if (type === "retest") {
           if (!s.retest?.enabled) continue;
+          const allowedTfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"];
+          if (!allowedTfs.includes(tf)) continue;
           const targetDir = s.retest.direction || "all";
           if (targetDir !== "all") {
             const sigDir = signal.direction === "long" ? "up" : "down";
@@ -3038,6 +3067,7 @@ server.listen(PORT, () => {
         }
 
         if (msg && telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
+          console.log(`[24/7 TG ALERT] Dispatching ${type} for ${sym} (${tf}) to chatId ${chatId}`);
           telegramBot.sendTelegramMessage(chatId, msg).catch(err => {
             console.warn(`[24/7 ALERT ERROR] Failed to send to ${chatId}:`, err.message);
           });
@@ -3047,21 +3077,6 @@ server.listen(PORT, () => {
   }
 
   setTimeout(scanAllPatterns, 1500);
-
-  // User formation alert settings sync endpoint
-  app.post("/api/user/formation-alerts", express.json(), (req, res) => {
-    setPublicCors(req, res);
-    const authHeader = req.headers.authorization || "";
-    const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-    const user = userStore.getUserByToken(token);
-    if (!user) return res.status(401).json({ error: "Неавторизован" });
-
-    const settings = req.body;
-    if (!settings || typeof settings !== "object") return res.status(400).json({ error: "Неверный формат настроек" });
-
-    userStore.updateUserPreferences(user.id, { formationAlerts: settings });
-    res.json({ success: true, settings });
-  });
 
   app.post("/api/notifications/telegram", express.json(), (req, res) => {
     setPublicCors(req, res);
