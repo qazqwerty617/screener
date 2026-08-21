@@ -28,7 +28,7 @@
     --ox: #8b5cf6;
     --radius: 6px;
     --font: "Inter", -apple-system, sans-serif;
-    --table-grid: minmax(60px, 1.5fr) 46px 52px 34px 44px 34px;
+    --table-grid: minmax(84px, 1.4fr) 56px 46px 36px 32px 58px;
 }
 
 html,
@@ -2435,37 +2435,30 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     background: var(--ac);
 }
 
+/* ── Resizer (Disabled / Fixed Panel) ── */
+.resizer,
+#rp-resizer {
+    display: none !important;
+}
+
 #main.rp-collapsed #rp {
-    width: 0 !important;
-    min-width: 0 !important;
-    border-left: none;
-    overflow: hidden;
+    width: 360px !important;
+    min-width: 360px !important;
+    max-width: 360px !important;
 }
 
-#main.rp-collapsed .resizer {
-    width: 12px;
-    background: var(--bg2);
-    border-left: 1px solid var(--bd);
-}
-
-#main.rp-collapsed .resizer-toggle {
-    opacity: 1;
-    transform: translateX(-50%) rotate(180deg);
-}
-
-/* ── Right Panel ── */
+/* ── Right Panel (Static & Fixed on Right) ── */
 #rp {
-    max-width: 1100px;
+    width: 360px !important;
+    min-width: 360px !important;
+    max-width: 360px !important;
     background: var(--screener-bg, rgba(13, 15, 20, 0.98));
     border-left: 1px solid var(--bd);
     display: flex;
     flex-direction: column;
-    flex-shrink: 0;
-    transition: width 0s linear, min-width 0s linear;
-}
-
-#rp:not(.no-transition) {
-    transition: width 0.2s ease, min-width 0.2s ease;
+    flex-shrink: 0 !important;
+    overflow: hidden;
+    user-select: none;
 }
 
 .rph {
@@ -2552,14 +2545,15 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
 .clh > div, .cr > div:not(.ct) {
     text-align: right;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
+    text-overflow: clip;
+    font-variant-numeric: tabular-nums;
 }
 
 .ct {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     min-width: 0;
 }
 
@@ -2661,19 +2655,20 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 }
 
 .cdot {
-    width: 24px;
-    height: 16px;
-    border-radius: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
     flex-shrink: 0;
 }
 
 .cname {
-    font-weight: 600;
-    color: var(--t1);
+    font-weight: 700;
+    color: #e2e8f0;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 11px;
+    overflow: visible;
+    text-overflow: clip;
+    font-size: 11.5px;
+    letter-spacing: -0.2px;
 }
 
 .cc {

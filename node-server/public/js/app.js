@@ -374,15 +374,15 @@ let visibleCols = { ...defaultCols };
 
 function updateTableGrid() {
   const SIZES = {
-    chg: "52px",
+    chg: "56px",
     v: "46px",
-    trades: "44px",
+    trades: "36px",
     oi: "36px",
-    corr: "36px",
-    funding: "42px"
+    corr: "32px",
+    funding: "58px"
   };
 
-  let gridStr = "minmax(66px, 1.5fr)";
+  let gridStr = "minmax(84px, 1.4fr)";
   let minContentWidth = 90;
   for (const [key, size] of Object.entries(SIZES)) {
     const cb = document.getElementById(`col-${key}`);
@@ -402,11 +402,9 @@ function updateTableGrid() {
 
   const rp = $("rp");
   if (rp) {
-    const currentWidth = parseInt(rp.style.width || "0", 10);
-    if (currentWidth > minContentWidth + 100 || currentWidth < minContentWidth) {
-      rp.style.width = Math.max(minContentWidth, 120) + "px";
-      rp.style.minWidth = Math.max(minContentWidth, 120) + "px";
-    }
+    rp.style.width = "360px";
+    rp.style.minWidth = "360px";
+    rp.style.maxWidth = "360px";
   }
 
   localStorage.setItem("tableCols", JSON.stringify(visibleCols));
@@ -7390,7 +7388,7 @@ function fillRow(c, rr) {
 
   // тФАтФА Funding тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const funding = c.funding || 0;
-  const fundStr = (funding >= 0 ? "+" : "") + funding.toFixed(3) + "%";
+  const fundStr = (funding >= 0 ? "+" : "") + funding.toFixed(4) + "%";
   if (rr.cells.funding.textContent !== fundStr) {
     rr.cells.funding.textContent = fundStr;
     rr.cells.funding.className = "cfunding " + (funding > 0 ? "pos" : funding < 0 ? "neg" : "");
