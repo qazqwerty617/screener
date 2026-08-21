@@ -12,6 +12,65 @@ const rowEls = new Map();
 const priceHistories = new Map();
 let isHoveringScreener = false;
 
+const DEFAULT_CANDLE_STATE = {
+  body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
+  border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
+  wick: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 }
+};
+
+const DEFAULT_VOLUME_STATE = {
+  show: true,
+  up: "#26c97a",
+  upOp: 75,
+  down: "#ff4560",
+  downOp: 75
+};
+
+function hexToRgba(hex, opacity = 100) {
+  if (!hex || typeof hex !== 'string') return `rgba(255, 255, 255, ${(opacity ?? 100) / 100})`;
+  const op = (Number(opacity) >= 0 ? Number(opacity) : 100) / 100;
+  
+  if (hex.startsWith("rgba(") || hex.startsWith("rgb(")) {
+    const match = hex.match(/\d+(\.\d+)?/g);
+    if (match && match.length >= 3) {
+      const baseAlpha = match.length >= 4 ? Number(match[3]) : 1;
+      return `rgba(${match[0]}, ${match[1]}, ${match[2]}, ${baseAlpha * op})`;
+    }
+    return hex;
+  }
+
+  let cleanHex = hex.replace("#", "").trim();
+  let r = 0, g = 0, b = 0;
+  if (cleanHex.length === 3) {
+    r = parseInt(cleanHex[0] + cleanHex[0], 16) || 0;
+    g = parseInt(cleanHex[1] + cleanHex[1], 16) || 0;
+    b = parseInt(cleanHex[2] + cleanHex[2], 16) || 0;
+  } else if (cleanHex.length >= 6) {
+    r = parseInt(cleanHex.substring(0, 2), 16) || 0;
+    g = parseInt(cleanHex.substring(2, 4), 16) || 0;
+    b = parseInt(cleanHex.substring(4, 6), 16) || 0;
+  }
+  return `rgba(${r}, ${g}, ${b}, ${op})`;
+}
+
+function getSavedCandleSettings() {
+  try {
+    const saved = localStorage.getItem("screener-candle-settings");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return {
+        body: { ...DEFAULT_CANDLE_STATE.body, ...(parsed.body || {}) },
+        border: { ...DEFAULT_CANDLE_STATE.border, ...(parsed.border || {}) },
+        wick: { ...DEFAULT_CANDLE_STATE.wick, ...(parsed.wick || {}) }
+      };
+    }
+  } catch (_) {}
+  return JSON.parse(JSON.stringify(DEFAULT_CANDLE_STATE));
+}
+
+window.candleSettings = getSavedCandleSettings();
+window.volumeSettings = JSON.parse(JSON.stringify(DEFAULT_VOLUME_STATE));
+
 // ════ TOAST NOTIFICATIONS ═════════════════════════════
 function showToast(options, typeArg, titleArg, durationArg) {
   let title = "";
@@ -8346,10 +8405,49 @@ if (settingsBtn && settingsOverlay) {
         } catch (_) {}
       }
 
-      $("set-candle-body").checked = candleState.body.show;
-      $("set-candle-border").checked = candleState.border.show;
-      $("set-candle-wick").checked = candleState.wick.show;
-      $("set-show-volume").checked = volumeState.show;
+      const cbBody = $("set-candle-body");
+      if (cbBody) {
+        cbBody.checked = candleState.body.show !== false;
+        cbBody.onchange = (e) => {
+          candleState.body.show = e.target.checked;
+          window.candleSettings = candleState;
+          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
+          refreshCharts();
+        };
+      }
+
+      const cbBorder = $("set-candle-border");
+      if (cbBorder) {
+        cbBorder.checked = candleState.border.show !== false;
+        cbBorder.onchange = (e) => {
+          candleState.border.show = e.target.checked;
+          window.candleSettings = candleState;
+          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
+          refreshCharts();
+        };
+      }
+
+      const cbWick = $("set-candle-wick");
+      if (cbWick) {
+        cbWick.checked = candleState.wick.show !== false;
+        cbWick.onchange = (e) => {
+          candleState.wick.show = e.target.checked;
+          window.candleSettings = candleState;
+          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
+          refreshCharts();
+        };
+      }
+
+      const cbVol = $("set-show-volume");
+      if (cbVol) {
+        cbVol.checked = volumeState.show !== false;
+        cbVol.onchange = (e) => {
+          volumeState.show = e.target.checked;
+          window.volumeSettings = volumeState;
+          localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
+          refreshCharts();
+        };
+      }
 
       const compact = localStorage.getItem("screener-compact-list") === "true";
       const compactEl = $("set-compact-list");
@@ -8378,13 +8476,15 @@ if (settingsBtn && settingsOverlay) {
 
       if (id.startsWith("candle-")) {
         const parts = id.split("-");
-        const type = parts[2];
-        const side = parts[1];
+        const side = parts[1]; // up / down
+        const type = parts[2]; // body / border / wick
         initialColor = candleState[type][side];
         initialOpacity = candleState[type][side + "Op"];
         onUpdate = (c, o) => {
           candleState[type][side] = c;
           candleState[type][side + "Op"] = o;
+          window.candleSettings = candleState;
+          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
           refreshCharts();
         };
       } else if (id.startsWith("volume-")) {
@@ -8394,6 +8494,8 @@ if (settingsBtn && settingsOverlay) {
         onUpdate = (c, o) => {
           volumeState[side] = c;
           volumeState[side + "Op"] = o;
+          window.volumeSettings = volumeState;
+          localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
           refreshCharts();
         };
       } else if (id.startsWith("fmt-")) {
