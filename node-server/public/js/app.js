@@ -2583,11 +2583,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
-
-      if (typeof tl.endPrice === 'number' && Number.isFinite(tl.endPrice)) {
-        const currentY = toY(tl.endPrice);
-        scaleBadges.push({ price: tl.endPrice, y: currentY, color: lineColor });
-      }
     }
   }
 
@@ -3443,13 +3438,6 @@ function drawChart() {
     const minPxStep = 80;
     const stepBars = Math.max(1, Math.round(minPxStep / candleW));
 
-    // Draw subtle vertical grid lines on the main price chart aligned with timestamps
-    ctx.save();
-    ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.035)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-
     vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
     vCtx.font = "10px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
     vCtx.textAlign = "center";
@@ -3473,19 +3461,12 @@ function drawChart() {
       vCtx.lineTo(rawX, timeYStart + 4.5);
       vCtx.stroke();
 
-      // Main chart vertical grid line
-      ctx.moveTo(rawX, TOP);
-      ctx.lineTo(rawX, TOP + PH);
-
       // Format time label with active UTC offset
       const barTime = getTimeFromIdx(idx);
       const timeStr = formatTimestampWithOffset(barTime, activeTf, window.chartUtcOffset);
 
       vCtx.fillText(timeStr, rawX, timeYStart + 11.5);
     }
-
-    ctx.stroke();
-    ctx.restore();
   }
 
   // Timezone interactive button in bottom-right corner
