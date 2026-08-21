@@ -7944,15 +7944,19 @@ if (settingsBtn && settingsOverlay) {
     };
   });
 
-  // Theme switching placeholder
+  // Theme switching
   document.querySelectorAll(".theme-opt").forEach(opt => {
     opt.onclick = () => {
       document.querySelectorAll(".theme-opt").forEach(o => o.classList.remove("active"));
       opt.classList.add("active");
       const theme = opt.dataset.theme;
-      if (theme === "dark") updateBgColor("#0d0f14");
-      if (theme === "black") updateBgColor("#000000");
-      if (theme === "blue") updateBgColor("#0a0c1a");
+      let newBg = "#0d0f14";
+      if (theme === "dark") newBg = "#0d0f14";
+      if (theme === "black") newBg = "#000000";
+      if (theme === "blue") newBg = "#0a0c1a";
+      pendingBg = newBg;
+      if (bgPreview) bgPreview.style.backgroundColor = newBg;
+      updateBgColor(newBg, pendingOpacity, false);
     };
   });
 
@@ -8480,52 +8484,94 @@ if (settingsBtn && settingsOverlay) {
         updateBgColor(pendingBg, pendingOpacity, true);
         updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
 
-        candleState.body.show = $("set-candle-body").checked;
-        candleState.border.show = $("set-candle-border").checked;
-        candleState.wick.show = $("set-candle-wick").checked;
+        const cbBody = $("set-candle-body");
+        if (cbBody) candleState.body.show = cbBody.checked;
+        const cbBorder = $("set-candle-border");
+        if (cbBorder) candleState.border.show = cbBorder.checked;
+        const cbWick = $("set-candle-wick");
+        if (cbWick) candleState.wick.show = cbWick.checked;
         localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
 
-        const compact = $("set-compact-list").checked;
-        localStorage.setItem("screener-compact-list", compact);
-        $("coin-list").classList.toggle("compact", compact);
+        const cbCompact = $("set-compact-list");
+        if (cbCompact) {
+          const compact = cbCompact.checked;
+          localStorage.setItem("screener-compact-list", compact);
+          $("coin-list")?.classList.toggle("compact", compact);
+        }
 
-        const anim = $("set-chart-anim").checked;
-        localStorage.setItem("screener-chart-anim", anim);
-        INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
+        const cbAnim = $("set-chart-anim");
+        if (cbAnim) {
+          const anim = cbAnim.checked;
+          localStorage.setItem("screener-chart-anim", anim);
+          INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
+        }
 
-        volumeState.show = $("set-show-volume").checked;
-        localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
+        const cbVol = $("set-show-volume");
+        if (cbVol) {
+          volumeState.show = cbVol.checked;
+          localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
+        }
 
         localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
 
         refreshCharts();
-        if (settingsOverlay) settingsOverlay.classList.remove("open");
+        if (settingsOverlay) {
+          settingsOverlay.classList.remove("open");
+          settingsOverlay.style.display = "none";
+        }
       };
     }
 
     // Reset button
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
-      resetBtn.onclick = () => {
-        if (confirm("Вы уверены, что хотите сбросить все настройки к начальным?")) {
-          // Clear settings but keep drawings
-          const keysToKeep = [];
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (
+      resetBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Clear settings but keep drawings & auth
+        const keysToKeep = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (
+            key && (
               key.startsWith("crypto_drawings_") ||
               key.startsWith("obsidian_auth_") ||
               key.startsWith("obsidian_tg_") ||
+              key.startsWith("user_") ||
               key === "crypto_tags" ||
               key === "crypto_tool_colors"
-            ) {
-              keysToKeep.push({ key, val: localStorage.getItem(key) });
-            }
+            )
+          ) {
+            keysToKeep.push({ key, val: localStorage.getItem(key) });
           }
-          localStorage.clear();
-          keysToKeep.forEach(item => localStorage.setItem(item.key, item.val));
-          location.reload();
         }
+        localStorage.clear();
+        keysToKeep.forEach(item => localStorage.setItem(item.key, item.val));
+
+        // Reset memory variables to defaults
+        pendingBg = "#0d0f14";
+        pendingOpacity = "100";
+        if (bgPreview) bgPreview.style.backgroundColor = "#0d0f14";
+        if (opacitySlider) opacitySlider.value = 100;
+        if (opacityVal) opacityVal.textContent = "100%";
+        
+        updateBgColor("#0d0f14", 100, true);
+        updateAxisColor("#d1d4dc", 100, true);
+        updateScreenerBgColor("rgba(13, 15, 20, 0.98)", true);
+        
+        document.querySelectorAll(".theme-opt").forEach(o => {
+          o.classList.toggle("active", o.dataset.theme === "dark");
+        });
+
+        if (typeof showToast === "function") {
+          showToast({ title: "Настройки", message: "Настройки оформления сброшены по умолчанию", type: "info" });
+        }
+        
+        refreshCharts();
+        setTimeout(() => {
+          location.reload();
+        }, 250);
       };
     }
 
@@ -8590,8 +8636,11 @@ function updateScreenerHeaderColor(color, save = true) {
   updateScreenerBgColor(color, save);
 }
 
+let currentCanvasBgRgba = null;
+
 function updateBgColor(color, opacity = 100, save = true) {
   const rgba = hexToRgba(color, opacity);
+  currentCanvasBgRgba = rgba;
   document.documentElement.style.setProperty("--bg", rgba);
   document.documentElement.style.setProperty("--bg2", rgba);
 
@@ -8601,7 +8650,9 @@ function updateBgColor(color, opacity = 100, save = true) {
   }
 
   // Force redraw all charts if initialized
-  if (typeof drawChart === "function") drawChart();
+  if (typeof drawChart === "function") {
+    requestAnimationFrame(drawChart);
+  }
 
   if (typeof screenerView !== "undefined" && (screenerView === "multichart" || activeView === "formations")) {
     // Redraw all ChartInstances
@@ -8612,6 +8663,7 @@ function updateBgColor(color, opacity = 100, save = true) {
 }
 
 function getCanvasBgColor() {
+  if (currentCanvasBgRgba) return currentCanvasBgRgba;
   const color = localStorage.getItem("screener-bg-color") || "#0d0f14";
   const opacity = localStorage.getItem("screener-bg-opacity") || "100";
   return hexToRgba(color, opacity);
