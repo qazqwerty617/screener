@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
-
 *,
 *::before,
 *::after {
@@ -29,8 +27,7 @@
     --bb: #3b82f6;
     --ox: #8b5cf6;
     --radius: 6px;
-    --font: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-    --font-mono: "JetBrains Mono", "SF Mono", Consolas, "Courier New", monospace;
+    --font: "Inter", -apple-system, sans-serif;
     --table-grid: minmax(84px, 1.4fr) 56px 46px 36px 32px 58px;
 }
 
@@ -41,10 +38,6 @@ body {
     background: var(--bg);
     color: var(--t1);
     overflow: hidden;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "tnum";
 }
 
 ::-webkit-scrollbar {

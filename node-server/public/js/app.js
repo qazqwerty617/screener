@@ -71,12 +71,6 @@ function getSavedCandleSettings() {
 window.candleSettings = getSavedCandleSettings();
 window.volumeSettings = JSON.parse(JSON.stringify(DEFAULT_VOLUME_STATE));
 
-if (typeof document !== "undefined" && document.fonts && document.fonts.ready) {
-  document.fonts.ready.then(() => {
-    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
-  });
-}
-
 // ════ TOAST NOTIFICATIONS ═════════════════════════════
 function showToast(options, typeArg, titleArg, durationArg) {
   let title = "";
