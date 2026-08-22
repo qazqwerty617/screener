@@ -2738,7 +2738,21 @@ function drawChart() {
   const TOP = 0;
   if (PH <= 20) return;
 
-  // тФАтФА Background тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+  // Real-time live candle price synchronization with 0ms lag
+  const ak = `${activeEx}:${activeSym}`;
+  const liveCoin = coins.get(ak);
+  if (liveCoin && liveCoin.p > 0 && candles.length > 0) {
+    const lastCandle = candles[candles.length - 1];
+    const tfMs = TF_MS[activeTf] || 60000;
+    const now = Date.now();
+    if (now >= lastCandle.t && now < lastCandle.t + tfMs * 2) {
+      lastCandle.c = liveCoin.p;
+      if (liveCoin.p > lastCandle.h) lastCandle.h = liveCoin.p;
+      if (liveCoin.p < lastCandle.l) lastCandle.l = liveCoin.p;
+    }
+  }
+
+  // ── Background ─────────────────────────────────────────────────────────────
   ctx.clearRect(0, 0, chartW, chartH);
   ctx.fillStyle = getCanvasBgColor();
   ctx.fillRect(0, 0, chartW, chartH);
@@ -6992,13 +7006,40 @@ async function loadOlderHistory(ex, sym, tf) {
   }
 }
 
-function appendCandle(k) {
-  if (!candles.length || !k) return;
-  const last = candles[candles.length - 1];
+async function refetchMissingHistory(ex, sym, tf) {
+  if (window.isFetchingGap) return;
+  window.isFetchingGap = true;
+  try {
+    const fresh = await fetchServerKlines(ex, sym, tf, 0);
+    if (fresh && fresh.length > 0 && activeEx === ex && activeSym === sym && activeTf === tf) {
+      const map = new Map();
+      fresh.forEach(c => map.set(c.t, c));
+      candles.forEach(c => map.set(c.t, c)); // preserve latest live values
+      const merged = Array.from(map.values()).sort((a, b) => a.t - b.t);
+      candles = sanitizeCandles(merged);
+      chartNeedsDraw = true;
+      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    }
+  } catch (_) {}
+  finally {
+    window.isFetchingGap = false;
+  }
+}
 
-  const prev = candles.length > 1 ? candles[candles.length - 2].c : null;
-  const clean = sanitizeCandle(k, prev);
+function appendCandle(k) {
+  if (!k) return;
+  const clean = sanitizeCandle(k, null);
   if (!clean) return;
+
+  if (!candles.length) {
+    candles = [clean];
+    chartNeedsDraw = true;
+    updateOHLC();
+    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    return;
+  }
+
+  const last = candles[candles.length - 1];
 
   // Only accept updates that are NOT older than current last candle
   if (clean.t === last.t) {
@@ -7008,18 +7049,12 @@ function appendCandle(k) {
     last.c = clean.c;
     last.v = clean.v;
   } else if (clean.t > last.t) {
-    // Never fabricate missing exchange candles. Re-fetch the authoritative range instead.
     const tfMs = TF_MS[activeTf] || 60000;
-    if (clean.t - last.t > tfMs * 1.5) {
-      if (!window.isFetchingGap) {
-        window.isFetchingGap = true;
-        setTimeout(() => {
-          Promise.resolve(fetchKlines(activeEx, activeSym, activeTf)).finally(() => { window.isFetchingGap = false; });
-        }, 150);
-      }
+    if (clean.t - last.t > tfMs * 2) {
+      refetchMissingHistory(activeEx, activeSym, activeTf);
     }
     candles.push(clean);
-    if (candles.length > 1500) {
+    if (candles.length > 2500) {
       candles.shift();
       if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
     }
@@ -7033,7 +7068,7 @@ function appendCandle(k) {
 }
 
 function applyMainMarketTick(data) {
-  if (!Array.isArray(data) || candles.length === 0) return;
+  if (!Array.isArray(data)) return;
   const eventTime = +data[0];
   const price = +data[1];
   const eventHigh = +data[2] || price;
@@ -7043,19 +7078,27 @@ function applyMainMarketTick(data) {
   lastMarketEventAt = Date.now();
 
   const tfMs = TF_MS[activeTf] || 60000;
+
+  if (!candles.length) {
+    const start = Math.floor(eventTime / tfMs) * tfMs;
+    candles = [{ t: start, o: firstPrice, h: Math.max(firstPrice, eventHigh, price), l: Math.min(firstPrice, eventLow, price), c: price, v: 0 }];
+    chartNeedsDraw = true;
+    updateOHLC();
+    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    return;
+  }
+
   let last = candles[candles.length - 1];
   if (eventTime >= last.t + tfMs) {
     const start = Math.floor(eventTime / tfMs) * tfMs;
-    last = { t: start, o: firstPrice, h: eventHigh, l: eventLow, c: price, v: 0 };
+    last = { t: start, o: price, h: Math.max(price, eventHigh), l: Math.min(price, eventLow), c: price, v: 0 };
     candles.push(last);
-    if (candles.length > 1500) candles.shift();
+    if (candles.length > 2500) candles.shift();
     clearCandleCaches(candles);
   } else if (eventTime >= last.t) {
     last.c = price;
     last.h = Math.max(last.h, eventHigh, price);
     last.l = Math.min(last.l, eventLow, price);
-  } else {
-    return;
   }
 
   const ticker = coins.get(`${activeEx}:${activeSym}`);
