@@ -8652,7 +8652,7 @@ if (settingsBtn && settingsOverlay) {
         e.preventDefault();
         e.stopPropagation();
         
-        // Preserve essential auth and drawings only
+        // Preserve essential auth, drawings, formation notification settings and price alerts
         const keysToKeep = [];
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
@@ -8661,6 +8661,12 @@ if (settingsBtn && settingsOverlay) {
               key.startsWith("crypto_drawings_") ||
               key.startsWith("obsidian_auth_") ||
               key.startsWith("obsidian_tg_") ||
+              key.startsWith("obsidian_formation_") ||
+              key.startsWith("obsidian_price_") ||
+              key.startsWith("obsidian_utc_") ||
+              key.startsWith("crypto_chart_formations") ||
+              key.startsWith("crypto_fov_") ||
+              key.startsWith("formation_") ||
               key.startsWith("user_")
             )
           ) {
