@@ -77,7 +77,7 @@ button {
     display: flex;
     align-items: center;
     height: 44px;
-    background: var(--screener-header-bg, #13151e);
+    background: #13151e;
     border-bottom: 1px solid var(--bd);
     padding: 0 16px;
     gap: 20px;
@@ -276,7 +276,7 @@ button {
     display: flex;
     align-items: center;
     height: 34px;
-    background: var(--screener-header-bg, #0d0f14);
+    background: #0d0f14;
     border-bottom: 1px solid var(--bd);
     padding: 0 6px;
     gap: 4px;
