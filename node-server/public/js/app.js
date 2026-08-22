@@ -8631,7 +8631,7 @@ if (settingsBtn && settingsOverlay) {
         e.preventDefault();
         e.stopPropagation();
         
-        // Clear settings but keep drawings & auth
+        // Preserve essential auth and drawings only
         const keysToKeep = [];
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
@@ -8640,9 +8640,7 @@ if (settingsBtn && settingsOverlay) {
               key.startsWith("crypto_drawings_") ||
               key.startsWith("obsidian_auth_") ||
               key.startsWith("obsidian_tg_") ||
-              key.startsWith("user_") ||
-              key === "crypto_tags" ||
-              key === "crypto_tool_colors"
+              key.startsWith("user_")
             )
           ) {
             keysToKeep.push({ key, val: localStorage.getItem(key) });
@@ -8651,29 +8649,72 @@ if (settingsBtn && settingsOverlay) {
         localStorage.clear();
         keysToKeep.forEach(item => localStorage.setItem(item.key, item.val));
 
-        // Reset memory variables to defaults
+        // Reset memory variables to standard defaults
         pendingBg = "#0d0f14";
         pendingOpacity = "100";
+        pendingAxisColor = "#d1d4dc";
+        pendingAxisOpacity = "100";
         if (bgPreview) bgPreview.style.backgroundColor = "#0d0f14";
         if (opacitySlider) opacitySlider.value = 100;
         if (opacityVal) opacityVal.textContent = "100%";
-        
+        if (axisPreview) axisPreview.style.backgroundColor = "#d1d4dc";
+        if (axisOpacitySlider) axisOpacitySlider.value = 100;
+        if (axisOpacityVal) axisOpacityVal.textContent = "100%";
+
+        window.candleSettings = JSON.parse(JSON.stringify(DEFAULT_CANDLE_STATE));
+        window.volumeSettings = JSON.parse(JSON.stringify(DEFAULT_VOLUME_STATE));
+        window.formationColorSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_COLORS));
+        coinTags = {};
+        if (typeof toolColors !== "undefined") toolColors = { ...DEFAULT_TOOL_COLORS };
+
+        localStorage.setItem("screener-candle-settings", JSON.stringify(DEFAULT_CANDLE_STATE));
+        localStorage.setItem("screener-volume-settings", JSON.stringify(DEFAULT_VOLUME_STATE));
+        localStorage.setItem("screener-formation-colors", JSON.stringify(DEFAULT_FORMATION_COLORS));
+        localStorage.setItem("crypto_tool_colors", JSON.stringify(DEFAULT_TOOL_COLORS));
+        localStorage.setItem("crypto_tags", "{}");
+
         updateBgColor("#0d0f14", 100, true);
         updateAxisColor("#d1d4dc", 100, true);
         updateScreenerBgColor("rgba(13, 15, 20, 0.98)", true);
-        
+        updateScreenerHeaderColor("transparent", true);
+
+        // Reset pickers in modal if open
+        Object.keys(pickers).forEach(id => {
+          if (id.startsWith("candle-")) {
+            const parts = id.split("-");
+            const side = parts[1];
+            const type = parts[2];
+            pickers[id]?.setColor(DEFAULT_CANDLE_STATE[type][side], DEFAULT_CANDLE_STATE[type][side + "Op"]);
+          } else if (id.startsWith("volume-")) {
+            const side = id.split("-")[1];
+            pickers[id]?.setColor(DEFAULT_VOLUME_STATE[side], DEFAULT_VOLUME_STATE[side + "Op"]);
+          } else if (id.startsWith("fmt-")) {
+            pickers[id]?.setColor("#94a3b8", 75);
+          } else if (id === "screener-bg") {
+            pickers[id]?.setColor("#0d0f14", 100);
+          } else if (id === "screener-header") {
+            pickers[id]?.setColor("transparent", 100);
+          }
+        });
+
         document.querySelectorAll(".theme-opt").forEach(o => {
           o.classList.toggle("active", o.dataset.theme === "dark");
         });
 
+        // Sync fresh default preferences to server so account state is updated
+        if (typeof syncPreferencesToServer === "function") {
+          syncPreferencesToServer();
+        }
+
         if (typeof showToast === "function") {
-          showToast({ title: "Настройки", message: "Настройки оформления сброшены по умолчанию", type: "info" });
+          showToast({ title: "Настройки", message: "Все настройки скринера и цветов сброшены по умолчанию", type: "info" });
         }
         
         refreshCharts();
+        if (typeof rebuildList === "function") rebuildList();
         setTimeout(() => {
           location.reload();
-        }, 250);
+        }, 300);
       };
     }
 
