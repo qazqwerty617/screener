@@ -2759,8 +2759,6 @@ function drawChart() {
   
   vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   vCtx.clearRect(0, 0, chartW, volH);
-  vCtx.fillStyle = getCanvasBgColor();
-  vCtx.fillRect(0, 0, chartW, volH);
 
   // тФАтФА Visible candle window тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const n = Math.max(1, PW / candleW);
@@ -3085,10 +3083,6 @@ function drawChart() {
       vCtx.beginPath();
       vCtx.rect(0, yStart, PW, indicatorSubH);
       vCtx.clip();
-
-      // Fill background for this sub-panel
-      vCtx.fillStyle = getCanvasBgColor();
-      vCtx.fillRect(0, yStart, PW, indicatorSubH);
 
       // Draw sub-panel border/divider
       vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
@@ -3426,18 +3420,6 @@ function drawChart() {
   vCtx.rect(0, volumeYStart, PW, volumeHeight);
   vCtx.clip();
 
-  // Fill background for volume panel
-  vCtx.fillStyle = getCanvasBgColor();
-  vCtx.fillRect(0, volumeYStart, PW, volumeHeight);
-
-  // Subtle top border divider
-  vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-  vCtx.lineWidth = 1;
-  vCtx.beginPath();
-  vCtx.moveTo(0, volumeYStart);
-  vCtx.lineTo(PW, volumeYStart);
-  vCtx.stroke();
-
   const vs = window.volumeSettings || {
     show: true,
     up: "#26c97a",
@@ -3485,10 +3467,6 @@ function drawChart() {
   // ─── Time Scale Strip (Underneath Volume) ───
   const timeYStart = volumeYStart + volumeHeight;
   vCtx.save();
-
-  // Background of time bar
-  vCtx.fillStyle = getCanvasBgColor();
-  vCtx.fillRect(0, timeYStart, chartW, timeBarHeight);
 
   // Top border line separating volume histogram from time bar
   vCtx.strokeStyle = "rgba(255, 255, 255, 0.09)";

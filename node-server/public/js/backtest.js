@@ -675,8 +675,6 @@
 
     if (volCv && vCtx) {
       vCtx.clearRect(0, 0, m.w, m.volTotalH);
-      vCtx.fillStyle = "#0d0f14";
-      vCtx.fillRect(0, 0, m.w, m.volTotalH);
     }
 
     // Dynamic price scale grid using calcNiceStep (matching Screener 1:1)
@@ -727,11 +725,6 @@
       vCtx.beginPath();
       vCtx.rect(0, volumeTop, m.plot.w, m.volumeH);
       vCtx.clip();
-
-      vCtx.fillStyle = "rgba(13, 15, 20, 0.95)";
-      vCtx.fillRect(0, volumeTop, m.plot.w, m.volumeH);
-      vCtx.strokeStyle = "rgba(255,255,255,.06)";
-      vCtx.beginPath(); vCtx.moveTo(0, volumeTop + .5); vCtx.lineTo(m.plot.w, volumeTop + .5); vCtx.stroke();
 
       const volW = Math.max(1, m.stepX > 3 ? m.stepX - 2 : m.stepX);
       m.data.forEach((c, i) => {
