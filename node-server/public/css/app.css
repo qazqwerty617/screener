@@ -2305,6 +2305,12 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     position: relative;
 }
 
+.dt-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
 /* White color specifically for cursor/crosshair, magnet, and trash can */
 .dt-btn[data-tool="none"],
 .dt-btn[data-bt-tool="none"],
