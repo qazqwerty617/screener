@@ -16198,27 +16198,6 @@ function initNotificationsUI() {
     showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
   });
 
-  // Settings Apply button hook
-  const applyBtn = $("settings-apply-btn");
-  if (applyBtn) {
-    applyBtn.onclick = () => {
-      saveFormationAlertSettings(currentFormationAlertSettings);
-      showToast({ title: "Настройки сохранены", message: "Параметры уведомлений успешно применены", type: "success" });
-      if (typeof closeSettingsModal === "function") closeSettingsModal();
-    };
-  }
-
-  // Settings Reset button hook
-  const resetBtn = $("settings-reset-btn");
-  if (resetBtn) {
-    resetBtn.onclick = () => {
-      currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
-      saveFormationAlertSettings(currentFormationAlertSettings);
-      syncFormationUI();
-      showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
-    };
-  }
-
   // ═══ 24/7 Background Formation Alert Scanner Engine ═══
   const formationAlertCooldownMap = new Map();
   const formationAlertQueue = [];
