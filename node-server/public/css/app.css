@@ -2304,24 +2304,38 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     flex-shrink: 0;
     position: relative;
 }
+
+/* White color specifically for cursor/crosshair, magnet, and trash can */
+.dt-btn[data-tool="none"],
+.dt-btn[data-bt-tool="none"],
+.dt-btn#magnet-btn,
+.dt-btn#bt-magnet,
+.dt-btn.del,
+.dt-btn#clear-draw,
+.dt-btn#bt-clear {
+    color: #ffffff !important;
+}
+
 .dt-btn:hover {
     background: rgba(255, 255, 255, 0.08);
     color: var(--t1);
 }
 .dt-btn.on {
-    background: linear-gradient(180deg, #8b5cf6 0%, #6d42ff 100%);
-    color: #fff;
+    background: linear-gradient(180deg, #8b5cf6 0%, #6d42ff 100%) !important;
+    color: #fff !important;
     box-shadow:
         0 0 0 1px rgba(255, 255, 255, 0.08) inset,
         0 0 14px rgba(109, 66, 255, 0.45);
 }
 .dt-btn.magnet-on {
-    color: #00baff;
-    background: rgba(0, 186, 255, 0.14);
+    color: #00baff !important;
+    background: rgba(0, 186, 255, 0.18) !important;
 }
-.dt-btn.del:hover {
-    background: rgba(255, 69, 96, 0.15);
-    color: var(--rd);
+.dt-btn.del:hover,
+.dt-btn#clear-draw:hover,
+.dt-btn#bt-clear:hover {
+    background: rgba(255, 69, 96, 0.2) !important;
+    color: #ff4560 !important;
 }
 /* Tooltip on hover */
 .dt-btn::after {
