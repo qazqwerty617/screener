@@ -276,7 +276,7 @@ button {
     display: flex;
     align-items: center;
     height: 34px;
-    background: var(--screener-header-bg, rgba(13, 15, 20, 0.98));
+    background: var(--screener-header-bg, #0d0f14);
     border-bottom: 1px solid var(--bd);
     padding: 0 6px;
     gap: 4px;
