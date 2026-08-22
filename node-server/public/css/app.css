@@ -1778,22 +1778,23 @@ body.view-is-multichart #ctbar .grid-config {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 3px;
-    padding: 5px 4px;
-    background: linear-gradient(
-        180deg,
-        rgba(45, 30, 75, 0.96) 0%,
-        rgba(20, 21, 31, 0.97) 22%,
-        rgba(13, 14, 21, 0.98) 100%
-    );
-    border: 1px solid rgba(139, 92, 246, 0.32);
-    border-radius: 12px;
-    backdrop-filter: blur(16px);
+    gap: 2px;
+    padding: 6px 4px;
+    background:
+        linear-gradient(
+            180deg,
+            rgba(94, 58, 238, 0.16) 0%,
+            rgba(18, 20, 30, 0.96) 18%,
+            rgba(18, 20, 30, 0.92) 100%
+        );
+    border: 1px solid rgba(160, 124, 255, 0.16);
+    border-radius: 8px;
+    backdrop-filter: blur(14px);
     box-shadow:
-        0 16px 36px rgba(0, 0, 0, 0.65),
-        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        0 14px 32px rgba(0, 0, 0, 0.48),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
     user-select: none;
-    min-width: 36px;
+    min-width: 34px;
 }
 
 /* ── Settings Modal ── */
@@ -2289,40 +2290,37 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
 }
 
 .dt-btn {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
     border: none;
     background: transparent;
     color: var(--tool-accent, var(--t3));
     cursor: pointer;
-    border-radius: 7px;
+    border-radius: 5px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.15s ease;
+    transition: background 0.1s, color 0.1s;
     flex-shrink: 0;
     position: relative;
 }
 .dt-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.08);
     color: var(--t1);
 }
 .dt-btn.on {
-    background: #7c3aed !important;
-    color: #ffffff !important;
+    background: linear-gradient(180deg, #8b5cf6 0%, #6d42ff 100%);
+    color: #fff;
     box-shadow:
-        0 0 0 1px rgba(255, 255, 255, 0.2) inset,
-        0 0 14px rgba(124, 58, 237, 0.6) !important;
-}
-.dt-btn.on svg {
-    color: #ffffff !important;
+        0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+        0 0 14px rgba(109, 66, 255, 0.45);
 }
 .dt-btn.magnet-on {
     color: #00baff;
-    background: rgba(0, 186, 255, 0.18);
+    background: rgba(0, 186, 255, 0.14);
 }
 .dt-btn.del:hover {
-    background: rgba(255, 69, 96, 0.2);
+    background: rgba(255, 69, 96, 0.15);
     color: var(--rd);
 }
 /* Tooltip on hover */
@@ -2454,13 +2452,15 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     width: 360px !important;
     min-width: 360px !important;
     max-width: 360px !important;
-    background: var(--screener-bg, #0d0f14);
+    background: #0d0f14 !important;
     border-left: 1px solid var(--bd);
     display: flex;
     flex-direction: column;
     flex-shrink: 0 !important;
     overflow: hidden;
     user-select: none;
+    position: relative;
+    z-index: 10;
 }
 
 .rph {
@@ -2470,9 +2470,9 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     border-bottom: 1px solid var(--bd);
     gap: 6px;
     flex-shrink: 0;
-    background: var(--screener-header-bg, #0d0f14);
+    background: #0d0f14 !important;
     position: relative;
-    z-index: 10;
+    z-index: 5;
 }
 
 .rph-title {
@@ -2494,9 +2494,9 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     border-bottom: 1px solid var(--bd);
     flex-shrink: 0;
     flex-wrap: wrap;
-    background: #0d0f14;
+    background: #0d0f14 !important;
     position: relative;
-    z-index: 10;
+    z-index: 5;
 }
 
 .sh {
@@ -2535,10 +2535,10 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     flex-shrink: 0;
     font-weight: 700;
     overflow: hidden;
-    background: #0d0f14;
+    background: #0d0f14 !important;
     position: sticky;
     top: 0;
-    z-index: 10;
+    z-index: 5;
 }
 
 .cr {
