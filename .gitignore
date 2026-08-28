@@ -54,4 +54,10 @@ node-server/security_banned_ips.json
 *.heapsnapshot
 go-scanner/scanner
 
+# Deployment scripts & temp auth helpers
+deploy.ps1
+askpass*.bat
+check_bx.py
+
+
 

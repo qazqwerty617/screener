@@ -62,6 +62,21 @@ test("walls below the publication score floor are dropped", () => {
   assert.deepEqual(result.map(w => w.base), ["BBB"]);
 });
 
+test("the publication score floor is configurable per call", () => {
+  const input = [
+    wall({ base: "LOW", sym: "LOWUSDT", score: 3, rtwi: 3 }),
+    wall({ base: "HIGH", sym: "HIGHUSDT", score: 9, rtwi: 9 }),
+  ];
+  assert.deepEqual(
+    buildWallSnapshot(input, { minScore: 8 }).map(w => w.base),
+    ["HIGH"]
+  );
+  assert.deepEqual(
+    new Set(buildWallSnapshot(input, { minScore: 1 }).map(w => w.base)),
+    new Set(["LOW", "HIGH"])
+  );
+});
+
 test("score falls back to rtwi for legacy records without score", () => {
   const legacy = wall();
   delete legacy.score;
@@ -146,7 +161,7 @@ test("every exchange keeps output slots when a loud venue dominates", () => {
       }));
     }
   }
-  // Nine quiet venues with weaker but valid walls.
+  // Nine quiet venues with weaker but still publishable walls.
   for (const ex of ["BN", "BB", "BG", "GT", "MX", "KC", "HT", "HL", "AD"]) {
     for (let i = 0; i < 4; i++) {
       input.push(wall({
@@ -154,8 +169,8 @@ test("every exchange keeps output slots when a loud venue dominates", () => {
         base: `Q${ex}${i}`,
         sym: `Q${ex}${i}USDT`,
         price: 500 + i,
-        score: 3.0,
-        rtwi: 3.0,
+        score: 6.0,
+        rtwi: 6.0,
       }));
     }
   }

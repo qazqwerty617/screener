@@ -345,6 +345,11 @@ function broadcastKline(ex, sym, tf, candle) {
         flat[flat.length - 2] = clean.c;
         flat[flat.length - 1] = clean.v;
       } else if (normT > lastT) {
+        const tfMs = getTfMs(tf);
+        if (normT > lastT + tfMs * 10) {
+          klinesCache.delete(key);
+          return;
+        }
         flat.push(normT, clean.o, clean.h, clean.l, clean.c, clean.v);
         if (flat.length > 7200) flat.splice(0, 6);
       }
@@ -400,8 +405,8 @@ function publishMarketTrade(ex, sym, tf, eventTime, price, volume = 0) {
   }
   const pending = { batch: merged, timer: null };
   pendingMarketTicks.set(targetKey, pending);
-  pending.timer = setTimeout(() => flushMarketTick(targetKey), 16);
-  pending.timer.unref?.();
+  // Zero-delay immediate dispatch (Vataga model)
+  setImmediate(() => flushMarketTick(targetKey));
 }
 
 function flushMarketTick(targetKey) {
@@ -871,6 +876,11 @@ function connectKlineWs(sub) {
       markMarketOpen(sub);
       sub.ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.candlesticks", event: "subscribe", payload: [tfMap[tf] || "4h", sym] }));
       sub.ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.trades", event: "subscribe", payload: [sym] }));
+      sub.pingTimer = setInterval(() => {
+        if (sub.ws?.readyState === 1) {
+          sub.ws.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.ping" }));
+        }
+      }, 15000);
     });
     sub.ws.on("message", (raw) => {
       try {
@@ -1239,7 +1249,21 @@ const TF_MAP = {
   HT: { "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "60min", "4h": "4hour", "1d": "1day", "3d": "3day", "1w": "1week" },
 };
 
+function getTfMs(tf) {
+  const low = String(tf || "").toLowerCase();
+  const num = parseInt(low, 10) || 1;
+  if (low.endsWith("m")) return num * 60 * 1000;
+  if (low.endsWith("h")) return num * 60 * 60 * 1000;
+  if (low.endsWith("d")) return num * 24 * 60 * 60 * 1000;
+  if (low.endsWith("w")) return num * 7 * 24 * 60 * 60 * 1000;
+  return 60000;
+}
+
 function getKlinesUrl(ex, sym, tf, limit, before) {
+  const tfMs = getTfMs(tf);
+  const endMs = Number.isFinite(+before) && +before > 0 ? +before : Date.now();
+  const startMs = endMs - (limit * tfMs);
+
   if (ex === "BN" || ex === "AD") {
     const base = ex === "BN" ? "fapi.binance.com" : "fapi.asterdex.com";
     return `https://${base}/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
@@ -1254,18 +1278,18 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
     return `https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TF_MAP.BG[tf] || "1H"}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
   }
   if (ex === "GT") {
-    return `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${TF_MAP.GT[tf] || "1h"}&limit=${limit}` + (before ? `&to=${Math.floor(before / 1000)}` : "");
+    return `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${TF_MAP.GT[tf] || "1h"}&limit=${limit}&from=${Math.floor(startMs / 1000)}&to=${Math.floor(endMs / 1000)}`;
   }
   if (ex === "MX") {
     const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
-    return `https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${TF_MAP.MX[tf] || "Min60"}` + (before ? `&end=${Math.floor(before / 1000)}` : "");
+    return `https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${TF_MAP.MX[tf] || "Min60"}&start=${Math.floor(startMs / 1000)}&end=${Math.floor(endMs / 1000)}`;
   }
   if (ex === "KC") {
-    return `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${TF_MAP.KC[tf] || "60"}` + (before ? `&to=${before}` : "");
+    return `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${TF_MAP.KC[tf] || "60"}&from=${startMs}&to=${endMs}`;
   }
   if (ex === "BX") {
     const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
-    return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}` + (before ? `&endTime=${before}` : "");
+    return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}&startTime=${startMs}&endTime=${endMs}`;
   }
   if (ex === "HT") {
     return `https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;

@@ -945,9 +945,11 @@ function processTickData(dt) {
   // 1. Interpolate all active coin prices with smooth exponential lerp (no teleportation)
   if (interpActive.size > 0) {
     const keysToRemove = [];
+    const currentActiveKey = `${activeEx}:${activeSym}`;
     for (const [key, info] of interpActive) {
       const c = coins.get(key);
       if (!c) { keysToRemove.push(key); continue; }
+      if (key === currentActiveKey) { c.displayP = c.p; keysToRemove.push(key); continue; }
       if (!c.displayP) { c.displayP = c.p; keysToRemove.push(key); continue; }
       checkPriceAlerts(c.ex, c.sym, c.p);
 
@@ -996,8 +998,21 @@ function processTickData(dt) {
     const now = Date.now();
     const expectedCandleStart = Math.floor(now / tfMs) * tfMs;
 
-    // Check if we passed a timeframe boundary and need to spawn a new candle instantly
-    if (expectedCandleStart > last.t && !hasMainMarketStream()) {
+    // Check if we passed a timeframe boundary and need to spawn a new candle instantly (Vataga model)
+    if (expectedCandleStart > last.t) {
+      const gap = Math.round((expectedCandleStart - last.t) / tfMs);
+      if (gap > 1 && gap <= 50) {
+        for (let g = 1; g < gap; g++) {
+          candles.push({
+            t: last.t + g * tfMs,
+            o: last.c,
+            h: last.c,
+            l: last.c,
+            c: last.c,
+            v: 0
+          });
+        }
+      }
       const newCandle = {
         t: expectedCandleStart,
         o: last.c,
@@ -1007,33 +1022,24 @@ function processTickData(dt) {
         v: 0
       };
       candles.push(newCandle);
-      if (candles.length > 1500) candles.shift();
+      if (candles.length > 3000) candles.shift();
       clearCandleCaches(candles);
-      if (offsetX > 0) offsetX++;
+      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
       chartNeedsDraw = true;
     }
 
+    // Only update curLast from ticker if there is NO live market trade stream!
     const curLast = candles[candles.length - 1];
-    if (!hasMainMarketStream()) {
+    if (!hasMainMarketStream() && !klWs) {
       const liveP = getDisplayP(ac);
-      if (liveP > 0 && curLast) {
-        // Price scale sanity check: ensure liveP is on same price scale as curLast (ratio 0.4 to 2.5)
+      if (liveP > 0 && curLast && expectedCandleStart === curLast.t) {
         const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
-        if (ratio > 0.4 && ratio < 2.5) {
+        if (ratio > 0.3 && ratio < 3.0) {
           if (curLast.c !== liveP) {
             curLast.c = liveP;
             if (liveP > curLast.h) curLast.h = liveP;
             if (liveP < curLast.l) curLast.l = liveP;
             chartNeedsDraw = true;
-          }
-
-          const oc = document.getElementById("oc");
-          if (oc) {
-            const pStr = fP(liveP);
-            if (oc._lastPStr !== pStr) {
-              oc.textContent = pStr;
-              oc._lastPStr = pStr;
-            }
           }
         }
       }
@@ -2711,6 +2717,39 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
 
+  // Timeframe boundary rollover check (Vataga model)
+  const headCandle = candles[candles.length - 1];
+  const tfMs = TF_MS[activeTf] || 60000;
+  const now = Date.now();
+  const curBarStart = Math.floor(now / tfMs) * tfMs;
+  if (headCandle && curBarStart > headCandle.t) {
+    const gapBars = Math.round((curBarStart - headCandle.t) / tfMs);
+    if (gapBars > 1 && gapBars <= 50) {
+      for (let g = 1; g < gapBars; g++) {
+        candles.push({
+          t: headCandle.t + g * tfMs,
+          o: headCandle.c,
+          h: headCandle.c,
+          l: headCandle.c,
+          c: headCandle.c,
+          v: 0
+        });
+      }
+    }
+    candles.push({
+      t: curBarStart,
+      o: headCandle.c,
+      h: headCandle.c,
+      l: headCandle.c,
+      c: headCandle.c,
+      v: 0
+    });
+    if (candles.length > 3000) {
+      candles.shift();
+      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
+    }
+    clearCandleCaches(candles);
+  }
 
   // Calculate active indicators first to determine volH
   const activeIndicators = [];
@@ -6661,6 +6700,55 @@ let currentLoadedEx = null;
 let currentLoadedSym = null;
 let currentLoadedTf = null;
 
+function mergeCandles(existingList, incomingList) {
+  if (!Array.isArray(incomingList) || incomingList.length === 0) return existingList || [];
+  if (!Array.isArray(existingList) || existingList.length === 0) return sanitizeCandles(incomingList);
+
+  const map = new Map();
+  // 1. Ingest incoming authoritative / history candles
+  for (const c of incomingList) {
+    if (c && Number.isFinite(c.t) && c.t > 0) {
+      map.set(c.t, { ...c });
+    }
+  }
+
+  // 2. Overlay existing candles (preserving live intra-bar spikes)
+  const lastExisting = existingList[existingList.length - 1];
+  for (const c of existingList) {
+    if (!c || !Number.isFinite(c.t) || c.t <= 0) continue;
+    const incoming = map.get(c.t);
+    if (incoming) {
+      if (c === lastExisting) {
+        incoming.h = Math.max(incoming.h, c.h);
+        incoming.l = Math.min(incoming.l, c.l);
+        incoming.c = c.c;
+        if (c.v > incoming.v) incoming.v = c.v;
+      }
+    } else {
+      map.set(c.t, { ...c });
+    }
+  }
+
+  const merged = Array.from(map.values()).sort((a, b) => a.t - b.t);
+  return sanitizeCandles(merged);
+}
+
+async function refetchMissingHistory(ex, sym, tf) {
+  if (window._isRefetchingGap) return;
+  window._isRefetchingGap = true;
+  try {
+    const fresh = await fetchServerKlines(ex, sym, tf, 0);
+    if (fresh && fresh.length > 0 && activeEx === ex && activeSym === sym && activeTf === tf) {
+      candles = mergeCandles(candles, fresh);
+      chartNeedsDraw = true;
+      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    }
+  } catch (_) {}
+  finally {
+    window._isRefetchingGap = false;
+  }
+}
+
 async function fetchDirectKlines(ex, sym, tf) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 900);
@@ -6697,13 +6785,17 @@ async function fetchDirectKlines(ex, sym, tf) {
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "GT") {
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000`, { signal: controller.signal });
+      const fromSec = Math.floor((now - 1000 * tfMs) / 1000);
+      const toSec = Math.floor(now / 1000);
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000&from=${fromSec}&to=${toSec}`, { signal: controller.signal });
       const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
       const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
       const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
-      const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(mxSym)}?interval=${mxTfMap[tf] || "Min60"}`, { signal: controller.signal });
+      const startSec = Math.floor((now - 1000 * tfMs) / 1000);
+      const endSec = Math.floor(now / 1000);
+      const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(mxSym)}?interval=${mxTfMap[tf] || "Min60"}&start=${startSec}&end=${endSec}`, { signal: controller.signal });
       const data = await r.json();
       if (data.data?.time) resultCandles = sanitizeCandles(data.data.time.map((t, i) => {
         const c = +data.data.close[i];
@@ -6712,15 +6804,16 @@ async function fetchDirectKlines(ex, sym, tf) {
       }));
     } else if (ex === "KC") {
       const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
-      const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${encSym}&granularity=${kcTfMap[tf] || 60}`, { signal: controller.signal });
+      const startMs = now - 1000 * tfMs;
+      const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${encSym}&granularity=${kcTfMap[tf] || 60}&from=${startMs}&to=${now}`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "BX") {
       const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
       const [r1, r2] = await Promise.all([
-        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000`, { signal: controller.signal }).then(r => r.json()).catch(() => null),
-        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000&endTime=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => null)
+        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000&startTime=${now - 1000 * tfMs}&endTime=${now}`, { signal: controller.signal }).then(r => r.json()).catch(() => null),
+        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000&startTime=${now - 2000 * tfMs}&endTime=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => null)
       ]);
       const l1 = r1?.data || [];
       const l2 = r2?.data || [];
@@ -6853,14 +6946,7 @@ async function fetchKlines(ex, sym, tf) {
         .then(parsed => {
           if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const lastCandle = candles[candles.length - 1];
-            const parsedLast = parsed[parsed.length - 1];
-            if (lastCandle && parsedLast && lastCandle.t >= parsedLast.t) {
-              const older = parsed.filter(p => p.t < lastCandle.t);
-              candles = sanitizeCandles([...older, lastCandle]);
-            } else {
-              candles = parsed;
-            }
+            candles = mergeCandles(candles, parsed);
             KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
             chartNeedsDraw = true;
             drawChart();
@@ -6909,7 +6995,8 @@ async function loadOlderHistory(ex, sym, tf) {
     } else if (ex === "BX") {
       const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
       const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
-      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000&endTime=${endTime}`);
+      const startMs = endTime - 1000 * tfMs;
+      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000&startTime=${startMs}&endTime=${endTime}`);
       const data = await r.json();
       if (data.data) {
         olderCandles = data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) }));
@@ -6921,7 +7008,9 @@ async function loadOlderHistory(ex, sym, tf) {
         olderCandles = data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
       }
     } else if (ex === "GT") {
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000&to=${Math.floor(endTime / 1000)}`);
+      const startSec = Math.floor((endTime - 1000 * tfMs) / 1000);
+      const endSec = Math.floor(endTime / 1000);
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000&from=${startSec}&to=${endSec}`);
       const data = await r.json();
       if (Array.isArray(data)) {
         olderCandles = data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) }));
@@ -6947,7 +7036,7 @@ async function loadOlderHistory(ex, sym, tf) {
     }
 
     const addedCount = sanitized.length;
-    candles = [...sanitized, ...candles];
+    candles = mergeCandles(candles, sanitized);
     if (candles.length > 20000) {
       candles = candles.slice(-20000);
     }
@@ -6962,32 +7051,56 @@ async function loadOlderHistory(ex, sym, tf) {
 }
 
 function appendCandle(k) {
-  if (!candles.length || !k) return;
-  const last = candles[candles.length - 1];
-
-  const prev = candles.length > 1 ? candles[candles.length - 2].c : null;
-  const clean = sanitizeCandle(k, prev);
+  if (!k) return;
+  const clean = sanitizeCandle(k, null);
   if (!clean) return;
 
+  if (!candles.length) {
+    candles = [clean];
+    chartNeedsDraw = true;
+    updateOHLC();
+    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    return;
+  }
+
+  const last = candles[candles.length - 1];
   const tfMs = TF_MS[activeTf] || 60000;
 
   if (clean.t === last.t) {
-    // Authoritative exchange update for the current candle
+    // Authoritative exchange update for the current candle:
+    // Expand high and low so fast intra-bar spikes are never erased
     last.o = clean.o;
     last.h = Math.max(last.h, clean.h);
     last.l = Math.min(last.l, clean.l);
     last.c = clean.c;
-    last.v = clean.v;
+    if (clean.v > 0) last.v = Math.max(last.v, clean.v);
   } else if (clean.t > last.t) {
+    // New candle from exchange!
+    const gap = Math.round((clean.t - last.t) / tfMs);
+    if (gap > 1 && gap <= 50) {
+      // Fill missing flat candles (Vataga continuous timeline standard)
+      for (let g = 1; g < gap; g++) {
+        candles.push({
+          t: last.t + g * tfMs,
+          o: last.c,
+          h: last.c,
+          l: last.c,
+          c: last.c,
+          v: 0
+        });
+      }
+    } else if (gap > 50) {
+      refetchMissingHistory(activeEx, activeSym, activeTf);
+    }
     candles.push(clean);
-    if (candles.length > 2500) {
+    if (candles.length > 3000) {
       candles.shift();
       if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
     }
     clearCandleCaches(candles);
   } else {
-    // If exchange finalized a recently closed candle (e.g. previous 1-3 bars)
-    const target = candles.slice(-5).find(c => c.t === clean.t);
+    // If exchange finalized a recently closed candle (e.g. within last 15 bars)
+    const target = candles.slice(-15).find(c => c.t === clean.t);
     if (target) {
       target.o = clean.o;
       target.h = Math.max(target.h, clean.h);
@@ -7004,43 +7117,103 @@ function appendCandle(k) {
   }
 }
 
-function applyMainMarketTick(data) {
-  if (!Array.isArray(data) || candles.length === 0) return;
+let lastAppliedTradeTime = 0;
+
+function applyMainMarketTick(data, isRelay = false) {
+  if (!Array.isArray(data)) return;
   const eventTime = +data[0];
   const price = +data[1];
   const eventHigh = +data[2] || price;
   const eventLow = +data[3] || price;
   if (!(price > 0)) return;
-  lastMarketEventAt = Date.now();
 
-  const last = candles[candles.length - 1];
-  if (last) {
-    // Update the live forming candle: price moves, high grows, low decreases
-    // When price pulls back (вкатывает), the candle stays the same and leaves a wick!
+  // If direct high-speed exchange WebSocket is active, ignore delayed ticks from server relay!
+  if (isRelay && klWs && klWs.readyState === 1) return;
+
+  // Monotonic time guard: drop delayed/out-of-order packets from network jitter
+  if (eventTime > 0) {
+    if (eventTime < lastAppliedTradeTime - 100) return;
+    if (eventTime > lastAppliedTradeTime) lastAppliedTradeTime = eventTime;
+  }
+
+  lastMarketEventAt = Date.now();
+  const tfMs = TF_MS[activeTf] || 60000;
+  const now = (eventTime > 1e11) ? eventTime : Date.now();
+  const barStart = Math.floor(now / tfMs) * tfMs;
+
+  if (!candles.length) {
+    candles = [{
+      t: barStart,
+      o: price,
+      h: Math.max(price, eventHigh),
+      l: Math.min(price, eventLow),
+      c: price,
+      v: 0
+    }];
+    chartNeedsDraw = true;
+    updateOHLC();
+    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    return;
+  }
+
+  let last = candles[candles.length - 1];
+
+  if (barStart === last.t) {
+    // Intra-candle live update (1-to-1 Vataga behavior):
     last.c = price;
     if (price > last.h) last.h = price;
     if (eventHigh > last.h) last.h = eventHigh;
     if (price < last.l) last.l = price;
     if (eventLow < last.l) last.l = eventLow;
+  } else if (barStart > last.t) {
+    // Timeframe boundary crossed! Finalize previous bar and instantly spawn new bar (Vataga model):
+    const gap = Math.round((barStart - last.t) / tfMs);
+    if (gap > 1 && gap <= 50) {
+      for (let g = 1; g < gap; g++) {
+        candles.push({
+          t: last.t + g * tfMs,
+          o: last.c, h: last.c, l: last.c, c: last.c, v: 0
+        });
+      }
+    } else if (gap > 50) {
+      refetchMissingHistory(activeEx, activeSym, activeTf);
+    }
+    const h = Math.max(last.c, price, eventHigh);
+    const l = Math.min(last.c, price, eventLow);
+    last = {
+      t: barStart,
+      o: last.c,
+      h: h,
+      l: l,
+      c: price,
+      v: 0
+    };
+    candles.push(last);
+    if (candles.length > 3000) {
+      candles.shift();
+      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
+    }
+    clearCandleCaches(candles);
   }
 
+  // Update ticker display price directly
   const ticker = coins.get(`${activeEx}:${activeSym}`);
   if (ticker) {
     ticker.prev = ticker.p;
     ticker.p = price;
     ticker.displayP = price;
-    dirty.add(ticker.key);
   }
+
   chartNeedsDraw = true;
   updateOHLC();
   checkPriceAlerts(activeEx, activeSym, price, eventHigh, eventLow);
 
-  const now = performance.now();
-  if (now - lastLatencyPaintAt > 500) {
-    lastLatencyPaintAt = now;
+  const perfNow = performance.now();
+  if (perfNow - lastLatencyPaintAt > 500) {
+    lastLatencyPaintAt = perfNow;
     const sourceLag = Math.max(0, Math.min(99_999, Date.now() - eventTime));
     const label = $("cd-label");
-    if (label) label.textContent = `LIVE · ${Math.round(sourceLag)}ms`;
+    if (label) label.textContent = `LIVE В· ${Math.round(sourceLag)}ms`;
   }
 }
 
@@ -7055,10 +7228,9 @@ function connectKlWs(ex, sym, tf) {
   if (klWs) { try { klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
-  // Production uses the pooled server relay: one normalized, recoverable stream for all 11 venues.
-  if (location.protocol !== "file:") {
-    const nextKey = marketKey(ex, sym, tf);
-    if (mainMarketKey === nextKey && mainMarketUnsubscribe) return;
+  // 1. Normalized server relay subscription (handles all 11 venues as background/fallback)
+  const nextKey = marketKey(ex, sym, tf);
+  if (mainMarketKey !== nextKey || !mainMarketUnsubscribe) {
     if (mainMarketUnsubscribe) mainMarketUnsubscribe();
     mainMarketKey = nextKey;
     mainMarketUnsubscribe = subscribeMarketData({
@@ -7068,13 +7240,12 @@ function connectKlWs(ex, sym, tf) {
         appendCandle({ t: data[0], o: data[1], h: data[2], l: data[3], c: data[4], v: data[5] });
         checkPriceAlerts(ex, sym, data[4], data[2], data[3]);
       },
-      onTick: applyMainMarketTick,
+      onTick: (data) => applyMainMarketTick(data, true),
       onStatus: applyMainMarketStatus,
     });
-    return;
   }
 
-  // Direct browser fallback. Production charts use the normalized server market-data relay above.
+  // 2. DIRECT BROWSER WEBSOCKET for 0ms ultra-low latency (Vataga model)
   if (ex === "BN" || ex === "AD") {
     const domain = ex === "BN" ? "fstream.binance.com" : "fstream.asterdex.com";
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
@@ -7082,10 +7253,10 @@ function connectKlWs(ex, sym, tf) {
     const sLower = sym.toLowerCase();
     try {
       const streamPath = ex === "BN" ? "market/stream" : "stream";
-      const streams = ex === "BN"
-        ? `${sLower}@kline_${bnTf}/${sLower}@aggTrade`
-        : `${sLower}@kline_${bnTf}/${sLower}@aggTrade/${sLower}@bookTicker`;
-      klWs = new WebSocket(`wss://${domain}/${streamPath}?streams=${streams}`);
+      const s1 = `${sLower}@kline_${bnTf}`;
+      const s2 = `${sLower}@aggTrade`;
+      klWs = new WebSocket(`wss://${domain}/${streamPath}?streams=${s1}/${s2}`);
+      klWs.onopen = () => applyMainMarketStatus("live");
       klWs.onmessage = (e) => {
         try {
           const res = JSON.parse(e.data);
@@ -7093,48 +7264,23 @@ function connectKlWs(ex, sym, tf) {
           if (d && d.e === "kline" && d.k) {
             const k = d.k;
             appendCandle({ t: k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q || +k.v });
-          } else if (d && (d.e === "bookTicker" || d.e === "aggTrade")) {
-            let p = 0;
-            if (d.e === "bookTicker") {
-              const b = +d.b, a = +d.a;
-              p = (b > 0 && a > 0) ? (b + a) / 2 : (b || a || 0);
-            } else {
-              p = +d.p;
-            }
-            if (p > 0 && candles.length > 0) {
-              const tfMs = TF_MS[activeTf] || 60000;
-              const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
-              let last = candles[candles.length - 1];
-              if (expectedStart > last.t) {
-                last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
-                candles.push(last);
-                if (candles.length > 1500) candles.shift();
-                clearCandleCaches(candles);
-              } else {
-                last.c = p;
-                if (p > last.h) last.h = p;
-                if (p < last.l) last.l = p;
-              }
-              if (d.e === "aggTrade" && d.q) last.v += (+d.q || 0);
-              chartNeedsDraw = true;
-              updateOHLC();
-              checkPriceAlerts(ex, sym, p);
-            }
+          } else if (d && d.e === "aggTrade") {
+            const p = +d.p;
+            if (p > 0) applyMainMarketTick([d.T || Date.now(), p, p, p, +d.q || 0], false);
           }
         } catch (_) {}
       };
-      return;
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
     } catch (_) {}
-  }
-
-  // Direct Browser WebSocket for Bybit (kline + sub-20ms ticker feed)
-  if (ex === "BB") {
+  } else if (ex === "BB") {
     const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" };
     const bbTf = tfMap[tf] || "60";
     try {
       klWs = new WebSocket("wss://stream.bybit.com/v5/public/linear");
       klWs.onopen = () => {
-        klWs.send(JSON.stringify({ op: "subscribe", args: [`kline.${bbTf}.${sym}`, `tickers.${sym}`] }));
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ op: "subscribe", args: [`kline.${bbTf}.${sym}`, `publicTrade.${sym}`] }));
       };
       klWs.onmessage = (e) => {
         try {
@@ -7143,61 +7289,46 @@ function connectKlWs(ex, sym, tf) {
             if (d.topic.startsWith("kline.") && d.data && d.data.length) {
               const k = d.data[0];
               appendCandle({ t: +k.start, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.turnover || +k.volume });
-            } else if (d.topic.startsWith("tickers.") && d.data) {
-              const tickData = Array.isArray(d.data) ? d.data[0] : d.data;
-              const p = +(tickData.lastPrice || tickData.bid1Price || tickData.ask1Price || 0);
-              if (p > 0 && candles.length > 0) {
-                const tfMs = TF_MS[activeTf] || 60000;
-                const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
-                let last = candles[candles.length - 1];
-                if (expectedStart > last.t) {
-                  last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
-                  candles.push(last);
-                  if (candles.length > 1500) candles.shift();
-                  clearCandleCaches(candles);
-                } else {
-                  last.c = p;
-                  if (p > last.h) last.h = p;
-                  if (p < last.l) last.l = p;
-                }
-                chartNeedsDraw = true;
-                updateOHLC();
+            } else if (d.topic.startsWith("publicTrade.") && d.data && d.data.length) {
+              for (const trade of d.data) {
+                const p = +trade.p;
+                if (p > 0) applyMainMarketTick([trade.T || Date.now(), p, p, p, +trade.v || 0], false);
               }
             }
           }
         } catch (_) {}
       };
-      return;
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
     } catch (_) {}
-  }
-
-  // Direct Browser WebSocket for OKX
-  if (ex === "OX") {
-    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
-    const ch = "candle" + (tfMap[tf] || "1H");
+  } else if (ex === "GT") {
+    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     try {
-      klWs = new WebSocket("wss://ws.okx.com:8443/ws/v5/public");
+      klWs = new WebSocket("wss://fx-ws.gateio.ws/v4/ws/usdt");
       klWs.onopen = () => {
-        klWs.send(JSON.stringify({ op: "subscribe", args: [{ channel: ch, instId: sym }] }));
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.candlesticks", event: "subscribe", payload: [tfMap[tf] || "4h", sym] }));
+        klWs.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.trades", event: "subscribe", payload: [sym] }));
       };
       klWs.onmessage = (e) => {
         try {
-          const str = e.data;
-          if (str === "pong") return;
-          const d = JSON.parse(str);
-          if (d && d.data && d.data.length && d.arg && d.arg.channel === ch) {
-            const k = d.data[0];
-            appendCandle({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] });
+          const d = JSON.parse(e.data);
+          if (d.event !== "update") return;
+          if (d.channel === "futures.candlesticks") {
+            const candles = Array.isArray(d.result) ? d.result : [d.result];
+            for (const k of candles) appendCandle({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) });
+          } else if (d.channel === "futures.trades") {
+            const trades = Array.isArray(d.result) ? d.result : [d.result];
+            for (const trade of trades) {
+              const p = +trade.price;
+              if (p > 0) applyMainMarketTick([trade.create_time_ms || Date.now(), p, p, p, +trade.size || 0], false);
+            }
           }
         } catch (_) {}
       };
-      return;
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
     } catch (_) {}
-  }
-
-  // Fallback: Subscribe to server kline stream via main WS
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: "subscribe_kline", ex, sym, tf }));
   }
 }
 
@@ -7232,23 +7363,20 @@ function rafLoop() {
 
   requestAnimationFrame(rafLoop);
 
-  // Process price interpolations and DOM row updates aligned with V-Sync
-  processTickData(dt);
-
-  const ak = `${activeEx}:${activeSym}`;
-  const ac = coins.get(ak);
-  const isActiveAnimating = ac && ac.displayP && Math.abs(ac.p - ac.displayP) > 1e-8;
-
-  if (screenerView === "multichart" || activeView === "formations") {
-    chartInstances.forEach(inst => {
-      if (inst.dirty) {
-        inst.draw(true);
-      }
-    });
-  } else if (chartNeedsDraw || isActiveAnimating) {
+  // 1. TOP PRIORITY: Paint chart immediately on the very first microsecond of the frame (Vataga model)
+  if (chartNeedsDraw) {
     chartNeedsDraw = false;
     drawChart();
   }
+
+  if (screenerView === "multichart" || activeView === "formations") {
+    chartInstances.forEach(inst => {
+      if (inst.dirty) inst.draw(true);
+    });
+  }
+
+  // 2. Process background ticker table rows AFTER chart is already painted
+  processTickData(dt);
 }
 
 function isUsdtFutures(c) {

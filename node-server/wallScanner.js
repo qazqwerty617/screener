@@ -80,24 +80,47 @@ const RESIDUAL_ALIVE_RATIO = 0.35;
 const REFILL_DIP_RATIO = 0.72;
 
 // Admission gates. Deliberately relative; the composite score does the work.
-const MIN_SIGNIFICANCE = envNum("WALL_MIN_SIGNIFICANCE", 0.30, 0.05, 0.95);
-const MIN_Z = envNum("WALL_MIN_Z", 1.15, 0.2, 8);
-const MIN_DOMINANCE = envNum("WALL_MIN_DOMINANCE", 1.9, 1.0, 20);
-const MIN_DEPTH_SHARE = envNum("WALL_MIN_DEPTH_SHARE", 0.025, 0.001, 0.9);
-const MIN_VOL_MINUTES = envNum("WALL_MIN_VOL_MINUTES", 0.15, 0.0, 120);
-const MIN_ABS_USD = envNum("WALL_MIN_ABS_USD", 15000, 0, 1e9);
-const MIN_SYMBOL_VOLUME_USD = envNum("WALL_MIN_SYMBOL_VOLUME_USD", 150000, 0, 1e12);
+//
+// These are the strictness knobs. Every one is a ratio (except the two dust
+// floors), so raising them tightens the map identically for BTC and for a
+// micro-cap instead of biasing toward large or small coins.
+const MIN_SIGNIFICANCE = envNum("WALL_MIN_SIGNIFICANCE", 0.40, 0.05, 0.95);
+const MIN_Z = envNum("WALL_MIN_Z", 1.9, 0.2, 8);
+const MIN_DOMINANCE = envNum("WALL_MIN_DOMINANCE", 3.2, 1.0, 20);
+const MIN_DEPTH_SHARE = envNum("WALL_MIN_DEPTH_SHARE", 0.05, 0.001, 0.9);
+const MIN_VOL_MINUTES = envNum("WALL_MIN_VOL_MINUTES", 0.8, 0.0, 120);
+const MIN_ABS_USD = envNum("WALL_MIN_ABS_USD", 50000, 0, 1e9);
+const MIN_SYMBOL_VOLUME_USD = envNum("WALL_MIN_SYMBOL_VOLUME_USD", 2000000, 0, 1e12);
+
+/**
+ * Publication stability gates.
+ *
+ * A density must be seen in at least MIN_CONFIRMATIONS separate polls before it
+ * is published at all. This is the single most effective anti-flicker measure:
+ * without it, every transient order that momentarily looks large appears on the
+ * map for one refresh and vanishes, which reads as the map "jumping".
+ *
+ * MIN_QUALITY is applied to the final lifecycle-adjusted score, and once a level
+ * is on the map it only needs KEEP_QUALITY_RATIO of that to stay. The hysteresis
+ * band stops levels that hover around the threshold from blinking in and out on
+ * every refresh.
+ */
+const MIN_CONFIRMATIONS = envInt("WALL_MIN_CONFIRMATIONS", 2, 1, 10);
+const MIN_QUALITY = envNum("WALL_MIN_QUALITY", 0.28, 0.02, 0.95);
+const KEEP_QUALITY_RATIO = envNum("WALL_KEEP_QUALITY_RATIO", 0.72, 0.2, 1.0);
 
 // Snapshot shaping.
-const MAX_OUTPUT = envInt("WALL_MAX_RESULTS", 2500, 50, 20000);
-const MAX_PER_COIN = envInt("WALL_MAX_PER_COIN", 6, 1, 40);
+const MAX_OUTPUT = envInt("WALL_MAX_RESULTS", 600, 50, 20000);
+const MAX_PER_COIN = envInt("WALL_MAX_PER_COIN", 3, 1, 40);
 const CLUSTER_PCT = envNum("WALL_SNAPSHOT_CLUSTER_PCT", 0.1, 0.01, 1);
 const EX_RESERVE_RATIO = envNum("WALL_EX_RESERVE_RATIO", 0.45, 0, 0.9);
-const PUBLISH_MIN_SCORE = envNum("WALL_PUBLISH_MIN_SCORE", 2.4, 0, 20);
+const PUBLISH_MIN_SCORE = envNum("WALL_PUBLISH_MIN_SCORE", 5.0, 0, 20);
 
 // Scheduling / transport.
 const REQUEST_TIMEOUT_MS = envInt("WALL_REQUEST_TIMEOUT_MS", 7000, 1000, 30000);
-const PUBLISH_INTERVAL_MS = envInt("WALL_PUBLISH_INTERVAL_MS", 2500, 500, 30000);
+// Publish cadence. Every publish is a visible change on the client, so pushing
+// faster than the eye can follow only makes the map look unstable.
+const PUBLISH_INTERVAL_MS = envInt("WALL_PUBLISH_INTERVAL_MS", 4000, 500, 30000);
 const UNIVERSE_REFRESH_MS = envInt("WALL_UNIVERSE_REFRESH_MS", 20000, 5000, 300000);
 const SYMBOL_STALE_MS = envInt("WALL_SYMBOL_STALE_MS", 15 * 60 * 1000, 60000, 6 * 60 * 60 * 1000);
 const EXCHANGE_STALE_MS = envInt("WALL_EXCHANGE_CACHE_TTL_MS", 5 * 60 * 1000, 30000, 60 * 60 * 1000);
@@ -982,9 +1005,19 @@ function updateSymbolLevels(state, analysis, now) {
 }
 
 /**
- * Final per-symbol scoring: apply lifecycle-derived context to raw significance.
- * `score` is the number the UI sorts by; it stays roughly on the old 0..15
- * `rtwi` scale so existing frontend sorting and sprite caches behave.
+ * Final per-symbol scoring: apply lifecycle-derived context to raw significance,
+ * then decide what is stable enough to publish.
+ *
+ * `score` is the number the UI sorts by; it stays on the 0..15 scale the old
+ * `rtwi` used so existing frontend sorting and sprite caches behave.
+ *
+ * Two things happen here beyond scoring, and both exist to stop the map from
+ * churning:
+ *   1. A level must be confirmed by MIN_CONFIRMATIONS separate polls before it
+ *      is published at all. Transient orders that momentarily look large are the
+ *      main source of one-refresh appearances.
+ *   2. The score is smoothed (EMA) and admission uses hysteresis, so a level
+ *      hovering at the threshold does not blink on and off between refreshes.
  */
 function scoreSymbolWalls(state, analysis, tracked, now) {
   const spoofPenalty = 1 - clamp(pullRateOf(state) - 0.25, 0, 0.6) * 0.8;
@@ -1001,7 +1034,26 @@ function scoreSymbolWalls(state, analysis, tracked, now) {
     // significance is less trustworthy.
     const spreadPenalty = 1 - clamp((candidate.spreadPct - 0.05) / 1.5, 0, 0.35);
     const confirmed = clamp(0.55 + persistence * 0.45, 0, 1);
-    const quality = clamp(candidate.significance * confirmed * spoofPenalty * spreadPenalty, 0, 1);
+    const instant = clamp(candidate.significance * confirmed * spoofPenalty * spreadPenalty, 0, 1);
+
+    // Smooth the quality across polls. The underlying book size fluctuates every
+    // refresh; without this the score, rank and bubble size visibly twitch even
+    // when the level itself is completely stable.
+    const quality = Number.isFinite(level.smoothedQuality)
+      ? level.smoothedQuality + (instant - level.smoothedQuality) * 0.35
+      : instant;
+    level.smoothedQuality = quality;
+
+    // Confirmation gate: never publish a level seen only once.
+    if (level.observations < MIN_CONFIRMATIONS) continue;
+
+    // Hysteresis: entering the map needs full quality, staying needs less.
+    const bar = level.published ? MIN_QUALITY * KEEP_QUALITY_RATIO : MIN_QUALITY;
+    if (quality < bar) {
+      level.published = false;
+      continue;
+    }
+    level.published = true;
 
     const imbalance = imbalanceRef > 0
       ? (analysis.bidDepth - analysis.askDepth) / imbalanceRef

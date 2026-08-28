@@ -778,18 +778,20 @@
                     </select>
                     <select id="density-max-distance" class="density-select" title="Максимальное расстояние от текущей цены">
                         <option value="1">до 1%</option>
+                        <option value="2" selected>до 2%</option>
                         <option value="3">до 3%</option>
-                        <option value="5" selected>до 5%</option>
+                        <option value="5">до 5%</option>
                     </select>
                     <select id="density-min-age" class="density-select" title="Минимальное время жизни стены">
-                        <option value="0" selected>Возраст: любой</option>
-                        <option value="30">от 30 сек</option>
+                        <option value="0">Возраст: любой</option>
+                        <option value="30" selected>от 30 сек</option>
                         <option value="120">от 2 мин</option>
+                        <option value="600">от 10 мин</option>
                     </select>
                     <select id="density-min-rank" class="density-select" title="Минимальная значимость уровня относительно стакана монеты (1-10)">
                         <option value="0" selected>Значимость: любая</option>
-                        <option value="5">от 5/10</option>
                         <option value="7">от 7/10</option>
+                        <option value="8">от 8/10</option>
                         <option value="9">от 9/10</option>
                     </select>
                     <select id="density-min-confluence" class="density-select" title="Уровень подтверждён на нескольких биржах одновременно">

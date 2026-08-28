@@ -73,14 +73,27 @@ function feed(opts, now) {
 
 // ── Persistence / anti-spoof ─────────────────────────────────────────────────
 
-test("a first sighting is admitted but carries minimal persistence", () => {
+test("a single sighting is never published (anti-flicker confirmation gate)", () => {
   reset();
   const t0 = 1_000_000;
+  // A level seen exactly once could be a transient order that happened to look
+  // large for one refresh. Publishing it is what made the map churn.
   const walls = feed({ wallUsd: 900_000 }, t0);
+  assert.deepEqual(walls, []);
+});
+
+test("a level is published on its second confirmation with low persistence", () => {
+  reset();
+  let t = 1_100_000;
+  feed({ wallUsd: 900_000 }, t); t += 20_000;
+  const walls = feed({ wallUsd: 900_000 }, t);
+
   const wall = walls.find(w => w.side === "bid");
-  assert.ok(wall, "wall must be detected on the first poll");
-  assert.equal(wall.confirmations, 1);
-  assert.ok(wall.persistence < 0.3, `persistence too high on first sighting: ${wall.persistence}`);
+  assert.ok(wall, "wall must appear once confirmed");
+  assert.equal(wall.confirmations, 2);
+  assert.ok(wall.persistence < 0.35, `persistence too high when barely confirmed: ${wall.persistence}`);
+  // firstSeenAt must point at the original sighting, not the confirming poll.
+  assert.equal(wall.firstSeenAt, 1_100_000);
 });
 
 test("persistence, confirmations and score all rise as a level survives", () => {
@@ -89,21 +102,26 @@ test("persistence, confirmations and score all rise as a level survives", () => 
   let first = null;
   let last = null;
 
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 8; i++) {
     const walls = feed({ wallUsd: 900_000 }, t);
     const wall = walls.find(w => w.side === "bid");
-    assert.ok(wall, `wall lost on poll ${i}`);
-    if (i === 0) first = wall;
-    last = wall;
+    if (i === 0) {
+      // Held back by the confirmation gate.
+      assert.equal(wall, undefined);
+    } else {
+      assert.ok(wall, `wall lost on poll ${i}`);
+      if (!first) first = wall;
+      last = wall;
+    }
     t += 20_000;
   }
 
-  assert.equal(first.confirmations, 1);
-  assert.ok(last.confirmations >= 6, `confirmations=${last.confirmations}`);
+  assert.equal(first.confirmations, 2);
+  assert.ok(last.confirmations >= 8, `confirmations=${last.confirmations}`);
   assert.ok(last.persistence > first.persistence);
   // Same raw book, so the increase must come purely from confirmed survival.
   assert.ok(last.score > first.score, `${last.score} <= ${first.score}`);
-  assert.ok(last.age >= 100, `age=${last.age}`);
+  assert.ok(last.age >= 120, `age=${last.age}`);
 });
 
 test("a level yanked while price stayed far away is classified as pulled (spoof)", () => {
@@ -168,26 +186,39 @@ test("a symbol with a high pull rate has its densities discounted", () => {
   assert.ok(spoofy.pulled >= 3, `expected several pulls, got ${JSON.stringify(spoofy)}`);
   assert.ok(spoofy.pullRate > 0.5, `pullRate=${spoofy.pullRate}`);
 
+  // Two polls so the level clears the confirmation gate on both symbols.
+  feed({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }, t); t += 20_000;
   const spoofWalls = feed({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }, t);
   const spoofWall = spoofWalls.find(w => w.side === "bid");
 
   // A clean symbol with the identical book must score higher.
   const CLEAN_SYM = "CLEANUSDT";
+  const CLEAN_COIN = { sym: CLEAN_SYM, base: "CLEAN", p: 100, v: 40_000_000, cs: 1 };
   resetSymbolState(EX, CLEAN_SYM);
+  ingestBook({
+    ex: EX,
+    coin: CLEAN_COIN,
+    now: t - 20_000,
+    ...buildBook({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }),
+  });
   const cleanWalls = ingestBook({
     ex: EX,
-    coin: { sym: CLEAN_SYM, base: "CLEAN", p: 100, v: 40_000_000, cs: 1 },
+    coin: CLEAN_COIN,
     now: t,
     ...buildBook({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }),
   });
   const cleanWall = cleanWalls.find(w => w.side === "bid");
 
-  assert.ok(spoofWall && cleanWall);
-  assert.ok(spoofWall.pullRate > cleanWall.pullRate);
-  assert.ok(
-    spoofWall.score < cleanWall.score,
-    `spoof-heavy symbol should score lower: ${spoofWall.score} vs ${cleanWall.score}`
-  );
+  assert.ok(cleanWall, "the clean symbol's density must be published");
+  // The spoof-heavy symbol is either suppressed entirely by the quality gate or
+  // published with a strictly lower score. Both are correct outcomes.
+  if (spoofWall) {
+    assert.ok(spoofWall.pullRate > cleanWall.pullRate);
+    assert.ok(
+      spoofWall.score < cleanWall.score,
+      `spoof-heavy symbol should score lower: ${spoofWall.score} vs ${cleanWall.score}`
+    );
+  }
   resetSymbolState(EX, CLEAN_SYM);
 });
 
@@ -197,6 +228,7 @@ test("eatenPct tracks how much of the peak has been absorbed", () => {
   reset();
   let t = 6_000_000;
 
+  feed({ wallUsd: 1_000_000 }, t); t += 20_000;
   feed({ wallUsd: 1_000_000 }, t); t += 20_000;
   const walls = feed({ wallUsd: 400_000 }, t);
   const wall = walls.find(w => w.side === "bid");
@@ -222,7 +254,8 @@ test("a level that is eaten down then restored is counted as a refill", () => {
 
 test("published densities carry the full professional signal set", () => {
   reset();
-  const walls = feed({ wallUsd: 900_000 }, 8_000_000);
+  feed({ wallUsd: 900_000 }, 8_000_000);
+  const walls = feed({ wallUsd: 900_000 }, 8_020_000);
   const wall = walls.find(w => w.side === "bid");
   assert.ok(wall);
 
@@ -247,13 +280,10 @@ test("published densities carry the full professional signal set", () => {
 
 test("spot symbols are labelled as the spot market", () => {
   const SPOT_SYM = "SPOTCOINUSDT_SPOT";
+  const SPOT_COIN = { sym: SPOT_SYM, base: "SPOTCOIN", p: 100, v: 20_000_000, cs: 1 };
   resetSymbolState(EX, SPOT_SYM);
-  const walls = ingestBook({
-    ex: EX,
-    coin: { sym: SPOT_SYM, base: "SPOTCOIN", p: 100, v: 20_000_000, cs: 1 },
-    now: 9_000_000,
-    ...buildBook({ wallUsd: 900_000 }),
-  });
+  ingestBook({ ex: EX, coin: SPOT_COIN, now: 9_000_000, ...buildBook({ wallUsd: 900_000 }) });
+  const walls = ingestBook({ ex: EX, coin: SPOT_COIN, now: 9_020_000, ...buildBook({ wallUsd: 900_000 }) });
   const wall = walls.find(w => w.side === "bid");
   assert.ok(wall);
   assert.equal(wall.market, "spot");
@@ -262,15 +292,66 @@ test("spot symbols are labelled as the spot market", () => {
 
 test("a bid wall and an ask wall are tracked independently", () => {
   reset();
-  const t = 10_000_000;
-  const bids = makeSide(100, "bid", {});
-  const asks = makeSide(100, "ask", {});
-  bids[49].usd += 900_000; bids[49].qty = bids[49].usd / bids[49].price;
-  asks[49].usd += 900_000; asks[49].qty = asks[49].usd / asks[49].price;
+  let t = 10_000_000;
+  const build = () => {
+    const bids = makeSide(100, "bid", {});
+    const asks = makeSide(100, "ask", {});
+    bids[49].usd += 900_000; bids[49].qty = bids[49].usd / bids[49].price;
+    asks[49].usd += 900_000; asks[49].qty = asks[49].usd / asks[49].price;
+    return { bids, asks };
+  };
 
-  const walls = ingestBook({ ex: EX, coin: coinAt(100), now: t, bids, asks });
+  ingestBook({ ex: EX, coin: coinAt(100), now: t, ...build() });
+  t += 20_000;
+  const walls = ingestBook({ ex: EX, coin: coinAt(100), now: t, ...build() });
   assert.ok(walls.some(w => w.side === "bid"));
   assert.ok(walls.some(w => w.side === "ask"));
+});
+
+// ── Stability / anti-flicker ─────────────────────────────────────────────────
+
+test("a level that keeps reappearing at the same price is not re-created", () => {
+  reset();
+  let t = 15_000_000;
+  let firstId = null;
+
+  for (let i = 0; i < 6; i++) {
+    // The volume-weighted cluster price drifts slightly between polls, which is
+    // exactly the case that must not spawn a new level each time.
+    const walls = feed({ wallUsd: 900_000 + i * 4_000 }, t);
+    const wall = walls.find(w => w.side === "bid");
+    if (wall) {
+      if (!firstId) firstId = wall.wallId;
+      assert.equal(wall.wallId, firstId, `identity changed on poll ${i}`);
+    }
+    t += 20_000;
+  }
+  assert.ok(firstId, "a level must have been published");
+});
+
+test("score is smoothed so a noisy book does not make it swing", () => {
+  reset();
+  let t = 16_000_000;
+  // Warm up past the confirmation gate.
+  feed({ wallUsd: 900_000 }, t); t += 20_000;
+  feed({ wallUsd: 900_000 }, t); t += 20_000;
+
+  const scores = [];
+  // Alternate the wall size hard on every poll.
+  for (let i = 0; i < 6; i++) {
+    const walls = feed({ wallUsd: i % 2 ? 1_600_000 : 700_000 }, t);
+    const wall = walls.find(w => w.side === "bid");
+    if (wall) scores.push(wall.score);
+    t += 20_000;
+  }
+
+  assert.ok(scores.length >= 4, "the level must stay published throughout");
+  let maxJump = 0;
+  for (let i = 1; i < scores.length; i++) {
+    maxJump = Math.max(maxJump, Math.abs(scores[i] - scores[i - 1]));
+  }
+  // Without EMA smoothing this book swings the score by several points per poll.
+  assert.ok(maxJump < 2.5, `score jumped by ${maxJump.toFixed(2)} between polls`);
 });
 
 // ── History ──────────────────────────────────────────────────────────────────
