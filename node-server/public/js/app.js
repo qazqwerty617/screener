@@ -7069,7 +7069,10 @@ function appendCandle(k) {
     last.o = clean.o;
     last.h = Math.max(last.h, clean.h);
     last.l = Math.min(last.l, clean.l);
-    last.c = clean.c;
+    // Only update close if no real-time trades have been received recently (prevents dragging candle backward)
+    if (!lastMarketEventAt || Date.now() - lastMarketEventAt > 2500) {
+      last.c = clean.c;
+    }
     if (clean.v > 0) last.v = Math.max(last.v, clean.v);
   } else if (clean.t > last.t) {
     // New candle from exchange!
@@ -7302,10 +7305,16 @@ function connectKlWs(ex, sym, tf) {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
     try {
       klWs = new WebSocket("wss://fx-ws.gateio.ws/v4/ws/usdt");
+      let pingTimer = null;
       klWs.onopen = () => {
         applyMainMarketStatus("live");
         klWs.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.candlesticks", event: "subscribe", payload: [tfMap[tf] || "4h", sym] }));
         klWs.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.trades", event: "subscribe", payload: [sym] }));
+        pingTimer = setInterval(() => {
+          if (klWs?.readyState === 1) {
+            klWs.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), channel: "futures.ping" }));
+          }
+        }, 15000);
       };
       klWs.onmessage = (e) => {
         try {
@@ -7324,7 +7333,7 @@ function connectKlWs(ex, sym, tf) {
         } catch (_) {}
       };
       klWs.onerror = () => {};
-      klWs.onclose = () => {};
+      klWs.onclose = () => { if (pingTimer) clearInterval(pingTimer); };
     } catch (_) {}
   } else if (ex === "OX") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
