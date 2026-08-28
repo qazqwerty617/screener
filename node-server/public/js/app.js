@@ -7228,7 +7228,7 @@ function connectKlWs(ex, sym, tf) {
   if (klWs) { try { klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
-  // 1. Normalized server relay subscription (handles all 11 venues as background/fallback)
+  // 1. Normalized server relay (handles all 11 venues as reliable fallback/aggregator)
   const nextKey = marketKey(ex, sym, tf);
   if (mainMarketKey !== nextKey || !mainMarketUnsubscribe) {
     if (mainMarketUnsubscribe) mainMarketUnsubscribe();
@@ -7245,7 +7245,7 @@ function connectKlWs(ex, sym, tf) {
     });
   }
 
-  // 2. DIRECT BROWSER WEBSOCKET for 0ms ultra-low latency (Vataga model)
+  // 2. DIRECT BROWSER WEBSOCKETS (0ms ultra-low latency Vataga model for all supported exchanges)
   if (ex === "BN" || ex === "AD") {
     const domain = ex === "BN" ? "fstream.binance.com" : "fstream.asterdex.com";
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
@@ -7323,6 +7323,152 @@ function connectKlWs(ex, sym, tf) {
               const p = +trade.price;
               if (p > 0) applyMainMarketTick([trade.create_time_ms || Date.now(), p, p, p, +trade.size || 0], false);
             }
+          }
+        } catch (_) {}
+      };
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
+    } catch (_) {}
+  } else if (ex === "OX") {
+    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
+    const ch = "candle" + (tfMap[tf] || "1H");
+    try {
+      klWs = new WebSocket("wss://ws.okx.com:8443/ws/v5/public");
+      klWs.onopen = () => {
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ op: "subscribe", args: [{ channel: ch, instId: sym }, { channel: "trades", instId: sym }] }));
+      };
+      klWs.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.arg?.channel === ch && d.data?.length) {
+            const k = d.data[0];
+            appendCandle({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +(k[7] || k[6]) });
+          } else if (d.arg?.channel === "trades" && d.data?.length) {
+            for (const trade of d.data) {
+              const p = +trade.px;
+              if (p > 0) applyMainMarketTick([+trade.ts || Date.now(), p, p, p, +trade.sz || 0], false);
+            }
+          }
+        } catch (_) {}
+      };
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
+    } catch (_) {}
+  } else if (ex === "BG") {
+    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D", "3d": "3D", "1w": "1W" };
+    try {
+      klWs = new WebSocket("wss://ws.bitget.com/v2/ws/public");
+      klWs.onopen = () => {
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ op: "subscribe", args: [
+          { instType: "USDT-FUTURES", channel: "candle" + (tfMap[tf] || "1H"), instId: sym },
+          { instType: "USDT-FUTURES", channel: "trade", instId: sym }
+        ] }));
+      };
+      klWs.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (!d.action || !d.arg?.channel) return;
+          if (d.arg.channel.startsWith("candle") && d.data?.length) {
+            for (const k of d.data) appendCandle({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] });
+          } else if (d.arg.channel === "trade" && d.data?.length) {
+            for (const trade of d.data) {
+              const p = +trade.price;
+              if (p > 0) applyMainMarketTick([+trade.ts || Date.now(), p, p, p, +trade.size || 0], false);
+            }
+          }
+        } catch (_) {}
+      };
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
+    } catch (_) {}
+  } else if (ex === "MX") {
+    const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
+    const tfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
+    try {
+      klWs = new WebSocket("wss://contract.mexc.com/edge");
+      klWs.onopen = () => {
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ method: "sub.kline", param: { symbol: mxSym, interval: tfMap[tf] || "Min60" } }));
+        klWs.send(JSON.stringify({ method: "sub.deal", param: { symbol: mxSym } }));
+      };
+      klWs.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.channel === "push.deal" && Array.isArray(d.data)) {
+            for (const deal of d.data) {
+              const p = +deal.p;
+              if (p > 0) applyMainMarketTick([+deal.t || Date.now(), p, p, p, +deal.v || 0], false);
+            }
+          } else if (d.channel === "push.kline" && d.data) {
+            const k = d.data;
+            appendCandle({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.a || (+k.q * +k.c) });
+          }
+        } catch (_) {}
+      };
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
+    } catch (_) {}
+  } else if (ex === "HL") {
+    const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
+    try {
+      klWs = new WebSocket("wss://api.hyperliquid.xyz/ws");
+      klWs.onopen = () => {
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ method: "subscribe", subscription: { type: "candle", coin: sym, interval: tfMap[tf] || "1h" } }));
+        klWs.send(JSON.stringify({ method: "subscribe", subscription: { type: "trades", coin: sym } }));
+      };
+      klWs.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.channel === "candle" && d.data) {
+            const candles = Array.isArray(d.data) ? d.data : [d.data];
+            for (const k of candles) appendCandle({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: Number(k.v) * Number(k.c) });
+          } else if (d.channel === "trades" && d.data) {
+            const trades = Array.isArray(d.data) ? d.data : [d.data];
+            for (const trade of trades) {
+              const p = +trade.px;
+              if (p > 0) applyMainMarketTick([+trade.time || Date.now(), p, p, p, +trade.sz || 0], false);
+            }
+          }
+        } catch (_) {}
+      };
+      klWs.onerror = () => {};
+      klWs.onclose = () => {};
+    } catch (_) {}
+  } else if (ex === "BX") {
+    const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
+    try {
+      klWs = new WebSocket("wss://open-api-swap.bingx.com/swap-market");
+      klWs.binaryType = "arraybuffer";
+      klWs.onopen = () => {
+        applyMainMarketStatus("live");
+        klWs.send(JSON.stringify({ id: "id1", reqType: "sub", dataType: `${bxSym}@kline_${tf}` }));
+        klWs.send(JSON.stringify({ id: "id2", reqType: "sub", dataType: `${bxSym}@trade` }));
+      };
+      klWs.onmessage = async (e) => {
+        try {
+          let str = "";
+          if (typeof DecompressionStream !== "undefined" && (e.data instanceof ArrayBuffer || e.data instanceof Blob)) {
+            const ds = new DecompressionStream("gzip");
+            const decompressedStream = new Response(e.data).body.pipeThrough(ds);
+            str = await new Response(decompressedStream).text();
+          } else if (typeof e.data === "string") {
+            str = e.data;
+          }
+          if (!str) return;
+          const d = JSON.parse(str);
+          if (d.ping && klWs?.readyState === 1) { klWs.send(JSON.stringify({ pong: d.ping })); return; }
+          if (d.dataType?.includes("@trade") && d.data) {
+            const trades = Array.isArray(d.data) ? d.data : [d.data];
+            for (const trade of trades) {
+              const p = +(trade.p || trade.price || 0);
+              if (p > 0) applyMainMarketTick([+trade.T || +trade.t || Date.now(), p, p, p, +trade.v || 0], false);
+            }
+          } else if (d.dataType?.includes("@kline") && d.data) {
+            const k = Array.isArray(d.data) ? d.data[d.data.length - 1] : d.data;
+            if (k) appendCandle({ t: +(k.time || k.T || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.c || k.close || 0), v: +(k.v || k.volume || 0) });
           }
         } catch (_) {}
       };
