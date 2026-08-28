@@ -6785,9 +6785,7 @@ async function fetchDirectKlines(ex, sym, tf) {
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "GT") {
-      const fromSec = Math.floor((now - 1000 * tfMs) / 1000);
-      const toSec = Math.floor(now / 1000);
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000&from=${fromSec}&to=${toSec}`, { signal: controller.signal });
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000`, { signal: controller.signal });
       const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
@@ -7008,9 +7006,8 @@ async function loadOlderHistory(ex, sym, tf) {
         olderCandles = data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
       }
     } else if (ex === "GT") {
-      const startSec = Math.floor((endTime - 1000 * tfMs) / 1000);
       const endSec = Math.floor(endTime / 1000);
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000&from=${startSec}&to=${endSec}`);
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000&to=${endSec}`);
       const data = await r.json();
       if (Array.isArray(data)) {
         olderCandles = data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) }));
