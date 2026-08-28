@@ -989,48 +989,46 @@ function processTickData(dt) {
     lastRender = now2;
   }
 
-  // 3. Update main chart active coin OHLC in REAL TIME using smooth displayP
-  const activeKey = `${activeEx}:${activeSym}`;
-  const ac = coins.get(activeKey);
-  if (ac && candles.length > 0) {
-    const last = candles[candles.length - 1];
-    const tfMs = TF_MS[activeTf] || 60000;
-    const now = Date.now();
-    const expectedCandleStart = Math.floor(now / tfMs) * tfMs;
+  // 3. Fallback for symbols with NO WebSocket stream (REST-only polling)
+  if (!hasMainMarketStream() && !klWs) {
+    const activeKey = `${activeEx}:${activeSym}`;
+    const ac = coins.get(activeKey);
+    if (ac && candles.length > 0) {
+      const last = candles[candles.length - 1];
+      const tfMs = TF_MS[activeTf] || 60000;
+      const now = Date.now();
+      const expectedCandleStart = Math.floor(now / tfMs) * tfMs;
 
-    // Check if we passed a timeframe boundary and need to spawn a new candle instantly (Vataga model)
-    if (expectedCandleStart > last.t) {
-      const gap = Math.round((expectedCandleStart - last.t) / tfMs);
-      if (gap > 1 && gap <= 50) {
-        for (let g = 1; g < gap; g++) {
-          candles.push({
-            t: last.t + g * tfMs,
-            o: last.c,
-            h: last.c,
-            l: last.c,
-            c: last.c,
-            v: 0
-          });
+      if (expectedCandleStart > last.t) {
+        const gap = Math.round((expectedCandleStart - last.t) / tfMs);
+        if (gap > 1 && gap <= 50) {
+          for (let g = 1; g < gap; g++) {
+            candles.push({
+              t: last.t + g * tfMs,
+              o: last.c,
+              h: last.c,
+              l: last.c,
+              c: last.c,
+              v: 0
+            });
+          }
         }
+        const newCandle = {
+          t: expectedCandleStart,
+          o: last.c,
+          h: last.c,
+          l: last.c,
+          c: last.c,
+          v: 0
+        };
+        candles.push(newCandle);
+        if (candles.length > 3000) candles.shift();
+        clearCandleCaches(candles);
+        if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
+        chartNeedsDraw = true;
       }
-      const newCandle = {
-        t: expectedCandleStart,
-        o: last.c,
-        h: last.c,
-        l: last.c,
-        c: last.c,
-        v: 0
-      };
-      candles.push(newCandle);
-      if (candles.length > 3000) candles.shift();
-      clearCandleCaches(candles);
-      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
-      chartNeedsDraw = true;
-    }
 
-    // Only update curLast from ticker if there is NO live market trade stream!
-    const curLast = candles[candles.length - 1];
-    if (!hasMainMarketStream() && !klWs) {
+      const curLast = candles[candles.length - 1];
       const liveP = getDisplayP(ac);
       if (liveP > 0 && curLast && expectedCandleStart === curLast.t) {
         const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
@@ -2717,39 +2715,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 function drawChart() {
   if (!candles.length || !chartW || !chartH) return;
 
-  // Timeframe boundary rollover check (Vataga model)
-  const headCandle = candles[candles.length - 1];
-  const tfMs = TF_MS[activeTf] || 60000;
-  const now = Date.now();
-  const curBarStart = Math.floor(now / tfMs) * tfMs;
-  if (headCandle && curBarStart > headCandle.t) {
-    const gapBars = Math.round((curBarStart - headCandle.t) / tfMs);
-    if (gapBars > 1 && gapBars <= 50) {
-      for (let g = 1; g < gapBars; g++) {
-        candles.push({
-          t: headCandle.t + g * tfMs,
-          o: headCandle.c,
-          h: headCandle.c,
-          l: headCandle.c,
-          c: headCandle.c,
-          v: 0
-        });
-      }
-    }
-    candles.push({
-      t: curBarStart,
-      o: headCandle.c,
-      h: headCandle.c,
-      l: headCandle.c,
-      c: headCandle.c,
-      v: 0
-    });
-    if (candles.length > 3000) {
-      candles.shift();
-      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
-    }
-    clearCandleCaches(candles);
-  }
 
   // Calculate active indicators first to determine volH
   const activeIndicators = [];
