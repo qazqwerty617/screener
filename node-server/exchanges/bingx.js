@@ -126,8 +126,8 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         }
       } catch (_) {}
     };
-    // Poll every 3s
-    setInterval(poll, 3000);
+    // Poll every 10s
+    setInterval(poll, 10000);
   }
 
   return { init };

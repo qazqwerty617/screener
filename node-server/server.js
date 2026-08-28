@@ -310,6 +310,17 @@ setInterval(() => {
   }
 }, 50);
 
+// Server heartbeat every 3s to prevent client watchdog quiet triggers
+setInterval(() => {
+  if (clients.size === 0) return;
+  const heartbeatMsg = JSON.stringify({ type: "ping", ts: Date.now() });
+  for (const ws of clients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(heartbeatMsg); } catch (_) {}
+    }
+  }
+}, 3000);
+
 // тФАтФАтФА Kline broadcast to clients тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function normalizeTimestamp(t) {
   return marketDataCore.normalizeTimestamp(t);
@@ -442,10 +453,12 @@ const paymentGateway = require("./paymentGateway");
 const adminBot = require("./adminBot");
 const { registerPaymentRoutes, createSlidingWindowLimiter } = require("./paymentRoutes");
 const { renderServerChartSnapshot } = require("./serverChartRenderer");
+const securityShield = require("./securityShield");
 
 // ── HTTP + WebSocket server ──
 const app = express();
 app.disable("x-powered-by");
+app.use(securityShield.securityShieldMiddleware);
 const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10);
 if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 10) {
   app.set("trust proxy", trustProxyHops);
@@ -513,13 +526,25 @@ const wss = new WebSocketServer({
 const wsClientsByIp = new Map();
 wss.on("connection", (ws, req) => {
   const ip = String(req.socket.remoteAddress || "unknown");
+  if (!securityShield.registerWsConnection(ip)) {
+    return ws.close(1008, "Banned by Security Shield");
+  }
   const origin = String(req.headers.origin || "");
   const host = String(req.headers.host || "");
   try {
-    if (origin && new URL(origin).host !== host) return ws.close(1008, "origin rejected");
-  } catch (_) { return ws.close(1008, "origin rejected"); }
+    if (origin && new URL(origin).host !== host) {
+      securityShield.unregisterWsConnection(ip);
+      return ws.close(1008, "origin rejected");
+    }
+  } catch (_) {
+    securityShield.unregisterWsConnection(ip);
+    return ws.close(1008, "origin rejected");
+  }
   const ipCount = wsClientsByIp.get(ip) || 0;
-  if (ipCount >= 12) return ws.close(1013, "connection limit");
+  if (ipCount >= 12) {
+    securityShield.unregisterWsConnection(ip);
+    return ws.close(1013, "connection limit");
+  }
   wsClientsByIp.set(ip, ipCount + 1);
   ws._clientIp = ip;
   ws._messagesInWindow = 0;
@@ -548,13 +573,21 @@ wss.on("connection", (ws, req) => {
   } catch (err) {
     console.error("[WS CLIENT] Error sending initial data:", err.message);
   }
+  try {
+    const urlObj = new URL(req.url, "http://localhost");
+    const token = urlObj.searchParams.get("token") || urlObj.searchParams.get("auth");
+    if (token) userStore.getUserByToken(token);
+  } catch (_) {}
+
   ws.on("message", (data) => {
     try {
       const now = Date.now();
       if (now - ws._messageWindowAt >= 60_000) { ws._messageWindowAt = now; ws._messagesInWindow = 0; }
       if (++ws._messagesInWindow > 180) return ws.close(1008, "message rate limit");
       const msg = JSON.parse(data.toString());
-      if (msg.type === "subscribe_kline") {
+      if (msg.type === "auth" && msg.token) {
+        userStore.getUserByToken(msg.token);
+      } else if (msg.type === "subscribe_kline") {
         subscribeKline(ws, msg.ex, msg.sym, msg.tf);
       } else if (msg.type === "unsubscribe_kline") {
         unsubscribeKline(ws, msg.ex, msg.sym, msg.tf);
@@ -580,6 +613,7 @@ wss.on("connection", (ws, req) => {
     klineClients.delete(ws);
     const clientIp = ws._clientIp;
     if (clientIp) {
+      securityShield.unregisterWsConnection(clientIp);
       const remaining = Math.max(0, (wsClientsByIp.get(clientIp) || 1) - 1);
       if (remaining) wsClientsByIp.set(clientIp, remaining); else wsClientsByIp.delete(clientIp);
     }
@@ -1928,7 +1962,8 @@ async function runJournalSync(userId, exchangeInput, options = {}) {
   if (!credentials) throw Object.assign(new Error("API-ключи для биржи не подключены"), { statusCode: 404 });
   const cacheKey = `${userId}:${exchange}`;
   const current = journalSyncCache.get(cacheKey);
-  if (!options.force && current?.result && Date.now() - current.at < 8000) return current.result;
+  const maxAge = typeof options.maxAge === "number" ? options.maxAge : 8000;
+  if (!options.force && current?.result && Date.now() - current.at < maxAge) return current.result;
   if (!options.force && current?.pending) return current.pending;
   const pending = syncJournal({ exchange, ...credentials }).then(result => {
     journalSyncCache.set(cacheKey, { at: Date.now(), result });
@@ -1988,7 +2023,7 @@ app.get("/api/journal/live", async (req, res) => {
   const exchange = journalCredentials.canonicalExchange(req.query.exchange);
   if (!exchange) return res.status(400).json({ error: "Биржа не поддерживается" });
   try {
-    return res.json(journalPayload(await runJournalSync(user.id, exchange), req.query.symbol));
+    return res.json(journalPayload(await runJournalSync(user.id, exchange, { maxAge: 2000 }), req.query.symbol));
   } catch (error) {
     return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
   }
@@ -2177,12 +2212,12 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
   }
 });
 
-// ─── High-Capacity Background Pre-Fetcher Engine (80-90% API Capacity) ───────
+// ─── High-Capacity Background Pre-Fetcher Engine ─────────────────────────────
 setInterval(async () => {
   if (tickers.size === 0) return;
   const topTickers = Array.from(tickers.values())
     .sort((a, b) => (b.v || 0) - (a.v || 0))
-    .slice(0, 25);
+    .slice(0, 10);
 
   for (const t of topTickers) {
     const key = cacheKey(t.ex, t.sym, "1m", false);
@@ -2195,10 +2230,10 @@ setInterval(async () => {
           klinesCache.set(key, { at: Date.now(), data: flat });
         }
       } catch (_) {}
-      await new Promise(r => setTimeout(r, 120));
+      await new Promise(r => setTimeout(r, 200));
     }
   }
-}, 10000).unref();
+}, 60000).unref();
 
 function constantTimeSecretEqual(left, right) {
   if (typeof left !== "string" || typeof right !== "string") return false;
@@ -2404,6 +2439,27 @@ app.get("/api/user/formation-alerts", (req, res) => {
   }
   const preferences = userStore.getUserPreferences(user.id) || {};
   res.json({ success: true, settings: preferences.formationAlerts || null });
+});
+
+app.get("/api/orchestrator/status", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  const memUsage = process.memoryUsage();
+  res.json({
+    success: true,
+    server: {
+      uptimeSec: Math.round(process.uptime()),
+      nodeVersion: process.version,
+      platform: process.platform,
+      memory: {
+        rssMB: Math.round(memUsage.rss / 1024 / 1024),
+        heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
+        heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024)
+      },
+      tickersCount: tickers.size,
+      connectedWsClients: clients.size,
+      exchangesCount: Object.keys(exStatus).length
+    }
+  });
 });
 
 app.post("/api/user/formation-alerts", express.json({ limit: "5mb" }), (req, res) => {
@@ -2805,6 +2861,10 @@ server.listen(PORT, () => {
     delete meta.walls;
     currentWallsCache = walls;
     currentWallsMeta = Array.isArray(payload) ? { walls, updatedAt: Date.now() } : payload;
+    // Re-point the global on every publish. It used to be bound once at startup
+    // to the initial empty object, so every consumer reading it (the Telegram
+    // digest) saw a permanently empty density set.
+    global.__obsidianWallsMeta = currentWallsMeta;
     const msg = JSON.stringify({ type: "walls", data: walls, meta });
     for (const ws of clients) {
       if (ws.readyState === WebSocket.OPEN) {
@@ -2874,11 +2934,11 @@ server.listen(PORT, () => {
           return true;
         })
         .sort((a, b) => b.v - a.v)
-        .slice(0, 100);
+        .slice(0, 40);
 
       if (list.length === 0) {
         isScanningPatterns = false;
-        setTimeout(scanAllPatterns, 5000);
+        setTimeout(scanAllPatterns, 10000);
         return;
       }
 
@@ -2951,7 +3011,7 @@ server.listen(PORT, () => {
           } catch (e) {}
         }
         // Micro-sleep to keep exchange API completely relaxed and zero chance of rate limits
-        await new Promise(r => setTimeout(r, 60));
+        await new Promise(r => setTimeout(r, 80));
       }
 
       patternsCache.sort((a, b) => b.ts - a.ts);
@@ -2964,7 +3024,7 @@ server.listen(PORT, () => {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      setTimeout(scanAllPatterns, 10000);
+      setTimeout(scanAllPatterns, 30000);
     }
   }
 
@@ -3176,8 +3236,6 @@ server.listen(PORT, () => {
       }
     }
   }
-
-  setTimeout(scanAllPatterns, 1500);
 
   app.post("/api/notifications/telegram", express.json(), (req, res) => {
     setPublicCors(req, res);

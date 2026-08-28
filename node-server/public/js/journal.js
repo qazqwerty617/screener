@@ -76,9 +76,121 @@
     return { ...(json ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   }
 
+  // ── EXCHANGE SETTINGS (Отображение на графике & Ведение в дневнике) ──────────
+  const EXCHANGE_SETTINGS_KEY = "obsidian_exchange_settings_v1";
+
+  function normalizeExchangeCode(ex) {
+    const s = String(ex || "").toUpperCase().trim();
+    if (s === "BINANCE" || s === "BN") return "BN";
+    if (s === "BYBIT" || s === "BB") return "BB";
+    if (s === "OKX" || s === "OX") return "OX";
+    if (s === "BITGET" || s === "BG") return "BG";
+    return s;
+  }
+
+  function loadExchangeSettings() {
+    const defaults = {
+      BN: { showOnChart: true, trackInJournal: true },
+      BB: { showOnChart: true, trackInJournal: true },
+      OX: { showOnChart: true, trackInJournal: true },
+      BG: { showOnChart: true, trackInJournal: true }
+    };
+    try {
+      const raw = localStorage.getItem(EXCHANGE_SETTINGS_KEY);
+      if (!raw) return defaults;
+      const parsed = JSON.parse(raw);
+      return {
+        BN: { ...defaults.BN, ...(parsed.BN || {}) },
+        BB: { ...defaults.BB, ...(parsed.BB || {}) },
+        OX: { ...defaults.OX, ...(parsed.OX || {}) },
+        BG: { ...defaults.BG, ...(parsed.BG || {}) }
+      };
+    } catch (_) {
+      return defaults;
+    }
+  }
+
+  let exchangeSettings = loadExchangeSettings();
+
+  function saveExchangeSettings() {
+    try {
+      localStorage.setItem(EXCHANGE_SETTINGS_KEY, JSON.stringify(exchangeSettings));
+    } catch (_) {}
+  }
+
+  function isExchangeChartEnabled(ex) {
+    const code = normalizeExchangeCode(ex);
+    const s = exchangeSettings[code];
+    return s ? s.showOnChart !== false : true;
+  }
+
+  function isExchangeJournalEnabled(ex) {
+    const code = normalizeExchangeCode(ex);
+    const s = exchangeSettings[code];
+    return s ? s.trackInJournal !== false : true;
+  }
+
+  function updateSwitchInputs(ex) {
+    const code = normalizeExchangeCode(ex);
+    const s = exchangeSettings[code] || { showOnChart: true, trackInJournal: true };
+    const chartEl = document.getElementById(`j-setting-chart-${code}`);
+    const journalEl = document.getElementById(`j-setting-journal-${code}`);
+    if (chartEl) chartEl.checked = s.showOnChart !== false;
+    if (journalEl) journalEl.checked = s.trackInJournal !== false;
+  }
+
   function markApiConnected(ex) {
-    const statusEl = document.getElementById(`j-api-status-${ex}`);
-    if (statusEl) { statusEl.textContent = "Подключено"; statusEl.className = "j-api-status connected"; }
+    const code = normalizeExchangeCode(ex);
+    const statusEl = document.getElementById(`j-api-status-${code}`);
+    if (statusEl) {
+      statusEl.textContent = "Подключено";
+      statusEl.className = "j-api-status connected";
+    }
+    const gearBtn = document.getElementById(`j-api-gear-${code}`);
+    if (gearBtn) {
+      gearBtn.style.display = "inline-flex";
+    }
+    updateSwitchInputs(code);
+  }
+
+  function toggleExchangeSettings(ex) {
+    const code = normalizeExchangeCode(ex);
+    const panel = document.getElementById(`j-api-settings-${code}`);
+    const gearBtn = document.getElementById(`j-api-gear-${code}`);
+    if (!panel) return;
+    const isShown = panel.style.display !== "none";
+    panel.style.display = isShown ? "none" : "flex";
+    if (gearBtn) gearBtn.classList.toggle("active", !isShown);
+  }
+
+  function updateExchangeSetting(ex, key, val) {
+    const code = normalizeExchangeCode(ex);
+    if (!exchangeSettings[code]) {
+      exchangeSettings[code] = { showOnChart: true, trackInJournal: true };
+    }
+    exchangeSettings[code][key] = !!val;
+    saveExchangeSettings();
+
+    if (key === "showOnChart") {
+      window.TradeOverlay?.refresh(true);
+      window.requestMainChartDraw?.();
+      if (typeof window.showToast === "function") {
+        window.showToast({
+          message: val ? `Сделки ${code} включены на графике` : `Сделки ${code} скрыты с графика`,
+          type: "info",
+          durationMs: 2000
+        });
+      }
+    } else if (key === "trackInJournal") {
+      updateUI();
+      if (typeof window.showToast === "function") {
+        window.showToast({
+          message: val ? `Сделки ${code} включены в дневник` : `Сделки ${code} исключены из дневника`,
+          type: "info",
+          durationMs: 2000
+        });
+      }
+    }
   }
 
   async function hydrateServerCredentials() {
@@ -114,6 +226,9 @@
 
   function getFilteredTrades() {
     let list = [...trades];
+
+    // Filter out trades from exchanges where "trackInJournal" is disabled
+    list = list.filter(t => isExchangeJournalEnabled(t.exchange));
 
     // Date range filter
     if (dateRange !== "ALL") {
@@ -2276,12 +2391,17 @@
       configuredExchanges.add(ex);
       delete apiKeys[ex]; saveApiKeys(); markApiConnected(ex);
       keyEl.value = ""; secretEl.value = ""; if (passEl) passEl.value = "";
+      toggleExchangeSettings(ex);
       await syncExchangeApi(true, ex);
       window.TradeOverlay?.refresh(true);
       alert("API-ключи проверены и защищённо сохранены на сервере.");
       return;
     } catch (error) {
       if (connectingStatus) { connectingStatus.textContent = "Ошибка API"; connectingStatus.className = "j-api-status disconnected"; }
+      const gearBtn = document.getElementById(`j-api-gear-${ex}`);
+      if (gearBtn) gearBtn.style.display = "none";
+      const panel = document.getElementById(`j-api-settings-${ex}`);
+      if (panel) panel.style.display = "none";
       alert(`Не удалось подключить API: ${error.message}`);
       return;
     }
@@ -2296,6 +2416,10 @@
     saveApiKey: saveApiKey,
     syncApi: () => syncExchangeApi(false),
     exportCsv: exportCSV,
+    isExchangeChartEnabled: isExchangeChartEnabled,
+    isExchangeJournalEnabled: isExchangeJournalEnabled,
+    updateExchangeSetting: updateExchangeSetting,
+    toggleExchangeSettings: toggleExchangeSettings,
     activate: () => {
       const mainEl = document.getElementById("main");
       const densityEl = document.getElementById("density-view");

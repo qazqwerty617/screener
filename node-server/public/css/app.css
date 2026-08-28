@@ -1,3 +1,5 @@
+@import url('/css/fonts.css');
+
 *,
 *::before,
 *::after {
@@ -27,17 +29,26 @@
     --bb: #3b82f6;
     --ox: #8b5cf6;
     --radius: 6px;
-    --font: "Inter", -apple-system, sans-serif;
-    --table-grid: minmax(84px, 1.4fr) 56px 46px 36px 32px 58px;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Roboto Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    --table-grid: minmax(60px, 1.5fr) 46px 52px 34px 44px 34px;
 }
 
 html,
 body {
     height: 100%;
     font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     background: var(--bg);
     color: var(--t1);
     overflow: hidden;
+}
+
+input, button, select, textarea, optgroup, table, th, td {
+    font-family: inherit;
 }
 
 ::-webkit-scrollbar {
@@ -77,7 +88,7 @@ button {
     display: flex;
     align-items: center;
     height: 44px;
-    background: var(--screener-header-bg, #13151e) !important;
+    background: var(--screener-header-bg, #13151e);
     border-bottom: 1px solid var(--bd);
     padding: 0 16px;
     gap: 20px;
@@ -276,7 +287,7 @@ button {
     display: flex;
     align-items: center;
     height: 34px;
-    background: var(--screener-header-bg, #0d0f14) !important;
+    background: var(--screener-header-bg, rgba(13, 15, 20, 0.98));
     border-bottom: 1px solid var(--bd);
     padding: 0 6px;
     gap: 4px;
@@ -1780,13 +1791,19 @@ body.view-is-multichart #ctbar .grid-config {
     align-items: center;
     gap: 2px;
     padding: 6px 4px;
-    background: #11131c;
-    background: linear-gradient(180deg, #25203b 0%, #151722 18%, #11131c 100%) !important;
-    border: 1px solid rgba(160, 124, 255, 0.18);
+    background:
+        linear-gradient(
+            180deg,
+            rgba(94, 58, 238, 0.16) 0%,
+            rgba(18, 20, 30, 0.96) 18%,
+            rgba(18, 20, 30, 0.92) 100%
+        );
+    border: 1px solid rgba(160, 124, 255, 0.16);
     border-radius: 8px;
+    backdrop-filter: blur(14px);
     box-shadow:
-        0 14px 32px rgba(0, 0, 0, 0.65),
-        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        0 14px 32px rgba(0, 0, 0, 0.48),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
     user-select: none;
     min-width: 34px;
 }
@@ -2298,44 +2315,24 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     flex-shrink: 0;
     position: relative;
 }
-
-.dt-btn svg {
-    width: 15px;
-    height: 15px;
-    display: block;
-}
-
-/* White color specifically for cursor/crosshair, magnet, and trash can */
-.dt-btn[data-tool="none"],
-.dt-btn[data-bt-tool="none"],
-.dt-btn#magnet-btn,
-.dt-btn#bt-magnet,
-.dt-btn.del,
-.dt-btn#clear-draw,
-.dt-btn#bt-clear {
-    color: #ffffff !important;
-}
-
 .dt-btn:hover {
     background: rgba(255, 255, 255, 0.08);
     color: var(--t1);
 }
 .dt-btn.on {
-    background: linear-gradient(180deg, #8b5cf6 0%, #6d42ff 100%) !important;
-    color: #fff !important;
+    background: linear-gradient(180deg, #8b5cf6 0%, #6d42ff 100%);
+    color: #fff;
     box-shadow:
         0 0 0 1px rgba(255, 255, 255, 0.08) inset,
         0 0 14px rgba(109, 66, 255, 0.45);
 }
 .dt-btn.magnet-on {
-    color: #00baff !important;
-    background: rgba(0, 186, 255, 0.18) !important;
+    color: #00baff;
+    background: rgba(0, 186, 255, 0.14);
 }
-.dt-btn.del:hover,
-.dt-btn#clear-draw:hover,
-.dt-btn#bt-clear:hover {
-    background: rgba(255, 69, 96, 0.2) !important;
-    color: #ff4560 !important;
+.dt-btn.del:hover {
+    background: rgba(255, 69, 96, 0.15);
+    color: var(--rd);
 }
 /* Tooltip on hover */
 .dt-btn::after {
@@ -2449,32 +2446,37 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     background: var(--ac);
 }
 
-/* ── Resizer (Disabled / Fixed Panel) ── */
-.resizer,
-#rp-resizer {
-    display: none !important;
-}
-
 #main.rp-collapsed #rp {
-    width: 360px !important;
-    min-width: 360px !important;
-    max-width: 360px !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    border-left: none;
+    overflow: hidden;
 }
 
-/* ── Right Panel (Static & Fixed on Right) ── */
+#main.rp-collapsed .resizer {
+    width: 12px;
+    background: var(--bg2);
+    border-left: 1px solid var(--bd);
+}
+
+#main.rp-collapsed .resizer-toggle {
+    opacity: 1;
+    transform: translateX(-50%) rotate(180deg);
+}
+
+/* ── Right Panel ── */
 #rp {
-    width: 360px !important;
-    min-width: 360px !important;
-    max-width: 360px !important;
-    background: var(--screener-bg, #0d0f14) !important;
+    max-width: 1100px;
+    background: var(--screener-bg, rgba(13, 15, 20, 0.98));
     border-left: 1px solid var(--bd);
     display: flex;
     flex-direction: column;
-    flex-shrink: 0 !important;
-    overflow: hidden;
-    user-select: none;
-    position: relative;
-    z-index: 10;
+    flex-shrink: 0;
+    transition: width 0s linear, min-width 0s linear;
+}
+
+#rp:not(.no-transition) {
+    transition: width 0.2s ease, min-width 0.2s ease;
 }
 
 .rph {
@@ -2484,9 +2486,7 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     border-bottom: 1px solid var(--bd);
     gap: 6px;
     flex-shrink: 0;
-    background: var(--screener-header-bg, var(--screener-bg, #0d0f14)) !important;
-    position: relative;
-    z-index: 5;
+    background: var(--screener-header-bg, transparent);
 }
 
 .rph-title {
@@ -2508,9 +2508,6 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     border-bottom: 1px solid var(--bd);
     flex-shrink: 0;
     flex-wrap: wrap;
-    background: var(--screener-header-bg, var(--screener-bg, #0d0f14)) !important;
-    position: relative;
-    z-index: 5;
 }
 
 .sh {
@@ -2549,10 +2546,6 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     flex-shrink: 0;
     font-weight: 700;
     overflow: hidden;
-    background: var(--screener-header-bg, var(--screener-bg, #0d0f14)) !important;
-    position: sticky;
-    top: 0;
-    z-index: 5;
 }
 
 .cr {
@@ -2570,15 +2563,14 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
 .clh > div, .cr > div:not(.ct) {
     text-align: right;
     white-space: nowrap;
-    overflow: visible;
-    text-overflow: clip;
-    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ct {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     min-width: 0;
 }
 
@@ -2680,20 +2672,19 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 }
 
 .cdot {
-    width: 14px;
-    height: 14px;
-    border-radius: 3px;
+    width: 24px;
+    height: 16px;
+    border-radius: 2px;
     flex-shrink: 0;
 }
 
 .cname {
-    font-weight: 700;
-    color: #e2e8f0;
+    font-weight: 600;
+    color: var(--t1);
     white-space: nowrap;
-    overflow: visible;
-    text-overflow: clip;
-    font-size: 11.5px;
-    letter-spacing: -0.2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11px;
 }
 
 .cc {
@@ -3335,6 +3326,10 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     display: flex;
     gap: 4px;
     align-items: center;
+    /* The engine exposes more filters than before (significance, confluence).
+       Wrap instead of overflowing the toolbar on narrow viewports. */
+    flex-wrap: wrap;
+    row-gap: 4px;
 }
 
 .density-select {
@@ -3985,7 +3980,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 #bt-canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; }
 #bt-canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
 #bt-vol-canvas { position: absolute; bottom: 0; left: 0; width: 100%; pointer-events: none; }
-#bt-draw-tools { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 34px; padding: 6px 4px; border: 1px solid rgba(160,124,255,.18); border-radius: 8px; background: #11131c; background: linear-gradient(180deg,#25203b 0%,#151722 18%,#11131c 100%) !important; box-shadow: 0 14px 32px rgba(0,0,0,.65),inset 0 1px rgba(255,255,255,.08); user-select: none; }
+#bt-draw-tools { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 34px; padding: 6px 4px; border: 1px solid rgba(160,124,255,.16); border-radius: 8px; background: linear-gradient(180deg,rgba(94,58,238,.16),rgba(18,20,30,.96) 18%,rgba(18,20,30,.92)); backdrop-filter: blur(14px); box-shadow: 0 14px 32px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.05); user-select: none; }
 #bt-draw-tools .dt-btn { color: var(--tool-accent,var(--t3)); }
 #bt-draw-tools .dt-btn.on { color: #fff; }
 .bt-color-cycle span { width: 11px; height: 11px; border-radius: 50%; background: var(--bt-active-color,#8b5cf6); box-shadow: 0 0 7px var(--bt-active-color,#8b5cf6); }
@@ -5734,6 +5729,144 @@ body {
 
 .j-api-input:focus {
     border-color: var(--ac);
+}
+
+/* ── Exchange API Settings & Toggles ── */
+.j-api-head-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.j-api-gear-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--t2);
+    cursor: pointer;
+    transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 0;
+}
+
+.j-api-gear-btn:hover {
+    background: rgba(108, 93, 211, 0.22);
+    border-color: #6c5dd3;
+    color: #fff;
+    transform: rotate(45deg);
+}
+
+.j-api-gear-btn.active {
+    background: rgba(108, 93, 211, 0.3);
+    border-color: #a78bfa;
+    color: #a78bfa;
+}
+
+.j-api-settings-panel {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.j-api-settings-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #a78bfa;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.j-api-setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.j-api-setting-row:last-child {
+    border-bottom: none;
+    padding-bottom: 2px;
+}
+
+.j-api-setting-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.j-api-setting-name {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #f1f5f9;
+}
+
+.j-api-setting-hint {
+    font-size: 10px;
+    color: var(--t2);
+    line-height: 1.3;
+}
+
+.j-toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 36px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+.j-toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+
+.j-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(255, 255, 255, 0.14);
+    border-radius: 20px;
+    transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.j-toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 14px;
+    width: 14px;
+    left: 2px;
+    bottom: 2px;
+    background-color: #ffffff;
+    border-radius: 50%;
+    transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+.j-toggle-switch input:checked + .j-toggle-slider {
+    background-color: #26c97a;
+    border-color: rgba(38, 201, 122, 0.4);
+}
+
+.j-toggle-switch input:checked + .j-toggle-slider:before {
+    transform: translateX(16px);
 }
 
 /* ── Modals ── */

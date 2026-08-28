@@ -12,65 +12,6 @@ const rowEls = new Map();
 const priceHistories = new Map();
 let isHoveringScreener = false;
 
-const DEFAULT_CANDLE_STATE = {
-  body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
-  border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
-  wick: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 }
-};
-
-const DEFAULT_VOLUME_STATE = {
-  show: true,
-  up: "#26c97a",
-  upOp: 75,
-  down: "#ff4560",
-  downOp: 75
-};
-
-function hexToRgba(hex, opacity = 100) {
-  if (!hex || typeof hex !== 'string') return `rgba(255, 255, 255, ${(opacity ?? 100) / 100})`;
-  const op = (Number(opacity) >= 0 ? Number(opacity) : 100) / 100;
-  
-  if (hex.startsWith("rgba(") || hex.startsWith("rgb(")) {
-    const match = hex.match(/\d+(\.\d+)?/g);
-    if (match && match.length >= 3) {
-      const baseAlpha = match.length >= 4 ? Number(match[3]) : 1;
-      return `rgba(${match[0]}, ${match[1]}, ${match[2]}, ${baseAlpha * op})`;
-    }
-    return hex;
-  }
-
-  let cleanHex = hex.replace("#", "").trim();
-  let r = 0, g = 0, b = 0;
-  if (cleanHex.length === 3) {
-    r = parseInt(cleanHex[0] + cleanHex[0], 16) || 0;
-    g = parseInt(cleanHex[1] + cleanHex[1], 16) || 0;
-    b = parseInt(cleanHex[2] + cleanHex[2], 16) || 0;
-  } else if (cleanHex.length >= 6) {
-    r = parseInt(cleanHex.substring(0, 2), 16) || 0;
-    g = parseInt(cleanHex.substring(2, 4), 16) || 0;
-    b = parseInt(cleanHex.substring(4, 6), 16) || 0;
-  }
-  return `rgba(${r}, ${g}, ${b}, ${op})`;
-}
-
-function getSavedCandleSettings() {
-  try {
-    const saved = localStorage.getItem("screener-candle-settings");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return {
-        body: { ...DEFAULT_CANDLE_STATE.body, ...(parsed.body || {}) },
-        border: { ...DEFAULT_CANDLE_STATE.border, ...(parsed.border || {}) },
-        wick: { ...DEFAULT_CANDLE_STATE.wick, ...(parsed.wick || {}) }
-      };
-    }
-  } catch (_) {}
-  return JSON.parse(JSON.stringify(DEFAULT_CANDLE_STATE));
-}
-
-window.candleSettings = getSavedCandleSettings();
-window.volumeSettings = JSON.parse(JSON.stringify(DEFAULT_VOLUME_STATE));
-
 // ════ TOAST NOTIFICATIONS ═════════════════════════════
 function showToast(options, typeArg, titleArg, durationArg) {
   let title = "";
@@ -255,33 +196,50 @@ const DENSITY_SIZE_LABELS = {
 };
 
 function getDensityRelativeRank(wall) {
-  // `rank` is calculated by the scanner from the wall's Z-score inside this
-  // exact coin/exchange order book.  It deliberately does not use fixed USD
-  // limits: the same $1m order can be huge for an altcoin and ordinary for BTC.
+  // `rank` is produced by the density engine from the level's composite
+  // significance inside this exact coin/exchange order book, blended with how
+  // long it has actually survived.  It is deliberately not a USD threshold: the
+  // same $1m order is enormous for an altcoin and routine for BTC.
   const rank = Number(wall && wall.rank);
   if (Number.isFinite(rank) && rank > 0) return Math.max(1, Math.min(10, rank));
 
-  // Compatibility with older/history records that predate `rank`.
-  const relSize = Number(wall && wall.relSize);
-  if (Number.isFinite(relSize) && relSize > 0) {
-    if (wall && wall.ex === "HL") {
-      if (relSize > 3.2) return 7;
-      if (relSize > 2.2) return 6;
-      if (relSize > 1.5) return 5;
-      return 3;
-    }
-    if (relSize > 6.0) return 7;
-    if (relSize > 5.0) return 6;
-    if (relSize > 4.2) return 5;
+  // Engine-native fallback: significance is already normalised to 0..1.
+  const significance = Number(wall && wall.significance);
+  if (Number.isFinite(significance) && significance > 0) {
+    if (significance >= 0.88) return 10;
+    if (significance >= 0.77) return 9;
+    if (significance >= 0.66) return 8;
+    if (significance >= 0.55) return 7;
+    if (significance >= 0.45) return 6;
+    if (significance >= 0.36) return 5;
+    if (significance >= 0.28) return 4;
     return 3;
   }
 
-  // Last-resort fallback for legacy cached objects. `rtwi` is still relative
-  // to the local book, unlike an absolute USD wall size.
-  const rtwi = Number(wall && wall.rtwi) || 0;
-  if (rtwi >= 7) return 7;
-  if (rtwi >= 4.5) return 5;
+  // Compatibility with older/history records that predate `significance`.
+  const relSize = Number(wall && wall.relSize);
+  if (Number.isFinite(relSize) && relSize > 0) {
+    if (relSize > 6.0) return 8;
+    if (relSize > 4.5) return 7;
+    if (relSize > 3.0) return 6;
+    if (relSize > 2.0) return 5;
+    return 3;
+  }
+
+  // Last-resort fallback for legacy cached objects. `score`/`rtwi` is still
+  // relative to the local book, unlike an absolute USD wall size.
+  const score = Number(wall && (wall.score !== undefined ? wall.score : wall.rtwi)) || 0;
+  if (score >= 11) return 8;
+  if (score >= 8) return 7;
+  if (score >= 5.5) return 5;
   return 3;
+}
+
+function getDensityScore(wall) {
+  const score = Number(wall && wall.score);
+  if (Number.isFinite(score)) return score;
+  const rtwi = Number(wall && wall.rtwi);
+  return Number.isFinite(rtwi) ? rtwi : 0;
 }
 
 function getDensitySizeType(wall) {
@@ -433,15 +391,15 @@ let visibleCols = { ...defaultCols };
 
 function updateTableGrid() {
   const SIZES = {
-    chg: "56px",
+    chg: "52px",
     v: "46px",
-    trades: "36px",
+    trades: "44px",
     oi: "36px",
-    corr: "32px",
-    funding: "58px"
+    corr: "36px",
+    funding: "42px"
   };
 
-  let gridStr = "minmax(84px, 1.4fr)";
+  let gridStr = "minmax(66px, 1.5fr)";
   let minContentWidth = 90;
   for (const [key, size] of Object.entries(SIZES)) {
     const cb = document.getElementById(`col-${key}`);
@@ -461,9 +419,11 @@ function updateTableGrid() {
 
   const rp = $("rp");
   if (rp) {
-    rp.style.width = "360px";
-    rp.style.minWidth = "360px";
-    rp.style.maxWidth = "360px";
+    const currentWidth = parseInt(rp.style.width || "0", 10);
+    if (currentWidth > minContentWidth + 100 || currentWidth < minContentWidth) {
+      rp.style.width = Math.max(minContentWidth, 120) + "px";
+      rp.style.minWidth = Math.max(minContentWidth, 120) + "px";
+    }
   }
 
   localStorage.setItem("tableCols", JSON.stringify(visibleCols));
@@ -508,7 +468,7 @@ let offsetX = 0;
 let isLoadingOlderCandles = false;
 let hasReachedStartOfHistory = false;
 function getClampedOffsetX(val) {
-  if (!Number.isFinite(val) || candles.length === 0) return 0;
+  if (!Number.isFinite(val) || !candles || candles.length === 0) return 0;
   const PW = chartW - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const visibleCount = PW / (candleW || 10);
   const minX = -Math.max(0, visibleCount - 2);
@@ -1063,7 +1023,7 @@ function processTickData(dt) {
           if (curLast.c !== liveP) {
             curLast.c = liveP;
             if (liveP > curLast.h) curLast.h = liveP;
-            if (liveP < curLast.l) last.l = liveP;
+            if (liveP < curLast.l) curLast.l = liveP;
             chartNeedsDraw = true;
           }
 
@@ -1174,7 +1134,7 @@ const fT = (v) => {
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function getClampedOffsetX(val) {
-  if (!candles || !candles.length) return -6;
+  if (!candles || !candles.length) return 0;
   const PW = (chartW || 1000) - (typeof PR_WIDTH !== 'undefined' ? PR_WIDTH : 82);
   const n = Math.max(1, PW / (candleW || 10));
   const minOff = -(n - 5);
@@ -1230,6 +1190,12 @@ const canvas = $("chart-canvas"),
   ctx = canvas.getContext("2d");
 const volCv = $("vol-canvas"),
   vCtx = volCv.getContext("2d");
+
+if (typeof document !== "undefined" && document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    if (typeof requestDraw === "function") requestDraw();
+  });
+}
 
 function resizeChart() {
   const w = $("cwrap");
@@ -2334,7 +2300,23 @@ function renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY,
     ctx.lineTo(x2, y);
     ctx.stroke();
 
-    const volStr = cl.volK >= 1000 ? (cl.volK / 1000).toFixed(1) + "M" : cl.volK + "K";
+    let volStr = "";
+    const v = Math.abs(Number(cl.volK) || 0);
+    if (v >= 1e12) {
+      const t = v / 1e12;
+      volStr = (t >= 10 ? t.toFixed(1) : t.toFixed(2)).replace(/\.?0+$/, "") + "T";
+    } else if (v >= 1e9) {
+      const b = v / 1e9;
+      volStr = (b >= 10 ? b.toFixed(1) : b.toFixed(2)).replace(/\.?0+$/, "") + "B";
+    } else if (v >= 1e6) {
+      const m = v / 1e6;
+      volStr = (m >= 10 ? m.toFixed(1) : m.toFixed(2)).replace(/\.?0+$/, "") + "M";
+    } else if (v >= 1e3) {
+      const k = v / 1e3;
+      volStr = (k >= 100 ? k.toFixed(0) : k >= 10 ? k.toFixed(1) : k.toFixed(2)).replace(/\.?0+$/, "") + "K";
+    } else {
+      volStr = v < 10 ? v.toFixed(2).replace(/\.?0+$/, "") : Math.round(v).toString();
+    }
     const badgeText = `${cl.topLev} $${volStr} Liq`;
 
     ctx.font = "bold 9px Inter";
@@ -2373,16 +2355,34 @@ function drawDensityTimelineOnChart(ctx, options) {
   const { candles: chartCandles, base, candleWidth, viewStart, toY, PW, PH, TOP = 0 } = options;
   if (!chartCandles || !chartCandles.length || !base) return [];
 
-  const source = densityData.map(wall => ({ ...wall, active: true, endedAt: null }));
   const rangeStart = chartCandles[0].t;
   const observedTf = chartCandles.length > 1
     ? Math.max(1, chartCandles[chartCandles.length - 1].t - chartCandles[chartCandles.length - 2].t)
     : 60000;
   const rangeEnd = chartCandles[chartCandles.length - 1].t + observedTf;
 
+  // Merge live densities with the engine's lifecycle history so the chart shows
+  // where levels were actually filled or pulled, not only what is resting now.
+  // Live records win on collision because they carry the full signal set.
+  const source = [];
+  const liveIds = new Set();
+  for (const wall of densityData) {
+    if (wall.base !== base) continue;
+    liveIds.add(wall.wallId || `${wall.ex}:${wall.sym}:${wall.side}:${wall.price}`);
+    source.push({ ...wall, active: true, endedAt: null });
+  }
+  if (Array.isArray(densityHistoryData)) {
+    for (const record of densityHistoryData) {
+      if (record.base !== base) continue;
+      if (record.active) continue;
+      const id = record.wallId || `${record.ex}:${record.sym}:${record.side}:${record.price}`;
+      if (liveIds.has(id)) continue;
+      source.push({ ...record, active: false });
+    }
+  }
+
   const walls = source.filter(w => {
     if (isBaseInDensityBlacklist(w.base, w.sym)) return false;
-    if (w.base !== base) return false;
     if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
     if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
     if (!chartDensityExes.has(w.ex)) return false;
@@ -2391,7 +2391,12 @@ function drawDensityTimelineOnChart(ctx, options) {
     const startedAt = Number(w.firstSeenAt) || Date.now();
     const endedAt = Number(w.endedAt) || rangeEnd;
     return startedAt <= rangeEnd && endedAt >= rangeStart;
-  }).sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)) || (b.S || 0) - (a.S || 0));
+  }).sort((a, b) =>
+    // Live first, then by the engine's composite score, then by size.
+    Number(Boolean(b.active)) - Number(Boolean(a.active)) ||
+    getDensityScore(b) - getDensityScore(a) ||
+    (b.S || 0) - (a.S || 0)
+  );
 
   const badges = [];
   const occupiedLabelY = [];
@@ -2640,6 +2645,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+
+      // No price scale badge for trendlines (наклонки)
     }
   }
 
@@ -2738,27 +2745,15 @@ function drawChart() {
   const TOP = 0;
   if (PH <= 20) return;
 
-  // Real-time live candle price synchronization with 0ms lag
-  const ak = `${activeEx}:${activeSym}`;
-  const liveCoin = coins.get(ak);
-  if (liveCoin && liveCoin.p > 0 && candles.length > 0) {
-    const lastCandle = candles[candles.length - 1];
-    const tfMs = TF_MS[activeTf] || 60000;
-    const now = Date.now();
-    if (now >= lastCandle.t && now < lastCandle.t + tfMs * 2) {
-      lastCandle.c = liveCoin.p;
-      if (liveCoin.p > lastCandle.h) lastCandle.h = liveCoin.p;
-      if (liveCoin.p < lastCandle.l) lastCandle.l = liveCoin.p;
-    }
-  }
-
-  // ── Background ─────────────────────────────────────────────────────────────
+  // тФАтФА Background тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   ctx.clearRect(0, 0, chartW, chartH);
   ctx.fillStyle = getCanvasBgColor();
   ctx.fillRect(0, 0, chartW, chartH);
   
   vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   vCtx.clearRect(0, 0, chartW, volH);
+  vCtx.fillStyle = getCanvasBgColor();
+  vCtx.fillRect(0, 0, chartW, volH);
 
   // тФАтФА Visible candle window тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const n = Math.max(1, PW / candleW);
@@ -2839,7 +2834,8 @@ function drawChart() {
   ctx.clip();
 
   // тФАтФА Candles тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-  const hw = Math.max(0.5, (candleW - 2) / 2);
+  const bodyRatio = candleW > 4 ? 0.78 : 0.88;
+  const hw = Math.max(0.5, (candleW * bodyRatio) / 2);
   const cs = window.candleSettings || {
     body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
     border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
@@ -2864,8 +2860,19 @@ function drawChart() {
     const bT = Math.min(yO, yC),
       bH = Math.max(1, Math.abs(yC - yO));
 
+    const leftX = Math.round((rawX - hw) * dpr);
+    const rightX = Math.round((rawX + hw) * dpr);
+    const fillPixelW = Math.max(1, rightX - leftX);
+    const fillX = leftX / dpr;
+    const fillY = Math.round(bT * dpr) / dpr;
+    const fillW = fillPixelW / dpr;
+    const fillH = Math.max(1 / dpr, Math.round(bH * dpr) / dpr);
+
+    // Wick is placed at exact mathematical pixel center of candle body (TigerTrade standard)
+    const wickPixel = Math.round(leftX + fillPixelW / 2);
+    const wickX = (wickPixel + 0.5) / dpr;
+
     if (cs.wick.show) {
-      const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
       const wickYH = Math.round(yH * dpr) / dpr;
       const wickYL = Math.round(yL * dpr) / dpr;
       ctx.strokeStyle = up ? upWickCol : dnWickCol;
@@ -2877,28 +2884,15 @@ function drawChart() {
     }
 
     if (cs.body.show) {
-      const leftX = Math.round((rawX - hw) * dpr);
-      const rightX = Math.round((rawX + hw) * dpr);
-      const topY = Math.round(bT * dpr);
-      const bottomY = Math.round((bT + bH) * dpr);
-
-      const fillX = leftX / dpr;
-      const fillY = topY / dpr;
-      const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
-      const fillH = Math.max(1 / dpr, (bottomY - topY) / dpr);
-
       ctx.fillStyle = up ? upBodyCol : dnBodyCol;
       ctx.fillRect(fillX, fillY, fillW, fillH);
     }
 
     if (cs.border.show && candleW > 10) {
-      const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
+      const strokeLeftX = (leftX + 0.5) / dpr;
       const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
-      const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
-      const strokeBottomY = (Math.floor((bT + bH) * dpr) + 0.5) / dpr;
-
-      const strokeW = Math.max(1 / dpr, strokeRightX - strokeLeftX);
-      const strokeH = Math.max(1 / dpr, strokeBottomY - strokeTopY);
+      const strokeW = Math.max(1 / dpr, fillW);
+      const strokeH = Math.max(1 / dpr, fillH);
 
       ctx.strokeStyle = up ? upBorderCol : dnBorderCol;
       ctx.lineWidth = 1 / dpr;
@@ -3083,6 +3077,10 @@ function drawChart() {
       vCtx.beginPath();
       vCtx.rect(0, yStart, PW, indicatorSubH);
       vCtx.clip();
+
+      // Fill background for this sub-panel
+      vCtx.fillStyle = getCanvasBgColor();
+      vCtx.fillRect(0, yStart, PW, indicatorSubH);
 
       // Draw sub-panel border/divider
       vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
@@ -3420,6 +3418,18 @@ function drawChart() {
   vCtx.rect(0, volumeYStart, PW, volumeHeight);
   vCtx.clip();
 
+  // Fill background for volume panel
+  vCtx.fillStyle = getCanvasBgColor();
+  vCtx.fillRect(0, volumeYStart, PW, volumeHeight);
+
+  // Subtle top border divider
+  vCtx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+  vCtx.lineWidth = 1;
+  vCtx.beginPath();
+  vCtx.moveTo(0, volumeYStart);
+  vCtx.lineTo(PW, volumeYStart);
+  vCtx.stroke();
+
   const vs = window.volumeSettings || {
     show: true,
     up: "#26c97a",
@@ -3468,6 +3478,10 @@ function drawChart() {
   const timeYStart = volumeYStart + volumeHeight;
   vCtx.save();
 
+  // Background of time bar
+  vCtx.fillStyle = getCanvasBgColor();
+  vCtx.fillRect(0, timeYStart, chartW, timeBarHeight);
+
   // Top border line separating volume histogram from time bar
   vCtx.strokeStyle = "rgba(255, 255, 255, 0.09)";
   vCtx.lineWidth = 1;
@@ -3486,6 +3500,13 @@ function drawChart() {
   if (candles.length > 0 && PW > 50) {
     const minPxStep = 80;
     const stepBars = Math.max(1, Math.round(minPxStep / candleW));
+
+    // Draw subtle vertical grid lines on the main price chart aligned with timestamps
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.035)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
 
     vCtx.fillStyle = "rgba(255, 255, 255, 0.5)";
     vCtx.font = "10px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
@@ -3510,12 +3531,19 @@ function drawChart() {
       vCtx.lineTo(rawX, timeYStart + 4.5);
       vCtx.stroke();
 
+      // Main chart vertical grid line
+      ctx.moveTo(rawX, TOP);
+      ctx.lineTo(rawX, TOP + PH);
+
       // Format time label with active UTC offset
       const barTime = getTimeFromIdx(idx);
       const timeStr = formatTimestampWithOffset(barTime, activeTf, window.chartUtcOffset);
 
       vCtx.fillText(timeStr, rawX, timeYStart + 11.5);
     }
+
+    ctx.stroke();
+    ctx.restore();
   }
 
   // Timezone interactive button in bottom-right corner
@@ -3588,91 +3616,12 @@ function drawChart() {
   ctx.lineTo(PW, chartH);
   ctx.stroke();
 
-  // тФАтФА Draw Walls (Density) on Chart тФАтФА
-  let wallBadges = [];
-  if (false && chartDensityEnabled) {
-    const ticker = coins.get(activeEx + ":" + activeSym);
-    const activeBase = ticker ? ticker.base : activeSym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
-
-    const walls = densityData.filter(w => {
-      if (w.base !== activeBase) return false;
-      if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
-      if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
-      if (!chartDensityExes.has(w.ex)) return false;
-
-      const sizeType = getDensitySizeType(w);
-      if (!chartDensitySizes.has(sizeType)) return false;
-
-      return true;
-    });
-
-    if (walls.length > 0) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, TOP, PW, PH);
-      ctx.clip();
-
-      // Exchange abbreviation map for clearer labels
-      const EX_NAMES = {
-        BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX",
-        KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate",
-        HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
-      };
-
-      for (const w of walls) {
-        const wy = toY(w.price);
-        if (wy < TOP || wy > TOP + PH) continue;
-
-        // Find x start position (based on firstSeenAt timestamp (exact time, not just candle index)
-        let startIdx = 0;
-        if (w.firstSeenAt && candles.length > 0) {
-          startIdx = getIdxFromTime(w.firstSeenAt);
-        }
-        const startX = Math.max(0, (startIdx - s + futureGap) * candleW + candleW / 2);
-
-        const isBid = w.side === "bid";
-        const baseColor = isBid ? "rgb(38,201,122)" : "rgb(255,69,96)";
-
-        ctx.strokeStyle = baseColor;
-        // Nicer line thickness
-        ctx.lineWidth = Math.min(6, 1.5 + w.rtwi / 5);
-        ctx.lineCap = "round";
-
-        ctx.beginPath();
-        ctx.moveTo(startX, wy);
-        ctx.lineTo(PW, wy);
-        ctx.stroke();
-
-        // Print exchange + volume (e.g. Binance 2.5M) near the start
-        const exName = EX_NAMES[w.ex] || w.ex;
-        const volStr = (w.wallK >= 1000 ? (w.wallK / 1000).toFixed(1).replace(/\.0$/, "") + "M" : w.wallK + "K");
-        const label = `${exName} ${volStr}`;
-        ctx.fillStyle = baseColor;
-        ctx.font = "bold 9px Inter";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "bottom";
-
-        // Draw a little pill/background for label
-        const labelWidth = ctx.measureText(label).width + 10;
-        const labelHeight = 14;
-        ctx.fillStyle = isBid ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
-        roundRect(ctx, Math.min(startX + 2, PW - labelWidth - 4), wy - labelHeight - 2, labelWidth, labelHeight, 3);
-        ctx.fill();
-
-        ctx.fillStyle = baseColor;
-        ctx.fillText(label, Math.min(startX + 7, PW - labelWidth), wy - 5);
-
-        // Save badge coordinate and info to draw on price scale later (outside of clip)
-        wallBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38, 201, 122] : [255, 69, 96] });
-      }
-      ctx.restore();
-    }
-  }
+  // ── Draw Walls (Density) on Chart ──
   const activeDensityTicker = coins.get(activeEx + ":" + activeSym);
   const activeDensityBase = activeDensityTicker
     ? activeDensityTicker.base
     : activeSym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
-  wallBadges = drawDensityTimelineOnChart(ctx, {
+  let wallBadges = drawDensityTimelineOnChart(ctx, {
     candles,
     base: activeDensityBase,
     candleWidth: candleW,
@@ -3684,16 +3633,23 @@ function drawChart() {
   });
 
   if (window.TradeOverlay) {
-    window.TradeOverlay.draw(ctx, {
-      candles,
-      xForIndex: index => (index - viewStart) * candleW + candleW / 2,
-      yForPrice: toY,
-      width: PW,
-      height: PH,
-      currentPrice: candles[candles.length - 1]?.c,
-      symbol: activeSym,
-      exchange: activeEx,
-    });
+    try {
+      const liveCoin = coins.get(activeEx + ":" + activeSym);
+      const livePrice = (liveCoin && liveCoin.p > 0) ? liveCoin.p : (candles[candles.length - 1]?.c || 0);
+      window.TradeOverlay.draw(ctx, {
+        candles,
+        xForIndex: index => (index - viewStart) * candleW + candleW / 2,
+        yForPrice: toY,
+        width: PW,
+        chartWidth: chartW,
+        height: PH,
+        currentPrice: livePrice,
+        symbol: activeSym,
+        exchange: activeEx,
+      });
+    } catch (err) {
+      console.error("TradeOverlay draw error:", err);
+    }
   }
 
   // тФАтФА Drawings тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -4405,7 +4361,15 @@ let isDragTimeScale = false,
   timeScaleStartX = 0,
   timeScaleStartCandleW = 10;
 
-canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const mouseX = e.clientX - rect.left;
+  const mouseY = e.clientY - rect.top;
+  if (window.TradeOverlay) {
+    window.TradeOverlay.handleRightClick(mouseX, mouseY);
+  }
+});
 
 // тФАтФАтФА Drawing system (TradingView-style) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 
@@ -6283,10 +6247,10 @@ let wsPingTimer = null;
 let wsReconnectTimer = null;
 let lastWsMsg = 0;
 
-// Watchdog: if no data for 4s while connected тАФ force auto-reconnect instantly
+// Watchdog: if no data for 15s while connected — force auto-reconnect cleanly
 setInterval(() => {
-  if (lastWsMsg > 0 && Date.now() - lastWsMsg > 4000) {
-    console.warn("[WS] Quiet for 4s - auto-reconnecting...");
+  if (lastWsMsg > 0 && Date.now() - lastWsMsg > 15000) {
+    console.warn("[WS] Quiet for 15s - auto-reconnecting...");
     $("cd-label").textContent = "Reconnecting...";
     if (ws) { ws.onclose = null; ws.onerror = null; try { ws.close(); } catch (_) { } }
     ws = null;
@@ -6295,7 +6259,7 @@ setInterval(() => {
     if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
     connectWS();
   }
-}, 2000);
+}, 3000);
 
 function connectWS() {
   // Cancel any pending reconnect
@@ -6681,8 +6645,14 @@ function sanitizeCandles(list) {
   for (const k of sorted) {
     const clean = sanitizeCandle(k, out.length ? out[out.length - 1].c : null);
     if (!clean) continue;
-    if (out.length && out[out.length - 1].t === clean.t) out[out.length - 1] = clean;
-    else out.push(clean);
+    if (out.length) {
+      const prev = out[out.length - 1];
+      if (prev.t === clean.t) {
+        out[out.length - 1] = clean;
+        continue;
+      }
+    }
+    out.push(clean);
   }
   return out.slice(-3000);
 }
@@ -6812,7 +6782,7 @@ async function fetchKlines(ex, sym, tf) {
 
   isLoadingOlderCandles = false;
   hasReachedStartOfHistory = false;
-  offsetX = -6;
+  offsetX = 0;
   chartNeedsDraw = false;
   viewMn = null;
   viewMx = null;
@@ -6883,8 +6853,15 @@ async function fetchKlines(ex, sym, tf) {
         .then(parsed => {
           if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
           if (Array.isArray(parsed) && parsed.length > 0) {
-            candles = parsed;
-            KLINES_CACHE.set(key, { ts: Date.now(), data: parsed });
+            const lastCandle = candles[candles.length - 1];
+            const parsedLast = parsed[parsed.length - 1];
+            if (lastCandle && parsedLast && lastCandle.t >= parsedLast.t) {
+              const older = parsed.filter(p => p.t < lastCandle.t);
+              candles = sanitizeCandles([...older, lastCandle]);
+            } else {
+              candles = parsed;
+            }
+            KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
             chartNeedsDraw = true;
             drawChart();
           }
@@ -6984,60 +6961,42 @@ async function loadOlderHistory(ex, sym, tf) {
   }
 }
 
-async function refetchMissingHistory(ex, sym, tf) {
-  if (window.isFetchingGap) return;
-  window.isFetchingGap = true;
-  try {
-    const fresh = await fetchServerKlines(ex, sym, tf, 0);
-    if (fresh && fresh.length > 0 && activeEx === ex && activeSym === sym && activeTf === tf) {
-      const map = new Map();
-      fresh.forEach(c => map.set(c.t, c));
-      candles.forEach(c => map.set(c.t, c)); // preserve latest live values
-      const merged = Array.from(map.values()).sort((a, b) => a.t - b.t);
-      candles = sanitizeCandles(merged);
-      chartNeedsDraw = true;
-      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
-    }
-  } catch (_) {}
-  finally {
-    window.isFetchingGap = false;
-  }
-}
-
 function appendCandle(k) {
-  if (!k) return;
-  const clean = sanitizeCandle(k, null);
-  if (!clean) return;
-
-  if (!candles.length) {
-    candles = [clean];
-    chartNeedsDraw = true;
-    updateOHLC();
-    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
-    return;
-  }
-
+  if (!candles.length || !k) return;
   const last = candles[candles.length - 1];
 
-  // Only accept updates that are NOT older than current last candle
+  const prev = candles.length > 1 ? candles[candles.length - 2].c : null;
+  const clean = sanitizeCandle(k, prev);
+  if (!clean) return;
+
+  const tfMs = TF_MS[activeTf] || 60000;
+
   if (clean.t === last.t) {
-    if (last.o === undefined || last.o === null) last.o = clean.o;
-    last.h = Math.max(last.h, clean.h); // Keep historical high/low for current candle
+    // Authoritative exchange update for the current candle
+    last.o = clean.o;
+    last.h = Math.max(last.h, clean.h);
     last.l = Math.min(last.l, clean.l);
     last.c = clean.c;
     last.v = clean.v;
   } else if (clean.t > last.t) {
-    const tfMs = TF_MS[activeTf] || 60000;
-    if (clean.t - last.t > tfMs * 2) {
-      refetchMissingHistory(activeEx, activeSym, activeTf);
-    }
     candles.push(clean);
     if (candles.length > 2500) {
       candles.shift();
       if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
     }
     clearCandleCaches(candles);
+  } else {
+    // If exchange finalized a recently closed candle (e.g. previous 1-3 bars)
+    const target = candles.slice(-5).find(c => c.t === clean.t);
+    if (target) {
+      target.o = clean.o;
+      target.h = Math.max(target.h, clean.h);
+      target.l = Math.min(target.l, clean.l);
+      target.c = clean.c;
+      target.v = clean.v;
+    }
   }
+
   chartNeedsDraw = true;
   updateOHLC();
   if (clean && clean.c > 0) {
@@ -7046,37 +7005,23 @@ function appendCandle(k) {
 }
 
 function applyMainMarketTick(data) {
-  if (!Array.isArray(data)) return;
+  if (!Array.isArray(data) || candles.length === 0) return;
   const eventTime = +data[0];
   const price = +data[1];
   const eventHigh = +data[2] || price;
   const eventLow = +data[3] || price;
-  const firstPrice = +data[4] || price;
-  if (!(eventTime > 0) || !(price > 0)) return;
+  if (!(price > 0)) return;
   lastMarketEventAt = Date.now();
 
-  const tfMs = TF_MS[activeTf] || 60000;
-
-  if (!candles.length) {
-    const start = Math.floor(eventTime / tfMs) * tfMs;
-    candles = [{ t: start, o: firstPrice, h: Math.max(firstPrice, eventHigh, price), l: Math.min(firstPrice, eventLow, price), c: price, v: 0 }];
-    chartNeedsDraw = true;
-    updateOHLC();
-    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
-    return;
-  }
-
-  let last = candles[candles.length - 1];
-  if (eventTime >= last.t + tfMs) {
-    const start = Math.floor(eventTime / tfMs) * tfMs;
-    last = { t: start, o: price, h: Math.max(price, eventHigh), l: Math.min(price, eventLow), c: price, v: 0 };
-    candles.push(last);
-    if (candles.length > 2500) candles.shift();
-    clearCandleCaches(candles);
-  } else if (eventTime >= last.t) {
+  const last = candles[candles.length - 1];
+  if (last) {
+    // Update the live forming candle: price moves, high grows, low decreases
+    // When price pulls back (вкатывает), the candle stays the same and leaves a wick!
     last.c = price;
-    last.h = Math.max(last.h, eventHigh, price);
-    last.l = Math.min(last.l, eventLow, price);
+    if (price > last.h) last.h = price;
+    if (eventHigh > last.h) last.h = eventHigh;
+    if (price < last.l) last.l = price;
+    if (eventLow < last.l) last.l = eventLow;
   }
 
   const ticker = coins.get(`${activeEx}:${activeSym}`);
@@ -7468,7 +7413,7 @@ function fillRow(c, rr) {
 
   // тФАтФА Funding тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const funding = c.funding || 0;
-  const fundStr = (funding >= 0 ? "+" : "") + funding.toFixed(4) + "%";
+  const fundStr = (funding >= 0 ? "+" : "") + funding.toFixed(3) + "%";
   if (rr.cells.funding.textContent !== fundStr) {
     rr.cells.funding.textContent = fundStr;
     rr.cells.funding.className = "cfunding " + (funding > 0 ? "pos" : funding < 0 ? "neg" : "");
@@ -8024,19 +7969,15 @@ if (settingsBtn && settingsOverlay) {
     };
   });
 
-  // Theme switching
+  // Theme switching placeholder
   document.querySelectorAll(".theme-opt").forEach(opt => {
     opt.onclick = () => {
       document.querySelectorAll(".theme-opt").forEach(o => o.classList.remove("active"));
       opt.classList.add("active");
       const theme = opt.dataset.theme;
-      let newBg = "#0d0f14";
-      if (theme === "dark") newBg = "#0d0f14";
-      if (theme === "black") newBg = "#000000";
-      if (theme === "blue") newBg = "#0a0c1a";
-      pendingBg = newBg;
-      if (bgPreview) bgPreview.style.backgroundColor = newBg;
-      updateBgColor(newBg, pendingOpacity, false);
+      if (theme === "dark") updateBgColor("#0d0f14");
+      if (theme === "black") updateBgColor("#000000");
+      if (theme === "blue") updateBgColor("#0a0c1a");
     };
   });
 
@@ -8426,49 +8367,10 @@ if (settingsBtn && settingsOverlay) {
         } catch (_) {}
       }
 
-      const cbBody = $("set-candle-body");
-      if (cbBody) {
-        cbBody.checked = candleState.body.show !== false;
-        cbBody.onchange = (e) => {
-          candleState.body.show = e.target.checked;
-          window.candleSettings = candleState;
-          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
-          refreshCharts();
-        };
-      }
-
-      const cbBorder = $("set-candle-border");
-      if (cbBorder) {
-        cbBorder.checked = candleState.border.show !== false;
-        cbBorder.onchange = (e) => {
-          candleState.border.show = e.target.checked;
-          window.candleSettings = candleState;
-          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
-          refreshCharts();
-        };
-      }
-
-      const cbWick = $("set-candle-wick");
-      if (cbWick) {
-        cbWick.checked = candleState.wick.show !== false;
-        cbWick.onchange = (e) => {
-          candleState.wick.show = e.target.checked;
-          window.candleSettings = candleState;
-          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
-          refreshCharts();
-        };
-      }
-
-      const cbVol = $("set-show-volume");
-      if (cbVol) {
-        cbVol.checked = volumeState.show !== false;
-        cbVol.onchange = (e) => {
-          volumeState.show = e.target.checked;
-          window.volumeSettings = volumeState;
-          localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
-          refreshCharts();
-        };
-      }
+      $("set-candle-body").checked = candleState.body.show;
+      $("set-candle-border").checked = candleState.border.show;
+      $("set-candle-wick").checked = candleState.wick.show;
+      $("set-show-volume").checked = volumeState.show;
 
       const compact = localStorage.getItem("screener-compact-list") === "true";
       const compactEl = $("set-compact-list");
@@ -8497,15 +8399,13 @@ if (settingsBtn && settingsOverlay) {
 
       if (id.startsWith("candle-")) {
         const parts = id.split("-");
-        const side = parts[1]; // up / down
-        const type = parts[2]; // body / border / wick
+        const type = parts[2];
+        const side = parts[1];
         initialColor = candleState[type][side];
         initialOpacity = candleState[type][side + "Op"];
         onUpdate = (c, o) => {
           candleState[type][side] = c;
           candleState[type][side + "Op"] = o;
-          window.candleSettings = candleState;
-          localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
           refreshCharts();
         };
       } else if (id.startsWith("volume-")) {
@@ -8515,8 +8415,6 @@ if (settingsBtn && settingsOverlay) {
         onUpdate = (c, o) => {
           volumeState[side] = c;
           volumeState[side + "Op"] = o;
-          window.volumeSettings = volumeState;
-          localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
           refreshCharts();
         };
       } else if (id.startsWith("fmt-")) {
@@ -8607,141 +8505,52 @@ if (settingsBtn && settingsOverlay) {
         updateBgColor(pendingBg, pendingOpacity, true);
         updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
 
-        const cbBody = $("set-candle-body");
-        if (cbBody) candleState.body.show = cbBody.checked;
-        const cbBorder = $("set-candle-border");
-        if (cbBorder) candleState.border.show = cbBorder.checked;
-        const cbWick = $("set-candle-wick");
-        if (cbWick) candleState.wick.show = cbWick.checked;
+        candleState.body.show = $("set-candle-body").checked;
+        candleState.border.show = $("set-candle-border").checked;
+        candleState.wick.show = $("set-candle-wick").checked;
         localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
 
-        const cbCompact = $("set-compact-list");
-        if (cbCompact) {
-          const compact = cbCompact.checked;
-          localStorage.setItem("screener-compact-list", compact);
-          $("coin-list")?.classList.toggle("compact", compact);
-        }
+        const compact = $("set-compact-list").checked;
+        localStorage.setItem("screener-compact-list", compact);
+        $("coin-list").classList.toggle("compact", compact);
 
-        const cbAnim = $("set-chart-anim");
-        if (cbAnim) {
-          const anim = cbAnim.checked;
-          localStorage.setItem("screener-chart-anim", anim);
-          INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
-        }
+        const anim = $("set-chart-anim").checked;
+        localStorage.setItem("screener-chart-anim", anim);
+        INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
 
-        const cbVol = $("set-show-volume");
-        if (cbVol) {
-          volumeState.show = cbVol.checked;
-          localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
-        }
+        volumeState.show = $("set-show-volume").checked;
+        localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
 
         localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
 
         refreshCharts();
-        if (settingsOverlay) {
-          settingsOverlay.classList.remove("open");
-          settingsOverlay.style.display = "none";
-        }
+        if (settingsOverlay) settingsOverlay.classList.remove("open");
       };
     }
 
     // Reset button
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
-      resetBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        // Preserve essential auth, drawings, formation notification settings and price alerts
-        const keysToKeep = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (
-            key && (
+      resetBtn.onclick = () => {
+        if (confirm("Вы уверены, что хотите сбросить все настройки к начальным?")) {
+          // Clear settings but keep drawings
+          const keysToKeep = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (
               key.startsWith("crypto_drawings_") ||
               key.startsWith("obsidian_auth_") ||
               key.startsWith("obsidian_tg_") ||
-              key.startsWith("obsidian_formation_") ||
-              key.startsWith("obsidian_price_") ||
-              key.startsWith("obsidian_utc_") ||
-              key.startsWith("crypto_chart_formations") ||
-              key.startsWith("crypto_fov_") ||
-              key.startsWith("formation_") ||
-              key.startsWith("user_")
-            )
-          ) {
-            keysToKeep.push({ key, val: localStorage.getItem(key) });
+              key === "crypto_tags" ||
+              key === "crypto_tool_colors"
+            ) {
+              keysToKeep.push({ key, val: localStorage.getItem(key) });
+            }
           }
-        }
-        localStorage.clear();
-        keysToKeep.forEach(item => localStorage.setItem(item.key, item.val));
-
-        // Reset memory variables to standard defaults
-        pendingBg = "#0d0f14";
-        pendingOpacity = "100";
-        pendingAxisColor = "#d1d4dc";
-        pendingAxisOpacity = "100";
-        if (bgPreview) bgPreview.style.backgroundColor = "#0d0f14";
-        if (opacitySlider) opacitySlider.value = 100;
-        if (opacityVal) opacityVal.textContent = "100%";
-        if (axisPreview) axisPreview.style.backgroundColor = "#d1d4dc";
-        if (axisOpacitySlider) axisOpacitySlider.value = 100;
-        if (axisOpacityVal) axisOpacityVal.textContent = "100%";
-
-        window.candleSettings = JSON.parse(JSON.stringify(DEFAULT_CANDLE_STATE));
-        window.volumeSettings = JSON.parse(JSON.stringify(DEFAULT_VOLUME_STATE));
-        window.formationColorSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_COLORS));
-        coinTags = {};
-        if (typeof toolColors !== "undefined") toolColors = { ...DEFAULT_TOOL_COLORS };
-
-        localStorage.setItem("screener-candle-settings", JSON.stringify(DEFAULT_CANDLE_STATE));
-        localStorage.setItem("screener-volume-settings", JSON.stringify(DEFAULT_VOLUME_STATE));
-        localStorage.setItem("screener-formation-colors", JSON.stringify(DEFAULT_FORMATION_COLORS));
-        localStorage.setItem("crypto_tool_colors", JSON.stringify(DEFAULT_TOOL_COLORS));
-        localStorage.setItem("crypto_tags", "{}");
-
-        updateBgColor("#0d0f14", 100, true);
-        updateAxisColor("#d1d4dc", 100, true);
-        updateScreenerBgColor("rgba(13, 15, 20, 0.98)", true);
-        updateScreenerHeaderColor("transparent", true);
-
-        // Reset pickers in modal if open
-        Object.keys(pickers).forEach(id => {
-          if (id.startsWith("candle-")) {
-            const parts = id.split("-");
-            const side = parts[1];
-            const type = parts[2];
-            pickers[id]?.setColor(DEFAULT_CANDLE_STATE[type][side], DEFAULT_CANDLE_STATE[type][side + "Op"]);
-          } else if (id.startsWith("volume-")) {
-            const side = id.split("-")[1];
-            pickers[id]?.setColor(DEFAULT_VOLUME_STATE[side], DEFAULT_VOLUME_STATE[side + "Op"]);
-          } else if (id.startsWith("fmt-")) {
-            pickers[id]?.setColor("#94a3b8", 75);
-          } else if (id === "screener-bg") {
-            pickers[id]?.setColor("#0d0f14", 100);
-          } else if (id === "screener-header") {
-            pickers[id]?.setColor("transparent", 100);
-          }
-        });
-
-        document.querySelectorAll(".theme-opt").forEach(o => {
-          o.classList.toggle("active", o.dataset.theme === "dark");
-        });
-
-        // Sync fresh default preferences to server so account state is updated
-        if (typeof syncPreferencesToServer === "function") {
-          syncPreferencesToServer();
-        }
-
-        if (typeof showToast === "function") {
-          showToast({ title: "Настройки", message: "Все настройки скринера и цветов сброшены по умолчанию", type: "info" });
-        }
-        
-        refreshCharts();
-        if (typeof rebuildList === "function") rebuildList();
-        setTimeout(() => {
+          localStorage.clear();
+          keysToKeep.forEach(item => localStorage.setItem(item.key, item.val));
           location.reload();
-        }, 300);
+        }
       };
     }
 
@@ -8806,11 +8615,8 @@ function updateScreenerHeaderColor(color, save = true) {
   updateScreenerBgColor(color, save);
 }
 
-let currentCanvasBgRgba = null;
-
 function updateBgColor(color, opacity = 100, save = true) {
   const rgba = hexToRgba(color, opacity);
-  currentCanvasBgRgba = rgba;
   document.documentElement.style.setProperty("--bg", rgba);
   document.documentElement.style.setProperty("--bg2", rgba);
 
@@ -8820,9 +8626,7 @@ function updateBgColor(color, opacity = 100, save = true) {
   }
 
   // Force redraw all charts if initialized
-  if (typeof drawChart === "function") {
-    requestAnimationFrame(drawChart);
-  }
+  if (typeof drawChart === "function") drawChart();
 
   if (typeof screenerView !== "undefined" && (screenerView === "multichart" || activeView === "formations")) {
     // Redraw all ChartInstances
@@ -8833,7 +8637,6 @@ function updateBgColor(color, opacity = 100, save = true) {
 }
 
 function getCanvasBgColor() {
-  if (currentCanvasBgRgba) return currentCanvasBgRgba;
   const color = localStorage.getItem("screener-bg-color") || "#0d0f14";
   const opacity = localStorage.getItem("screener-bg-opacity") || "100";
   return hexToRgba(color, opacity);
@@ -9230,23 +9033,23 @@ document.addEventListener("contextmenu", (e) => {
 });
 
 // ═══ Density Blacklist Config ═══
-const DEFAULT_DENSITY_BLACKLIST = [
-  // User Screenshot & Majors:
-  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-  "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TRXUSDT",
-  "DOTUSDT", "LTCUSDT", "BCHUSDT", "SUIUSDT", "HYPEUSDT",
-  "ASTERUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "ZECUSDT", "ETCUSDT",
-  "WLFIUSDT", "NEARUSDT", "ENAUSDT",
-  // Base tickers:
-  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "TRX",
-  "DOT", "LTC", "BCH", "SUI", "HYPE", "ASTER", "1000PEPE", "PEPE", "1000SHIB", "SHIB",
-  "ZEC", "ETC", "WLFI", "NEAR", "ENA",
-  // Stables:
+//
+// Two separate concerns that used to be one list:
+//
+// 1. DENSITY_NON_TRADABLE — instruments that are not crypto order-book plays at
+//    all (stablecoins, tokenized stocks, ETFs, commodities).  Always hidden,
+//    matched structurally so new tickers are covered too.
+// 2. DEFAULT_DENSITY_BLACKLIST — the *user's* starting hide list.  It is now
+//    empty: majors are the highest-quality densities on the board, and hiding
+//    BTC/ETH/SOL by default meant the map silently discarded its best signals.
+//    Anything the user wants gone can still be added from the UI.
+const DENSITY_NON_TRADABLE = [
+  // Stablecoins & fiat:
   "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "PYUSD",
   "USD1", "EUR1", "USDC1", "BTC1", "USTC", "USDD", "FRAX", "LUSD", "CRVUSD", "GUSD",
   "USDJ", "CUSD", "EUR", "GBP", "JPY", "AUD", "USD", "CHF", "TRY", "RUB", "BRL",
   "USDCUSDT", "BUSDUSDT", "FDUSDUSDT", "TUSDUSDT", "EURUSDT",
-  // Stocks & Equities (OKX, Gate, Bitget):
+  // Stocks & equities (OKX, Gate, Bitget tokenized markets):
   "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "COIN",
   "MSTR", "BAC", "AMD", "INTC", "PLTR", "BABA", "DIS", "PYPL", "UBER", "SPY",
   "QQQ", "IWM", "DIA", "V", "MA", "JPM", "WMT", "XOM", "CVX", "LLY",
@@ -9256,16 +9059,18 @@ const DEFAULT_DENSITY_BLACKLIST = [
   "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
   "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
   "AVGOX", "AAPLX", "TSLAX", "NVDAX", "MSFTX", "AMZNX", "GOOGX", "GOOGLX", "METAX",
-  // ETFs / Leveraged Index Funds:
+  // ETFs / leveraged index funds:
   "TQQQ", "SQQQ", "SPXL", "SPXS", "SOXL", "SOXS", "UVXY", "SVXY", "VXX",
   "FAS", "FAZ", "LABU", "LABD", "NUGT", "DUST", "JNUG", "JDST",
-  // Commodities & Indices:
+  // Commodities & indices:
   "XAU", "XAG", "GOLD", "SILVER", "OIL", "WTI", "BRENT", "COPPER", "NATGAS",
   "DOW", "SPX", "NDX", "US30", "US500", "USTECH", "DE40", "UK100", "JP225",
   "XAUT", "PAXG"
 ];
 
-const KNOWN_STOCK_SET = new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
+const DEFAULT_DENSITY_BLACKLIST = [];
+
+const KNOWN_STOCK_SET = new Set(DENSITY_NON_TRADABLE.map(c => c.toUpperCase()));
 
 function checkSingleStockClient(token) {
   if (!token) return false;
@@ -9278,7 +9083,7 @@ function checkSingleStockClient(token) {
     if (KNOWN_STOCK_SET.has(inner)) return true;
   }
 
-  for (const root of DEFAULT_DENSITY_BLACKLIST) {
+  for (const root of DENSITY_NON_TRADABLE) {
     if (root.length >= 3) {
       if (inner === root) return true;
       if (inner.startsWith(root) && inner.length <= root.length + 3) {
@@ -9290,13 +9095,45 @@ function checkSingleStockClient(token) {
   return false;
 }
 
+// Legacy profiles saved a hide list that contained every major coin, because
+// that used to be the shipped default.  Those are the strongest densities on
+// the board, so clear that exact legacy set once instead of silently hiding
+// them forever.  Anything the user added themselves is preserved.
+const LEGACY_DEFAULT_HIDDEN_MAJORS = new Set([
+  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+  "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TRXUSDT",
+  "DOTUSDT", "LTCUSDT", "BCHUSDT", "SUIUSDT", "HYPEUSDT",
+  "ASTERUSDT", "1000PEPEUSDT", "1000SHIBUSDT", "ZECUSDT", "ETCUSDT",
+  "WLFIUSDT", "NEARUSDT", "ENAUSDT",
+  "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "TRX",
+  "DOT", "LTC", "BCH", "SUI", "HYPE", "ASTER", "1000PEPE", "PEPE", "1000SHIB", "SHIB",
+  "ZEC", "ETC", "WLFI", "NEAR", "ENA",
+]);
+
 let densityBlacklistSet = (function() {
+  const MIGRATION_KEY = "density_blacklist_majors_cleared_v1";
   try {
     const saved = localStorage.getItem("density_blacklist_coins");
     if (saved) {
       const arr = JSON.parse(saved);
-      if (Array.isArray(arr)) return new Set(arr.map(c => String(c).trim().toUpperCase()));
+      if (Array.isArray(arr)) {
+        let set = new Set(arr.map(c => String(c).trim().toUpperCase()));
+        if (!localStorage.getItem(MIGRATION_KEY)) {
+          const cleaned = new Set();
+          for (const coin of set) {
+            if (LEGACY_DEFAULT_HIDDEN_MAJORS.has(coin)) continue;
+            cleaned.add(coin);
+          }
+          set = cleaned;
+          try {
+            localStorage.setItem("density_blacklist_coins", JSON.stringify(Array.from(set)));
+            localStorage.setItem(MIGRATION_KEY, "1");
+          } catch (_) {}
+        }
+        return set;
+      }
     }
+    localStorage.setItem(MIGRATION_KEY, "1");
   } catch(_) {}
   return new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
 })();
@@ -9340,11 +9177,18 @@ let densityBubbles = [];  // layout objects with {x,y,vx,vy,r,...}
 let densityFilter = "all";
 let densityMarket = "all";
 let densitySize = "all";
-let densitySort = "score"; // "score" | "size" | "dist"
+let densitySort = "score"; // "score" | "size" | "dist" | "age" | "confluence"
 let densitySearch = "";
-let densityMinUsd = 0; // show every wall the scanner publishes by default
-let densityMaxDistance = 3;
+let densityMinUsd = 0; // show every density the engine publishes by default
+// The engine publishes the full 0.03%–5% band.  Defaulting the client to 3%
+// used to silently discard the 3–5% levels that were already computed.
+let densityMaxDistance = 5;
 let densityMinAge = 0;
+// Relative-quality floor (0..10 rank).  0 = show everything admitted by the
+// server's own significance gates.
+let densityMinRank = 0;
+// Require the level to be defended on at least N exchanges.  1 = no requirement.
+let densityMinConfluence = 1;
 let densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
 let densityVisibleData = [];
 let densityHover = -1;
@@ -9708,11 +9552,22 @@ class ChartInstance {
     const clean = sanitizeCandle({ t: data[0], o: data[1], h: data[2], l: data[3], c: data[4], v: data[5] });
     if (!clean || !this.candles.length) return;
     const last = this.candles[this.candles.length - 1];
-    if (clean.t === last.t) Object.assign(last, clean);
-    else if (clean.t > last.t) {
+    const tfMs = TF_MS[this.tf] || 60000;
+    if (clean.t === last.t) {
+      Object.assign(last, clean);
+    } else if (clean.t > last.t) {
+      const gapBars = Math.round((clean.t - last.t) / tfMs) - 1;
+      if (gapBars > 0 && gapBars <= 25) {
+        for (let g = 1; g <= gapBars; g++) {
+          this.candles.push({ t: last.t + g * tfMs, o: last.c, h: last.c, l: last.c, c: last.c, v: 0 });
+        }
+      }
       this.candles.push(clean);
       if (this.candles.length > 1500) this.candles.shift();
-    } else return;
+    } else {
+      const target = this.candles.slice(-5).find(c => c.t === clean.t);
+      if (target) Object.assign(target, clean);
+    }
     this.headerPrice.textContent = fP(clean.c);
     this.dirty = true;
     this.refreshFormationLevels();
@@ -9721,19 +9576,16 @@ class ChartInstance {
 
   applyOfficialTick(data) {
     if (!Array.isArray(data) || !this.candles.length) return;
-    const t = +data[0], p = +data[1], hi = +data[2] || p, lo = +data[3] || p;
-    if (!(t > 0) || !(p > 0)) return;
-    const tfMs = TF_MS[this.tf] || 60000;
-    let last = this.candles[this.candles.length - 1];
-    if (t >= last.t + tfMs) {
-      last = { t: Math.floor(t / tfMs) * tfMs, o: +data[4] || p, h: hi, l: lo, c: p, v: 0 };
-      this.candles.push(last);
-      if (this.candles.length > 1500) this.candles.shift();
-    } else if (t >= last.t) {
+    const p = +data[1], hi = +data[2] || p, lo = +data[3] || p;
+    if (!(p > 0)) return;
+    const last = this.candles[this.candles.length - 1];
+    if (last) {
       last.c = p;
-      last.h = Math.max(last.h, hi, p);
-      last.l = Math.min(last.l, lo, p);
-    } else return;
+      if (p > last.h) last.h = p;
+      if (hi > last.h) last.h = hi;
+      if (p < last.l) last.l = p;
+      if (lo < last.l) last.l = lo;
+    }
     this.headerPrice.textContent = fP(p);
     this.dirty = true;
     this.refreshFormationLevels();
@@ -10165,17 +10017,14 @@ class ChartInstance {
       const getX = (idx) => (idx - viewStart) * candleWidth + candleWidth / 2;
       const N = this.candles.length;
 
-      // тФАтФА Pre-calculate and adjust Y label coordinates to prevent overlapping тФАтФАтФАтФА
+      // Pre-calculate and adjust Y label coordinates for horizontal levels to prevent overlapping
       this.levels.forEach(setup => {
-        if (setup.isTrendline) {
-          const currentPriceAtLine = setup.p1.price + (setup.p2.price - setup.p1.price) * ((N - 1) - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
-          setup.labelY = toY(currentPriceAtLine);
-        } else {
+        if (!setup.isTrendline) {
           setup.labelY = toY(setup.price);
         }
       });
 
-      const visibleLevels = this.levels.filter(setup => setup.labelY >= 2 && setup.labelY <= ch - 2);
+      const visibleLevels = this.levels.filter(setup => !setup.isTrendline && setup.labelY >= 2 && setup.labelY <= ch - 2);
       visibleLevels.sort((a, b) => a.labelY - b.labelY);
 
       const minSpacing = 16;
@@ -10222,19 +10071,7 @@ class ChartInstance {
           ctx.setLineDash([]);
           ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
 
-          // Draw price label at current price level of the trendline (at N - 1)
-          const currentPriceAtLine = setup.p1.price + (setup.p2.price - setup.p1.price) * ((N - 1) - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
-          const yLabel = setup.labelY;
-          if (yLabel >= 2 && yLabel <= ch - 2) {
-            const labelH = 15, labelW = PR - 6;
-            roundRect(ctx, PW + 3, yLabel - labelH / 2, labelW, labelH, 3);
-            ctx.fillStyle = lineColor;
-            ctx.fill();
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 8px Inter';
-            ctx.textAlign = 'center';
-            ctx.fillText(fP(currentPriceAtLine), PW + PR / 2, yLabel + 3);
-          }
+          // Trendline has no price label on scale
 
           // Draw touch circles for trendline
           if (setup.swingIndices) {
@@ -10473,91 +10310,12 @@ class ChartInstance {
     }
     ctx.restore();
 
-    // тФАтФА Draw Walls (Density) on Chart тФАтФА
-    let gridBadges = [];
-    if (false && chartDensityEnabled) {
-      const ticker = coins.get(this.ex + ":" + this.sym);
-      const activeBase = ticker ? ticker.base : this.sym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
-
-      const walls = densityData.filter(w => {
-        if (w.base !== activeBase) return false;
-        if (chartDensitySide !== "all" && w.side !== chartDensitySide) return false;
-        if (chartDensityMarket !== "all" && w.market !== chartDensityMarket) return false;
-        if (!chartDensityExes.has(w.ex)) return false;
-
-        const sizeType = getDensitySizeType(w);
-        if (!chartDensitySizes.has(sizeType)) return false;
-
-        return true;
-      });
-
-      if (walls.length > 0) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, PW, ch);
-        ctx.clip();
-
-        // Exchange abbreviation map for clearer labels
-        const EX_NAMES = {
-          BN: "Binance", BB: "Bybit", OX: "OKX", BG: "BingX",
-          KC: "KuCoin", BX: "Bitget", MX: "MEXC", GT: "Gate",
-          HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
-        };
-
-        for (const w of walls) {
-          const wy = toY(w.price);
-          if (wy < 0 || wy > ch) continue;
-
-          // Find x start position (based on firstSeenAt timestamp (exact time, not just candle index)
-          let startIdx = 0;
-          if (w.firstSeenAt && this.candles.length > 0) {
-            startIdx = getIdxFromTime(w.firstSeenAt, this.candles);
-          }
-          const startX = Math.max(0, (startIdx - s + futureGap) * candleWidth + candleWidth / 2);
-
-          const isBid = w.side === "bid";
-          const baseColor = isBid ? "rgb(38,201,122)" : "rgb(255,69,96)";
-
-          ctx.strokeStyle = baseColor;
-          ctx.lineWidth = Math.min(8, 2.0 + w.rtwi / 4);
-          ctx.lineCap = "round";
-
-          ctx.beginPath();
-          ctx.moveTo(startX, wy);
-          ctx.lineTo(PW, wy);
-          ctx.stroke();
-
-          // Print exchange + volume (e.g. Binance 2.5M) near the start
-          const exName = EX_NAMES[w.ex] || w.ex;
-          const volStr = (w.wallK >= 1000 ? (w.wallK / 1000).toFixed(1).replace(/\.0$/, "") + "M" : w.wallK + "K");
-          const label = exName + " " + volStr;
-          ctx.fillStyle = baseColor;
-          ctx.font = "bold 9px Inter";
-          ctx.textAlign = "left";
-          ctx.textBaseline = "bottom";
-
-          // Draw a little pill/background for label
-          const labelWidth = ctx.measureText(label).width + 10;
-          const labelHeight = 14;
-          ctx.fillStyle = isBid ? "rgba(38,201,122,0.15)" : "rgba(255,69,96,0.15)";
-          roundRect(ctx, Math.min(startX + 2, PW - labelWidth - 4), wy - labelHeight - 2, labelWidth, labelHeight, 3);
-          ctx.fill();
-
-          ctx.fillStyle = baseColor;
-          ctx.fillText(label, Math.min(startX + 7, PW - labelWidth), wy - 5);
-
-          // Save badge coordinate and info to draw on price scale later (outside of clip)
-          gridBadges.push({ y: wy, price: w.price, isBid, baseColorArr: isBid ? [38, 201, 122] : [255, 69, 96] });
-        }
-        ctx.restore();
-      }
-    }
-
+    // ── Draw Walls (Density) on Chart ──
     const densityTicker = coins.get(this.ex + ":" + this.sym);
     const densityBase = densityTicker
       ? densityTicker.base
       : this.sym.replace("USDT", "").replace("USD", "").replace("-", "").split(/[-_]/)[0];
-    gridBadges = drawDensityTimelineOnChart(ctx, {
+    const gridBadges = drawDensityTimelineOnChart(ctx, {
       candles: this.candles,
       base: densityBase,
       candleWidth,
@@ -11261,7 +11019,7 @@ setInterval(() => {
   if (Date.now() - densityLastUpdate > 15000) fetchWalls();
 }, 12000);
 
-// тФАтФА Filter тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ── Filter ───────────────────────────────────────────────────────────────────
 function passesDensityBaseFilters(d) {
     if (isBaseInDensityBlacklist(d.base, d.sym)) return false;
     if (densityFilter !== "all" && d.side !== densityFilter) return false;
@@ -11269,12 +11027,22 @@ function passesDensityBaseFilters(d) {
     if (!densityExFilter.has(d.ex)) return false;
     if ((Number(d.S) || 0) < densityMinUsd) return false;
     if ((Number(d.pct) || 0) > densityMaxDistance) return false;
-    if ((Number(d.age) || 0) < densityMinAge) return false;
+    if (getDensityLiveAgeSec(d) < densityMinAge) return false;
+    if (densityMinRank > 0 && getDensityRelativeRank(d) < densityMinRank) return false;
+    if (densityMinConfluence > 1 && (Number(d.confluence) || 1) < densityMinConfluence) return false;
     if (densitySearch) {
       const q = densitySearch.toLowerCase();
       if (!d.base.toLowerCase().includes(q) && !d.sym.toLowerCase().includes(q)) return false;
     }
     return true;
+}
+
+// Lifetime measured from firstSeenAt so it keeps counting between publishes,
+// instead of freezing at whatever `age` the last snapshot happened to carry.
+function getDensityLiveAgeSec(d) {
+  const seenAt = Number(d && d.firstSeenAt) || 0;
+  if (seenAt > 0) return Math.max(0, Math.round((Date.now() - seenAt) / 1000));
+  return Number(d && d.age) || 0;
 }
 
 function updateDensitySizeCounts(baseFiltered) {
@@ -11302,14 +11070,17 @@ function getFilteredDensity() {
   return baseFiltered.filter(d => passesDensitySizeFilter(d, densitySize));
 }
 
-// тФАтФА Layout: distribute badges radially by pct тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
+// ── Layout: distribute badges radially by pct ───────────────────────────────
 function layoutDensityBadges() {
   const filtered = getFilteredDensity();
   const sorters = {
-    score: (a, b) => (b.rtwi || 0) - (a.rtwi || 0) || (b.S || 0) - (a.S || 0),
+    score: (a, b) => getDensityScore(b) - getDensityScore(a) || (b.S || 0) - (a.S || 0),
     size: (a, b) => (b.S || 0) - (a.S || 0),
     dist: (a, b) => (a.pct || 0) - (b.pct || 0),
-    age: (a, b) => (b.age || 0) - (a.age || 0),
+    age: (a, b) => getDensityLiveAgeSec(b) - getDensityLiveAgeSec(a),
+    // Same price defended across venues is the strongest multi-exchange signal.
+    confluence: (a, b) => (Number(b.confluence) || 1) - (Number(a.confluence) || 1) ||
+      getDensityScore(b) - getDensityScore(a),
   };
   filtered.sort(sorters[densitySort] || sorters.score);
   // The server already applies anti-noise quality gates.  Keep every filtered
@@ -11518,8 +11289,7 @@ function drawDensityMap() {
 
     // Live lifetime: firstSeenAt keeps counting up while the wall exists,
     // unlike the stale `age` snapshot from the scanner.
-    const seenAt = Number(d.firstSeenAt) || 0;
-    const liveAgeSec = seenAt > 0 ? Math.max(0, Math.round((Date.now() - seenAt) / 1000)) : (Number(d.age) || 0);
+    const liveAgeSec = getDensityLiveAgeSec(d);
     let formatAge = "-";
     if (liveAgeSec > 0) {
       if (liveAgeSec < 60) formatAge = `${liveAgeSec} сек`;
@@ -11529,11 +11299,49 @@ function drawDensityMap() {
     }
     tipRows.push(["ВРЕМЯ ЖИЗНИ", formatAge, "#fbbf24"]);
 
+    // Значимость: композитный скор движка (0..10), а не абсолютные доллары.
+    const rankValue = getDensityRelativeRank(d);
+    tipRows.push([
+      "ЗНАЧИМОСТЬ",
+      `${rankValue}/10`,
+      rankValue >= 7 ? "#16c784" : (rankValue >= 5 ? "#fbbf24" : "#94a3b8"),
+    ]);
+
+    // Во сколько раз уровень крупнее соседних заявок в этом же стакане.
+    const dominance = Number(d.dominance);
+    if (Number.isFinite(dominance) && dominance > 0) {
+      tipRows.push(["КРУПНЕЕ СОСЕДНИХ", `×${dominance >= 10 ? Math.round(dominance) : dominance.toFixed(1)}`, "#7dd3fc"]);
+    }
+
+    // Сколько минут среднего оборота монеты нужно, чтобы съесть уровень.
+    const volMinutes = Number(d.volMinutes);
+    if (Number.isFinite(volMinutes) && volMinutes > 0) {
+      const minutesText = volMinutes >= 60
+        ? `${(volMinutes / 60).toFixed(1)} ч оборота`
+        : `${volMinutes < 1 ? volMinutes.toFixed(2) : volMinutes.toFixed(1)} мин оборота`;
+      tipRows.push(["ОБЪЁМ РЫНКА", minutesText, "#c084fc"]);
+    }
+
+    // Подтверждение на нескольких биржах — сильнейший сигнал: это не спуф.
+    const confluence = Number(d.confluence) || 1;
+    if (confluence > 1) {
+      tipRows.push(["ПОДТВЕРЖДЕНО БИРЖ", `${confluence}`, "#16c784"]);
+    }
+
     // Absorption: how much of the wall's peak size has been eaten.
-    const peakUsd = Number(d.maxSizeUsd) || 0;
-    if (peakUsd > Number(d.S) * 1.05) {
-      const eatenPct = Math.min(99, Math.round((1 - Number(d.S) / peakUsd) * 100));
+    const eatenFromServer = Number(d.eatenPct);
+    const peakUsd = Number(d.maxSizeUsd) || Number(d.peakUsd) || 0;
+    let eatenPct = null;
+    if (Number.isFinite(eatenFromServer) && eatenFromServer > 1) eatenPct = Math.min(99, Math.round(eatenFromServer));
+    else if (peakUsd > Number(d.S) * 1.05) eatenPct = Math.min(99, Math.round((1 - Number(d.S) / peakUsd) * 100));
+    if (eatenPct !== null && eatenPct > 0) {
       tipRows.push(["СЪЕДЕНО ОТ ПИКА", `${eatenPct}%`, eatenPct >= 50 ? "#ff6b81" : "#fbbf24"]);
+    }
+
+    // Refills: уровень восстанавливали после съедания — его реально защищают.
+    const refills = Number(d.refills) || 0;
+    if (refills > 0) {
+      tipRows.push(["ВОССТАНОВЛЕН", `${refills} раз`, "#16c784"]);
     }
 
     // Anti-spoof confirmations: scans in a row the wall survived.
@@ -11541,10 +11349,22 @@ function drawDensityMap() {
       tipRows.push(["ПОДТВЕРЖДЕНИЙ", `${d.confirmations} скан.`, "#a78bfa"]);
     }
 
-    // тФАтФА Tooltip
+    // Доля снятых (не исполненных) уровней по этому символу — риск спуфинга.
+    const pullRate = Number(d.pullRate);
+    if (Number.isFinite(pullRate) && pullRate > 0.45) {
+      tipRows.push(["СНИМАЮТ ЗАЯВКИ", `${Math.round(pullRate * 100)}%`, "#ff6b81"]);
+    }
+
+    // ── Tooltip
+    // The card is now fed by more signals than before, so cap the row count to
+    // keep it from growing past the canvas.  The first four rows are the fixed
+    // header block; the rest are ordered by how much they change a decision.
+    const MAX_TIP_ROWS = 10;
+    const visibleTipRows = tipRows.length > MAX_TIP_ROWS ? tipRows.slice(0, MAX_TIP_ROWS) : tipRows;
+
     // Math to get tip width (adaptive on mobile)
     const tipW = Math.min(230, densityW - 20);
-    const tipH = 62 + tipRows.length * 20;
+    const tipH = Math.min(densityH - 20, 62 + visibleTipRows.length * 20);
     let tipX, tipY;
     if (densityW <= 500) {
       // Mobile: center tooltip horizontally or keep safely within bounds
@@ -11593,7 +11413,7 @@ function drawDensityMap() {
 
     // Rows: market/volume/price rendered from the prebuilt list
     let currY = tipY + 50;
-    for (const [label, value, color] of tipRows) {
+    for (const [label, value, color] of visibleTipRows) {
       // The lifetime row is the key signal — draw it slightly larger.
       const isAgeRow = label === "ВРЕМЯ ЖИЗНИ";
       ctx.font = isAgeRow ? "600 12px Inter" : "11px Inter";
@@ -11621,7 +11441,9 @@ function drawDensityMap() {
 // тФАтФА Draw a single bubble badge тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function drawDensityBubble(ctx, d, x, y, isHover) {
   const isBid = d.side === "bid";
-  const scoreFactor = Math.min(1. + (d.rtwi || 5) / 30, 2.2);
+  // Bubble size tracks the engine's composite score (same 0..15 scale the old
+  // `rtwi` used), so geometry is unchanged.
+  const scoreFactor = Math.min(1. + (getDensityScore(d) || 5) / 30, 2.2);
   const baseR = Math.min(32, 24 + scoreFactor * 3); // Larger base radius to fit 3 lines
   const R = Math.round(isHover ? baseR + 4 : baseR);
   const bc = isBid ? [22, 199, 132] : [255, 69, 96];
@@ -11707,7 +11529,7 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
 function getDensityBubbleSprite(d) {
   const stableId = d.wallId || `${d.ex}:${d.sym}:${d.side}:${Number(d.price).toPrecision(8)}`;
   const scale = Math.min(2, window.devicePixelRatio || 1);
-  const key = `${stableId}|${d.wallK}|${Number(d.rtwi || 0).toFixed(1)}|${Number(d.pct || 0).toFixed(2)}|${scale}`;
+  const key = `${stableId}|${d.wallK}|${getDensityScore(d).toFixed(1)}|${Number(d.pct || 0).toFixed(2)}|${scale}`;
   const cached = densityBubbleSpriteCache.get(key);
   if (cached) return cached;
 
@@ -11940,6 +11762,8 @@ if (densitySearchInput) {
 const densityMinUsdInput = $("density-min-usd");
 const densityMaxDistanceInput = $("density-max-distance");
 const densityMinAgeInput = $("density-min-age");
+const densityMinRankInput = $("density-min-rank");
+const densityMinConfluenceInput = $("density-min-confluence");
 const densitySortInput = $("density-sort");
 const densityResetBtn = $("density-reset-btn");
 
@@ -11955,6 +11779,16 @@ if (densityMaxDistanceInput) densityMaxDistanceInput.addEventListener("change", 
 });
 if (densityMinAgeInput) densityMinAgeInput.addEventListener("change", e => {
   densityMinAge = Math.max(0, Number(e.target.value) || 0);
+  saveDensityFilters();
+  layoutDensityBadges();
+});
+if (densityMinRankInput) densityMinRankInput.addEventListener("change", e => {
+  densityMinRank = Math.max(0, Math.min(10, Number(e.target.value) || 0));
+  saveDensityFilters();
+  layoutDensityBadges();
+});
+if (densityMinConfluenceInput) densityMinConfluenceInput.addEventListener("change", e => {
+  densityMinConfluence = Math.max(1, Math.min(11, Number(e.target.value) || 1));
   saveDensityFilters();
   layoutDensityBadges();
 });
@@ -11978,6 +11812,8 @@ function saveDensityFilters() {
       densityMinUsd,
       densityMaxDistance,
       densityMinAge,
+      densityMinRank,
+      densityMinConfluence,
       densityExFilter: Array.from(densityExFilter)
     };
     localStorage.setItem("density_filters_v2", JSON.stringify(payload));
@@ -11998,6 +11834,18 @@ function loadDensityFilters() {
       if (typeof parsed.densityMinUsd === "number") densityMinUsd = parsed.densityMinUsd;
       if (typeof parsed.densityMaxDistance === "number") densityMaxDistance = parsed.densityMaxDistance;
       if (typeof parsed.densityMinAge === "number") densityMinAge = parsed.densityMinAge;
+      if (typeof parsed.densityMinRank === "number") densityMinRank = parsed.densityMinRank;
+      if (typeof parsed.densityMinConfluence === "number") densityMinConfluence = parsed.densityMinConfluence;
+
+      // Saved profiles from before the engine published the full 0.03–5% band
+      // pinned the client to 3%, which threw away levels the server had already
+      // computed. Lift that one legacy value to the full range exactly once.
+      const distanceMigrationKey = "density_max_distance_full_band_v1";
+      if (!localStorage.getItem(distanceMigrationKey)) {
+        if (densityMaxDistance === 3) densityMaxDistance = 5;
+        localStorage.setItem(distanceMigrationKey, "1");
+      }
+
       if (Array.isArray(parsed.densityExFilter)) {
         densityExFilter = new Set(parsed.densityExFilter);
 
@@ -12046,6 +11894,12 @@ function syncDensityFilterUI() {
   const minAgeInp = $("density-min-age");
   if (minAgeInp) minAgeInp.value = String(densityMinAge);
 
+  const minRankInp = $("density-min-rank");
+  if (minRankInp) minRankInp.value = String(densityMinRank);
+
+  const minConfluenceInp = $("density-min-confluence");
+  if (minConfluenceInp) minConfluenceInp.value = String(densityMinConfluence);
+
   const sortInp = $("density-sort");
   if (sortInp) sortInp.value = densitySort;
 
@@ -12059,8 +11913,11 @@ function resetDensityFilters() {
   densitySort = "score";
   densitySearch = "";
   densityMinUsd = 0;
-  densityMaxDistance = 3;
+  // Full band the engine publishes, not the old truncated 3%.
+  densityMaxDistance = 5;
   densityMinAge = 0;
+  densityMinRank = 0;
+  densityMinConfluence = 1;
   densityExFilter = new Set(["BN", "BB", "OX", "BG", "GT", "MX", "KC", "BX", "HT", "HL", "AD"]);
   syncDensityFilterUI();
   saveDensityFilters();
@@ -12184,9 +12041,13 @@ function initDensityBlacklistUI() {
 
   if (blResetDefault) {
     blResetDefault.addEventListener("click", () => {
+      // The shipped default is now empty: majors are the strongest densities on
+      // the board and are no longer hidden out of the box. Non-tradable
+      // instruments (stables, tokenized stocks, ETFs) are filtered structurally
+      // and never depend on this list.
       densityBlacklistSet = new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
       saveBlacklist();
-      showToast({ type: "success", title: "Черный список", message: "Восстановлен стандартный черный список", durationMs: 2500 });
+      showToast({ type: "success", title: "Черный список", message: "Восстановлены настройки по умолчанию — скрыты только стейблы и токенизированные акции", durationMs: 3000 });
     });
   }
 
@@ -16265,6 +16126,27 @@ function initNotificationsUI() {
     syncFormationUI();
     showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
   });
+
+  // Settings Apply button hook
+  const applyBtn = $("settings-apply-btn");
+  if (applyBtn) {
+    applyBtn.onclick = () => {
+      saveFormationAlertSettings(currentFormationAlertSettings);
+      showToast({ title: "Настройки сохранены", message: "Параметры уведомлений успешно применены", type: "success" });
+      if (typeof closeSettingsModal === "function") closeSettingsModal();
+    };
+  }
+
+  // Settings Reset button hook
+  const resetBtn = $("settings-reset-btn");
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+      saveFormationAlertSettings(currentFormationAlertSettings);
+      syncFormationUI();
+      showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
+    };
+  }
 
   // ═══ 24/7 Background Formation Alert Scanner Engine ═══
   const formationAlertCooldownMap = new Map();

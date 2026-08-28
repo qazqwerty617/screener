@@ -291,7 +291,6 @@ function buildRows(tickers, now = Date.now(), history = null) {
         ));
 
         const rKey = routeKey("spread", base, buy.ex, sell.ex);
-        const histPoints = history ? (history.get(rKey) || []).slice(-30).map(pt => pt[1]) : [];
 
         spreads.push({
           key: rKey, base, symbol: `${base}/USDT`,
@@ -304,7 +303,7 @@ function buildRows(tickers, now = Date.now(), history = null) {
           buyFunding: round(buy.funding, 6), sellFunding: round(sell.funding, 6),
           buyInterval: buy.interval, sellInterval: sell.interval,
           ageMs: freshness, quality, score: round(score, 1),
-          history: histPoints,
+          history: [],
           buyUrl: tradeUrl(buy.ex, buy.sym), sellUrl: tradeUrl(sell.ex, sell.sym),
         });
 
@@ -326,7 +325,6 @@ function buildRows(tickers, now = Date.now(), history = null) {
               25 + dailyBonus + fundingVolBonus + (long.executable && short.executable ? 8 : 0) - basisPenalty
             ));
             const fKey = routeKey("funding", base, long.ex, short.ex);
-            const fHistPoints = history ? (history.get(fKey) || []).slice(-30).map(pt => pt[1]) : [];
 
             funding.push({
               key: fKey, base, symbol: `${base}/USDT`,
@@ -342,7 +340,7 @@ function buildRows(tickers, now = Date.now(), history = null) {
               nextFunding: Math.min(long.nextFunding || Infinity, short.nextFunding || Infinity),
               ageMs: Math.max(long.ageMs, short.ageMs), quality: long.executable && short.executable ? "bbo" : "indicative",
               score: round(fundingScore, 1),
-              history: fHistPoints,
+              history: [],
               longUrl: tradeUrl(long.ex, long.sym), shortUrl: tradeUrl(short.ex, short.sym),
             });
           }
@@ -354,6 +352,17 @@ function buildRows(tickers, now = Date.now(), history = null) {
   // Sort by score (quality, volume and spread combined) and net yield
   spreads.sort((a, b) => b.score - a.score || b.net - a.net || b.liquidity - a.liquidity);
   funding.sort((a, b) => b.score - a.score || b.daily - a.daily || b.liquidity - a.liquidity);
+
+  // Attach sparkline points only for top active rows to avoid memory churn
+  if (history) {
+    for (const row of spreads.slice(0, 150)) {
+      row.history = (history.get(row.key) || []).slice(-30).map(pt => pt[1]);
+    }
+    for (const row of funding.slice(0, 150)) {
+      row.history = (history.get(row.key) || []).slice(-30).map(pt => pt[1]);
+    }
+  }
+
   return { spreads, funding, groups: groups.size };
 }
 
@@ -365,31 +374,31 @@ function createArbitrageEngine(tickers, exStatus) {
   function record(key, ts, value, buyPrice = 0, sellPrice = 0, gross = 0) {
     const points = history.get(key) || [];
     points.push([ts, value, buyPrice, sellPrice, gross]);
-    if (points.length > 900) points.splice(0, points.length - 900);
+    if (points.length > 60) points.splice(0, points.length - 60);
     history.set(key, points);
   }
 
   function refresh() {
     const generatedAt = Date.now();
     snapshot = { generatedAt, ...buildRows(tickers, generatedAt, history) };
-    for (const row of snapshot.spreads.slice(0, 1500)) {
+    for (const row of snapshot.spreads.slice(0, 150)) {
       record(row.key, generatedAt, row.net, row.buyAsk, row.sellBid, row.gross);
       // Bi-directional key for history query stability
       const altKey = `spread:${row.base}:${row.sellEx}:${row.buyEx}`;
       record(altKey, generatedAt, row.net, row.buyAsk, row.sellBid, row.gross);
     }
-    for (const row of snapshot.funding.slice(0, 1500)) {
+    for (const row of snapshot.funding.slice(0, 150)) {
       record(row.key, generatedAt, row.daily, row.longPrice, row.shortPrice, row.basis);
       const altKey = `funding:${row.base}:${row.shortEx}:${row.longEx}`;
       record(altKey, generatedAt, row.daily, row.longPrice, row.shortPrice, row.basis);
     }
     for (const [key, points] of history) {
-      if (!points.length || generatedAt - points[points.length - 1][0] > 7200000) history.delete(key);
+      if (!points.length || generatedAt - points[points.length - 1][0] > 3600000) history.delete(key);
     }
   }
 
   function getSnapshot() {
-    if (!snapshot.generatedAt || Date.now() - snapshot.generatedAt > 3500) refresh();
+    if (!snapshot.generatedAt || Date.now() - snapshot.generatedAt > 6000) refresh();
     const statuses = {};
     for (const code of Object.keys(EXCHANGES)) {
       const state = exStatus.get(code);
@@ -401,7 +410,7 @@ function createArbitrageEngine(tickers, exStatus) {
   function start() {
     if (timer) return;
     refresh();
-    timer = setInterval(refresh, 2000);
+    timer = setInterval(refresh, 5000);
     if (typeof timer.unref === "function") timer.unref();
   }
 

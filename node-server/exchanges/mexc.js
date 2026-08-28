@@ -85,7 +85,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         }
       } catch (_) {}
     };
-    setInterval(poll, 1000);
+    setInterval(poll, 15000);
   }
 
   function connectWs() {

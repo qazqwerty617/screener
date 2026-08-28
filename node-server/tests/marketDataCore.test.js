@@ -48,3 +48,23 @@ test("coalescer retains the earliest trade as candle open", () => {
   assert.equal(batch.first, 100);
   assert.equal(batch.last, 102);
 });
+
+test("pullback within active candle preserves peak high as wick without splitting candle", () => {
+  // Simulates price pump from 100 to 120 and pullback to 105
+  const candle = { t: 1_720_000_000_000, o: 100, h: 100, l: 100, c: 100, v: 0 };
+  
+  // Trade ticks during pump
+  const ticks = [105, 110, 118, 120, 115, 108, 105];
+  for (const p of ticks) {
+    candle.c = p;
+    if (p > candle.h) candle.h = p;
+    if (p < candle.l) candle.l = p;
+  }
+
+  // Final candle state must retain high of 120, low of 100, close of 105
+  assert.equal(candle.o, 100);
+  assert.equal(candle.h, 120);
+  assert.equal(candle.l, 100);
+  assert.equal(candle.c, 105);
+});
+

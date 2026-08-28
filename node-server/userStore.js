@@ -86,6 +86,87 @@ let authLogs = loadJSON(LOGS_FILE, []); // Array of log objects
   if (changed) saveJSON(SESSIONS_FILE, sessions);
 })();
 
+// Migrate & enrich user activity timestamps from sessions, logs, and preferences
+(function migrateUserActivity() {
+  let changed = false;
+  for (const [userId, user] of Object.entries(users)) {
+    if (!user || typeof user !== "object") continue;
+
+    // 1. Find most recent session activity
+    let latestSessionTime = 0;
+    for (const session of Object.values(sessions)) {
+      if (session && session.userId === userId) {
+        const renewed = Number(session.lastRenewedAt) || 0;
+        const created = Date.parse(session.createdAt || "") || 0;
+        const best = Math.max(renewed, created);
+        if (best > latestSessionTime) latestSessionTime = best;
+      }
+    }
+
+    // 2. Find most recent auth log activity
+    let latestLogTime = 0;
+    if (Array.isArray(authLogs)) {
+      for (const entry of authLogs) {
+        if (entry && (entry.userId === userId || entry.username === user.username || entry.query === user.email)) {
+          const t = Date.parse(entry.timestamp || "") || 0;
+          if (t > latestLogTime) latestLogTime = t;
+        }
+      }
+    }
+
+    // 3. Find most recent preference update
+    let latestPrefTime = 0;
+    if (user.preferences && user.preferences.updatedAt) {
+      latestPrefTime = Date.parse(user.preferences.updatedAt) || 0;
+    }
+
+    const bestRecentTime = Math.max(latestSessionTime, latestLogTime, latestPrefTime);
+
+    if (bestRecentTime > 0) {
+      const currentActiveMs = Date.parse(user.lastActive || "") || 0;
+      if (bestRecentTime > currentActiveMs) {
+        user.lastActive = new Date(bestRecentTime).toISOString();
+        changed = true;
+      }
+      const currentLoginMs = Date.parse(user.lastLogin || "") || 0;
+      if (bestRecentTime > currentLoginMs) {
+        user.lastLogin = new Date(bestRecentTime).toISOString();
+        changed = true;
+      }
+    }
+
+    // Fallback: if lastActive or lastLogin is still completely missing, default to createdAt
+    if (!user.lastActive) {
+      user.lastActive = user.createdAt || new Date().toISOString();
+      changed = true;
+    }
+    if (!user.lastLogin) {
+      user.lastLogin = user.createdAt || new Date().toISOString();
+      changed = true;
+    }
+  }
+
+  if (changed) saveJSON(USERS_FILE, users);
+})();
+
+let pendingUserSave = false;
+let userSaveTimer = null;
+
+function scheduleUsersSave() {
+  if (pendingUserSave) return;
+  pendingUserSave = true;
+  if (!userSaveTimer) {
+    userSaveTimer = setTimeout(() => {
+      pendingUserSave = false;
+      userSaveTimer = null;
+      saveJSON(USERS_FILE, users);
+    }, 15000);
+    if (userSaveTimer && typeof userSaveTimer.unref === "function") {
+      userSaveTimer.unref();
+    }
+  }
+}
+
 function logAuthEvent(eventData) {
   const logEntry = {
     id: crypto.randomBytes(8).toString("hex"),
@@ -304,6 +385,7 @@ function registerUser({ username, email, password, ip = "" }) {
   const userId = generateUserId();
   const { hash, salt, algorithm } = hashPassword(passwordText);
 
+  const nowIso = new Date().toISOString();
   const newUser = {
     id: userId,
     username: cleanUsername,
@@ -314,7 +396,10 @@ function registerUser({ username, email, password, ip = "" }) {
     authMethod: "login",
     role: "PRO Trader",
     plan: "free",
-    createdAt: new Date().toISOString(),
+    createdAt: nowIso,
+    lastActive: nowIso,
+    lastLogin: nowIso,
+    lastIp: ip,
     avatar: ""
   };
 
@@ -380,8 +465,13 @@ function loginUser({ emailOrUsername, password, ip = "" }) {
     foundUser.passwordHash = upgraded.hash;
     foundUser.salt = upgraded.salt;
     foundUser.passwordAlgorithm = upgraded.algorithm;
-    saveJSON(USERS_FILE, users);
   }
+
+  const nowIso = new Date().toISOString();
+  foundUser.lastLogin = nowIso;
+  foundUser.lastActive = nowIso;
+  if (ip) foundUser.lastIp = ip;
+  saveJSON(USERS_FILE, users);
 
   logAuthEvent({ event: "LOGIN_SUCCESS", userId: foundUser.id, username: foundUser.username, ip });
 
@@ -411,6 +501,7 @@ function telegramAuth(tgData, chatId = null, ip = "") {
 
   let isNew = false;
   let modified = false;
+  const nowIso = new Date().toISOString();
 
   if (!foundUser) {
     isNew = true;
@@ -430,7 +521,10 @@ function telegramAuth(tgData, chatId = null, ip = "") {
       authMethod: "telegram",
       role: "VIP Trader",
       plan: "free",
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      lastActive: nowIso,
+      lastLogin: nowIso,
+      lastIp: ip,
       avatar: tgData.photo_url || ""
     };
 
@@ -446,6 +540,11 @@ function telegramAuth(tgData, chatId = null, ip = "") {
       ip
     });
   } else {
+    foundUser.lastActive = nowIso;
+    foundUser.lastLogin = nowIso;
+    if (ip) foundUser.lastIp = ip;
+    modified = true;
+
     if (chatId && foundUser.telegramChatId !== String(chatId)) {
       foundUser.telegramChatId = String(chatId);
       foundUser.telegramLinked = true;
@@ -505,6 +604,10 @@ function getUserByToken(token) {
   const user = users[session.userId];
   if (!user) return null;
   if (user.blocked && (!user.blockExpiresAt || user.blockExpiresAt > now)) return null;
+
+  // Touch real-time user activity
+  touchUserActivity(session.userId);
+
   return sanitizeUser(user);
 }
 
@@ -879,9 +982,21 @@ function resetUserPassword(userId, newPassword) {
   return sanitizeUser(target);
 }
 
-function touchUserActivity(userId) {
+function touchUserActivity(userId, { isLogin = false, ip = "" } = {}) {
   if (!userId || !users[userId]) return;
-  users[userId].lastActive = new Date().toISOString();
+  const nowIso = new Date().toISOString();
+  users[userId].lastActive = nowIso;
+  if (isLogin || !users[userId].lastLogin) {
+    users[userId].lastLogin = nowIso;
+  }
+  if (ip) {
+    users[userId].lastIp = ip;
+  }
+  if (isLogin) {
+    saveJSON(USERS_FILE, users);
+  } else {
+    scheduleUsersSave();
+  }
 }
 
 function getAllUsersRaw() {

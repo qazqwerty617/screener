@@ -534,24 +534,33 @@ function getServerTickers() {
   return _serverTickers;
 }
 
+/**
+ * Strongest bid/ask density per symbol, keyed by uppercase symbol.
+ *
+ * Reads the density engine's published shape: `side` is "bid"/"ask" and `S` is
+ * the level size in USD. The previous version looked for `type: "BID"` and
+ * `usdValue`, fields the engine has never emitted, so it always returned empty.
+ */
 function getMarketWallsMap() {
   const wallsMap = new Map();
   try {
     const meta = global.__obsidianWallsMeta;
     if (meta && Array.isArray(meta.walls)) {
       for (const w of meta.walls) {
-        if (!w || !w.sym || !w.usdValue) continue;
-        const sym = w.sym.toUpperCase();
+        if (!w || !w.sym) continue;
+        const usd = Number(w.S);
+        if (!Number.isFinite(usd) || usd <= 0) continue;
+        const sym = String(w.sym).toUpperCase();
         let entry = wallsMap.get(sym);
         if (!entry) {
           entry = { bidWall: null, askWall: null };
           wallsMap.set(sym, entry);
         }
-        if (w.type === "BID" && (!entry.bidWall || w.usdValue > entry.bidWall.usdValue)) {
-          entry.bidWall = w;
-        }
-        if (w.type === "ASK" && (!entry.askWall || w.usdValue > entry.askWall.usdValue)) {
-          entry.askWall = w;
+        const record = { ...w, usdValue: usd };
+        if (w.side === "bid" && (!entry.bidWall || usd > entry.bidWall.usdValue)) {
+          entry.bidWall = record;
+        } else if (w.side === "ask" && (!entry.askWall || usd > entry.askWall.usdValue)) {
+          entry.askWall = record;
         }
       }
     }

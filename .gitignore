@@ -48,3 +48,10 @@ check_remote*.py
 deploy_remote*.py
 scratch_digest.py
 
+# Backups, snapshots, and security runtime files
+node-server/backups/
+node-server/security_banned_ips.json
+*.heapsnapshot
+go-scanner/scanner
+
+

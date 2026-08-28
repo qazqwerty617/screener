@@ -234,7 +234,7 @@ function buildMainMenu() {
   const now = Date.now();
   const dayAgo = now - 24 * 60 * 60 * 1000;
   const todayCount = allUsers.filter(u => new Date(u.createdAt).getTime() >= dayAgo).length;
-  const onlineCount = allUsers.filter(u => u.lastActive && (now - new Date(u.lastActive).getTime()) < 5 * 60 * 1000).length || Math.min(totalUsers, Math.floor(totalUsers * 0.1) + 1);
+  const onlineCount = allUsers.filter(u => (u.lastActive || u.lastLogin) && (now - new Date(u.lastActive || u.lastLogin).getTime()) < 5 * 60 * 1000).length;
 
   const todayRevenue = payments
     .filter(p => new Date(p.date).getTime() >= dayAgo && p.status === "success")
@@ -295,7 +295,7 @@ function buildUsersMenu() {
   const days7 = allUsers.filter(u => new Date(u.createdAt).getTime() >= days7Ago).length;
   const days30 = allUsers.filter(u => new Date(u.createdAt).getTime() >= days30Ago).length;
 
-  const online = allUsers.filter(u => u.lastActive && (now - new Date(u.lastActive).getTime()) < 5 * 60 * 1000).length || Math.min(total, 1);
+  const online = allUsers.filter(u => (u.lastActive || u.lastLogin) && (now - new Date(u.lastActive || u.lastLogin).getTime()) < 5 * 60 * 1000).length;
   const proCount = allUsers.filter(u => u.plan === "pro").length;
   const freeCount = total - proCount;
   const blockedCount = allUsers.filter(u => u.blocked).length;
@@ -354,8 +354,11 @@ function buildUserCard(user) {
   const daysLeft = isPro ? (user.proExpiresAt ? Math.max(0, Math.ceil((user.proExpiresAt - Date.now()) / (1000 * 60 * 60 * 24))) + " дн." : "∞") : "—";
 
   const regDate = formatDate(user.createdAt);
-  const lastActiveText = formatTimeAgo(user.lastActive || user.createdAt);
-  const lastLoginText = formatDateTime(user.lastActive || user.createdAt);
+  const lastActiveIso = user.lastActive || user.lastLogin || user.createdAt;
+  const lastLoginIso = user.lastLogin || user.lastActive || user.createdAt;
+  const isOnline = lastActiveIso && (Date.now() - new Date(lastActiveIso).getTime() < 5 * 60 * 1000);
+  const lastActiveText = isOnline ? "🟢 <b>Онлайн (сейчас)</b>" : formatTimeAgo(lastActiveIso);
+  const lastLoginText = formatDateTime(lastLoginIso);
   const tgBotEmoji = (user.telegramLinked || user.telegramChatId) ? "✅" : "❌";
   const tgBotText = (user.telegramLinked || user.telegramChatId) ? "Подключён" : "Не подключён";
 
@@ -1505,7 +1508,11 @@ async function handleAdminCallbackQuery(query) {
       let text = `<b>📋 Детали пользователя #${userId}</b>\n\nИнформационная запись создана.`;
       if (action === "notes") text = `<b>📝 Заметки пользователя #${userId}</b>\n\nЗаметок пока нет. Напишите текст в чат для сохранения.`;
       if (action === "pays") text = `<b>💳 Платежи пользователя #${userId}</b>\n\nУспешных транзакций: 0`;
-      if (action === "act") text = `<b>📋 Журнал активности #${userId}</b>\n\n• Последний вход: ${formatDateTime(user.lastActive || user.createdAt)}`;
+      if (action === "act") {
+        const lastActiveIso = user.lastActive || user.lastLogin || user.createdAt;
+        const lastLoginIso = user.lastLogin || user.lastActive || user.createdAt;
+        text = `<b>📋 Журнал активности #${userId}</b>\n\n• <b>Последняя активность:</b> ${formatDateTime(lastActiveIso)} (${formatTimeAgo(lastActiveIso)})\n• <b>Последний вход:</b> ${formatDateTime(lastLoginIso)}\n• <b>Регистрация:</b> ${formatDateTime(user.createdAt)}`;
+      }
 
       await editAdminMessage(messageId, text, {
         inline_keyboard: [[{ text: "👤 Вернуться к пользователю", callback_data: `adm:user:view:${userId}` }]]
@@ -2303,5 +2310,6 @@ module.exports = {
   createSupportTicket,
   handleAdminMessageText,
   handleAdminCallbackQuery,
-  notifyBugReport
+  notifyBugReport,
+  buildUserCard
 };
