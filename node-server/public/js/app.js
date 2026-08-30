@@ -15644,7 +15644,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
   }
 }
 
-function sendTelegramAlert(message, photoDataUrl = null) {
+async function sendTelegramAlert(message, photoDataUrl = null) {
   const activeUser = window.currentUser || {};
   const inputEl = document.getElementById("pd-tg-chat-id-input");
   const inputChatId = (inputEl && inputEl.value.trim()) || "";
@@ -15665,29 +15665,34 @@ function sendTelegramAlert(message, photoDataUrl = null) {
     ? { chatId: chatId || undefined, caption: message, photoDataUrl }
     : { chatId: chatId || undefined, message };
 
-
-  fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body)
-  }).then(async r => {
+  try {
+    const r = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    });
     const d = await r.json().catch(() => ({}));
-    if (hasPhoto && (!r.ok || !d.success)) {
-      // Retry immediately as plain text if photo request was rejected or failed
-      fetch("/api/notifications/telegram", {
+    if (r.ok && (d.success || d.messageId)) {
+      return { success: true, chatId: d.chatId || chatId, messageId: d.messageId };
+    }
+    if (hasPhoto) {
+      // Fallback text if photo upload fails
+      const r2 = await fetch("/api/notifications/telegram", {
         method: "POST",
         headers,
         body: JSON.stringify({ chatId: chatId || undefined, message })
-      }).catch(() => {});
+      });
+      const d2 = await r2.json().catch(() => ({}));
+      if (r2.ok && (d2.success || d2.messageId)) {
+        return { success: true, chatId: d2.chatId || chatId, messageId: d2.messageId };
+      }
+      return { success: false, error: d2.error || d.error || "Не удалось отправить сообщение в Telegram" };
     }
-  }).catch(err => {
+    return { success: false, error: d.error || "Не удалось отправить сообщение в Telegram" };
+  } catch (err) {
     console.error("[TELEGRAM ALERT ERROR]", err);
-    fetch("/api/notifications/telegram", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ chatId: chatId || undefined, message })
-    }).catch(() => {});
-  });
+    return { success: false, error: err.message || "Ошибка соединения с сервером" };
+  }
 }
 
 
@@ -16628,6 +16633,13 @@ function initNotificationsUI() {
     const setToastModal = $("fmt-modal-toast-enabled");
 
 
+    const tgChatInput = $("fmt-tg-chat-id-input");
+    if (tgChatInput) {
+      const activeUser = window.currentUser || {};
+      const savedTgId = localStorage.getItem("obsidian_tg_chat_id") || activeUser.telegramChatId || activeUser.telegramId || "";
+      if (savedTgId && !tgChatInput.value) tgChatInput.value = savedTgId;
+    }
+
     if (setSound) setSound.checked = !!s.soundEnabled;
     if (setToast) setToast.checked = !!s.toastEnabled;
     if (setTgModal) setTgModal.checked = !!s.tgEnabled;
@@ -16743,16 +16755,20 @@ function initNotificationsUI() {
     }
 
     const telegramMsg =
-      `Сигнал формации: Наклонный уровень (Тест)\n` +
-      `• Монета: ${sym.toUpperCase()} (${exFull})\n` +
-      `• Таймфрейм: ${tf}\n` +
-      `• Касания: 3 касания\n` +
-      `• Дистанция: 0.28% до наклонки\n` +
+      `⚡ <b>Сигнал формации: Наклонный уровень (Тест)</b>\n\n` +
+      `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+      `• <b>Таймфрейм:</b> ${tf}\n` +
+      `• <b>Касания:</b> 3 касания\n` +
+      `• <b>Дистанция:</b> 0.28% до наклонки\n` +
       `─────────────────────────\n` +
-      `Obsidian Screener`;
+      `⚡ <b>Obsidian Screener</b>`;
 
-    sendTelegramAlert(telegramMsg, photoDataUrl);
-    showToast({ title: "Telegram", message: "Тестовое сообщение отправлено в Telegram!", type: "success" });
+    const res = await sendTelegramAlert(telegramMsg, photoDataUrl);
+    if (res && res.success) {
+      showToast({ title: "Telegram", message: `Тестовое сообщение отправлено в Telegram (Chat: ${res.chatId || "подключен"})!`, type: "success" });
+    } else {
+      showToast({ title: "Ошибка Telegram", message: (res && res.error) || "Не удалось отправить сообщение в Telegram. Проверьте Chat ID", type: "error" });
+    }
   }
 
   $("btn-test-sound")?.addEventListener("click", triggerTestAlert);
@@ -16761,6 +16777,12 @@ function initNotificationsUI() {
 
   // Formation Modal Save button
   $("btn-save-formation-alerts")?.addEventListener("click", () => {
+    const tgInput = $("fmt-tg-chat-id-input");
+    if (tgInput && tgInput.value.trim()) {
+      localStorage.setItem("obsidian_tg_chat_id", tgInput.value.trim());
+      const pdTg = $("pd-tg-chat-id-input");
+      if (pdTg) pdTg.value = tgInput.value.trim();
+    }
     const customInput = $("fmt-blacklist-custom");
     if (customInput) {
       currentFormationAlertSettings.blacklistCustom = customInput.value.trim();

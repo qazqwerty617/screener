@@ -2835,11 +2835,12 @@ app.post("/api/bug-report", express.json({
   }
 });
 
-function sendTextMessage(token, chatId, text, res) {
+function sendTextMessage(token, chatId, text, res, disableHtmlRetry = false) {
   const postData = JSON.stringify({
-    chat_id: chatId,
-    text: text,
-    parse_mode: "HTML"
+    chat_id: String(chatId),
+    text: String(text),
+    parse_mode: disableHtmlRetry ? undefined : "HTML",
+    disable_web_page_preview: true
   });
 
   const options = {
@@ -2861,10 +2862,15 @@ function sendTextMessage(token, chatId, text, res) {
         const parsed = JSON.parse(body);
         if (parsed.ok) {
           console.log(`[TELEGRAM ALERT SENT] Chat: ${chatId}`);
-          return res.json({ success: true, messageId: parsed.result?.message_id });
+          return res.json({ success: true, chatId, messageId: parsed.result?.message_id });
+        }
+        // If HTML parsing failed, retry once as plain text
+        if (!disableHtmlRetry && parsed.description && /parse entities|can't parse/i.test(parsed.description)) {
+          const plain = text.replace(/<[^>]*>/g, "");
+          return sendTextMessage(token, chatId, plain, res, true);
         }
         console.warn(`[TELEGRAM ALERT FAIL] Chat: ${chatId}, Error: ${parsed.description}`);
-        return res.status(400).json({ error: parsed.description || "Telegram API error" });
+        return res.status(400).json({ error: parsed.description || "Telegram API error", chatId });
       } catch (_) {
         return res.status(500).json({ error: "Failed to parse Telegram response" });
       }
@@ -2880,25 +2886,40 @@ function sendTextMessage(token, chatId, text, res) {
   reqTg.end();
 }
 
-app.post("/api/notifications/telegram", express.json(), (req, res) => {
-  setPublicCors(req, res);
-  const { chatId, message, botToken } = req.body || {};
-  const token = botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
+function resolveTelegramTargetChatId(req) {
+  const bodyChatId = req.body && req.body.chatId ? String(req.body.chatId).trim() : "";
+  if (bodyChatId) return bodyChatId;
 
-  let targetChatId = (chatId && String(chatId).trim()) || "";
-  if (!targetChatId) {
-    const authHeader = req.headers.authorization || "";
-    const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
-    if (bearerToken) {
-      const user = userStore.getUserByToken(bearerToken);
-      if (user && (user.telegramChatId || user.telegramId || user.tgChatId || user.chatId)) {
-        targetChatId = String(user.telegramChatId || user.telegramId || user.tgChatId || user.chatId).trim();
+  const authHeader = req.headers && req.headers.authorization ? req.headers.authorization : "";
+  const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+  if (bearerToken && typeof userStore.getUserByToken === "function") {
+    const user = userStore.getUserByToken(bearerToken);
+    if (user && (user.telegramChatId || user.telegramId || user.tgChatId || user.chatId)) {
+      return String(user.telegramChatId || user.telegramId || user.tgChatId || user.chatId).trim();
+    }
+  }
+
+  // Check all users in userStore for linked Telegram ID
+  if (typeof userStore.getAllUsersRaw === "function") {
+    const rawUsers = Object.values(userStore.getAllUsersRaw() || {});
+    for (const u of rawUsers) {
+      if (u && (u.telegramChatId || u.telegramId)) {
+        return String(u.telegramChatId || u.telegramId).trim();
       }
     }
   }
-  if (!targetChatId) {
-    targetChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
-  }
+
+  const adminId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
+  if (adminId) return adminId;
+
+  return "";
+}
+
+app.post("/api/notifications/telegram", express.json(), (req, res) => {
+  setPublicCors(req, res);
+  const { message, botToken } = req.body || {};
+  const token = botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
+  const targetChatId = resolveTelegramTargetChatId(req);
 
   if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
   if (!targetChatId) return res.status(400).json({ error: "Chat ID не указан. Подключите бота или введите ваш Telegram Chat ID" });
@@ -2913,23 +2934,9 @@ app.post("/api/notifications/telegram", express.json(), (req, res) => {
 
 app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), async (req, res) => {
   setPublicCors(req, res);
-  const { chatId, caption, photoDataUrl, botToken } = req.body || {};
+  const { caption, photoDataUrl, botToken } = req.body || {};
   const token = botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
-
-  let targetChatId = (chatId && String(chatId).trim()) || "";
-  if (!targetChatId) {
-    const authHeader = req.headers.authorization || "";
-    const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
-    if (bearerToken) {
-      const user = userStore.getUserByToken(bearerToken);
-      if (user && (user.telegramChatId || user.telegramId || user.tgChatId || user.chatId)) {
-        targetChatId = String(user.telegramChatId || user.telegramId || user.tgChatId || user.chatId).trim();
-      }
-    }
-  }
-  if (!targetChatId) {
-    targetChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
-  }
+  const targetChatId = resolveTelegramTargetChatId(req);
 
   if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
   if (!targetChatId) return res.status(400).json({ error: "Chat ID не указан. Подключите бота или введите ваш Telegram Chat ID" });
@@ -2938,7 +2945,6 @@ app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), a
   if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
     return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
   }
-
 
   if (!photoDataUrl || typeof photoDataUrl !== "string" || !photoDataUrl.includes(";base64,")) {
     return sendTextMessage(token, targetChatId, caption, res);
@@ -2971,7 +2977,7 @@ app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), a
     const parsed = await tgRes.json();
     if (parsed.ok) {
       console.log(`[TELEGRAM PHOTO SENT] Chat: ${targetChatId}`);
-      return res.json({ success: true, messageId: parsed.result?.message_id });
+      return res.json({ success: true, chatId: targetChatId, messageId: parsed.result?.message_id });
     }
 
     console.warn(`[TELEGRAM PHOTO FAIL] Chat: ${targetChatId}, Error: ${parsed.description}`);
@@ -3684,56 +3690,6 @@ server.listen(PORT, () => {
       }
     }
   }
-
-  app.post("/api/notifications/telegram", express.json(), (req, res) => {
-    setPublicCors(req, res);
-    const { chatId, message, botToken } = req.body || {};
-    const token = botToken || process.env.TELEGRAM_BOT_TOKEN;
-    if (!chatId || !message) return res.status(400).json({ error: "chatId and message are required" });
-    if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
-
-    if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(chatId)) {
-      return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
-    }
-
-    const postData = JSON.stringify({
-      chat_id: chatId,
-      text: message,
-      parse_mode: "HTML"
-    });
-
-    const options = {
-      hostname: "api.telegram.org",
-      port: 443,
-      path: `/bot${token}/sendMessage`,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(postData)
-      }
-    };
-
-    const reqTg = https.request(options, (resTg) => {
-      let body = "";
-      resTg.on("data", (chunk) => body += chunk);
-      resTg.on("end", () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.ok) return res.json({ success: true, messageId: parsed.result?.message_id });
-          return res.status(400).json({ error: parsed.description || "Telegram API error" });
-        } catch (_) {
-          return res.status(500).json({ error: "Failed to parse Telegram response" });
-        }
-      });
-    });
-
-    reqTg.on("error", (err) => {
-      return res.status(500).json({ error: err.message || "Network error" });
-    });
-
-    reqTg.write(postData);
-    reqTg.end();
-  });
 
   // 24/7 Server-Side Offline Alert Engine (Operates 24/7 with Ultra-HD Charts even when user screener tabs are closed)
   if (alertEngine && typeof alertEngine.init === "function") {
