@@ -997,7 +997,10 @@
     candleWidth: 12,
     isDragging: false,
     dragStartX: 0,
+    dragStartY: 0,
     dragStartOffset: 0,
+    dragStartMinP: 0,
+    dragStartMaxP: 0,
     isDraggingYScale: false,
     yScaleStartY: 0,
     yScaleStartMinP: 0,
@@ -1607,7 +1610,10 @@
 
       chartState.isDragging = true;
       chartState.dragStartX = e.clientX;
+      chartState.dragStartY = e.clientY;
       chartState.dragStartOffset = chartState.scrollOffset;
+      chartState.dragStartMinP = chartState.currentMinP;
+      chartState.dragStartMaxP = chartState.currentMaxP;
       canvas.style.cursor = "grabbing";
     });
 
@@ -1674,7 +1680,16 @@
 
       if (chartState.isDragging) {
         const dx = e.clientX - chartState.dragStartX;
+        const dy = e.clientY - chartState.dragStartY;
         chartState.scrollOffset = chartState.dragStartOffset - dx;
+
+        // 2D chart movement — move chart freely vertically up & down
+        const pSpan = chartState.dragStartMaxP - chartState.dragStartMinP;
+        if (pSpan > 0 && PRICE_H > 0) {
+          const dPrice = (dy / PRICE_H) * pSpan;
+          chartState.customMinP = chartState.dragStartMinP + dPrice;
+          chartState.customMaxP = chartState.dragStartMaxP + dPrice;
+        }
         renderInteractiveChart(canvas);
       } else {
         // Cursor appearance
@@ -1733,15 +1748,10 @@
       renderInteractiveChart(canvas);
     });
 
-    canvas.addEventListener("dblclick", (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const RIGHT_MARGIN = 75;
-      if (mouseX >= rect.width - RIGHT_MARGIN) {
-        chartState.customMinP = null;
-        chartState.customMaxP = null;
-        renderInteractiveChart(canvas);
-      }
+    canvas.addEventListener("dblclick", () => {
+      chartState.customMinP = null;
+      chartState.customMaxP = null;
+      renderInteractiveChart(canvas);
     });
 
     canvas.addEventListener("wheel", (e) => {
