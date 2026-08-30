@@ -3983,6 +3983,9 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 #bt-draw-tools { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 34px; padding: 6px 4px; border: 1px solid rgba(160,124,255,.16); border-radius: 8px; background: linear-gradient(180deg,rgba(94,58,238,.16),rgba(18,20,30,.96) 18%,rgba(18,20,30,.92)); backdrop-filter: blur(14px); box-shadow: 0 14px 32px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.05); user-select: none; }
 #bt-draw-tools .dt-btn { color: var(--tool-accent,var(--t3)); }
 #bt-draw-tools .dt-btn.on { color: #fff; }
+#j-draw-tools { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 34px; padding: 6px 4px; border: 1px solid rgba(160,124,255,.16); border-radius: 8px; background: linear-gradient(180deg,rgba(94,58,238,.16),rgba(18,20,30,.96) 18%,rgba(18,20,30,.92)); backdrop-filter: blur(14px); box-shadow: 0 14px 32px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.05); user-select: none; }
+#j-draw-tools .dt-btn { color: var(--tool-accent,var(--t3)); }
+#j-draw-tools .dt-btn.on { color: #fff; background: rgba(94,58,238,.35); border: 1px solid rgba(160,124,255,.4); }
 .bt-color-cycle span { width: 11px; height: 11px; border-radius: 50%; background: var(--bt-active-color,#8b5cf6); box-shadow: 0 0 7px var(--bt-active-color,#8b5cf6); }
 .bt-loader { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; background: rgba(13,15,20,.9); color: var(--t2); font-size: 11px; }
 .bt-loader[hidden], .bt-result[hidden] { display: none; }

@@ -405,26 +405,31 @@
         const xEnd = isOpen
           ? Math.max(xStart + 16, xForIndex(currentCandleIdx))
           : Math.max(xStart + 16, xForIndex(lastExit.index));
-        const zoneLeft = Math.min(xStart, xEnd);
-        const zoneRight = Math.max(xStart, xEnd);
+        const zoneLeft = xStart;
+        const zoneRight = width;
         const zoneTop = Math.min(yEntry, yMark);
         const zoneBottom = Math.max(yEntry, yMark);
         const zoneW = Math.max(16, zoneRight - zoneLeft);
         const zoneH = Math.max(4, zoneBottom - zoneTop);
 
-        // ── 1.1 FILLED TRADE ZONE (Зеленый при прибыли/в сторону позиции, красный при убытке) ──
+        // ── 1.1 FILLED TRADE ZONE (Во всю длину направо до ценовой шкалы) ──
         ctx.save();
         ctx.fillStyle = zoneFillColor;
         ctx.fillRect(zoneLeft, zoneTop, zoneW, zoneH);
 
-        // Border around the trade zone
+        // Пунктирные линии только сверху и снизу (боковые вертикальные пунктиры убраны)
         ctx.strokeStyle = zoneBorderColor;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 1.2;
         ctx.setLineDash([4, 3]);
-        ctx.strokeRect(zoneLeft, zoneTop, zoneW, zoneH);
+        ctx.beginPath();
+        ctx.moveTo(zoneLeft, zoneTop);
+        ctx.lineTo(zoneRight, zoneTop);
+        ctx.moveTo(zoneLeft, zoneBottom);
+        ctx.lineTo(zoneRight, zoneBottom);
+        ctx.stroke();
         ctx.restore();
 
-        // Hit region for deleting closed trade by clicking anywhere on the zone
+        // Hit region for trade zone
         state.hitRegions.push({
           type: "zone",
           cycleKey,
@@ -439,22 +444,11 @@
         // ── 1.2 TRAJECTORY CONNECTING LINE (От входа до выхода/текущей цены) ──
         ctx.save();
         ctx.strokeStyle = pnlColor;
-        ctx.lineWidth = 1.3;
-        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([3, 3]);
         ctx.beginPath();
         ctx.moveTo(xStart, yEntry);
         ctx.lineTo(xEnd, yMark);
-        ctx.stroke();
-        ctx.restore();
-
-        // ── 1.3 TVX GUIDELINE TO PRICE SCALE ──
-        ctx.save();
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.45)"; // Sky blue
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(xStart, yEntry);
-        ctx.lineTo(width, yEntry);
         ctx.stroke();
         ctx.restore();
 

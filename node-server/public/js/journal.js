@@ -1008,8 +1008,264 @@
     currentMaxP: 0,
     mouseX: -1,
     mouseY: -1,
-    canvas: null
+    canvas: null,
+    tool: "none",
+    drawings: [],
+    draft: null,
+    drawingPhase: 0,
+    dragDrawing: null,
+    hoverDrawingIdx: -1,
+    brushWidth: 2,
+    toolColors: {
+      "h-ray": "#a78bfa",
+      "line": "#38bdf8",
+      "rect": "#facc15",
+      "brush": "#4ade80",
+      "ruler": "#fb923c",
+      "fibgrid": "#f472b6"
+    }
   };
+
+  function loadJournalDrawings(tradeId) {
+    if (!tradeId) return [];
+    try {
+      const raw = localStorage.getItem("crypto_j_drawings_" + tradeId);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveJournalDrawings(tradeId, drawings) {
+    if (!tradeId) return;
+    try {
+      if (drawings && drawings.length) {
+        localStorage.setItem("crypto_j_drawings_" + tradeId, JSON.stringify(drawings));
+      } else {
+        localStorage.removeItem("crypto_j_drawings_" + tradeId);
+      }
+    } catch {}
+  }
+
+  function setJournalTool(tool) {
+    if (tool === chartState.tool && tool !== "none") tool = "none";
+    chartState.tool = tool;
+    chartState.draft = null;
+    chartState.drawingPhase = 0;
+    document.querySelectorAll(".j-dt-btn[data-j-tool]").forEach(b => {
+      b.classList.toggle("on", b.dataset.jTool === tool);
+    });
+    if (chartState.canvas) {
+      renderInteractiveChart(chartState.canvas);
+    }
+  }
+
+  function jScreenFromPoint(pt, candles, state, minP, pRange, PRICE_H, TOP_MARGIN) {
+    if (!pt) return { x: 0, y: 0 };
+    let idx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < candles.length; i++) {
+      const d = Math.abs(candles[i].t - pt.t);
+      if (d < bestDist) {
+        bestDist = d;
+        idx = i;
+      }
+    }
+    if (idx < 0) idx = 0;
+    const x = idx * state.candleWidth - state.scrollOffset + state.candleWidth / 2;
+    const y = TOP_MARGIN + (1 - (pt.p - minP) / pRange) * PRICE_H;
+    return { x, y };
+  }
+
+  function jPointFromMouse(e, canvas, rect, candles, state, minP, pRange, PRICE_H, TOP_MARGIN) {
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const p = state.currentMaxP - ((mouseY - TOP_MARGIN) / PRICE_H) * pRange;
+    const candleIdx = Math.max(0, Math.min(candles.length - 1, Math.round((mouseX + state.scrollOffset - state.candleWidth / 2) / state.candleWidth)));
+    const t = candles[candleIdx]?.t || 0;
+    return { t, p: +p.toFixed(6) };
+  }
+
+  function jHitDrawing(drawing, px, py, candles, state, minP, pRange, PRICE_H, TOP_MARGIN) {
+    if (!drawing?.a) return null;
+    const p1 = jScreenFromPoint(drawing.a, candles, state, minP, pRange, PRICE_H, TOP_MARGIN);
+    if (Math.hypot(px - p1.x, py - p1.y) <= 10) return "p1";
+    if (drawing.type === "h-ray") {
+      if (px >= p1.x && Math.abs(py - p1.y) <= 8) return "move";
+      return null;
+    }
+    if (drawing.b) {
+      const p2 = jScreenFromPoint(drawing.b, candles, state, minP, pRange, PRICE_H, TOP_MARGIN);
+      if (Math.hypot(px - p2.x, py - p2.y) <= 10) return "p2";
+      if (drawing.type === "line" || drawing.type === "ruler") {
+        const dx = p2.x - p1.x, dy = p2.y - p1.y;
+        const len = dx * dx + dy * dy;
+        const dist = len === 0 ? Math.hypot(px - p1.x, py - p1.y) :
+          Math.hypot(px - (p1.x + Math.max(0, Math.min(1, ((px - p1.x) * dx + (py - p1.y) * dy) / len)) * dx),
+                     py - (p1.y + Math.max(0, Math.min(1, ((px - p1.x) * dx + (py - p1.y) * dy) / len)) * dy));
+        if (dist <= 8) return "move";
+      } else if (drawing.type === "rect") {
+        const rx = Math.min(p1.x, p2.x), ry = Math.min(p1.y, p2.y);
+        const rw = Math.abs(p2.x - p1.x), rh = Math.abs(p2.y - p1.y);
+        if (px >= rx - 4 && px <= rx + rw + 4 && py >= ry - 4 && py <= ry + rh + 4) return "move";
+      } else if (drawing.type === "fibgrid") {
+        const rx = Math.min(p1.x, p2.x), rw = Math.abs(p2.x - p1.x);
+        if (px >= rx - 8 && px <= rx + rw + 16) {
+          for (const lev of [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1]) {
+            const ly = p1.y + (p2.y - p1.y) * lev;
+            if (Math.abs(py - ly) <= 6) return "move";
+          }
+        }
+      }
+    }
+    if (drawing.type === "brush" && drawing.points?.length) {
+      for (let i = 0; i < drawing.points.length; i++) {
+        const pt = jScreenFromPoint(drawing.points[i], candles, state, minP, pRange, PRICE_H, TOP_MARGIN);
+        if (Math.hypot(px - pt.x, py - pt.y) <= 8) return "move";
+      }
+    }
+    return null;
+  }
+
+  function drawJournalDrawings(ctx, drawings, candles, state, minP, pRange, PRICE_H, TOP_MARGIN, CHART_W, formatAxisP) {
+    if (!drawings || !drawings.length) return;
+    drawings.forEach(d => {
+      if (!d || !d.a) return;
+      ctx.save();
+      const col = d.color || "#38bdf8";
+      ctx.strokeStyle = col;
+      ctx.fillStyle = col;
+      ctx.lineWidth = 1.4;
+
+      const p1 = jScreenFromPoint(d.a, candles, state, minP, pRange, PRICE_H, TOP_MARGIN);
+
+      if (d.type === "h-ray") {
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(CHART_W, p1.y);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(p1.x, p1.y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Right axis price badge
+        ctx.save();
+        const tagH = 16, tagW = 66;
+        const tagX = CHART_W + 4, tagY = p1.y - tagH / 2;
+        ctx.fillStyle = "#151722";
+        ctx.fillRect(tagX, tagY, tagW, tagH);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(tagX, tagY, tagW, tagH);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 9px monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(formatAxisP(d.a.p), tagX + tagW / 2, p1.y);
+        ctx.restore();
+      } else if (d.type === "brush" && d.points?.length) {
+        ctx.lineWidth = d.lineWidth || 2;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        d.points.forEach((pt, i) => {
+          const s = jScreenFromPoint(pt, candles, state, minP, pRange, PRICE_H, TOP_MARGIN);
+          if (i === 0) ctx.moveTo(s.x, s.y);
+          else ctx.lineTo(s.x, s.y);
+        });
+        ctx.stroke();
+      } else if (d.b) {
+        const p2 = jScreenFromPoint(d.b, candles, state, minP, pRange, PRICE_H, TOP_MARGIN);
+        if (d.type === "line") {
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(p1.x, p1.y, 3.5, 0, Math.PI * 2);
+          ctx.arc(p2.x, p2.y, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (d.type === "rect") {
+          const rx = Math.min(p1.x, p2.x);
+          const ry = Math.min(p1.y, p2.y);
+          const rw = Math.abs(p2.x - p1.x);
+          const rh = Math.abs(p2.y - p1.y);
+          ctx.save();
+          ctx.globalAlpha = 0.12;
+          ctx.fillRect(rx, ry, rw, rh);
+          ctx.globalAlpha = 0.85;
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.restore();
+        } else if (d.type === "ruler") {
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+          const change = d.a.p > 0 ? ((d.b.p - d.a.p) / d.a.p * 100) : 0;
+          const bars = Math.round(Math.abs(p2.x - p1.x) / state.candleWidth);
+          const label = `${change >= 0 ? "+" : ""}${change.toFixed(2)}% · ${bars} св.`;
+          ctx.font = "bold 9.5px Inter";
+          const tw = ctx.measureText(label).width;
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          ctx.save();
+          ctx.fillStyle = "rgba(18, 20, 30, 0.94)";
+          ctx.fillRect(midX - tw / 2 - 6, midY - 18, tw + 12, 18);
+          ctx.strokeStyle = col;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(midX - tw / 2 - 6, midY - 18, tw + 12, 18);
+          ctx.fillStyle = col;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(label, midX, midY - 9);
+          ctx.restore();
+        } else if (d.type === "fibgrid") {
+          const xMin = Math.min(p1.x, p2.x);
+          const xMax = Math.max(p1.x, p2.x);
+          const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+          levels.forEach(lev => {
+            const ly = p1.y + (p2.y - p1.y) * lev;
+            ctx.save();
+            ctx.globalAlpha = lev === 0 || lev === 1 ? 0.9 : 0.5;
+            ctx.setLineDash(lev === 0 || lev === 1 ? [] : [3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(xMin, ly);
+            ctx.lineTo(xMax, ly);
+            ctx.stroke();
+            ctx.font = "8.5px Inter";
+            ctx.textAlign = "left";
+            ctx.fillText(String(lev), xMax + 4, ly + 3);
+            ctx.restore();
+          });
+        }
+      }
+      ctx.restore();
+    });
+  }
+
+  function setupJournalDrawToolbar() {
+    document.querySelectorAll(".j-dt-btn[data-j-tool]").forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        setJournalTool(btn.dataset.jTool);
+      };
+    });
+    const clearBtn = document.getElementById("j-clear-draw");
+    if (clearBtn) {
+      clearBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (!chartState.drawings.length) return;
+        if (confirm("Очистить все рисунки на этом графике?")) {
+          chartState.drawings = [];
+          if (chartState.trade) {
+            saveJournalDrawings(chartState.trade.id, []);
+          }
+          renderInteractiveChart(chartState.canvas);
+        }
+      };
+    }
+  }
 
   async function openTradeChartModal(tradeId) {
     const trade = trades.find(t => t.id === tradeId);
@@ -1024,6 +1280,11 @@
 
     chartState.canvas = canvas;
     chartState.trade = trade;
+    chartState.drawings = loadJournalDrawings(trade.id);
+    chartState.draft = null;
+    chartState.drawingPhase = 0;
+    chartState.dragDrawing = null;
+    setJournalTool("none");
 
     // Executions are attached to one round trip by the server aggregator.
     const relatedExecs = (Array.isArray(trade.executions) ? trade.executions : []).map(item => ({
@@ -1182,11 +1443,147 @@
     if (canvas._hasInteractiveEvents) return;
     canvas._hasInteractiveEvents = true;
 
+    setupJournalDrawToolbar();
+
+    canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const RIGHT_MARGIN = 75;
+      const CHART_W = rect.width - RIGHT_MARGIN;
+      const H = rect.height;
+      const BOTTOM_MARGIN = 30, TOP_MARGIN = 15;
+      const PRICE_H = (H - BOTTOM_MARGIN - TOP_MARGIN) * 0.82;
+      const candles = chartState.candles || [];
+      const minP = chartState.currentMinP;
+      const pRange = (chartState.currentMaxP - minP) || 1;
+
+      // If drafting a drawing -> cancel draft
+      if (chartState.drawingPhase > 0 || chartState.draft) {
+        chartState.draft = null;
+        chartState.drawingPhase = 0;
+        setJournalTool("none");
+        renderInteractiveChart(canvas);
+        return;
+      }
+
+      // Check if right-clicking an existing drawing -> delete it
+      if (mouseX < CHART_W) {
+        for (let i = chartState.drawings.length - 1; i >= 0; i--) {
+          const hit = jHitDrawing(chartState.drawings[i], mouseX, mouseY, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN);
+          if (hit) {
+            chartState.drawings.splice(i, 1);
+            if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
+            renderInteractiveChart(canvas);
+            return;
+          }
+        }
+      }
+    });
+
     canvas.addEventListener("mousedown", (e) => {
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
       const RIGHT_MARGIN = 75;
       const CHART_W = rect.width - RIGHT_MARGIN;
+      const H = rect.height;
+      const BOTTOM_MARGIN = 30, TOP_MARGIN = 15;
+      const PRICE_H = (H - BOTTOM_MARGIN - TOP_MARGIN) * 0.82;
+      const candles = chartState.candles || [];
+      const minP = chartState.currentMinP;
+      const pRange = (chartState.currentMaxP - minP) || 1;
+
+      if (e.button !== 0) return;
+
+      // ── DRAWING TOOLS ACTIVE ──────────────────────────────────────────────
+      if (chartState.tool && chartState.tool !== "none" && mouseX < CHART_W) {
+        const pt = jPointFromMouse(e, canvas, rect, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN);
+        const tool = chartState.tool;
+
+        if (tool === "h-ray") {
+          chartState.drawings.push({
+            type: "h-ray",
+            color: chartState.toolColors["h-ray"],
+            a: pt,
+            b: { ...pt }
+          });
+          if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
+          setJournalTool("none");
+          renderInteractiveChart(canvas);
+          return;
+        }
+
+        if (tool === "brush") {
+          chartState.draft = {
+            type: "brush",
+            color: chartState.toolColors["brush"],
+            lineWidth: chartState.brushWidth || 2,
+            a: pt,
+            points: [pt]
+          };
+          chartState.drawingPhase = 1;
+          renderInteractiveChart(canvas);
+          return;
+        }
+
+        if (tool === "ruler") {
+          chartState.draft = {
+            type: "ruler",
+            color: chartState.toolColors["ruler"],
+            a: pt,
+            b: { ...pt }
+          };
+          chartState.drawingPhase = 1;
+          renderInteractiveChart(canvas);
+          return;
+        }
+
+        // 2-point tools: line, rect, fibgrid
+        if (chartState.drawingPhase === 0) {
+          chartState.draft = {
+            type: tool,
+            color: chartState.toolColors[tool],
+            a: pt,
+            b: { ...pt }
+          };
+          chartState.drawingPhase = 1;
+          renderInteractiveChart(canvas);
+          return;
+        } else {
+          chartState.draft.b = pt;
+          chartState.drawings.push({ ...chartState.draft });
+          if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
+          chartState.draft = null;
+          chartState.drawingPhase = 0;
+          setJournalTool("none");
+          renderInteractiveChart(canvas);
+          return;
+        }
+      }
+
+      // ── CURSOR MODE (tool === "none") ─────────────────────────────────────
+      // Check if clicking on an existing drawing handle or body to drag/move it
+      if (chartState.tool === "none" && mouseX < CHART_W) {
+        for (let i = chartState.drawings.length - 1; i >= 0; i--) {
+          const hit = jHitDrawing(chartState.drawings[i], mouseX, mouseY, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN);
+          if (hit) {
+            const d = chartState.drawings[i];
+            const pt = jPointFromMouse(e, canvas, rect, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN);
+            chartState.dragDrawing = {
+              idx: i,
+              handle: hit,
+              startPoint: pt,
+              a: { ...d.a },
+              b: d.b ? { ...d.b } : null,
+              points: d.points ? d.points.map(p => ({ ...p })) : null
+            };
+            canvas.style.cursor = "grabbing";
+            return;
+          }
+        }
+      }
 
       // Click on Price Scale -> drag to expand / compress vertically
       if (mouseX >= CHART_W) {
@@ -1210,6 +1607,48 @@
       chartState.mouseY = e.clientY - rect.top;
       const RIGHT_MARGIN = 75;
       const CHART_W = rect.width - RIGHT_MARGIN;
+      const H = rect.height;
+      const BOTTOM_MARGIN = 30, TOP_MARGIN = 15;
+      const PRICE_H = (H - BOTTOM_MARGIN - TOP_MARGIN) * 0.82;
+      const candles = chartState.candles || [];
+      const minP = chartState.currentMinP;
+      const pRange = (chartState.currentMaxP - minP) || 1;
+
+      // Dragging an existing drawing
+      if (chartState.dragDrawing) {
+        const drag = chartState.dragDrawing;
+        const d = chartState.drawings[drag.idx];
+        const pt = jPointFromMouse(e, canvas, rect, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN);
+        if (drag.handle === "p1") {
+          d.a = pt;
+        } else if (drag.handle === "p2") {
+          d.b = pt;
+        } else {
+          const dt = pt.t - drag.startPoint.t;
+          const dp = pt.p - drag.startPoint.p;
+          d.a = { ...drag.a, t: drag.a.t + dt, p: drag.a.p + dp };
+          if (d.b) d.b = { ...drag.b, t: drag.b.t + dt, p: drag.b.p + dp };
+          if (d.points) d.points = drag.points.map(p => ({ ...p, t: p.t + dt, p: p.p + dp }));
+        }
+        canvas.style.cursor = "grabbing";
+        renderInteractiveChart(canvas);
+        return;
+      }
+
+      // In progress drawing draft
+      if (chartState.draft) {
+        const pt = jPointFromMouse(e, canvas, rect, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN);
+        if (chartState.draft.type === "brush") {
+          const last = chartState.draft.points[chartState.draft.points.length - 1];
+          if (!last || last.t !== pt.t || Math.abs(last.p - pt.p) > 1e-6) {
+            chartState.draft.points.push(pt);
+          }
+        } else {
+          chartState.draft.b = pt;
+        }
+        renderInteractiveChart(canvas);
+        return;
+      }
 
       if (chartState.isDraggingYScale) {
         const dy = e.clientY - chartState.yScaleStartY;
@@ -1228,10 +1667,20 @@
         chartState.scrollOffset = chartState.dragStartOffset - dx;
         renderInteractiveChart(canvas);
       } else {
-        if (chartState.mouseX >= CHART_W) {
+        // Cursor appearance
+        if (chartState.tool && chartState.tool !== "none") {
+          canvas.style.cursor = "crosshair";
+        } else if (chartState.mouseX >= CHART_W) {
           canvas.style.cursor = "ns-resize";
         } else {
-          canvas.style.cursor = "crosshair";
+          let isOverDrawing = false;
+          for (let i = chartState.drawings.length - 1; i >= 0; i--) {
+            if (jHitDrawing(chartState.drawings[i], chartState.mouseX, chartState.mouseY, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN)) {
+              isOverDrawing = true;
+              break;
+            }
+          }
+          canvas.style.cursor = isOverDrawing ? "pointer" : "crosshair";
         }
         if (chartState.mouseX >= 0 && chartState.mouseX <= rect.width && chartState.mouseY >= 0 && chartState.mouseY <= rect.height) {
           renderInteractiveChart(canvas);
@@ -1240,6 +1689,21 @@
     });
 
     window.addEventListener("mouseup", () => {
+      if (chartState.dragDrawing) {
+        if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
+        chartState.dragDrawing = null;
+      }
+
+      if (chartState.tool === "brush" && chartState.draft) {
+        if (chartState.draft.points && chartState.draft.points.length > 1) {
+          chartState.drawings.push({ ...chartState.draft });
+          if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
+        }
+        chartState.draft = null;
+        chartState.drawingPhase = 0;
+        setJournalTool("none");
+      }
+
       if (chartState.isDragging || chartState.isDraggingYScale) {
         chartState.isDragging = false;
         chartState.isDraggingYScale = false;
@@ -1250,6 +1714,7 @@
           canvas.style.cursor = "crosshair";
         }
       }
+      renderInteractiveChart(canvas);
     });
 
     canvas.addEventListener("mouseleave", () => {
@@ -1887,6 +2352,11 @@
       });
     }
 
+    // ── RENDER JOURNAL DRAWING TOOLS (lines, rays, rect, brush, ruler, fib) ──
+    const allDrawings = [...(chartState.drawings || [])];
+    if (chartState.draft) allDrawings.push(chartState.draft);
+    drawJournalDrawings(ctx, allDrawings, candles, chartState, minP, pRange, PRICE_H, TOP_MARGIN, CHART_W, formatAxisP);
+
     // Watermark Top Right
     ctx.fillStyle = "rgba(255,255,255,0.06)";
     ctx.font = "bold 14px Inter";
@@ -1920,17 +2390,6 @@
       ctx.font = "10px monospace";
       ctx.textAlign = "center";
       ctx.fillText(hoverP.toFixed(hoverP > 10 ? 2 : 4), CHART_W + 36, mY + 4);
-
-      // Hovered Candle Info Top Left
-      const hoveredCandleIdx = Math.floor((mX + chartState.scrollOffset) / chartState.candleWidth);
-      const hoveredCandle = candles[hoveredCandleIdx];
-
-      if (hoveredCandle) {
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.font = "11px Inter";
-        ctx.textAlign = "left";
-        ctx.fillText(`O: $${hoveredCandle.o}  H: $${hoveredCandle.h}  L: $${hoveredCandle.l}  C: $${hoveredCandle.c}`, 15, TOP_MARGIN + 15);
-      }
     }
   }
 

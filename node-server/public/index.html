@@ -27,7 +27,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/css/app.css?v=1006" />
+    <link rel="stylesheet" href="/css/app.css?v=1007" />
     <link rel="stylesheet" href="/css/arbitrage.css?v=2" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=2" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
@@ -1744,8 +1744,66 @@
                 <!-- LEFT: Interactive Chart -->
                 <div style="flex:1; min-width:0; position:relative; background:#0b0e14; border-right:1px solid rgba(255,255,255,0.08);">
                     <canvas id="journal-trade-candle-canvas" style="width:100%; height:100%; cursor:crosshair;"></canvas>
-                    <div style="position:absolute; top:8px; left:10px; font-size:10px; color:rgba(255,255,255,0.35); pointer-events:none;">
-                        💡 ЛКМ — перемещение | Колесико — масштаб
+                    <!-- Journal Draw Tools (matching main screener) -->
+                    <div id="j-draw-tools" aria-label="Инструменты разметки">
+                        <button class="dt-btn j-dt-btn on" data-j-tool="none" title="Курсор и перемещение (V)">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                                <line x1="8" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                                <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                                <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                            </svg>
+                        </button>
+                        <button class="dt-btn j-dt-btn" data-j-tool="h-ray" title="Горизонтальный луч">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <circle cx="3" cy="8" r="1.2" stroke="currentColor" stroke-width="1.2" fill="none" />
+                                <line x1="4.5" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.2" />
+                            </svg>
+                        </button>
+                        <button class="dt-btn j-dt-btn" data-j-tool="line" title="Линия (L)">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <circle cx="3" cy="13" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                                <circle cx="13" cy="3" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                                <line x1="3.7" y1="12.3" x2="12.3" y2="3.7" stroke="currentColor" stroke-width="1.2" />
+                            </svg>
+                        </button>
+                        <button class="dt-btn j-dt-btn" data-j-tool="rect" title="Прямоугольник">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <rect x="3" y="4.5" width="10" height="7" rx="1" stroke="currentColor" stroke-width="1.2" />
+                            </svg>
+                        </button>
+                        <button class="dt-btn j-dt-btn" data-j-tool="brush" title="Кисть (B)">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <path d="M12 2L14 4L5 13H3V11L12 2Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+                                <path d="M10 4L12 6" stroke="currentColor" stroke-width="1.2" />
+                                <path d="M3 11C3 11 3.5 12 4.5 13C5.5 14 5.5 14 5.5 14" stroke="currentColor" stroke-width="1.2" />
+                            </svg>
+                        </button>
+                        <button class="dt-btn j-dt-btn" data-j-tool="ruler" title="Линейка">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <rect x="2" y="5" width="12" height="6" rx="1" transform="rotate(-45 8 8)" stroke="currentColor" stroke-width="1.2" fill="none" />
+                                <line x1="6" y1="6" x2="7" y2="7" stroke="currentColor" stroke-width="1" />
+                                <line x1="8" y1="8" x2="9" y2="9" stroke="currentColor" stroke-width="1" />
+                                <line x1="10" y1="10" x2="11" y2="11" stroke="currentColor" stroke-width="1" />
+                            </svg>
+                        </button>
+                        <button class="dt-btn j-dt-btn" data-j-tool="fibgrid" title="Коррекция Фибоначчи">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <line x1="2" y1="4" x2="11" y2="4" stroke="currentColor" stroke-width="1.2" />
+                                <line x1="2" y1="7" x2="14" y2="7" stroke="currentColor" stroke-width="1.2" />
+                                <line x1="2" y1="10" x2="12" y2="10" stroke="currentColor" stroke-width="1.2" />
+                                <line x1="2" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.2" />
+                                <circle cx="12" cy="4" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                                <circle cx="14" cy="7" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                                <circle cx="2" cy="13" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                            </svg>
+                        </button>
+                        <div class="dt-sep"></div>
+                        <button class="dt-btn j-dt-btn del" id="j-clear-draw" title="Очистить рисунки (Del)">
+                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+                                <path d="M3 4H13M6 4V2.5H10V4M5.5 4L6 13H10L10.5 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                        </button>
                     </div>
                     <div id="j-chart-controls" style="position:absolute; bottom:38px; right:85px; display:flex; gap:4px; background:rgba(15,23,42,0.85); padding:3px 6px; border-radius:5px; border:1px solid rgba(255,255,255,0.12); z-index:10;">
                         <button id="j-chart-reset-btn" class="j-btn" style="font-size:10px; padding:2px 6px;">Сброс</button>
@@ -3075,12 +3133,12 @@
     <div id="toast-container" class="toast-container"></div>
 
     <script src="/js/formationEngine.js?v=2008"></script>
-    <script src="/js/tradeOverlay.js?v=2012"></script>
+    <script src="/js/tradeOverlay.js?v=2013"></script>
     <script src="/js/app.js?v=2016"></script>
     <script src="/js/arbitrage.js?v=2008"></script>
     <script src="/js/arbitrage-pro.js?v=2008"></script>
     <script src="/js/backtest.js?v=2008"></script>
-    <script src="/js/journal.js?v=2012"></script>
+    <script src="/js/journal.js?v=2013"></script>
 </body>
 
 </html>
