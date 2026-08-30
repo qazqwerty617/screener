@@ -31,6 +31,8 @@ function generateUsersExcel(usersMap) {
     "Дата окончания подписки",
     "Дата регистрации",
     "Последняя активность",
+    "Последний вход",
+    "IP адрес",
     "Telegram-бот подключён",
     "Метки",
     "Количество платежей",
@@ -58,6 +60,8 @@ function generateUsersExcel(usersMap) {
     const expireDateStr = isPro ? (u.proExpiresAt ? new Date(u.proExpiresAt).toLocaleString("ru-RU") : "Бессрочно") : "—";
     const regDateStr = u.createdAt ? new Date(u.createdAt).toLocaleString("ru-RU") : "—";
     const lastActiveStr = u.lastActive ? new Date(u.lastActive).toLocaleString("ru-RU") : "—";
+    const lastLoginStr = u.lastLogin ? new Date(u.lastLogin).toLocaleString("ru-RU") : "—";
+    const ipStr = u.lastIp || "—";
     const tgLinkedStr = (u.telegramLinked || u.telegramChatId) ? "Да" : "Нет";
     const tagsStr = Array.isArray(u.tags) ? u.tags.join(", ") : "";
     const tgHandle = u.telegramUsername ? `@${u.telegramUsername.replace(/^@/, "")}` : (u.telegramId ? `id${u.telegramId}` : "—");
@@ -79,6 +83,8 @@ function generateUsersExcel(usersMap) {
       expireDateStr,
       regDateStr,
       lastActiveStr,
+      lastLoginStr,
+      ipStr,
       tgLinkedStr,
       tagsStr,
       payCount,

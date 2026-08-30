@@ -160,7 +160,7 @@ function scheduleUsersSave() {
       pendingUserSave = false;
       userSaveTimer = null;
       saveJSON(USERS_FILE, users);
-    }, 15000);
+    }, 5000);
     if (userSaveTimer && typeof userSaveTimer.unref === "function") {
       userSaveTimer.unref();
     }
@@ -571,7 +571,7 @@ function telegramAuth(tgData, chatId = null, ip = "") {
 }
 
 // Validate session token with 365-day sliding renewal
-function getUserByToken(token) {
+function getUserByToken(token, { ip = "" } = {}) {
   if (typeof token !== "string" || token.length < 32 || token.length > 256) return null;
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
   let sessionKey = tokenHash;
@@ -606,7 +606,7 @@ function getUserByToken(token) {
   if (user.blocked && (!user.blockExpiresAt || user.blockExpiresAt > now)) return null;
 
   // Touch real-time user activity
-  touchUserActivity(session.userId);
+  touchUserActivity(session.userId, { ip });
 
   return sanitizeUser(user);
 }
@@ -982,17 +982,119 @@ function resetUserPassword(userId, newPassword) {
   return sanitizeUser(target);
 }
 
-function touchUserActivity(userId, { isLogin = false, ip = "" } = {}) {
+// ── Real-Time Online Socket Registry ──
+const activeSocketsByUserId = new Map(); // userId -> Set<ws>
+const activeGuestSockets = new Set();    // Set<ws>
+
+function registerActiveSocket(userId, ws, ip = "") {
+  if (!ws) return;
+  const cleanIp = ip ? String(ip).replace(/^::ffff:/, "") : "";
+  if (userId && users[userId]) {
+    activeGuestSockets.delete(ws);
+    let set = activeSocketsByUserId.get(userId);
+    if (!set) {
+      set = new Set();
+      activeSocketsByUserId.set(userId, set);
+    }
+    set.add(ws);
+    touchUserActivity(userId, { ip: cleanIp });
+  } else {
+    activeGuestSockets.add(ws);
+  }
+}
+
+function unregisterActiveSocket(userId, ws) {
+  if (!ws) return;
+  activeGuestSockets.delete(ws);
+  if (userId) {
+    const set = activeSocketsByUserId.get(userId);
+    if (set) {
+      set.delete(ws);
+      if (set.size === 0) activeSocketsByUserId.delete(userId);
+    }
+    if (users[userId]) {
+      users[userId].lastActive = new Date().toISOString();
+      scheduleUsersSave();
+    }
+  } else {
+    for (const [uId, set] of activeSocketsByUserId.entries()) {
+      if (set.has(ws)) {
+        set.delete(ws);
+        if (set.size === 0) activeSocketsByUserId.delete(uId);
+        if (users[uId]) {
+          users[uId].lastActive = new Date().toISOString();
+          scheduleUsersSave();
+        }
+      }
+    }
+  }
+}
+
+function isUserOnline(userId) {
+  if (!userId || !users[userId]) return false;
+  const set = activeSocketsByUserId.get(userId);
+  if (set && set.size > 0) return true;
+  const user = users[userId];
+  const lastTime = Date.parse(user.lastActive || user.lastLogin || "") || 0;
+  if (!lastTime) return false;
+  return (Date.now() - lastTime) < 5 * 60 * 1000;
+}
+
+function getOnlineStats() {
+  const all = Object.values(users);
+  const onlineUsersCount = all.filter(u => isUserOnline(u.id)).length;
+  for (const ws of activeGuestSockets) {
+    if (!ws || ws.readyState !== 1) activeGuestSockets.delete(ws);
+  }
+  const onlineGuestsCount = activeGuestSockets.size;
+  return {
+    onlineUsersCount,
+    onlineGuestsCount,
+    totalOnline: onlineUsersCount + onlineGuestsCount
+  };
+}
+
+function getUserAuthLogs(userId, limit = 5) {
+  if (!Array.isArray(authLogs) || !userId) return [];
+  const u = users[userId];
+  const uname = u ? u.username : "";
+  return authLogs
+    .filter(e => e && (e.userId === userId || (uname && e.username === uname)))
+    .slice(0, limit);
+}
+
+function touchUserActivity(userId, { isLogin = false, ip = "", forceSave = false } = {}) {
   if (!userId || !users[userId]) return;
-  const nowIso = new Date().toISOString();
-  users[userId].lastActive = nowIso;
-  if (isLogin || !users[userId].lastLogin) {
-    users[userId].lastLogin = nowIso;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const user = users[userId];
+
+  // Check if this constitutes a new visit / session start:
+  // - Explicit login (isLogin === true)
+  // - No lastLogin recorded yet
+  // - Inactivity for more than 30 minutes since last recorded activity
+  const prevActiveMs = Date.parse(user.lastActive || user.lastLogin || "") || 0;
+  const wasAwayLong = (now - prevActiveMs) > 30 * 60 * 1000;
+
+  if (isLogin || !user.lastLogin || wasAwayLong) {
+    user.lastLogin = nowIso;
+    try {
+      logAuthEvent({
+        event: isLogin ? "LOGIN_SUCCESS" : "SESSION_VISIT",
+        userId: user.id,
+        username: user.username,
+        ip: (ip || user.lastIp || "").replace(/^::ffff:/, "")
+      });
+    } catch (_) {}
   }
-  if (ip) {
-    users[userId].lastIp = ip;
+
+  user.lastActive = nowIso;
+
+  if (ip && typeof ip === "string") {
+    user.lastIp = ip.replace(/^::ffff:/, "");
   }
-  if (isLogin) {
+
+  if (forceSave || isLogin) {
     saveJSON(USERS_FILE, users);
   } else {
     scheduleUsersSave();
@@ -1098,6 +1200,11 @@ module.exports = {
   resetUserPassword,
   touchUserActivity,
   getAllUsersRaw,
+  registerActiveSocket,
+  unregisterActiveSocket,
+  isUserOnline,
+  getOnlineStats,
+  getUserAuthLogs,
   addNotificationToUser,
   markNotificationRead,
   getUserPreferences,

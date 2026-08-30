@@ -131,9 +131,11 @@ async function sendTelegramMessageWithKeyboard(chatId, text, replyMarkup) {
   });
 }
 
-function answerCallbackQuery(callbackQueryId, text) {
+function answerCallbackQuery(callbackQueryId, text = "") {
   if (!getBotToken() || !callbackQueryId) return;
-  userApiCall("answerCallbackQuery", { callback_query_id: callbackQueryId, text });
+  const payload = { callback_query_id: callbackQueryId };
+  if (text) payload.text = text;
+  userApiCall("answerCallbackQuery", payload);
 }
 
 async function editMessageText(chatId, messageId, text, replyMarkup) {
@@ -146,48 +148,42 @@ async function editMessageText(chatId, messageId, text, replyMarkup) {
   });
 }
 
-// Long polling engine to process incoming Telegram Bot messages
+// Zero-lag long polling engine using native fetch with keepalive pooling
 let offset = 0;
-function pollUpdates() {
+let isPollingUser = false;
+async function pollUpdates() {
   const token = getBotToken();
-  if (!token) return;
-  const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=10`;
-  const req = https.get(url, { agent: tgPollAgent, timeout: 15000 }, (res) => {
-    let body = "";
-    res.on("data", (chunk) => body += chunk);
-    res.on("end", () => {
-      let hasUpdates = false;
-      try {
-        if (res.statusCode === 200) {
-          const data = JSON.parse(body);
-          if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
-            hasUpdates = true;
-            for (const update of data.result) {
-              offset = update.update_id + 1;
-              try {
-                handleUpdate(update);
-              } catch (err) {
-                console.error("[USER BOT UPDATE ERROR]", err);
-              }
-            }
+  if (!token || isPollingUser) return;
+  isPollingUser = true;
+
+  try {
+    const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(35000) });
+    if (res.status === 200) {
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+        for (const update of data.result) {
+          offset = update.update_id + 1;
+          try {
+            handleUpdate(update);
+          } catch (err) {
+            console.error("[USER BOT UPDATE ERROR]", err);
           }
-        } else {
-          console.warn(`[USER BOT POLL WARN] HTTP ${res.statusCode}: ${body}`);
         }
-      } catch (err) {
-        console.error("[USER BOT JSON ERR]", err.message);
       }
-      setTimeout(pollUpdates, hasUpdates ? 0 : 200);
-    });
-  });
-  req.on("socket", (socket) => socket.setKeepAlive(true, 10000));
-  req.on("error", (err) => {
-    console.error("[USER BOT POLL ERR]", err.message);
-    setTimeout(pollUpdates, 400);
-  });
-  req.on("timeout", () => {
-    req.destroy();
-  });
+    } else if (res.status === 409) {
+      console.warn("[USER BOT POLL] 409 Conflict: waiting 2s before retry...");
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } catch (err) {
+    if (err.name !== "TimeoutError" && !err.message?.includes("aborted")) {
+      console.error("[USER BOT POLL ERR]", err.message);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } finally {
+    isPollingUser = false;
+    setImmediate(pollUpdates);
+  }
 }
 
 function handleCallbackQuery(cb) {
@@ -211,7 +207,6 @@ function handleCallbackQuery(cb) {
       chatAlertState.set(chatId, nextState);
     }
 
-    const btnText = nextState ? "🔔 Ценовые алерты: ✅ ВКЛ" : "🔕 Ценовые алерты: ❌ ВЫКЛ";
     const statusText = nextState 
       ? "<b>✅ Уведомления о ценовых алертах ВКЛЮЧЕНЫ!</b>\n\nВсе выставляемые вами ценовые сигналы 🔔 на графике поступают в реальном времени." 
       : "<b>❌ Уведомления о ценовых алертах ВЫКЛЮЧЕНЫ.</b>\n\nСообщения о выставляемых уровнях цены временно приостановлены.";
@@ -222,9 +217,10 @@ function handleCallbackQuery(cb) {
     let existingUser = userStore.getUserByTelegramId ? userStore.getUserByTelegramId(tgUser.id) : null;
     const isEnabled = existingUser ? (existingUser.tgAlertsEnabled !== false) : (chatAlertState.get(chatId) !== false);
     
-    answerCallbackQuery(cb.id, "Информация о вашем профиле");
-    sendTelegramMessageWithKeyboard(
+    answerCallbackQuery(cb.id);
+    editMessageText(
       chatId,
+      messageId,
       `<b>👤 Аккаунт Obsidian Pro</b>\n\n` +
       `• <b>ID:</b> <code>${existingUser ? existingUser.id : "—"}</code>\n` +
       `• <b>Пользователь:</b> ${existingUser ? existingUser.username : (tgUser.username ? "@" + tgUser.username : "Trader")}\n` +
@@ -234,25 +230,20 @@ function handleCallbackQuery(cb) {
     );
   } else if (data === "support_prompt") {
     userSupportState.set(chatId, { awaiting: true });
-    answerCallbackQuery(cb.id, "Поддержка");
-    sendTelegramMessage(
+    answerCallbackQuery(cb.id);
+    editMessageText(
       chatId,
+      messageId,
       `<b>💬 Техническая поддержка Obsidian Screener</b>\n\n` +
       `Напишите ваш вопрос или сообщение прямо сюда в чат 👇\n` +
-      `Наш администратор получит его и ответит вам прямо в этом боте.`
+      `Наш администратор получит его и ответит вам прямо в этом боте.`,
+      getDefaultKeyboard(chatId, tgUser)
     );
   } else if (data === "top_coins") {
-    answerCallbackQuery(cb.id, "Загрузка топ монет...");
+    answerCallbackQuery(cb.id);
     const digest = buildMarketDigest();
-    if (digest) {
-      sendTelegramMessageWithKeyboard(chatId, digest, getDefaultKeyboard(chatId, tgUser));
-    } else {
-      sendTelegramMessageWithKeyboard(
-        chatId,
-        `<b>📊 Данные о рынке</b>\n\n<i>Рыночные данные загружаются, попробуйте через минуту...</i>`,
-        getDefaultKeyboard(chatId, tgUser)
-      );
-    }
+    const text = digest || `<b>📊 Данные о рынке</b>\n\n<i>Рыночные данные загружаются, попробуйте через минуту...</i>`;
+    editMessageText(chatId, messageId, text, getDefaultKeyboard(chatId, tgUser));
   }
 }
 
@@ -447,48 +438,42 @@ async function sendAdminNotification(user, details = {}) {
 
 const adminBot = require("./adminBot");
 
-// Admin Bot Command Polling Engine
+// Admin Bot Command Polling Engine using native fetch with zero artificial latency
 let adminOffset = 0;
-function pollAdminUpdates() {
+let isPollingAdmin = false;
+async function pollAdminUpdates() {
   const adminToken = getAdminBotToken();
-  if (!adminToken) return;
-  const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=10`;
-  const req = https.get(url, { agent: tgPollAgent, timeout: 15000 }, (res) => {
-    let body = "";
-    res.on("data", (chunk) => body += chunk);
-    res.on("end", () => {
-      let hasUpdates = false;
-      try {
-        if (res.statusCode === 200) {
-          const data = JSON.parse(body);
-          if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
-            hasUpdates = true;
-            for (const update of data.result) {
-              adminOffset = update.update_id + 1;
-              try {
-                handleAdminUpdate(update);
-              } catch (err) {
-                console.error("[ADMIN BOT UPDATE ERROR]", err);
-              }
-            }
+  if (!adminToken || isPollingAdmin) return;
+  isPollingAdmin = true;
+
+  try {
+    const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=25`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(35000) });
+    if (res.status === 200) {
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
+        for (const update of data.result) {
+          adminOffset = update.update_id + 1;
+          try {
+            handleAdminUpdate(update);
+          } catch (err) {
+            console.error("[ADMIN BOT UPDATE ERROR]", err);
           }
-        } else {
-          console.warn(`[ADMIN BOT POLL WARN] HTTP ${res.statusCode}: ${body}`);
         }
-      } catch (err) {
-        console.error("[ADMIN BOT JSON ERR]", err.message);
       }
-      setTimeout(pollAdminUpdates, hasUpdates ? 0 : 200);
-    });
-  });
-  req.on("socket", (socket) => socket.setKeepAlive(true, 10000));
-  req.on("error", (err) => {
-    console.error("[ADMIN BOT POLL ERR]", err.message);
-    setTimeout(pollAdminUpdates, 400);
-  });
-  req.on("timeout", () => {
-    req.destroy();
-  });
+    } else if (res.status === 409) {
+      console.warn("[ADMIN BOT POLL] 409 Conflict: waiting 2s before retry...");
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } catch (err) {
+    if (err.name !== "TimeoutError" && !err.message?.includes("aborted")) {
+      console.error("[ADMIN BOT POLL ERR]", err.message);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  } finally {
+    isPollingAdmin = false;
+    setImmediate(pollAdminUpdates);
+  }
 }
 
 function handleAdminUpdate(update) {

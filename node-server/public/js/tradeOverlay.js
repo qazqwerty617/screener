@@ -182,20 +182,33 @@
   }
 
   function rightScalePill(ctx, x, y, text, color, bgColor = "rgba(12, 16, 26, 0.95)") {
+    if (!ctx || !text) return { bx: 0, by: 0, width: 68, height: 18 };
     ctx.save();
     ctx.font = "bold 9.5px Inter, -apple-system, sans-serif";
-    const textWidth = ctx.measureText(text).width;
-    const width = Math.max(72, textWidth + 10);
+    const textWidth = ctx.measureText ? (ctx.measureText(text)?.width || 56) : 56;
+    const width = Math.max(68, textWidth + 12);
     const height = 18;
-    // Pinned to right price scale column (x is width = PW, so x + 4 places it on the scale)
-    const bx = Math.max(4, x + 4);
+    // Pinned near the price scale (inside the chart area just to the left of the scale line)
+    // Never cut off by canvas border, and leaves price axis numbers fully legible!
+    const bx = Math.max(4, x - width - 6);
     const by = Math.round(y - height / 2);
 
+    ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
+    ctx.shadowBlur = 4;
     ctx.fillStyle = bgColor;
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.2;
     roundRect(ctx, bx, by, width, height, 4);
     ctx.fill();
+    ctx.stroke();
+
+    // Small connector tick pointing right to the scale line
+    ctx.shadowColor = "transparent";
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.moveTo(bx + width, y);
+    ctx.lineTo(x, y);
     ctx.stroke();
 
     ctx.fillStyle = color;
@@ -207,20 +220,102 @@
     return { bx, by, width, height };
   }
 
-  function arrow(ctx, x, y, isBuy, color) {
-    const dir = isBuy ? -1 : 1;
+  function drawTradeArrow(ctx, px, py, isBuy, color, isHovered = false) {
     ctx.save();
+    // For Buy: arrow points UP (tip at py, body below py)
+    // For Sell: arrow points DOWN (tip at py, body above py)
+    const dir = isBuy ? 1 : -1;
+    const arrowLen = isHovered ? 15 : 12;
+    const arrowW = isHovered ? 12 : 9.5;
+    const stemW = isHovered ? 4.5 : 3.5;
+    const wingY = py + dir * (arrowLen * 0.58);
+    const baseY = py + dir * arrowLen;
+
+    ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
+    ctx.shadowBlur = isHovered ? 6 : 3;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 1;
+
     ctx.fillStyle = color;
+    ctx.strokeStyle = "rgba(10, 14, 22, 0.95)";
+    ctx.lineWidth = 1.2;
+
     ctx.beginPath();
-    ctx.moveTo(x, y + dir * 6);
-    ctx.lineTo(x - 4, y - dir * 2);
-    ctx.lineTo(x - 1.5, y - dir * 2);
-    ctx.lineTo(x - 1.5, y - dir * 6);
-    ctx.lineTo(x + 1.5, y - dir * 6);
-    ctx.lineTo(x + 1.5, y - dir * 2);
-    ctx.lineTo(x + 4, y - dir * 2);
+    ctx.moveTo(px, py);
+    ctx.lineTo(px - arrowW / 2, wingY);
+    ctx.lineTo(px - stemW / 2, wingY);
+    ctx.lineTo(px - stemW / 2, baseY);
+    ctx.lineTo(px + stemW / 2, baseY);
+    ctx.lineTo(px + stemW / 2, wingY);
+    ctx.lineTo(px + arrowW / 2, wingY);
     ctx.closePath();
     ctx.fill();
+    ctx.stroke();
+
+    // Precision dot centered exactly at the execution price (px, py)
+    ctx.shadowColor = "transparent";
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(px, py, isHovered ? 3.2 : 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(10, 14, 22, 0.95)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawTooltip(ctx, px, py, item, width, height) {
+    const isBuy = item.side === "BUY";
+    const sideColor = isBuy ? "#26c97a" : "#ff4560";
+    const actionNames = {
+      entry: "Вход",
+      add: "Добор",
+      partial_exit: "Част. выход",
+      exit: "Выход",
+      reverse: "Разворот"
+    };
+    const actionStr = `${actionNames[item.action] || "Сделка"} (${item.side})`;
+    const priceStr = `Цена: $${formatPrice(item.price)}`;
+    const qtyStr = item.qty > 0 ? `Объем: ${item.qty} ($${formatMoney(item.price * item.qty)})` : "";
+    const timeStr = item.time > 0 ? new Date(item.time).toLocaleTimeString() : "";
+
+    const lines = [actionStr, priceStr];
+    if (qtyStr) lines.push(qtyStr);
+    if (timeStr) lines.push(`Время: ${timeStr}`);
+
+    ctx.save();
+    ctx.font = "600 10.5px Inter, -apple-system, sans-serif";
+    let maxW = 0;
+    lines.forEach(l => {
+      const w = ctx.measureText(l).width;
+      if (w > maxW) maxW = w;
+    });
+
+    const pad = 8;
+    const boxW = maxW + pad * 2;
+    const lineH = 15;
+    const boxH = lines.length * lineH + pad * 2;
+
+    let bx = Math.max(8, Math.min(width - boxW - 8, px - boxW / 2));
+    let by = py > boxH + 20 ? py - boxH - 12 : py + 16;
+
+    ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = "rgba(12, 16, 26, 0.96)";
+    ctx.strokeStyle = sideColor;
+    ctx.lineWidth = 1.2;
+    roundRect(ctx, bx, by, boxW, boxH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.shadowColor = "transparent";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    lines.forEach((l, idx) => {
+      ctx.fillStyle = idx === 0 ? sideColor : "rgba(255, 255, 255, 0.85)";
+      ctx.fillText(l, bx + pad, by + pad + idx * lineH);
+    });
     ctx.restore();
   }
 
@@ -276,43 +371,85 @@
       ctx.rect(0, 0, chartWidth, height);
       ctx.clip();
 
-      // 1. Draw cycle lines and live real-time PnL
+      // ── 1. DRAW TRADE ZONES: BACKGROUND FILL, TRAJECTORY AND LIVE PNL ──
       for (const [cycleKey, cycleItems] of cycles.entries()) {
         const entries = cycleItems.filter(item => item.action === "entry" || item.action === "add");
         const exits = cycleItems.filter(item => item.action === "partial_exit" || item.action === "exit" || item.action === "reverse");
         if (!entries.length) continue;
 
         const isOpen = !!openCycles.get(cycleKey);
-        const entryAverage = entries.at(-1).average;
+        const firstEntry = entries[0];
+        const entryAverage = entries.at(-1).average || firstEntry.price;
         const livePrice = number(options.currentPrice || candles.at(-1)?.c);
-        const markPrice = isOpen ? livePrice : (exits.at(-1)?.price || livePrice);
-        const longSide = entries[0].side === "BUY";
+        const lastExit = exits.at(-1) || cycleItems.at(-1);
+        const markPrice = isOpen ? livePrice : (lastExit?.price || livePrice);
+        const longSide = firstEntry.side === "BUY";
 
         const pnlPct = entryAverage > 0
           ? (longSide ? (markPrice - entryAverage) : (entryAverage - markPrice)) / entryAverage * 100
           : 0;
 
-        const positionQty = isOpen ? Math.abs(cycleItems.at(-1)?.positionAfter || 0) : exits.reduce((acc, x) => acc + x.qty, 0);
+        const positionQty = isOpen
+          ? Math.abs(cycleItems.at(-1)?.positionAfter || 0)
+          : exits.reduce((acc, x) => acc + x.qty, 0) || entries.reduce((acc, x) => acc + x.qty, 0);
         const dollarPnl = (longSide ? (markPrice - entryAverage) : (entryAverage - markPrice)) * positionQty;
-        const pnlColor = pnlPct >= 0 ? "#26c97a" : "#ff4560";
-
-        // Бейдж PnL в реальном времени (% И сумма в USDT / $)
-        let pnlBadgeText = "";
-        if (positionQty > 0) {
-          pnlBadgeText = `${formatMoney(dollarPnl)} (${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%)`;
-        } else {
-          pnlBadgeText = `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(2)}%`;
-        }
+        const isProfit = pnlPct >= 0;
+        const pnlColor = isProfit ? "#26c97a" : "#ff4560";
+        const zoneFillColor = isProfit ? "rgba(38, 201, 122, 0.14)" : "rgba(255, 69, 96, 0.14)";
+        const zoneBorderColor = isProfit ? "rgba(38, 201, 122, 0.55)" : "rgba(255, 69, 96, 0.55)";
 
         const yEntry = yForPrice(entryAverage);
         const yMark = yForPrice(markPrice);
-        const xStart = Math.max(0, xForIndex(entries[0].index));
+        const xStart = Math.max(0, xForIndex(firstEntry.index));
         const currentCandleIdx = candles.length - 1;
-        const xLive = Math.max(0, xForIndex(currentCandleIdx));
+        const xEnd = isOpen
+          ? Math.max(xStart + 16, xForIndex(currentCandleIdx))
+          : Math.max(xStart + 16, xForIndex(lastExit.index));
+        const zoneLeft = Math.min(xStart, xEnd);
+        const zoneRight = Math.max(xStart, xEnd);
+        const zoneTop = Math.min(yEntry, yMark);
+        const zoneBottom = Math.max(yEntry, yMark);
+        const zoneW = Math.max(16, zoneRight - zoneLeft);
+        const zoneH = Math.max(4, zoneBottom - zoneTop);
 
-        // ТВХ: Тонкая пунктирная линия от точки входа прямо до ценовой шкалы
+        // ── 1.1 FILLED TRADE ZONE (Зеленый при прибыли/в сторону позиции, красный при убытке) ──
         ctx.save();
-        ctx.strokeStyle = "#38bdf8"; // Яркий небесно-голубой (Electric Sky Blue) вместо фиолетового
+        ctx.fillStyle = zoneFillColor;
+        ctx.fillRect(zoneLeft, zoneTop, zoneW, zoneH);
+
+        // Border around the trade zone
+        ctx.strokeStyle = zoneBorderColor;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(zoneLeft, zoneTop, zoneW, zoneH);
+        ctx.restore();
+
+        // Hit region for deleting closed trade by clicking anywhere on the zone
+        state.hitRegions.push({
+          type: "zone",
+          cycleKey,
+          isOpen,
+          x: zoneLeft,
+          y: zoneTop,
+          width: zoneW,
+          height: zoneH,
+          label: `Сделка ${isProfit ? "+" : ""}${pnlPct.toFixed(2)}%`
+        });
+
+        // ── 1.2 TRAJECTORY CONNECTING LINE (От входа до выхода/текущей цены) ──
+        ctx.save();
+        ctx.strokeStyle = pnlColor;
+        ctx.lineWidth = 1.3;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(xStart, yEntry);
+        ctx.lineTo(xEnd, yMark);
+        ctx.stroke();
+        ctx.restore();
+
+        // ── 1.3 TVX GUIDELINE TO PRICE SCALE ──
+        ctx.save();
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.45)"; // Sky blue
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
@@ -332,13 +469,13 @@
           label: `ТВХ ${formatPrice(entryAverage)}`
         });
 
-        // Реал цена: Тонкая пунктирная линия строго от ТЕКУЩЕЙ живой свечи (где сейчас цена) до ценовой шкалы!
+        // ── 1.4 MARK/EXIT GUIDELINE TO PRICE SCALE ──
         ctx.save();
-        ctx.strokeStyle = pnlColor;
+        ctx.strokeStyle = isProfit ? "rgba(38, 201, 122, 0.45)" : "rgba(255, 69, 96, 0.45)";
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.moveTo(xLive, yMark);
+        ctx.moveTo(xEnd, yMark);
         ctx.lineTo(width, yMark);
         ctx.stroke();
         ctx.restore();
@@ -347,14 +484,58 @@
           type: "line",
           cycleKey,
           isOpen,
-          xStart: Math.max(0, xLive - 10),
+          xStart: Math.max(0, xEnd - 10),
           xEnd: width + 85,
           y: yMark,
           tolerance: 10,
-          label: `PnL ${pnlBadgeText || formatPrice(markPrice)}`
+          label: `PnL ${formatPrice(markPrice)}`
         });
 
-        // Бейдж ТВХ на ценовой шкале (не закрывает свечи графика)
+        // ── 1.5 PROMINENT PNL BADGE DIRECTLY ON THE CHART ──
+        const sign = pnlPct >= 0 ? "+" : "";
+        let pnlText = `${sign}${pnlPct.toFixed(2)}%`;
+        if (dollarPnl !== 0 && Number.isFinite(dollarPnl)) {
+          pnlText += ` · ${dollarPnl >= 0 ? "+" : ""}${formatMoney(dollarPnl)}`;
+        }
+        if (isOpen) {
+          pnlText = `● LIVE ${pnlText}`;
+        }
+
+        ctx.save();
+        ctx.font = "bold 10px Inter, -apple-system, sans-serif";
+        const tw = ctx.measureText(pnlText).width;
+        const bw = tw + 14;
+        const bh = 20;
+        let bx = Math.min(width - bw - 4, zoneRight + 4);
+        let by = Math.max(4, Math.min(height - bh - 4, yMark - bh / 2));
+
+        ctx.fillStyle = isProfit ? "rgba(8, 24, 16, 0.95)" : "rgba(28, 10, 14, 0.95)";
+        ctx.strokeStyle = pnlColor;
+        ctx.lineWidth = 1.2;
+        ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
+        ctx.shadowBlur = 4;
+        roundRect(ctx, bx, by, bw, bh, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = pnlColor;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(pnlText, bx + bw / 2, by + bh / 2);
+        ctx.restore();
+
+        state.hitRegions.push({
+          type: "rect",
+          cycleKey,
+          isOpen,
+          x: bx - 4,
+          y: by - 4,
+          width: bw + 8,
+          height: bh + 8,
+          label: pnlText
+        });
+
+        // ── 1.6 RIGHT SCALE PILLS (ТВХ и PnL) ──
         const tvhBox = rightScalePill(ctx, width, yEntry, `ТВХ: ${formatPrice(entryAverage)}`, "#38bdf8", "rgba(10, 24, 40, 0.95)");
         state.hitRegions.push({
           type: "rect",
@@ -367,13 +548,12 @@
           label: `ТВХ ${formatPrice(entryAverage)}`
         });
 
-        // Бейдж PnL на ценовой шкале (предотвращаем наложение на бейдж ТВХ при близких ценах)
         let yPnlBadge = yMark;
         if (Math.abs(yPnlBadge - yEntry) < 20) {
           yPnlBadge = yEntry + (yPnlBadge >= yEntry ? 20 : -20);
         }
-        const pnlBg = pnlPct >= 0 ? "rgba(10, 30, 20, 0.95)" : "rgba(34, 12, 18, 0.95)";
-        const pnlBox = rightScalePill(ctx, width, yPnlBadge, pnlBadgeText, pnlColor, pnlBg);
+        const pnlBg = isProfit ? "rgba(10, 30, 20, 0.95)" : "rgba(34, 12, 18, 0.95)";
+        const pnlBox = rightScalePill(ctx, width, yPnlBadge, pnlText, pnlColor, pnlBg);
         state.hitRegions.push({
           type: "rect",
           cycleKey,
@@ -382,85 +562,33 @@
           y: pnlBox.by - 6,
           width: pnlBox.width + 12,
           height: pnlBox.height + 12,
-          label: `PnL ${pnlBadgeText || formatPrice(markPrice)}`
+          label: pnlText
         });
       }
 
-      // 2. Execution Markers on Candles (Вход, Добор, Выход)
-      // Гарантированный отступ: бейджи и стрелки ни при каких условиях не касаются свечей!
-      const placedBadges = [];
+      // ── 2. EXECUTION ARROWS ON EXACT CANDLE PRICES (NO TEXT WORDS) ──
+      let hoveredItem = null;
+      let hoveredItemPos = null;
 
       resolved.forEach(item => {
         const candle = candles[item.index];
         if (!candle) return;
-        const x = xForIndex(item.index);
-        if (x < -50 || x > width + 50) return;
+        const px = xForIndex(item.index);
+        if (px < -50 || px > width + 50) return;
+        const py = yForPrice(item.price);
         const isBuy = item.side === "BUY";
         const color = isBuy ? "#26c97a" : "#ff4560";
 
-        // Сканируем окрестность свечей (по 4 свечи влево и вправо), чтобы бейдж не перекрывал
-        // даже соседние свечи с длинными тенями!
-        const spanBars = 4;
-        const startIdx = Math.max(0, item.index - spanBars);
-        const endIdx = Math.min(candles.length - 1, item.index + spanBars);
-        let extremePrice = isBuy ? Infinity : -Infinity;
-        for (let ci = startIdx; ci <= endIdx; ci++) {
-          const c = candles[ci];
-          if (c) {
-            if (isBuy) {
-              if (c.l < extremePrice) extremePrice = c.l;
-            } else {
-              if (c.h > extremePrice) extremePrice = c.h;
-            }
-          }
+        // Check if mouse is hovering over this execution arrow / point
+        const dist = Math.hypot((state.mouseX || -999) - px, (state.mouseY || -999) - py);
+        const isHovered = (state.mouseX >= 0 && state.mouseY >= 0 && dist < 14);
+
+        if (isHovered && !hoveredItem) {
+          hoveredItem = item;
+          hoveredItemPos = { x: px, y: py };
         }
-        if (!Number.isFinite(extremePrice)) extremePrice = isBuy ? candle.l : candle.h;
 
-        const yExtreme = yForPrice(extremePrice);
-        const arrowY = isBuy ? (yExtreme + 12) : (yExtreme - 12);
-        arrow(ctx, x, arrowY, isBuy, color);
-
-        const labels = {
-          entry: "Вход",
-          add: "Добор",
-          partial_exit: "Част. выход",
-          exit: "Выход",
-          reverse: "Разворот"
-        };
-        const text = `${labels[item.action] || "Сделка"} · ${formatPrice(item.price)}`;
-
-        ctx.font = "600 9.5px Inter, -apple-system, sans-serif";
-        const textWidth = ctx.measureText(text).width;
-        const badgeW = Math.max(50, textWidth + 12);
-        const badgeH = 18;
-        const bx = Math.max(4, Math.min(x - badgeW / 2, width - badgeW - 4));
-
-        let by = isBuy ? (arrowY + 8) : (arrowY - badgeH - 8);
-
-        // Предотвращаем взаимное наложение соседних меток сделок
-        for (const pb of placedBadges) {
-          if (Math.abs(pb.bx - bx) < (pb.width + badgeW) / 2 + 4) {
-            if (Math.abs(pb.by - by) < badgeH + 4) {
-              by = isBuy ? (pb.by + badgeH + 6) : (pb.by - badgeH - 6);
-            }
-          }
-        }
-        placedBadges.push({ bx, by, width: badgeW, height: badgeH });
-
-        // Отрисовка плашки
-        ctx.save();
-        ctx.fillStyle = "rgba(10, 13, 20, 0.95)";
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
-        roundRect(ctx, bx, by, badgeW, badgeH, 4);
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.fillStyle = color;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(text, bx + badgeW / 2, by + badgeH / 2);
-        ctx.restore();
+        drawTradeArrow(ctx, px, py, isBuy, color, isHovered);
 
         const itemIsOpen = !!openCycles.get(item.cycleKey);
         state.hitRegions.push({
@@ -468,13 +596,18 @@
           cycleKey: item.cycleKey,
           itemKey: item.itemKey,
           isOpen: itemIsOpen,
-          x: Math.min(bx, x - 10) - 4,
-          y: Math.min(by, isBuy ? arrowY - 6 : arrowY - 14) - 4,
-          width: Math.max(badgeW, 20) + 8,
-          height: badgeH + 18,
-          label: text
+          x: px - 12,
+          y: isBuy ? py : py - 16,
+          width: 24,
+          height: 18,
+          label: `${item.side} ${formatPrice(item.price)}`
         });
       });
+
+      // ── 3. HOVER TOOLTIP (Отображается только при наведении мыши на стрелку) ──
+      if (hoveredItem && hoveredItemPos) {
+        drawTooltip(ctx, hoveredItemPos.x, hoveredItemPos.y, hoveredItem, width, height);
+      }
     } catch (err) {
       console.error("TradeOverlay draw error:", err);
     } finally {
@@ -515,7 +648,7 @@
     for (let i = state.hitRegions.length - 1; i >= 0; i--) {
       const reg = state.hitRegions[i];
       let hit = false;
-      if (reg.type === "marker" || reg.type === "rect") {
+      if (reg.type === "marker" || reg.type === "rect" || reg.type === "zone") {
         hit = (mouseX >= reg.x && mouseX <= reg.x + reg.width &&
                mouseY >= reg.y && mouseY <= reg.y + reg.height);
       } else if (reg.type === "line") {
@@ -622,10 +755,42 @@
     window.requestMainChartDraw?.();
   }
 
+  function hookCanvasMouse() {
+    const canvas = document.getElementById("chart-canvas");
+    if (!canvas || canvas._tradeOverlayHooked) return;
+    canvas._tradeOverlayHooked = true;
+    canvas.addEventListener("mousemove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const newX = e.clientX - rect.left;
+      const newY = e.clientY - rect.top;
+      const prevX = state.mouseX || -999;
+      const prevY = state.mouseY || -999;
+      state.mouseX = newX;
+      state.mouseY = newY;
+      // If mouse is near any execution marker, request chart redraw for smooth tooltip
+      const isNearMarker = state.hitRegions.some(reg => {
+        return reg.type === "marker" && Math.hypot(newX - (reg.x + reg.width / 2), newY - (reg.y + reg.height / 2)) < 24;
+      });
+      const wasNearMarker = state.hitRegions.some(reg => {
+        return reg.type === "marker" && Math.hypot(prevX - (reg.x + reg.width / 2), prevY - (reg.y + reg.height / 2)) < 24;
+      });
+      if (isNearMarker || wasNearMarker) {
+        window.requestMainChartDraw?.();
+      }
+    });
+    canvas.addEventListener("mouseleave", () => {
+      state.mouseX = -1;
+      state.mouseY = -1;
+      window.requestMainChartDraw?.();
+    });
+  }
+
   function start() {
+    hookCanvasMouse();
     if (state.timer) return;
     state.timer = setInterval(() => {
       if (document.visibilityState === "visible") refresh(false);
+      hookCanvasMouse();
     }, 2000);
     refresh(true);
   }

@@ -70,8 +70,25 @@ function showToast(options, typeArg, titleArg, durationArg) {
   const container = typeof $ === "function" ? $("toast-container") : document.getElementById("toast-container");
   if (!container) return;
   
+  const isClickable = (typeof options === "object" && options !== null && typeof options.onClick === "function");
   const card = document.createElement("div");
-  card.className = `toast-card toast-${type}`;
+  card.className = `toast-card toast-${type}${isClickable ? " clickable" : ""}`;
+  if (isClickable) {
+    card.title = options.hint || "Нажмите, чтобы перейти";
+    card.addEventListener("click", (e) => {
+      if (e.target.closest(".toast-close")) return;
+      try {
+        options.onClick(e);
+      } catch (err) {
+        console.error("[TOAST CLICK ERROR]", err);
+      }
+      if (card.parentNode) {
+        card.style.opacity = "0";
+        card.style.transform = "translateY(-10px)";
+        setTimeout(() => { if (card.parentNode) card.remove(); }, 150);
+      }
+    });
+  }
   card.innerHTML = `
     <div class="toast-header">
       <span class="toast-title">${icon ? icon + " " : ""}${title}</span>
@@ -997,22 +1014,11 @@ function processTickData(dt) {
       const last = candles[candles.length - 1];
       const tfMs = TF_MS[activeTf] || 60000;
       const now = Date.now();
-      const expectedCandleStart = Math.floor(now / tfMs) * tfMs;
+      const candleEnd = last.t + tfMs;
 
-      if (expectedCandleStart > last.t) {
-        const gap = Math.round((expectedCandleStart - last.t) / tfMs);
-        if (gap > 1 && gap <= 50) {
-          for (let g = 1; g < gap; g++) {
-            candles.push({
-              t: last.t + g * tfMs,
-              o: last.c,
-              h: last.c,
-              l: last.c,
-              c: last.c,
-              v: 0
-            });
-          }
-        }
+      if (now >= candleEnd) {
+        const numBars = Math.floor((now - last.t) / tfMs);
+        const expectedCandleStart = last.t + numBars * tfMs;
         const newCandle = {
           t: expectedCandleStart,
           o: last.c,
@@ -1024,13 +1030,13 @@ function processTickData(dt) {
         candles.push(newCandle);
         if (candles.length > 3000) candles.shift();
         clearCandleCaches(candles);
-        if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
+        if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
         chartNeedsDraw = true;
       }
 
       const curLast = candles[candles.length - 1];
       const liveP = getDisplayP(ac);
-      if (liveP > 0 && curLast && expectedCandleStart === curLast.t) {
+      if (liveP > 0 && curLast && now >= curLast.t && now < curLast.t + tfMs) {
         const ratio = curLast.c > 0 ? liveP / curLast.c : 1;
         if (ratio > 0.3 && ratio < 3.0) {
           if (curLast.c !== liveP) {
@@ -1081,6 +1087,50 @@ const TF_MS = {
   "3d": 259200000,
   "1w": 604800000,
 };
+
+function getBarStart(ts, tf, referenceTs = null) {
+  const tfMs = TF_MS[tf] || 60000;
+  if (referenceTs && Number.isFinite(referenceTs) && referenceTs > 0) {
+    const numBars = Math.floor((ts - referenceTs) / tfMs);
+    return referenceTs + numBars * tfMs;
+  }
+  if (tf === "1w") {
+    const d = new Date(ts);
+    const day = d.getUTCDay();
+    const diff = (day === 0 ? -6 : 1) - day;
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + diff, 0, 0, 0, 0);
+  }
+  if (tf === "1d") {
+    const d = new Date(ts);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0);
+  }
+  if (tf === "3d") {
+    const dayIndex = Math.floor(ts / 86400000);
+    const mod = ((dayIndex - 1) % 3 + 3) % 3;
+    return (dayIndex - mod) * 86400000;
+  }
+  return Math.floor(ts / tfMs) * tfMs;
+}
+
+function findCandleIndexByTime(list, targetTime) {
+  if (!Array.isArray(list) || !list.length || !Number.isFinite(targetTime)) return -1;
+  let low = 0, high = list.length - 1;
+  let closestIdx = 0;
+  let minDiff = Infinity;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const t = list[mid].t;
+    const diff = Math.abs(t - targetTime);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestIdx = mid;
+    }
+    if (t === targetTime) return mid;
+    if (t < targetTime) low = mid + 1;
+    else high = mid - 1;
+  }
+  return closestIdx;
+}
 
 // тХРтХРтХР Utils тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 window.onerror = (m, s, l, c, e) => {
@@ -1203,6 +1253,7 @@ if (typeof document !== "undefined" && document.fonts && document.fonts.ready) {
 
 function resizeChart() {
   const w = $("cwrap");
+  if (!w || !w.clientWidth || !w.clientHeight) return;
   chartW = w.clientWidth;
   chartH = w.clientHeight;
   const dpr = window.devicePixelRatio || 1;
@@ -2769,7 +2820,7 @@ function drawChart() {
   if (!vis.length && futureGap <= 0.5) return;
 
   // Infinite scroll: dynamically load older historical candles when approaching left edge
-  if (viewStart < 80 && candles.length > 0 && !isLoadingOlderCandles && !hasReachedStartOfHistory) {
+  if (offsetX > 0 && viewStart < 80 && candles.length > 0 && !isLoadingOlderCandles && !hasReachedStartOfHistory) {
     loadOlderHistory(activeEx, activeSym, activeTf);
   }
 
@@ -2861,8 +2912,8 @@ function drawChart() {
       yL = toY(c.l);
     const yO = toY(c.o),
       yC = toY(c.c);
-    const bT = Math.min(yO, yC),
-      bH = Math.max(1, Math.abs(yC - yO));
+    const bH = Math.max(1.8, Math.abs(yC - yO));
+    const bT = Math.abs(yC - yO) < 1.8 ? Math.min(yO, yC) - 0.9 : Math.min(yO, yC);
 
     const leftX = Math.round((rawX - hw) * dpr);
     const rightX = Math.round((rawX + hw) * dpr);
@@ -2870,7 +2921,7 @@ function drawChart() {
     const fillX = leftX / dpr;
     const fillY = Math.round(bT * dpr) / dpr;
     const fillW = fillPixelW / dpr;
-    const fillH = Math.max(1 / dpr, Math.round(bH * dpr) / dpr);
+    const fillH = Math.max(1.5 / dpr, Math.round(bH * dpr) / dpr);
 
     // Wick is placed at exact mathematical pixel center of candle body (TigerTrade standard)
     const wickPixel = Math.round(leftX + fillPixelW / 2);
@@ -4200,11 +4251,11 @@ function drawChart() {
     ctx.textAlign = "center";
     ctx.fillText(fP(dispClose), PW + PR / 2, ly2 + 4);
 
-    // Candle close countdown (Wall-clock based for stability)
+    // Candle close countdown (Anchored to current candle for 100% accuracy on all timeframes)
     const tfMs = TF_MS[activeTf] || 60000;
     const now = Date.now();
-    const nextClose = (Math.floor(now / tfMs) + 1) * tfMs;
-    const diff = nextClose - now;
+    const nextClose = (lc && lc.t > 0) ? (lc.t + tfMs) : (getBarStart(now, activeTf) + tfMs);
+    const diff = Math.max(0, nextClose - now);
     if (diff > 0) {
       const s = Math.floor(diff / 1000) % 60;
       const m = Math.floor(diff / 60000) % 60;
@@ -5376,13 +5427,36 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+function clearAllDragStates() {
+  isDragX = false;
+  isDragY = false;
+  isDragYScale = false;
+  isDragTimeScale = false;
+  dragDrawing = null;
+  quickMeasure = null;
+  if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+    chartInstances.forEach(inst => {
+      if (inst) {
+        inst.isDrag = false;
+        inst.isDragY = false;
+        inst.isDragYScale = false;
+      }
+    });
+  }
+}
+
+window.addEventListener("blur", clearAllDragStates);
+
 // Preserve exact chart position & prevent jumps when Alt-tabbing back to window
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
+  if (document.hidden) {
+    clearAllDragStates();
+  } else {
     requestDraw();
   }
 });
 window.addEventListener("focus", () => {
+  clearAllDragStates();
   requestDraw();
 });
 
@@ -5845,6 +5919,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (token) {
       try { localStorage.setItem("obsidian_auth_token", token); } catch (_) {}
       try { document.cookie = `obsidian_auth_token=${encodeURIComponent(token)}; max-age=31536000; path=/; SameSite=Lax`; } catch (_) {}
+      if (typeof sendUserHeartbeat === "function") sendUserHeartbeat();
     } else {
       try { localStorage.removeItem("obsidian_auth_token"); } catch (_) {}
       try { document.cookie = "obsidian_auth_token=; max-age=0; path=/"; } catch (_) {}
@@ -5852,6 +5927,27 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   window.setStoredAuthToken = setStoredAuthToken;
   window.getStoredAuthToken = getStoredAuthToken;
+
+  function sendUserHeartbeat() {
+    const curToken = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || "";
+    if (window.ws && window.ws.readyState === WebSocket.OPEN && curToken) {
+      try { window.ws.send(JSON.stringify({ type: "ping", token: curToken })); } catch (_) {}
+    }
+    if (curToken) {
+      fetch("/api/user/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${curToken}` },
+        body: JSON.stringify({ token: curToken })
+      }).catch(() => {});
+    }
+  }
+  window.sendUserHeartbeat = sendUserHeartbeat;
+
+  setInterval(sendUserHeartbeat, 30000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") sendUserHeartbeat();
+  });
+  window.addEventListener("focus", sendUserHeartbeat);
 
   async function checkAuthSession() {
     authToken = getStoredAuthToken();
@@ -6269,10 +6365,12 @@ function connectWS() {
   // Cancel any pending reconnect
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
 
+  const curToken = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || "";
+  const tokenQuery = curToken ? `?token=${encodeURIComponent(curToken)}` : "";
   const wsUrl =
     location.protocol === "file:"
-      ? "ws://localhost:3000/ws"
-      : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
+      ? `ws://localhost:3000/ws${tokenQuery}`
+      : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws${tokenQuery}`;
 
   // Tear down old connection cleanly
   if (ws) {
@@ -6284,11 +6382,16 @@ function connectWS() {
 
   $("cd-label").textContent = "Connecting...";
   ws = new WebSocket(wsUrl);
+  window.ws = ws;
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
     wsReady = true;
     console.log("[WS] Connected");
+    const activeToken = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || "";
+    if (activeToken) {
+      try { ws.send(JSON.stringify({ type: "auth", token: activeToken })); } catch (_) {}
+    }
     $("cd-go").classList.remove("err");
     $("cd-go").classList.add("ok");
     $("cd-label").textContent = "LIVE";
@@ -6297,12 +6400,12 @@ function connectWS() {
       const [ex, sym, tf] = key.split("|");
       sendMarketSubscription("subscribe_kline", ex, sym, tf);
     }
-    fetchKlines(activeEx, activeSym, activeTf);
 
-    // Ping every 20s to keep connection alive through proxies/nginx
+    // Ping every 20s to keep connection alive through proxies/nginx and sync activity
     wsPingTimer = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        try { ws.send(JSON.stringify({ type: "ping" })); } catch (_) { }
+        const pingToken = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || "";
+        try { ws.send(JSON.stringify({ type: "ping", token: pingToken || undefined })); } catch (_) { }
       }
     }, 20000);
   };
@@ -6509,13 +6612,17 @@ function connectWS() {
 function unfreezeAndResync() {
   lastRafTs = performance.now();
   chartNeedsDraw = true;
-  const isHealthy = ws && ws.readyState === WebSocket.OPEN && (lastWsMsg > 0 && Date.now() - lastWsMsg < 4000);
+  if (activeEx && activeSym && activeTf) {
+    refetchMissingHistory(activeEx, activeSym, activeTf);
+    if (!klWs || klWs.readyState > 1) {
+      connectKlWs(activeEx, activeSym, activeTf);
+    }
+  }
+  const isHealthy = ws && ws.readyState === WebSocket.OPEN && (lastWsMsg === 0 || Date.now() - lastWsMsg < 15000);
 
   if (!isHealthy) {
     console.log("[WS] Tab / Window active - socket quiet or closed, reconnecting...");
     connectWS();
-  } else if (activeEx && activeSym && activeTf) {
-    fetchKlines(activeEx, activeSym, activeTf);
   }
 
   if (screenerView === "multichart" || activeView === "formations") {
@@ -6632,7 +6739,7 @@ function sanitizeCandle(raw, prevClose = null) {
   return { t, o, h, l, c, v: Number.isFinite(v) && v >= 0 ? v : 0 };
 }
 
-function sanitizeCandles(list) {
+function sanitizeCandles(list, maxLimit = 3000) {
   if (!Array.isArray(list)) return [];
   const sorted = list
     .map((k) => ({
@@ -6646,7 +6753,11 @@ function sanitizeCandles(list) {
     .filter((k) => Number.isFinite(k.t))
     .sort((a, b) => a.t - b.t);
   const out = [];
-  for (const k of sorted) {
+  for (let i = 0; i < sorted.length; i++) {
+    const k = sorted[i];
+    const isLast = (i === sorted.length - 1);
+    // Ignore dummy placeholder bars with 0 volume and 0 price range
+    if (!isLast && k.h === k.l && (!k.v || k.v === 0)) continue;
     const clean = sanitizeCandle(k, out.length ? out[out.length - 1].c : null);
     if (!clean) continue;
     if (out.length) {
@@ -6658,16 +6769,17 @@ function sanitizeCandles(list) {
     }
     out.push(clean);
   }
-  return out.slice(-3000);
+  const cap = Number.isFinite(maxLimit) && maxLimit > 0 ? maxLimit : 3000;
+  return out.slice(-cap);
 }
 
 let currentLoadedEx = null;
 let currentLoadedSym = null;
 let currentLoadedTf = null;
 
-function mergeCandles(existingList, incomingList) {
+function mergeCandles(existingList, incomingList, maxLimit = 3000) {
   if (!Array.isArray(incomingList) || incomingList.length === 0) return existingList || [];
-  if (!Array.isArray(existingList) || existingList.length === 0) return sanitizeCandles(incomingList);
+  if (!Array.isArray(existingList) || existingList.length === 0) return sanitizeCandles(incomingList, maxLimit);
 
   const map = new Map();
   // 1. Ingest incoming authoritative / history candles
@@ -6681,6 +6793,7 @@ function mergeCandles(existingList, incomingList) {
   const lastExisting = existingList[existingList.length - 1];
   for (const c of existingList) {
     if (!c || !Number.isFinite(c.t) || c.t <= 0) continue;
+    if (c !== lastExisting && c.h === c.l && (!c.v || c.v === 0)) continue;
     const incoming = map.get(c.t);
     if (incoming) {
       if (c === lastExisting) {
@@ -6695,16 +6808,37 @@ function mergeCandles(existingList, incomingList) {
   }
 
   const merged = Array.from(map.values()).sort((a, b) => a.t - b.t);
-  return sanitizeCandles(merged);
+  return sanitizeCandles(merged, maxLimit);
 }
 
 async function refetchMissingHistory(ex, sym, tf) {
   if (window._isRefetchingGap) return;
   window._isRefetchingGap = true;
   try {
-    const fresh = await fetchServerKlines(ex, sym, tf, 0);
+    const directPromise = fetchDirectKlines(ex, sym, tf).then(c => (c && c.length > 0 ? c : Promise.reject()));
+    const serverPromise = fetchServerKlines(ex, sym, tf, 1).then(c => (c && c.length > 0 ? c : Promise.reject()));
+    let fresh = [];
+    try {
+      fresh = await Promise.any([directPromise, serverPromise]);
+    } catch (_) {
+      fresh = await fetchServerKlines(ex, sym, tf, 0);
+    }
     if (fresh && fresh.length > 0 && activeEx === ex && activeSym === sym && activeTf === tf) {
-      candles = mergeCandles(candles, fresh);
+      const prevAnchorTime = (offsetX > 0 && candles.length > 0)
+        ? candles[Math.max(0, Math.min(candles.length - 1, Math.round(candles.length - 1 - offsetX)))]?.t
+        : null;
+
+      candles = mergeCandles(candles, fresh, 20000);
+
+      if (prevAnchorTime && offsetX > 0) {
+        const newIdx = findCandleIndexByTime(candles, prevAnchorTime);
+        if (newIdx !== -1) {
+          offsetX = getClampedOffsetX(candles.length - 1 - newIdx);
+        }
+      }
+
+      const key = `${ex}|${sym}|${tf}`;
+      KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
       chartNeedsDraw = true;
       if (typeof drawChart === "function") requestAnimationFrame(drawChart);
     }
@@ -6991,18 +7125,26 @@ async function loadOlderHistory(ex, sym, tf) {
 
     if (curToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
 
-    const sanitized = sanitizeCandles(olderCandles).filter(c => c.t < oldestTs);
+    const sanitized = sanitizeCandles(olderCandles, 20000).filter(c => c.t < oldestTs);
     if (!sanitized.length) {
       hasReachedStartOfHistory = true;
       return;
     }
 
-    const addedCount = sanitized.length;
-    candles = mergeCandles(candles, sanitized);
+    const prevAnchorTime = (candles.length > 0)
+      ? candles[Math.max(0, Math.min(candles.length - 1, Math.round(candles.length - 1 - Math.max(0, offsetX))))]?.t
+      : null;
+
+    candles = mergeCandles(candles, sanitized, 20000);
     if (candles.length > 20000) {
       candles = candles.slice(-20000);
     }
-    offsetX += addedCount;
+    if (prevAnchorTime && offsetX > 0) {
+      const newIdx = findCandleIndexByTime(candles, prevAnchorTime);
+      if (newIdx !== -1) {
+        offsetX = getClampedOffsetX(candles.length - 1 - newIdx);
+      }
+    }
     chartNeedsDraw = true;
     drawChart();
   } catch (err) {
@@ -7042,36 +7184,42 @@ function appendCandle(k) {
   } else if (clean.t > last.t) {
     // New candle from exchange!
     const gap = Math.round((clean.t - last.t) / tfMs);
-    if (gap > 1 && gap <= 50) {
-      // Fill missing flat candles (Vataga continuous timeline standard)
-      for (let g = 1; g < gap; g++) {
-        candles.push({
-          t: last.t + g * tfMs,
-          o: last.c,
-          h: last.c,
-          l: last.c,
-          c: last.c,
-          v: 0
-        });
-      }
-    } else if (gap > 50) {
+    if (gap > 1) {
       refetchMissingHistory(activeEx, activeSym, activeTf);
     }
     candles.push(clean);
     if (candles.length > 3000) {
       candles.shift();
-      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
     }
+    if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
     clearCandleCaches(candles);
   } else {
-    // If exchange finalized a recently closed candle (e.g. within last 15 bars)
-    const target = candles.slice(-15).find(c => c.t === clean.t);
-    if (target) {
-      target.o = clean.o;
-      target.h = Math.max(target.h, clean.h);
-      target.l = Math.min(target.l, clean.l);
-      target.c = clean.c;
-      target.v = clean.v;
+    // If clean.t < last.t:
+    // If a speculative/phantom tick candle was added ahead of authoritative candle clean.t,
+    // remove phantom candle(s) that shouldn't exist!
+    while (candles.length > 1 && candles[candles.length - 1].t > clean.t) {
+      candles.pop();
+    }
+    const currentLast = candles[candles.length - 1];
+    if (currentLast && currentLast.t === clean.t) {
+      currentLast.o = clean.o;
+      currentLast.h = Math.max(currentLast.h, clean.h);
+      currentLast.l = Math.min(currentLast.l, clean.l);
+      if (!lastMarketEventAt || Date.now() - lastMarketEventAt > 2500) {
+        currentLast.c = clean.c;
+      }
+      if (clean.v > 0) currentLast.v = Math.max(currentLast.v, clean.v);
+      clearCandleCaches(candles);
+    } else {
+      // If exchange finalized a recently closed candle (e.g. within last 15 bars)
+      const target = candles.slice(-15).find(c => c.t === clean.t);
+      if (target) {
+        target.o = clean.o;
+        target.h = Math.max(target.h, clean.h);
+        target.l = Math.min(target.l, clean.l);
+        target.c = clean.c;
+        target.v = clean.v;
+      }
     }
   }
 
@@ -7104,9 +7252,9 @@ function applyMainMarketTick(data, isRelay = false) {
   lastMarketEventAt = Date.now();
   const tfMs = TF_MS[activeTf] || 60000;
   const now = (eventTime > 1e11) ? eventTime : Date.now();
-  const barStart = Math.floor(now / tfMs) * tfMs;
 
   if (!candles.length) {
+    const barStart = getBarStart(now, activeTf);
     candles = [{
       t: barStart,
       o: price,
@@ -7122,25 +7270,20 @@ function applyMainMarketTick(data, isRelay = false) {
   }
 
   let last = candles[candles.length - 1];
+  const candleEnd = last.t + tfMs;
 
-  if (barStart === last.t) {
+  if (now >= last.t && now < candleEnd) {
     // Intra-candle live update (1-to-1 Vataga behavior):
     last.c = price;
     if (price > last.h) last.h = price;
     if (eventHigh > last.h) last.h = eventHigh;
     if (price < last.l) last.l = price;
     if (eventLow < last.l) last.l = eventLow;
-  } else if (barStart > last.t) {
+  } else if (now >= candleEnd) {
     // Timeframe boundary crossed! Finalize previous bar and instantly spawn new bar (Vataga model):
-    const gap = Math.round((barStart - last.t) / tfMs);
-    if (gap > 1 && gap <= 50) {
-      for (let g = 1; g < gap; g++) {
-        candles.push({
-          t: last.t + g * tfMs,
-          o: last.c, h: last.c, l: last.c, c: last.c, v: 0
-        });
-      }
-    } else if (gap > 50) {
+    const numBars = Math.floor((now - last.t) / tfMs);
+    const barStart = last.t + numBars * tfMs;
+    if (numBars > 1) {
       refetchMissingHistory(activeEx, activeSym, activeTf);
     }
     const h = Math.max(last.c, price, eventHigh);
@@ -7156,9 +7299,14 @@ function applyMainMarketTick(data, isRelay = false) {
     candles.push(last);
     if (candles.length > 3000) {
       candles.shift();
-      if (offsetX > 0) offsetX = getClampedOffsetX(offsetX - 1);
     }
+    if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
     clearCandleCaches(candles);
+  } else {
+    // Out of order trade slightly before last.t due to network jitter: update extremes & close of current bar
+    if (price > last.h) last.h = price;
+    if (price < last.l) last.l = price;
+    last.c = price;
   }
 
   // Update ticker display price directly
@@ -7235,8 +7383,20 @@ function connectKlWs(ex, sym, tf) {
           }
         } catch (_) {}
       };
-      klWs.onerror = () => {};
-      klWs.onclose = () => {};
+      klWs.onerror = () => {
+        setTimeout(() => {
+          if (activeEx === ex && activeSym === sym && activeTf === tf && (!klWs || klWs.readyState > 1)) {
+            connectKlWs(ex, sym, tf);
+          }
+        }, 2000);
+      };
+      klWs.onclose = () => {
+        setTimeout(() => {
+          if (activeEx === ex && activeSym === sym && activeTf === tf && (!klWs || klWs.readyState > 1)) {
+            connectKlWs(ex, sym, tf);
+          }
+        }, 2000);
+      };
     } catch (_) {}
   } else if (ex === "BB") {
     const tfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D", "3d": "3", "1w": "W" };
@@ -9801,17 +9961,19 @@ class ChartInstance {
     if (clean.t === last.t) {
       Object.assign(last, clean);
     } else if (clean.t > last.t) {
-      const gapBars = Math.round((clean.t - last.t) / tfMs) - 1;
-      if (gapBars > 0 && gapBars <= 25) {
-        for (let g = 1; g <= gapBars; g++) {
-          this.candles.push({ t: last.t + g * tfMs, o: last.c, h: last.c, l: last.c, c: last.c, v: 0 });
-        }
-      }
       this.candles.push(clean);
       if (this.candles.length > 1500) this.candles.shift();
     } else {
-      const target = this.candles.slice(-5).find(c => c.t === clean.t);
-      if (target) Object.assign(target, clean);
+      while (this.candles.length > 1 && this.candles[this.candles.length - 1].t > clean.t) {
+        this.candles.pop();
+      }
+      const cur = this.candles[this.candles.length - 1];
+      if (cur && cur.t === clean.t) {
+        Object.assign(cur, clean);
+      } else {
+        const target = this.candles.slice(-10).find(c => c.t === clean.t);
+        if (target) Object.assign(target, clean);
+      }
     }
     this.headerPrice.textContent = fP(clean.c);
     this.dirty = true;
@@ -9873,14 +10035,17 @@ class ChartInstance {
       // Update current live candle with real-time price tick
       if (!this._marketUnsub && this.candles && this.candles.length > 0) {
         const tfMs = TF_MS[this.tf] || 60000;
-        const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
+        const now = Date.now();
         let last = this.candles[this.candles.length - 1];
+        const candleEnd = last.t + tfMs;
 
-        if (expectedStart > last.t) {
+        if (now >= candleEnd) {
+          const numBars = Math.floor((now - last.t) / tfMs);
+          const expectedStart = last.t + numBars * tfMs;
           last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
           this.candles.push(last);
           if (this.candles.length > 1500) this.candles.shift();
-        } else {
+        } else if (now >= last.t && now < candleEnd) {
           last.c = p;
           if (p > last.h) last.h = p;
           if (p < last.l) last.l = p;
@@ -10028,13 +10193,13 @@ class ChartInstance {
       const liveP = getDisplayP(cData);
       if (liveP > 0) {
         const tfMs = TF_MS[this.tf] || 60000;
-        const expectedStart = Math.floor(Date.now() / tfMs) * tfMs;
-        const timeDiff = expectedStart - last.t;
-        if (timeDiff > 0 && timeDiff <= tfMs * 2) {
+        const candleEnd = last.t + tfMs;
+        if (now >= candleEnd && now < candleEnd + tfMs * 2) {
+          const expectedStart = last.t + Math.floor((now - last.t) / tfMs) * tfMs;
           const newCandle = { t: expectedStart, o: last.c, h: Math.max(last.c, liveP), l: Math.min(last.c, liveP), c: liveP, v: 0 };
           this.candles.push(newCandle);
           if (this.candles.length > 1500) this.candles.shift();
-        } else if (timeDiff <= 0) {
+        } else if (now >= last.t && now < candleEnd) {
           last.c = liveP;
           if (liveP > last.h) last.h = liveP;
           if (liveP < last.l) last.l = liveP;
@@ -14344,6 +14509,29 @@ window.addEventListener("resize", () => {
       formationsAllCoins.sort((a, b) => b.v - a.v);
     }
 
+    if (window._formationPriorityCoin) {
+      const pEx = window._formationPriorityCoin.ex;
+      const pSym = (window._formationPriorityCoin.sym || "").toUpperCase();
+      const pRaw = pSym.replace(/[^A-Z0-9]/g, "");
+      const idx = formationsAllCoins.findIndex(c => {
+        const cSym = (c.sym || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        return (!pEx || c.ex === pEx) && (cSym === pRaw || cSym.startsWith(pRaw) || pRaw.startsWith(cSym));
+      });
+      if (idx > 0) {
+        const [targetCoin] = formationsAllCoins.splice(idx, 1);
+        formationsAllCoins.unshift(targetCoin);
+      } else if (idx === -1) {
+        const found = Array.from(coins.values()).find(c => {
+          const cSym = (c.sym || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+          return (!pEx || c.ex === pEx) && (cSym === pRaw || cSym.startsWith(pRaw) || pRaw.startsWith(cSym));
+        });
+        if (found) {
+          formationsAllCoins.unshift(found);
+        }
+      }
+      window._formationPriorityCoin = null;
+    }
+
     const currentScanKey = [
       activeFormation,
       formationsTf,
@@ -15386,8 +15574,23 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
             `─────────────────────────\n` +
             `🎯 <b>Obsidian Price Alert</b>`;
 
+          const alertExVal = alert.ex;
+          const alertSymVal = alert.sym;
           try { playAlertSound("chime"); } catch (_) {}
-          try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
+          try {
+            showToast({
+              title,
+              message: body + `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к графику</span> ↗</div>`,
+              type: "price_alert",
+              hint: "Нажмите, чтобы открыть график монеты",
+              onClick: () => {
+                if (typeof switchView === "function") switchView("screener");
+                if (alertExVal && alertSymVal && typeof loadCoinChart === "function") {
+                  loadCoinChart(alertExVal, alertSymVal, activeTf);
+                }
+              }
+            });
+          } catch (_) {}
           try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
         }
       }
@@ -15482,8 +15685,23 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
         `─────────────────────────\n` +
         `🎯 <b>Obsidian Price Alert</b>`;
 
+      const alertExVal = alert.ex;
+      const alertSymVal = alert.sym;
       try { playAlertSound("chime"); } catch (_) {}
-      try { showToast({ title, message: body, type: "price_alert" }); } catch (_) {}
+      try {
+        showToast({
+          title,
+          message: body + `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к графику</span> ↗</div>`,
+          type: "price_alert",
+          hint: "Нажмите, чтобы открыть график монеты",
+          onClick: () => {
+            if (typeof switchView === "function") switchView("screener");
+            if (alertExVal && alertSymVal && typeof loadCoinChart === "function") {
+              loadCoinChart(alertExVal, alertSymVal, activeTf);
+            }
+          }
+        });
+      } catch (_) {}
       try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
       
       savePriceAlerts();
@@ -15915,30 +16133,30 @@ function copyPayField(elementId) {
 // FORMATION ALERTS & NOTIFICATIONS CONTROLLER
 // ══════════════════════════════════════════════════════════════════════════
 const DEFAULT_FORMATION_ALERT_SETTINGS = {
-  soundEnabled: true,
-  toastEnabled: true,
-  tgEnabled: true,
+  soundEnabled: false,
+  toastEnabled: false,
+  tgEnabled: false,
   cooldownSeconds: 300,
   minVolume: 0,
   exchanges: ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"],
   blacklist: ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"],
   blacklistCustom: "",
   trendline: {
-    enabled: true,
+    enabled: false,
     timeframes: ["5m", "15m", "1h"],
     minTouches: 3,
     distancePct: 0.3,
     direction: "all" // "all" | "down" (support/long) | "up" (resistance/short)
   },
   level: {
-    enabled: true,
+    enabled: false,
     timeframes: ["5m", "15m", "1h"],
     minTouches: 3,
     distancePct: 0.3,
     direction: "all" // "all" | "support" | "resistance"
   },
   retest: {
-    enabled: true,
+    enabled: false,
     timeframes: ["5m", "15m", "1h"],
     direction: "all", // "all" | "up" | "down"
     stage: "confirmed", // "confirmed" | "approaching" | "both"
@@ -15950,8 +16168,9 @@ let currentFormationAlertSettings = { ...DEFAULT_FORMATION_ALERT_SETTINGS };
 
 function loadFormationAlertSettings() {
   try {
+    const isUserConfigured = localStorage.getItem("obsidian_formation_alerts_user_configured") === "true";
     const raw = localStorage.getItem("obsidian_formation_alert_settings");
-    if (raw) {
+    if (raw && isUserConfigured) {
       const parsed = JSON.parse(raw);
       currentFormationAlertSettings = {
         ...DEFAULT_FORMATION_ALERT_SETTINGS,
@@ -15963,6 +16182,15 @@ function loadFormationAlertSettings() {
         level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(parsed.level || {}) },
         retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(parsed.retest || {}) }
       };
+    } else {
+      currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+      currentFormationAlertSettings.soundEnabled = false;
+      currentFormationAlertSettings.toastEnabled = false;
+      currentFormationAlertSettings.tgEnabled = false;
+      if (currentFormationAlertSettings.trendline) currentFormationAlertSettings.trendline.enabled = false;
+      if (currentFormationAlertSettings.level) currentFormationAlertSettings.level.enabled = false;
+      if (currentFormationAlertSettings.retest) currentFormationAlertSettings.retest.enabled = false;
+      localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
     }
   } catch (_) {
     currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
@@ -15972,6 +16200,7 @@ function loadFormationAlertSettings() {
 }
 
 function saveFormationAlertSettings(settings) {
+  localStorage.setItem("obsidian_formation_alerts_user_configured", "true");
   currentFormationAlertSettings = settings || currentFormationAlertSettings;
   localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
   window.formationAlertSettings = currentFormationAlertSettings;
@@ -16305,7 +16534,16 @@ function initNotificationsUI() {
   // Test Sound & Alert Button
   function triggerTestAlert() {
     playAlertSound("chime");
-    showToast({ title: "Тестовый сигнал", message: "Звук и всплывающая карточка работают корректно!", type: "info" });
+    showToast({
+      title: "Тестовый сигнал",
+      message: "Звук и всплывающая карточка работают корректно!" +
+               `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к формациям</span> ↗</div>`,
+      type: "info",
+      hint: "Нажмите, чтобы перейти к формациям",
+      onClick: () => {
+        if (typeof window.switchView === "function") window.switchView("formations");
+      }
+    });
     if (currentFormationAlertSettings.tgEnabled) {
       sendTelegramAlert("Obsidian Formation & Price Alert\n\nТестовый сигнал из скринера получен успешно!");
     }
@@ -16366,10 +16604,12 @@ function initNotificationsUI() {
 
   // Formation Modal Reset button
   $("btn-reset-formation-alerts")?.addEventListener("click", () => {
+    localStorage.removeItem("obsidian_formation_alerts_user_configured");
     currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
     saveFormationAlertSettings(currentFormationAlertSettings);
+    localStorage.removeItem("obsidian_formation_alerts_user_configured");
     syncFormationUI();
-    showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
+    showToast({ title: "Сброс настроек", message: "Все алерты формаций отключены по умолчанию", type: "info" });
   });
 
   // Settings Apply button hook
@@ -16386,10 +16626,12 @@ function initNotificationsUI() {
   const resetBtn = $("settings-reset-btn");
   if (resetBtn) {
     resetBtn.onclick = () => {
+      localStorage.removeItem("obsidian_formation_alerts_user_configured");
       currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
       saveFormationAlertSettings(currentFormationAlertSettings);
+      localStorage.removeItem("obsidian_formation_alerts_user_configured");
       syncFormationUI();
-      showToast({ title: "Сброс настроек", message: "Все параметры возвращены к стандартным значениям", type: "info" });
+      showToast({ title: "Сброс настроек", message: "Все алерты формаций отключены по умолчанию", type: "info" });
     };
   }
 
@@ -16449,6 +16691,57 @@ function initNotificationsUI() {
     return false;
   }
 
+  function openFormationFromAlert(data) {
+    if (!data) return;
+
+    // 1. Switch to Formations view
+    if (typeof window.switchView === "function") {
+      window.switchView("formations");
+    } else if (typeof switchView === "function") {
+      switchView("formations");
+    }
+
+    // 2. Set formation type if specified (trendline, level -> breakout, retest, cascades)
+    if (data.type) {
+      const typeMap = {
+        trendline: "trendline",
+        level: "breakout",
+        breakout: "breakout",
+        retest: "retest",
+        cascades: "cascades"
+      };
+      const mapped = typeMap[data.type] || data.type;
+      activeFormation = mapped;
+      if (typeof syncFormationsSelect === "function") syncFormationsSelect();
+    }
+
+    // 3. Set timeframe if specified
+    if (data.tf) {
+      formationsTf = data.tf;
+      document.querySelectorAll(".fg-tf-btn").forEach(btn => {
+        btn.classList.toggle("on", btn.dataset.tf === data.tf);
+      });
+    }
+
+    // 4. Set priority coin so it appears as the first chart in the formations grid
+    if (data.sym) {
+      window._formationPriorityCoin = {
+        ex: data.ex,
+        sym: data.sym,
+        curPrice: data.curPrice,
+        targetPrice: data.targetPrice
+      };
+    }
+
+    // 5. Clear cached level maps to ensure fresh scan & load
+    if (typeof formationsCoinsLevelsMap !== "undefined" && formationsCoinsLevelsMap.clear) {
+      formationsCoinsLevelsMap.clear();
+    }
+    if (typeof window.loadFormations === "function") {
+      window.loadFormations(true);
+    }
+  }
+
   async function triggerMatchedFormationAlert(data) {
     const s = currentFormationAlertSettings;
     if (!s) return;
@@ -16483,8 +16776,13 @@ function initNotificationsUI() {
       try {
         showToast({
           title: data.typeName,
-          message: `<b>${symDisp} (${exFull}) [${data.tf}]</b>: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
-          type: "price_alert"
+          message: `<b>${symDisp} (${exFull}) [${data.tf}]</b>: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})` +
+                   `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к формации</span> ↗</div>`,
+          type: "price_alert",
+          hint: "Нажмите, чтобы открыть формацию на графике",
+          onClick: () => {
+            openFormationFromAlert(data);
+          }
         });
       } catch (_) {}
     }

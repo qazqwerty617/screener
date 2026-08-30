@@ -581,8 +581,21 @@ wss.on("connection", (ws, req) => {
   try {
     const urlObj = new URL(req.url, "http://localhost");
     const token = urlObj.searchParams.get("token") || urlObj.searchParams.get("auth");
-    if (token) userStore.getUserByToken(token);
-  } catch (_) {}
+    const clientIp = ws._clientIp;
+    if (token) {
+      const u = userStore.getUserByToken(token, { ip: clientIp });
+      if (u) {
+        ws._userId = u.id;
+        userStore.registerActiveSocket(u.id, ws, clientIp);
+      } else {
+        userStore.registerActiveSocket(null, ws, clientIp);
+      }
+    } else {
+      userStore.registerActiveSocket(null, ws, clientIp);
+    }
+  } catch (_) {
+    userStore.registerActiveSocket(null, ws, ws._clientIp);
+  }
 
   ws.on("message", (data) => {
     try {
@@ -591,13 +604,29 @@ wss.on("connection", (ws, req) => {
       if (++ws._messagesInWindow > 180) return ws.close(1008, "message rate limit");
       const msg = JSON.parse(data.toString());
       if (msg.type === "auth" && msg.token) {
-        userStore.getUserByToken(msg.token);
+        const u = userStore.getUserByToken(msg.token, { ip: ws._clientIp });
+        if (u) {
+          if (ws._userId && ws._userId !== u.id) {
+            userStore.unregisterActiveSocket(ws._userId, ws);
+          }
+          ws._userId = u.id;
+          userStore.registerActiveSocket(u.id, ws, ws._clientIp);
+        }
       } else if (msg.type === "subscribe_kline") {
         subscribeKline(ws, msg.ex, msg.sym, msg.tf);
       } else if (msg.type === "unsubscribe_kline") {
         unsubscribeKline(ws, msg.ex, msg.sym, msg.tf);
       } else if (msg.type === "ping") {
-        // keepalive — no-op
+        if (msg.token) {
+          const u = userStore.getUserByToken(msg.token, { ip: ws._clientIp });
+          if (u) {
+            ws._userId = u.id;
+            userStore.registerActiveSocket(u.id, ws, ws._clientIp);
+          }
+        } else if (ws._userId) {
+          userStore.touchUserActivity(ws._userId, { ip: ws._clientIp });
+        }
+        try { ws.send(JSON.stringify({ type: "pong", t: Date.now() })); } catch (_) {}
       } else if (msg.type === "get_snapshot") {
         if (tickers.size > 0 && ws.readyState === WebSocket.OPEN) {
           // Ensure all tickers have an index before sending map
@@ -616,6 +645,7 @@ wss.on("connection", (ws, req) => {
   ws.on("close", () => {
     clients.delete(ws);
     klineClients.delete(ws);
+    userStore.unregisterActiveSocket(ws._userId || null, ws);
     const clientIp = ws._clientIp;
     if (clientIp) {
       securityShield.unregisterWsConnection(clientIp);
@@ -2381,11 +2411,26 @@ app.post("/api/auth/telegram-link-token", (req, res) => {
 app.get("/api/auth/me", (req, res) => {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-  const user = userStore.getUserByToken(token);
+  const clientIp = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+  const user = userStore.getUserByToken(token, { ip: clientIp });
   if (!user) {
     return res.status(401).json({ error: "Неавторизован" });
   }
   res.json({ success: true, user });
+});
+
+// Real-time client activity heartbeat
+app.all("/api/user/heartbeat", (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim() || (req.body && req.body.token) || (req.query && req.query.token);
+  const clientIp = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim();
+  if (token) {
+    const user = userStore.getUserByToken(token, { ip: clientIp });
+    if (user) {
+      return res.json({ success: true, online: true, userId: user.id });
+    }
+  }
+  res.json({ success: true, online: false });
 });
 
 app.get("/api/notifications/unread", (req, res) => {

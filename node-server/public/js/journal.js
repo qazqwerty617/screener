@@ -998,6 +998,14 @@
     isDragging: false,
     dragStartX: 0,
     dragStartOffset: 0,
+    isDraggingYScale: false,
+    yScaleStartY: 0,
+    yScaleStartMinP: 0,
+    yScaleStartMaxP: 0,
+    customMinP: null,
+    customMaxP: null,
+    currentMinP: 0,
+    currentMaxP: 0,
     mouseX: -1,
     mouseY: -1,
     canvas: null
@@ -1143,10 +1151,23 @@
       const tf = duration <= 20 * 60_000 ? "1m" : duration <= 2 * 3600_000 ? "5m" : duration <= 12 * 3600_000 ? "15m" : "1h";
       const res = await fetch(`/api/klines?ex=${exCode}&sym=${encodeURIComponent(trade.symbol)}&tf=${tf}&lite=1`);
       if (res.ok) {
-        const flatKlines = await res.json();
+        const rawKlines = await res.json();
         const candles = [];
-        for (let i = 0; i < flatKlines.length; i += 6) {
-          candles.push({ t: flatKlines[i], o: flatKlines[i+1], h: flatKlines[i+2], l: flatKlines[i+3], c: flatKlines[i+4], v: flatKlines[i+5] });
+        if (Array.isArray(rawKlines) && rawKlines.length > 0) {
+          if (typeof rawKlines[0] === "object" && rawKlines[0] !== null && "t" in rawKlines[0]) {
+            candles.push(...rawKlines);
+          } else {
+            for (let i = 0; i < rawKlines.length; i += 6) {
+              candles.push({
+                t: Number(rawKlines[i]),
+                o: Number(rawKlines[i+1]),
+                h: Number(rawKlines[i+2]),
+                l: Number(rawKlines[i+3]),
+                c: Number(rawKlines[i+4]),
+                v: Number(rawKlines[i+5]) || 0
+              });
+            }
+          }
         }
         chartState.candles = candles;
         resetChartViewState(canvas);
@@ -1162,6 +1183,21 @@
     canvas._hasInteractiveEvents = true;
 
     canvas.addEventListener("mousedown", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const RIGHT_MARGIN = 75;
+      const CHART_W = rect.width - RIGHT_MARGIN;
+
+      // Click on Price Scale -> drag to expand / compress vertically
+      if (mouseX >= CHART_W) {
+        chartState.isDraggingYScale = true;
+        chartState.yScaleStartY = e.clientY;
+        chartState.yScaleStartMinP = chartState.currentMinP;
+        chartState.yScaleStartMaxP = chartState.currentMaxP;
+        canvas.style.cursor = "ns-resize";
+        return;
+      }
+
       chartState.isDragging = true;
       chartState.dragStartX = e.clientX;
       chartState.dragStartOffset = chartState.scrollOffset;
@@ -1172,20 +1208,47 @@
       const rect = canvas.getBoundingClientRect();
       chartState.mouseX = e.clientX - rect.left;
       chartState.mouseY = e.clientY - rect.top;
+      const RIGHT_MARGIN = 75;
+      const CHART_W = rect.width - RIGHT_MARGIN;
+
+      if (chartState.isDraggingYScale) {
+        const dy = e.clientY - chartState.yScaleStartY;
+        const center = (chartState.yScaleStartMinP + chartState.yScaleStartMaxP) / 2;
+        const baseSpan = (chartState.yScaleStartMaxP - chartState.yScaleStartMinP) / 2;
+        let half = baseSpan * Math.pow(1.006, dy);
+        half = Math.max(Math.abs(center) * 0.0001, Math.min(Math.abs(center) * 50, half));
+        chartState.customMinP = center - half;
+        chartState.customMaxP = center + half;
+        renderInteractiveChart(canvas);
+        return;
+      }
 
       if (chartState.isDragging) {
         const dx = e.clientX - chartState.dragStartX;
         chartState.scrollOffset = chartState.dragStartOffset - dx;
         renderInteractiveChart(canvas);
-      } else if (chartState.mouseX >= 0 && chartState.mouseX <= rect.width && chartState.mouseY >= 0 && chartState.mouseY <= rect.height) {
-        renderInteractiveChart(canvas);
+      } else {
+        if (chartState.mouseX >= CHART_W) {
+          canvas.style.cursor = "ns-resize";
+        } else {
+          canvas.style.cursor = "crosshair";
+        }
+        if (chartState.mouseX >= 0 && chartState.mouseX <= rect.width && chartState.mouseY >= 0 && chartState.mouseY <= rect.height) {
+          renderInteractiveChart(canvas);
+        }
       }
     });
 
     window.addEventListener("mouseup", () => {
-      if (chartState.isDragging) {
+      if (chartState.isDragging || chartState.isDraggingYScale) {
         chartState.isDragging = false;
-        canvas.style.cursor = "crosshair";
+        chartState.isDraggingYScale = false;
+        const rect = canvas.getBoundingClientRect();
+        if (chartState.mouseX >= rect.width - 75) {
+          canvas.style.cursor = "ns-resize";
+        } else {
+          canvas.style.cursor = "crosshair";
+        }
       }
     });
 
@@ -1195,13 +1258,40 @@
       renderInteractiveChart(canvas);
     });
 
-    canvas.addEventListener("wheel", (e) => {
-      e.preventDefault();
-      const zoomFactor = e.deltaY < 0 ? 1.2 : 0.8;
-      const newWidth = Math.max(4, Math.min(60, chartState.candleWidth * zoomFactor));
-      
+    canvas.addEventListener("dblclick", (e) => {
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
+      const RIGHT_MARGIN = 75;
+      if (mouseX >= rect.width - RIGHT_MARGIN) {
+        chartState.customMinP = null;
+        chartState.customMaxP = null;
+        renderInteractiveChart(canvas);
+      }
+    });
+
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const RIGHT_MARGIN = 75;
+      const CHART_W = rect.width - RIGHT_MARGIN;
+
+      // Wheel on Price Scale -> Zoom Y scale
+      if (mouseX >= CHART_W) {
+        const zoomFactor = e.deltaY < 0 ? 0.88 : 1.14;
+        const curMin = chartState.currentMinP;
+        const curMax = chartState.currentMaxP;
+        const center = (curMin + curMax) / 2;
+        let half = ((curMax - curMin) / 2) * zoomFactor;
+        half = Math.max(Math.abs(center) * 0.0001, Math.min(Math.abs(center) * 50, half));
+        chartState.customMinP = center - half;
+        chartState.customMaxP = center + half;
+        renderInteractiveChart(canvas);
+        return;
+      }
+
+      const zoomFactor = e.deltaY < 0 ? 1.2 : 0.8;
+      const newWidth = Math.max(4, Math.min(60, chartState.candleWidth * zoomFactor));
       const candleUnderMouse = (chartState.scrollOffset + mouseX) / chartState.candleWidth;
       
       chartState.candleWidth = newWidth;
@@ -1215,6 +1305,8 @@
 
     if (resetBtn) {
       resetBtn.onclick = () => {
+        chartState.customMinP = null;
+        chartState.customMaxP = null;
         resetChartViewState(canvas);
         renderInteractiveChart(canvas);
       };
@@ -1238,6 +1330,9 @@
     const trade = chartState.trade;
     if (!candles.length) return;
     chartState.candleWidth = 12;
+    chartState.customMinP = null;
+    chartState.customMaxP = null;
+    chartState.isDraggingYScale = false;
     const rect = canvas.getBoundingClientRect();
     const chartW = (rect.width || 800) - 80;
 
@@ -1302,14 +1397,29 @@
 
     if (!visibleCandles.length) return;
 
-    let minP = Math.min(...visibleCandles.map(c => c.l));
-    let maxP = Math.max(...visibleCandles.map(c => c.h));
+    let autoMinP = Math.min(...visibleCandles.map(c => c.l));
+    let autoMaxP = Math.max(...visibleCandles.map(c => c.h));
     if (trade) {
-      minP = Math.min(minP, trade.entry * 0.995, trade.exit * 0.995);
-      maxP = Math.max(maxP, trade.entry * 1.005, trade.exit * 1.005);
+      autoMinP = Math.min(autoMinP, trade.entry * 0.995, trade.exit * 0.995);
+      autoMaxP = Math.max(autoMaxP, trade.entry * 1.005, trade.exit * 1.005);
     }
-    const maxVol = Math.max(...visibleCandles.map(c => c.v || 0), 1);
+    const pPad = (autoMaxP - autoMinP) * 0.08 || autoMaxP * 0.01;
+    autoMinP -= pPad;
+    autoMaxP += pPad;
+
+    const minP = chartState.customMinP != null ? chartState.customMinP : autoMinP;
+    const maxP = chartState.customMaxP != null ? chartState.customMaxP : autoMaxP;
+    chartState.currentMinP = minP;
+    chartState.currentMaxP = maxP;
     const pRange = maxP - minP || 1;
+    const maxVol = Math.max(...visibleCandles.map(c => c.v || 0), 1);
+
+    function formatAxisP(p) {
+      if (p >= 1000) return p.toFixed(2);
+      if (p >= 1) return p.toFixed(3);
+      if (p >= 0.01) return p.toFixed(5);
+      return p.toPrecision(5);
+    }
 
     const getY = (p) => TOP_MARGIN + (1 - (p - minP) / pRange) * PRICE_H;
     const getVolY = (v) => (TOP_MARGIN + PRICE_H + VOL_H) - (v / maxVol) * VOL_H;
@@ -1324,6 +1434,7 @@
     for (let i = 0; i <= priceSteps; i++) {
       const p = minP + (pRange * i) / priceSteps;
       const y = getY(p);
+      if (y < TOP_MARGIN - 2 || y > H - BOTTOM_MARGIN + 2) continue;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(CHART_W, y);
@@ -1333,7 +1444,7 @@
       ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.font = "10px monospace";
       ctx.textAlign = "left";
-      ctx.fillText(p.toFixed(p > 10 ? 2 : 4), CHART_W + 8, y + 3);
+      ctx.fillText(formatAxisP(p), CHART_W + 8, y + 3);
     }
 
     // Vertical Time Grid & Candles
@@ -1403,10 +1514,11 @@
     for (let i = 0; i <= priceSteps; i++) {
       const p = minP + (pRange * i) / priceSteps;
       const y = getY(p);
-      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      if (y < TOP_MARGIN - 2 || y > H - BOTTOM_MARGIN + 2) continue;
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
       ctx.font = "10px monospace";
       ctx.textAlign = "left";
-      ctx.fillText(p.toFixed(p > 10 ? 2 : 4), CHART_W + 8, y + 3);
+      ctx.fillText(formatAxisP(p), CHART_W + 8, y + 3);
     }
 
     // ── DRAW TMM-STYLE EXECUTIONS & PRICE LINES (FULL TMM CLONE) ──────────────
