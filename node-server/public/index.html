@@ -27,7 +27,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap"
         rel="stylesheet" />
-    <link rel="stylesheet" href="/css/app.css?v=1007" />
+    <link rel="stylesheet" href="/css/app.css?v=1008" />
     <link rel="stylesheet" href="/css/arbitrage.css?v=2" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=2" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
@@ -1733,6 +1733,61 @@
         </div>
     </div>
 
+    <style>
+        #j-draw-tools {
+            position: absolute !important;
+            left: 10px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            z-index: 50 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 2px !important;
+            min-width: 34px !important;
+            padding: 6px 4px !important;
+            border: 1px solid rgba(160, 124, 255, 0.16) !important;
+            border-radius: 8px !important;
+            background: linear-gradient(180deg, rgba(94, 58, 238, 0.16) 0%, rgba(18, 20, 30, 0.96) 18%, rgba(18, 20, 30, 0.92) 100%) !important;
+            backdrop-filter: blur(14px) !important;
+            -webkit-backdrop-filter: blur(14px) !important;
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+            user-select: none !important;
+        }
+        #j-draw-tools .dt-btn {
+            width: 26px !important;
+            height: 26px !important;
+            border: none !important;
+            background: transparent;
+            color: var(--tool-accent, rgba(255, 255, 255, 0.65));
+            border-radius: 5px !important;
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            transition: background 0.12s, color 0.12s;
+            position: relative !important;
+        }
+        #j-draw-tools .dt-btn:hover {
+            background: rgba(255, 255, 255, 0.08) !important;
+            color: #fff !important;
+        }
+        #j-draw-tools .dt-btn.on {
+            background: linear-gradient(180deg, #8b5cf6 0%, #6d42ff 100%) !important;
+            color: #fff !important;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset, 0 0 14px rgba(109, 66, 255, 0.45) !important;
+        }
+        #j-draw-tools .dt-btn.del:hover {
+            background: rgba(255, 69, 96, 0.15) !important;
+            color: var(--rd) !important;
+        }
+        #j-draw-tools .dt-sep {
+            width: 18px !important;
+            height: 1px !important;
+            background: rgba(255, 255, 255, 0.1) !important;
+            margin: 3px 0 !important;
+        }
+    </style>
     <!-- Trade Detail & Candle Chart Visualizer Modal (TMM Style) -->
     <div id="journal-chart-modal" class="j-modal-overlay" style="display:none;">
         <div class="j-modal-content" style="max-width:1200px; width:96%; padding:0; overflow:hidden;">
@@ -1742,10 +1797,10 @@
             </div>
             <div style="display:flex; height:500px;">
                 <!-- LEFT: Interactive Chart -->
-                <div style="flex:1; min-width:0; position:relative; background:#0b0e14; border-right:1px solid rgba(255,255,255,0.08);">
-                    <canvas id="journal-trade-candle-canvas" style="width:100%; height:100%; cursor:crosshair;"></canvas>
-                    <!-- Journal Draw Tools (matching main screener) -->
-                    <div id="j-draw-tools" aria-label="Инструменты разметки">
+                <div style="flex:1; min-width:0; position:relative; background:#0b0e14; border-right:1px solid rgba(255,255,255,0.08); overflow:hidden;">
+                    <canvas id="journal-trade-candle-canvas" style="width:100%; height:100%; display:block; cursor:crosshair;"></canvas>
+                    <!-- Journal Draw Tools (strictly vertically centered on the left) -->
+                    <div id="j-draw-tools" style="position:absolute; left:10px; top:50%; transform:translateY(-50%); z-index:50; display:flex; flex-direction:column; align-items:center; gap:2px; min-width:34px; padding:6px 4px; border:1px solid rgba(160,124,255,0.16); border-radius:8px; background:linear-gradient(180deg,rgba(94,58,238,0.16) 0%,rgba(18,20,30,0.96) 18%,rgba(18,20,30,0.92) 100%); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 14px 32px rgba(0,0,0,0.48),inset 0 1px 0 rgba(255,255,255,0.05); user-select:none;" aria-label="Инструменты разметки">
                         <button class="dt-btn j-dt-btn on" data-j-tool="none" title="Курсор и перемещение (V)">
                             <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                                 <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
@@ -3138,7 +3193,7 @@
     <script src="/js/arbitrage.js?v=2008"></script>
     <script src="/js/arbitrage-pro.js?v=2008"></script>
     <script src="/js/backtest.js?v=2008"></script>
-    <script src="/js/journal.js?v=2013"></script>
+    <script src="/js/journal.js?v=2014"></script>
 </body>
 
 </html>

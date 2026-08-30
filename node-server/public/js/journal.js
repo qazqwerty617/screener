@@ -1244,7 +1244,16 @@
     });
   }
 
+  function applyJournalToolButtonColors() {
+    document.querySelectorAll(".j-dt-btn[data-j-tool]").forEach(btn => {
+      const tool = btn.dataset.jTool;
+      if (tool === "none") btn.style.removeProperty("--tool-accent");
+      else btn.style.setProperty("--tool-accent", chartState.toolColors[tool] || "#38bdf8");
+    });
+  }
+
   function setupJournalDrawToolbar() {
+    applyJournalToolButtonColors();
     document.querySelectorAll(".j-dt-btn[data-j-tool]").forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
@@ -1285,6 +1294,7 @@
     chartState.drawingPhase = 0;
     chartState.dragDrawing = null;
     setJournalTool("none");
+    applyJournalToolButtonColors();
 
     // Executions are attached to one round trip by the server aggregator.
     const relatedExecs = (Array.isArray(trade.executions) ? trade.executions : []).map(item => ({
