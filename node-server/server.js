@@ -3249,16 +3249,16 @@ server.listen(PORT, () => {
     const startTime = Date.now();
 
     try {
+      // ── Scan ALL crypto pairs on ALL exchanges (no limit) ──
       const list = Array.from(tickers.values())
         .filter(t => {
-          if (!t || !t.key || !t.p || t.p <= 0 || (t.v || 0) < 50000) return false;
+          if (!t || !t.key || !t.p || t.p <= 0) return false;
           if (typeof isNonCryptoOrStock === "function" && isNonCryptoOrStock(t.base, t.key)) return false;
           const k = String(t.key || "").toUpperCase();
           if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") || k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) return false;
           return true;
         })
-        .sort((a, b) => (b.v || 0) - (a.v || 0))
-        .slice(0, 300);
+        .sort((a, b) => (b.v || 0) - (a.v || 0)); // Most liquid first for batch ordering
 
       if (list.length === 0) {
         isScanningPatterns = false;
@@ -3268,7 +3268,7 @@ server.listen(PORT, () => {
 
       const timeframes = ["15m", "5m", "1h", "4h"];
       let newSignalsCount = 0;
-      const PARALLEL_CONCURRENCY = 14;
+      const PARALLEL_CONCURRENCY = 16;
 
       // Use a Map for O(1) keyed replacement instead of O(n) .filter() on every coin
       if (!scanAllPatterns._pMap) scanAllPatterns._pMap = new Map();
