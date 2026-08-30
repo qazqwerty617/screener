@@ -3,8 +3,7 @@
 const formationEngine = require("./public/js/formationEngine");
 
 /**
- * Clean unbroken horizontal S/R detector for server-side 24/7 scanning.
- * Rejects pierced levels and ensures at least 2 distinct swing bounces.
+ * Server-side wrapper for FormationEngine with all pattern types.
  */
 function detectChartLevelsAndTouches(rawCandles) {
   try {
@@ -14,4 +13,51 @@ function detectChartLevelsAndTouches(rawCandles) {
   }
 }
 
-module.exports = { detectChartLevelsAndTouches };
+function detectHorizontals(rawCandles, minTouches = 2) {
+  try {
+    return formationEngine.detectHorizontals(rawCandles, minTouches);
+  } catch (_) {
+    return [];
+  }
+}
+
+function detectCascades(rawCandles, minCount = 2) {
+  try {
+    return formationEngine.detectCascades(rawCandles, minCount);
+  } catch (_) {
+    return [];
+  }
+}
+
+function detectTrendlines(rawCandles, minTouches = 2) {
+  try {
+    return formationEngine.detectTrendlines(rawCandles, minTouches);
+  } catch (_) {
+    return [];
+  }
+}
+
+function detectRetests(rawCandles) {
+  try {
+    return formationEngine.detectRetests(rawCandles);
+  } catch (_) {
+    return [];
+  }
+}
+
+function detectApproachingRetests(rawCandles) {
+  try {
+    return formationEngine.detectApproachingRetests(rawCandles);
+  } catch (_) {
+    return [];
+  }
+}
+
+module.exports = {
+  detectChartLevelsAndTouches,
+  detectHorizontals,
+  detectCascades,
+  detectTrendlines,
+  detectRetests,
+  detectApproachingRetests
+};

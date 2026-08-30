@@ -455,7 +455,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     for (const tl of rawTls) {
       const endPrice = tl.endPrice;
       const dist = Math.abs(priceNow - endPrice) / priceNow;
-      if (dist <= 0.035) {
+      if (dist <= 0.08) {
         signals.push({
           type: 'trendline',
           ex, sym, base, tf,
@@ -465,13 +465,13 @@ function scanCandles(meta, candles, cfgOverride = {}) {
           ts: now,
           meta: {
             tlType: tl.direction === 'down' ? 'asc' : 'desc',
-            slope: +(tl.slope || 0).toFixed(4),
+            slope: +(tl.slope || 0).toFixed(6),
             touches: tl.touches || 2,
             dist: +(dist * 100).toFixed(2),
-            p1Idx: tl.p1.idx,
-            p1Price: tl.p1.price,
-            p2Idx: tl.p2.idx,
-            p2Price: tl.p2.price
+            p1Idx: tl.p1?.idx,
+            p1Price: tl.p1?.price,
+            p2Idx: tl.p2?.idx,
+            p2Price: tl.p2?.price
           }
         });
       }
@@ -483,7 +483,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     const rawHoriz = formationEngine.detectHorizontals(candles, 2);
     for (const hl of rawHoriz) {
       const dist = Math.abs(priceNow - hl.price) / priceNow;
-      if (dist <= 0.03) {
+      if (dist <= 0.08) {
         signals.push({
           type: 'level',
           ex, sym, base, tf,
@@ -501,6 +501,29 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     }
   } catch (_) {}
 
+  // 3. Retests & Approaching Retests from FormationEngine
+  try {
+    const confirmedRetests = formationEngine.detectRetests(candles);
+    for (const rt of confirmedRetests) {
+      const dist = Math.abs(priceNow - rt.price) / priceNow;
+      signals.push({
+        type: 'retest',
+        ex, sym, base, tf,
+        price: +rt.price.toFixed(4),
+        direction: rt.direction === 'up' ? 'long' : 'short',
+        confidence: 5,
+        ts: rt.touchTime || now,
+        meta: {
+          status: 'confirmed',
+          touches: rt.touches || 2,
+          dist: +(dist * 100).toFixed(2),
+          touchIdx: rt.touchIdx,
+          swingIdx: rt.swingIdx
+        }
+      });
+    }
+  } catch (_) {}
+
   // Breakouts
   for (const br of breakouts) {
     signals.push({
@@ -508,18 +531,6 @@ function scanCandles(meta, candles, cfgOverride = {}) {
       direction: br.direction === 'up' ? 'long' : 'short',
       confidence: br.volConfirmed ? 5 : 3, ts: lastC.t || now,
       meta: { sourceType: br.sourceType, volConfirmed: br.volConfirmed, barIdx: br.barIdx }
-    });
-  }
-
-  // Retests — only show if recent (within last 10 bars) to avoid stale signals
-  const RETEST_RECENCY = 10;
-  for (const rt of retests) {
-    if (last - rt.retestBar > RETEST_RECENCY) continue; // too old
-    signals.push({
-      type: 'retest', ex, sym, base, tf, price: +rt.event.breakPrice.toFixed(4),
-      direction: rt.event.direction === 'up' ? 'long' : 'short',
-      confidence: rt.status === 'confirmed' ? 5 : 2, ts: lastC.t || now,
-      meta: { status: rt.status, sourceType: rt.event.sourceType, barIdx: rt.event.barIdx, retestBar: rt.retestBar }
     });
   }
 

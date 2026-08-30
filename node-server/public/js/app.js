@@ -16340,33 +16340,33 @@ function copyPayField(elementId) {
 // ══════════════════════════════════════════════════════════════════════════
 const DEFAULT_FORMATION_ALERT_SETTINGS = {
   soundEnabled: false,
-  toastEnabled: false,
-  tgEnabled: false,
+  toastEnabled: true,
+  tgEnabled: true,
   cooldownSeconds: 300,
   minVolume: 0,
   exchanges: ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"],
-  blacklist: ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"],
+  blacklist: [],
   blacklistCustom: "",
   trendline: {
-    enabled: false,
-    timeframes: ["5m", "15m", "1h"],
-    minTouches: 3,
-    distancePct: 0.3,
+    enabled: true,
+    timeframes: ["5m", "15m", "1h", "4h"],
+    minTouches: 2,
+    distancePct: 0.8,
     direction: "all" // "all" | "down" (support/long) | "up" (resistance/short)
   },
   level: {
-    enabled: false,
-    timeframes: ["5m", "15m", "1h"],
-    minTouches: 3,
-    distancePct: 0.3,
+    enabled: true,
+    timeframes: ["5m", "15m", "1h", "4h"],
+    minTouches: 2,
+    distancePct: 0.8,
     direction: "all" // "all" | "support" | "resistance"
   },
   retest: {
-    enabled: false,
-    timeframes: ["5m", "15m", "1h"],
+    enabled: true,
+    timeframes: ["5m", "15m", "1h", "4h"],
     direction: "all", // "all" | "up" | "down"
     stage: "confirmed", // "confirmed" | "approaching" | "both"
-    maxAgeCandles: 20
+    maxAgeCandles: 30
   }
 };
 
@@ -16374,9 +16374,8 @@ let currentFormationAlertSettings = { ...DEFAULT_FORMATION_ALERT_SETTINGS };
 
 function loadFormationAlertSettings() {
   try {
-    const isUserConfigured = localStorage.getItem("obsidian_formation_alerts_user_configured") === "true";
     const raw = localStorage.getItem("obsidian_formation_alert_settings");
-    if (raw && isUserConfigured) {
+    if (raw) {
       const parsed = JSON.parse(raw);
       currentFormationAlertSettings = {
         ...DEFAULT_FORMATION_ALERT_SETTINGS,
@@ -16390,12 +16389,6 @@ function loadFormationAlertSettings() {
       };
     } else {
       currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
-      currentFormationAlertSettings.soundEnabled = false;
-      currentFormationAlertSettings.toastEnabled = false;
-      currentFormationAlertSettings.tgEnabled = false;
-      if (currentFormationAlertSettings.trendline) currentFormationAlertSettings.trendline.enabled = false;
-      if (currentFormationAlertSettings.level) currentFormationAlertSettings.level.enabled = false;
-      if (currentFormationAlertSettings.retest) currentFormationAlertSettings.retest.enabled = false;
       localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
     }
   } catch (_) {
@@ -16406,7 +16399,6 @@ function loadFormationAlertSettings() {
 }
 
 function saveFormationAlertSettings(settings) {
-  localStorage.setItem("obsidian_formation_alerts_user_configured", "true");
   currentFormationAlertSettings = settings || currentFormationAlertSettings;
   localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
   window.formationAlertSettings = currentFormationAlertSettings;
@@ -16439,8 +16431,10 @@ function initNotificationsUI() {
     const buttons = container.querySelectorAll("button.fmt-btn[data-val]");
     buttons.forEach(btn => {
       const val = btn.dataset.val;
-      btn.classList.toggle("active", String(val) === String(activeVal));
-      btn.onclick = () => {
+      const isAct = String(val) === String(activeVal);
+      btn.classList.toggle("active", isAct);
+      btn.onclick = (e) => {
+        e.preventDefault();
         buttons.forEach(b => b.classList.remove("active"));
         btn.classList.add("active");
         onSelect(val);
@@ -16448,178 +16442,156 @@ function initNotificationsUI() {
     });
   }
 
-  // Helper: setup multi-select timeframe button groups
-  function setupTfGroup(containerId, activeTfs, onToggle) {
+  // Helper: setup multi-select timeframe groups
+  function setupTfGroup(containerId, activeTfs, onSelect) {
     const container = $(containerId);
     if (!container) return;
     const buttons = container.querySelectorAll("button.fmt-btn[data-tf]");
+    const activeSet = new Set(Array.isArray(activeTfs) ? activeTfs : ["5m", "15m", "1h"]);
     buttons.forEach(btn => {
       const tf = btn.dataset.tf;
-      btn.classList.toggle("active", (activeTfs || []).includes(tf));
-      btn.onclick = () => {
-        btn.classList.toggle("active");
-        const currentSelected = Array.from(container.querySelectorAll("button.fmt-btn.active[data-tf]")).map(b => b.dataset.tf);
-        if (currentSelected.length === 0) {
-          btn.classList.add("active"); // Ensure at least 1 tf is selected
-          return;
+      btn.classList.toggle("active", activeSet.has(tf));
+      btn.onclick = (e) => {
+        e.preventDefault();
+        if (activeSet.has(tf)) {
+          if (activeSet.size > 1) activeSet.delete(tf);
+        } else {
+          activeSet.add(tf);
         }
-        onToggle(currentSelected);
+        buttons.forEach(b => b.classList.toggle("active", activeSet.has(b.dataset.tf)));
+        onSelect(Array.from(activeSet));
       };
     });
   }
 
-  // Helper: setup multi-select exchange button groups
-  const ALL_EXCHANGES_LIST = ["BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"];
-
-  function setupExchangeGroup(containerId, activeExs, onToggle) {
+  // Helper: setup multi-select exchange pills
+  function setupExchangeGroup(containerId, activeExchanges, onSelect) {
     const container = $(containerId);
     if (!container) return;
-    let selected = Array.isArray(activeExs) && activeExs.length > 0 ? [...activeExs] : ["all", ...ALL_EXCHANGES_LIST];
-    if (selected.includes("all") && selected.length === 1) {
-      selected = ["all", ...ALL_EXCHANGES_LIST];
-    }
-
     const buttons = container.querySelectorAll("button.fmt-btn[data-ex]");
+    let curList = Array.isArray(activeExchanges) ? [...activeExchanges] : ["all"];
     
-    function refreshUI() {
-      const isAll = selected.includes("all") || ALL_EXCHANGES_LIST.every(e => selected.includes(e));
+    function refresh() {
+      const isAll = curList.includes("all") || curList.length === 0;
       buttons.forEach(btn => {
         const ex = btn.dataset.ex;
         if (ex === "all") {
           btn.classList.toggle("active", isAll);
         } else {
-          btn.classList.toggle("active", isAll || selected.includes(ex));
+          btn.classList.toggle("active", isAll || curList.includes(ex));
         }
       });
     }
 
     buttons.forEach(btn => {
-      const ex = btn.dataset.ex;
-      btn.onclick = () => {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        const ex = btn.dataset.ex;
         if (ex === "all") {
-          const wasAll = selected.includes("all") || ALL_EXCHANGES_LIST.every(e => selected.includes(e));
-          if (wasAll) {
-            selected = ["BN"]; // Keep at least 1
-          } else {
-            selected = ["all", ...ALL_EXCHANGES_LIST];
-          }
+          curList = ["all"];
         } else {
-          if (selected.includes("all")) {
-            selected = [...ALL_EXCHANGES_LIST];
-          }
-          if (selected.includes(ex)) {
-            selected = selected.filter(e => e !== ex && e !== "all");
-            if (selected.length === 0) {
-              selected = [ex];
-            }
+          if (curList.includes("all")) {
+            curList = [ex];
+          } else if (curList.includes(ex)) {
+            curList = curList.filter(x => x !== ex);
+            if (curList.length === 0) curList = ["all"];
           } else {
-            selected.push(ex);
-            if (ALL_EXCHANGES_LIST.every(e => selected.includes(e))) {
-              selected = ["all", ...ALL_EXCHANGES_LIST];
-            }
+            curList.push(ex);
           }
         }
-        refreshUI();
-        onToggle(selected);
+        refresh();
+        onSelect(curList);
       };
     });
-
-    refreshUI();
+    refresh();
   }
 
-  // Helper: setup distance selector with custom input support
-  function setupDistanceGroup(containerId, customInputId, customBtnId, activeDist, onSelect) {
+  // Helper: setup custom distance input
+  function setupDistanceGroup(containerId, inputId, customBtnId, activeDist, onSelect) {
     const container = $(containerId);
-    const customInput = $(customInputId);
+    const input = $(inputId);
     const customBtn = $(customBtnId);
     if (!container) return;
 
-    const buttons = container.querySelectorAll("button.fmt-btn[data-val]");
-    let isStandard = false;
+    const buttons = container.querySelectorAll("button.fmt-btn[data-val]:not([data-val='custom'])");
+    let isPreset = false;
 
     buttons.forEach(btn => {
-      const val = btn.dataset.val;
-      if (val !== "custom" && parseFloat(val) === parseFloat(activeDist)) {
-        btn.classList.add("active");
-        isStandard = true;
-      } else {
-        btn.classList.remove("active");
-      }
+      const val = parseFloat(btn.dataset.val);
+      const isMatch = Math.abs(val - activeDist) < 0.001;
+      btn.classList.toggle("active", isMatch);
+      if (isMatch) isPreset = true;
 
-      btn.onclick = () => {
-        if (val === "custom") {
-          buttons.forEach(b => b.classList.remove("active"));
-          btn.classList.add("active");
-          if (customInput) {
-            customInput.style.display = "inline-block";
-            customInput.focus();
-            if (customInput.value) onSelect(parseFloat(customInput.value) || 0.3);
-          }
-        } else {
-          buttons.forEach(b => b.classList.remove("active"));
-          btn.classList.add("active");
-          if (customInput) customInput.style.display = "none";
-          onSelect(parseFloat(val));
-        }
+      btn.onclick = (e) => {
+        e.preventDefault();
+        buttons.forEach(b => b.classList.remove("active"));
+        if (customBtn) customBtn.classList.remove("active");
+        if (input) input.style.display = "none";
+        btn.classList.add("active");
+        onSelect(val);
       };
     });
 
-    if (!isStandard && customBtn && customInput) {
-      customBtn.classList.add("active");
-      customInput.style.display = "inline-block";
-      customInput.value = activeDist;
-    }
-
-    if (customInput) {
-      customInput.oninput = () => {
-        const parsed = parseFloat(customInput.value);
-        if (!isNaN(parsed) && parsed > 0) onSelect(parsed);
+    if (customBtn && input) {
+      if (!isPreset && activeDist !== undefined) {
+        customBtn.classList.add("active");
+        input.style.display = "inline-block";
+        input.value = activeDist;
+      }
+      customBtn.onclick = (e) => {
+        e.preventDefault();
+        buttons.forEach(b => b.classList.remove("active"));
+        customBtn.classList.add("active");
+        input.style.display = "inline-block";
+        input.focus();
+      };
+      input.oninput = () => {
+        const val = parseFloat(input.value);
+        if (!isNaN(val) && val > 0) onSelect(val);
       };
     }
   }
 
-  // Helper: setup blacklist quick pills and custom input
-  function setupBlacklistGroup(containerId, inputId, activeBl, customVal, onChange) {
-    const container = $(containerId);
-    const customInput = $(inputId);
+  // Helper: setup blacklist pills and custom input
+  function setupBlacklistGroup(pillsContainerId, customInputId, activeList, customStr, onChange) {
+    const container = $(pillsContainerId);
+    const input = $(customInputId);
     if (!container) return;
 
-    let selected = Array.isArray(activeBl) ? [...activeBl] : ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
-
+    const list = Array.isArray(activeList) ? [...activeList] : [];
     const buttons = container.querySelectorAll("button.fmt-btn[data-bl]");
+
+    function refresh() {
+      buttons.forEach(btn => {
+        const bl = btn.dataset.bl;
+        btn.classList.toggle("active", list.includes(bl));
+      });
+    }
+
     buttons.forEach(btn => {
-      const coin = btn.dataset.bl;
-      btn.classList.toggle("active", selected.includes(coin));
-      btn.onclick = () => {
-        if (selected.includes(coin)) {
-          selected = selected.filter(c => c !== coin);
-        } else {
-          selected.push(coin);
-        }
-        btn.classList.toggle("active", selected.includes(coin));
-        onChange(selected, customInput ? customInput.value : "");
+      btn.onclick = (e) => {
+        e.preventDefault();
+        const bl = btn.dataset.bl;
+        const idx = list.indexOf(bl);
+        if (idx >= 0) list.splice(idx, 1);
+        else list.push(bl);
+        refresh();
+        onChange(list, input ? input.value : "");
       };
     });
 
-    if (customInput) {
-      customInput.value = customVal || "";
-      const updateCustom = () => {
-        onChange(selected, customInput.value);
+    if (input) {
+      input.value = customStr || "";
+      input.oninput = () => {
+        onChange(list, input.value);
       };
-      customInput.oninput = updateCustom;
-      customInput.onchange = updateCustom;
-      customInput.onblur = updateCustom;
     }
+
+    refresh();
   }
 
+  // Open & Close Formations Modal
   function openFormationAlertsModal() {
-    const isPro = window.currentUser && window.currentUser.plan === "pro";
-    if (!isPro) {
-      if (typeof openProModal === "function") {
-        openProModal("Детектор и алерты формаций");
-      }
-      return;
-    }
     loadFormationAlertSettings();
     syncFormationUI();
     const overlay = $("modal-formation-alerts-overlay");
@@ -16634,14 +16606,12 @@ function initNotificationsUI() {
   window.openFormationAlertsModal = openFormationAlertsModal;
   window.closeFormationAlertsModal = closeFormationAlertsModal;
 
-  // Open modal triggers
   $("btn-open-formation-alerts")?.addEventListener("click", openFormationAlertsModal);
   $("btn-open-fmt-from-settings")?.addEventListener("click", () => {
-    if (typeof closeSettingsModal === "function") closeSettingsModal();
+    closeSettings();
     openFormationAlertsModal();
   });
 
-  // Close modal triggers
   $("fmt-modal-close")?.addEventListener("click", closeFormationAlertsModal);
   $("modal-formation-alerts-overlay")?.addEventListener("click", (e) => {
     if (e.target.id === "modal-formation-alerts-overlay") closeFormationAlertsModal();
@@ -16947,6 +16917,18 @@ function initNotificationsUI() {
       } catch (err) {
         console.warn("Snapshot generation failed for formation alert:", err);
       }
+
+      const telegramMsg =
+        `⚡ <b>${data.typeName}</b>\n\n` +
+        `• <b>Инструмент:</b> ${exFull} · <code>${symDisp}</code>\n` +
+        `• <b>Таймфрейм:</b> ${data.tf}\n` +
+        `• <b>Касания:</b> ${data.touches} касания\n` +
+        `• <b>Дистанция:</b> ${data.distPct}% до уровня ($${formattedPrice})\n` +
+        `• <b>Время:</b> ${timeStr}\n` +
+        `─────────────────────────\n` +
+        `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
+
+      sendTelegramAlert(telegramMsg, photoDataUrl);
     }
 
     if (s.soundEnabled) {
@@ -16971,8 +16953,7 @@ function initNotificationsUI() {
 
   async function runFormationAlertScanner() {
     if (isScanningFormationAlerts) return;
-    const isPro = window.currentUser && window.currentUser.plan === "pro";
-    if (!isPro) return; // Formation alerts are exclusively a PRO feature
+    const isPro = true; // All authenticated & local users can receive formation alerts
 
     const s = currentFormationAlertSettings;
     if (!s) return;

@@ -73,6 +73,12 @@ const journalCredentials = createJournalCredentialStore();
 const journalSyncCache = new Map();
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 const cachedTfMaps = Object.create(null); // tf -> { "EX:SYM": levels[] }
+const cachedFormationMaps = {
+  cascades: Object.create(null),
+  levels: Object.create(null),
+  trendline: Object.create(null),
+  retest: Object.create(null)
+};
 let currentWallsCache = [];
 let currentWallsMeta = { walls: [], updatedAt: 0, partial: false, exchangesReady: 0, exchangesTotal: 11, exchangeStatuses: {} };
 global.__obsidianWallsMeta = currentWallsMeta;
@@ -2983,12 +2989,21 @@ registerPaymentRoutes(app, { userStore, paymentGateway });
 // registered before the SPA catch-all below.
 app.get("/api/formations/map", compression(), (req, res) => {
   setPublicCors(req, res);
-  res.setHeader("Cache-Control", "public, max-age=5");
+  res.setHeader("Cache-Control", "public, max-age=3");
   const tf = String(req.query.tf || "15m");
   const type = String(req.query.type || "cascades");
 
-  if (type === "cascades" || type === "levels") {
-    return res.json(cachedTfMaps[tf] || {});
+  if (cachedFormationMaps[type] && cachedFormationMaps[type][tf] && Object.keys(cachedFormationMaps[type][tf]).length > 0) {
+    return res.json(cachedFormationMaps[type][tf]);
+  }
+  if (type === "breakout" && cachedFormationMaps.levels && cachedFormationMaps.levels[tf]) {
+    return res.json(cachedFormationMaps.levels[tf]);
+  }
+  if (type === "levels" && cachedFormationMaps.levels && cachedFormationMaps.levels[tf]) {
+    return res.json(cachedFormationMaps.levels[tf]);
+  }
+  if (type === "cascades" && cachedTfMaps[tf]) {
+    return res.json(cachedTfMaps[tf]);
   }
 
   const map = Object.create(null);
@@ -3160,28 +3175,49 @@ server.listen(PORT, () => {
     }
   });
 
-  // ═══ Pattern Scanner Engine (24/7 Continuous Loop with Smart TTL Caching & Pacing) ═══
+  // ═══ Pattern Scanner Engine (24/7 Continuous Parallel Pool with Smart Caching) ═══
   let isScanningPatterns = false;
   const scannerCandleCache = new Map(); // key -> { candles, expiresAt }
   const exchangeBackoffs = new Map(); // ex -> backoffUntilTimestamp
 
   function getTfTtlMs(tf) {
     const low = String(tf || "").toLowerCase();
-    if (low === "1d") return 15 * 60 * 1000; // 15 min cache for 1D
-    if (low === "4h") return 8 * 60 * 1000;  // 8 min cache for 4H
-    if (low === "1h") return 4 * 60 * 1000;  // 4 min cache for 1H
-    if (low === "15m") return 2 * 60 * 1000; // 2 min cache for 15M
-    if (low === "5m") return 60 * 1000;      // 1 min cache for 5M
-    return 30 * 1000;
+    if (low === "1d") return 10 * 60 * 1000; // 10 min cache for 1D
+    if (low === "4h") return 5 * 60 * 1000;  // 5 min cache for 4H
+    if (low === "1h") return 3 * 60 * 1000;  // 3 min cache for 1H
+    if (low === "15m") return 90 * 1000;     // 1.5 min cache for 15M
+    if (low === "5m") return 45 * 1000;      // 45 sec cache for 5M
+    return 20 * 1000;
   }
 
   async function getCachedCandlesForScanner(ex, sym, tf) {
     const key = `${ex}:${sym}:${tf}`;
     const now = Date.now();
     const cached = scannerCandleCache.get(key);
-    if (cached && cached.expiresAt > now && Array.isArray(cached.candles) && cached.candles.length > 20) {
+    if (cached && cached.expiresAt > now && Array.isArray(cached.candles) && cached.candles.length >= 20) {
       return cached.candles;
     }
+
+    // 1. Fast in-memory check in main klinesCache
+    try {
+      const kKey = cacheKey(ex, sym, tf, true);
+      const kCached = klinesCache.get(kKey);
+      if (kCached && kCached.data && Array.isArray(kCached.data) && kCached.data.length >= 30) {
+        const candles = [];
+        for (let i = 0; i < kCached.data.length; i += 6) {
+          candles.push({
+            t: kCached.data[i],
+            o: kCached.data[i + 1],
+            h: kCached.data[i + 2],
+            l: kCached.data[i + 3],
+            c: kCached.data[i + 4],
+            v: kCached.data[i + 5]
+          });
+        }
+        scannerCandleCache.set(key, { candles, expiresAt: now + getTfTtlMs(tf) });
+        return candles;
+      }
+    } catch (_) {}
 
     const backoffUntil = exchangeBackoffs.get(ex) || 0;
     if (backoffUntil > now) {
@@ -3190,7 +3226,7 @@ server.listen(PORT, () => {
 
     try {
       const candlesPromise = fetchFullHistory(ex, sym, tf, true);
-      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2500));
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2800));
       const candles = await Promise.race([candlesPromise, timeoutPromise]);
       if (Array.isArray(candles) && candles.length >= 20) {
         scannerCandleCache.set(key, {
@@ -3215,103 +3251,113 @@ server.listen(PORT, () => {
     try {
       const list = Array.from(tickers.values())
         .filter(t => {
-          if (!t || t.v < 300000) return false;
+          if (!t || !t.key || !t.p || t.p <= 0 || (t.v || 0) < 50000) return false;
+          if (typeof isNonCryptoOrStock === "function" && isNonCryptoOrStock(t.base, t.key)) return false;
           const k = String(t.key || "").toUpperCase();
           if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") || k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) return false;
           return true;
         })
-        .sort((a, b) => b.v - a.v)
-        .slice(0, 40);
+        .sort((a, b) => (b.v || 0) - (a.v || 0))
+        .slice(0, 300); // Comprehensive top 300 crypto pairs across all exchanges
 
       if (list.length === 0) {
         isScanningPatterns = false;
-        setTimeout(scanAllPatterns, 10000);
+        setTimeout(scanAllPatterns, 5000);
         return;
       }
 
-      console.log(`[PATTERNS 24/7] Starting scan cycle for top ${list.length} liquid crypto pairs (Paced & TTL-cached)...`);
-      const timeframes = ["15m", "1h", "4h", "5m", "1d"];
+      const timeframes = ["15m", "5m", "1h", "4h"];
       let newSignalsCount = 0;
+      const PARALLEL_CONCURRENCY = 14;
 
-      // Safe, paced sequential scanning (< 5 req/sec with smart TTL caching)
-      for (const t of list) {
-        const colonIdx = t.key.indexOf(':');
-        if (colonIdx <= 0) continue;
-        const ex = t.key.substring(0, colonIdx);
-        const sym = t.key.substring(colonIdx + 1);
-        const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
+      for (let i = 0; i < list.length; i += PARALLEL_CONCURRENCY) {
+        const batch = list.slice(i, i + PARALLEL_CONCURRENCY);
+        await Promise.all(batch.map(async (t) => {
+          const colonIdx = t.key.indexOf(':');
+          if (colonIdx <= 0) return;
+          const ex = t.key.substring(0, colonIdx);
+          const sym = t.key.substring(colonIdx + 1);
+          const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
+          const coinKey = `${ex}:${sym}`;
 
-        for (const tf of timeframes) {
-          try {
-            const candles = await getCachedCandlesForScanner(ex, sym, tf);
-            if (!candles || candles.length < 30) continue;
-
-            const meta = { ex, sym, base, tf };
-            const signals = patternDetector.scanCandles(meta, candles);
-
-            // 24/7 Server-side pre-computation of formations levels
-            const detectedLvls = serverLevels.detectChartLevelsAndTouches(candles);
-            const coinKey = `${ex}:${sym}`;
-            if (!cachedTfMaps[tf]) cachedTfMaps[tf] = {};
-            if (detectedLvls && detectedLvls.length > 0) {
-              serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedLvls);
-              cachedTfMaps[tf][coinKey] = detectedLvls;
+          for (const tf of timeframes) {
+            try {
+              const candles = await getCachedCandlesForScanner(ex, sym, tf);
+              if (!candles || candles.length < 25) continue;
 
               const lastCandle = candles[candles.length - 1];
-              if (lastCandle) {
-                for (const dLvl of detectedLvls) {
-                  const dist = Math.abs(lastCandle.c - dLvl.price) / lastCandle.c;
-                  if (dist <= 0.015 && (dLvl.touches || 2) >= 2) {
-                    signals.push({
-                      type: 'level',
-                      ex,
-                      sym,
-                      base,
-                      tf,
-                      price: dLvl.price,
-                      curPrice: lastCandle.c,
-                      direction: dLvl.direction === 'down' ? 'long' : 'short',
-                      confidence: dLvl.touches || 2,
-                      ts: Date.now(),
-                      meta: {
-                        touches: dLvl.touches || 2,
-                        dist: +(dist * 100).toFixed(2),
-                        direction: dLvl.direction
-                      }
-                    });
-                  }
-                }
+              const curPrice = lastCandle ? lastCandle.c : (t.p || 0);
+
+              // 1. Precompute formations for Screener & Alerts
+              const detectedCascades = serverLevels.detectCascades(candles, 2);
+              const detectedHorizontals = serverLevels.detectHorizontals(candles, 2);
+              const detectedTrendlines = serverLevels.detectTrendlines(candles, 2);
+              const detectedRetests = serverLevels.detectRetests(candles);
+
+              if (!cachedFormationMaps.cascades[tf]) cachedFormationMaps.cascades[tf] = Object.create(null);
+              if (!cachedFormationMaps.levels[tf]) cachedFormationMaps.levels[tf] = Object.create(null);
+              if (!cachedFormationMaps.trendline[tf]) cachedFormationMaps.trendline[tf] = Object.create(null);
+              if (!cachedFormationMaps.retest[tf]) cachedFormationMaps.retest[tf] = Object.create(null);
+              if (!cachedTfMaps[tf]) cachedTfMaps[tf] = Object.create(null);
+
+              if (detectedCascades && detectedCascades.length > 0) {
+                cachedFormationMaps.cascades[tf][coinKey] = detectedCascades;
+                cachedTfMaps[tf][coinKey] = detectedCascades;
+                serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedCascades);
+              } else {
+                delete cachedFormationMaps.cascades[tf][coinKey];
+                delete cachedTfMaps[tf][coinKey];
+                serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
               }
-            } else {
-              serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
-              delete cachedTfMaps[tf][coinKey];
-            }
 
-            patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-            for (const sig of signals) {
-              patternsCache.push(sig);
-              newSignalsCount++;
-            }
+              if (detectedHorizontals && detectedHorizontals.length > 0) {
+                cachedFormationMaps.levels[tf][coinKey] = detectedHorizontals;
+              } else {
+                delete cachedFormationMaps.levels[tf][coinKey];
+              }
 
-            // Autonomous 24/7 server-side formation alert dispatch
-            checkAndDispatchServerFormationAlerts(signals, candles[candles.length - 1]?.c, candles);
-          } catch (e) {}
-        }
-        // Micro-sleep to keep exchange API completely relaxed and zero chance of rate limits
-        await new Promise(r => setTimeout(r, 80));
+              if (detectedTrendlines && detectedTrendlines.length > 0) {
+                cachedFormationMaps.trendline[tf][coinKey] = detectedTrendlines;
+              } else {
+                delete cachedFormationMaps.trendline[tf][coinKey];
+              }
+
+              if (detectedRetests && detectedRetests.length > 0) {
+                cachedFormationMaps.retest[tf][coinKey] = detectedRetests;
+              } else {
+                delete cachedFormationMaps.retest[tf][coinKey];
+              }
+
+              const meta = { ex, sym, base, tf };
+              const signals = patternDetector.scanCandles(meta, candles);
+
+              if (signals && signals.length > 0) {
+                patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
+                for (const sig of signals) {
+                  patternsCache.push(sig);
+                  newSignalsCount++;
+                }
+                checkAndDispatchServerFormationAlerts(signals, curPrice, candles);
+              }
+            } catch (_) {}
+          }
+        }));
+        // Gentle micro-yield between batches
+        await new Promise(r => setTimeout(r, 20));
       }
 
       patternsCache.sort((a, b) => b.ts - a.ts);
-      if (patternsCache.length > 3000) {
-        patternsCache = patternsCache.slice(0, 3000);
+      if (patternsCache.length > 5000) {
+        patternsCache = patternsCache.slice(0, 5000);
       }
 
-      console.log(`[PATTERNS 24/7] Cycle done in ${((Date.now() - startTime) / 1000).toFixed(1)}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
+      const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[PATTERNS 24/7] Cycle done in ${elapsedSec}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      setTimeout(scanAllPatterns, 30000);
+      setTimeout(scanAllPatterns, 5000);
     }
   }
 
@@ -3319,15 +3365,15 @@ server.listen(PORT, () => {
   const serverFormationAlertCooldown = new Map();
 
   async function sendServerTelegramAlert(chatId, caption, photoBuffer) {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) {
-      if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
-        return telegramBot.sendTelegramMessage(chatId, caption);
+    const token = process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
+
+    if (userStore && typeof userStore.isTelegramAlertsEnabled === "function") {
+      if (!userStore.isTelegramAlertsEnabled(chatId)) {
+        return false;
       }
-      return;
     }
 
-    if (photoBuffer && Buffer.isBuffer(photoBuffer)) {
+    if (photoBuffer && Buffer.isBuffer(photoBuffer) && token) {
       try {
         const blob = new Blob([photoBuffer], { type: "image/png" });
         const form = new FormData();
@@ -3338,7 +3384,8 @@ server.listen(PORT, () => {
 
         const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
           method: "POST",
-          body: form
+          body: form,
+          signal: AbortSignal.timeout(10000)
         });
         const parsed = await tgRes.json();
         if (parsed.ok) {
@@ -3355,6 +3402,24 @@ server.listen(PORT, () => {
     if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
       return telegramBot.sendTelegramMessage(chatId, caption);
     }
+    if (token) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: String(chatId),
+            text: caption,
+            parse_mode: "HTML",
+            disable_web_page_preview: true
+          }),
+          signal: AbortSignal.timeout(8000)
+        });
+        const parsed = await res.json();
+        return !!parsed.ok;
+      } catch (_) {}
+    }
+    return false;
   }
 
   function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice, rawCandles) {
@@ -3362,13 +3427,87 @@ server.listen(PORT, () => {
     const now = Date.now();
     const allUsers = Object.values(userStore.getAllUsersRaw ? userStore.getAllUsersRaw() : {});
 
-    const proUsersWithTg = allUsers.filter(u => 
-      !u.blocked && 
-      (u.plan === "pro" || (u.planExpiresAt && new Date(u.planExpiresAt).getTime() > now)) &&
-      (u.telegramChatId || u.telegramId)
-    );
+    const subscribers = [];
+    const seenChatIds = new Set();
 
-    if (proUsersWithTg.length === 0) return;
+    for (const u of allUsers) {
+      if (!u || u.blocked) continue;
+      const chatId = String(u.telegramChatId || u.telegramId || u.tgChatId || u.chatId || "").trim();
+      if (!chatId) continue;
+
+      const isProOrAdmin = 
+        u.plan === "pro" || 
+        u.plan === "vip" ||
+        u.role === "admin" ||
+        u.role === "PRO Trader" ||
+        u.role === "VIP Trader" ||
+        u.isAdmin === true ||
+        (u.planExpiresAt && new Date(u.planExpiresAt).getTime() > now) ||
+        chatId === String(process.env.ADMIN_CHAT_ID || "").trim() ||
+        chatId === String(process.env.TELEGRAM_ADMIN_ID || "").trim();
+
+      if (!isProOrAdmin) continue;
+
+      const prefs = (u.preferences && u.preferences.formationAlerts) || 
+                    (u.preferences && u.preferences.notifications && u.preferences.notifications.formationAlerts) || 
+                    u.formationAlerts || {};
+
+      // If user has not explicitly disabled, default to enabled for connected TG users
+      const tgEnabled = prefs.tgEnabled !== undefined ? prefs.tgEnabled : true;
+      if (!tgEnabled) continue;
+
+      subscribers.push({
+        userId: u.id,
+        chatId,
+        settings: {
+          tgEnabled,
+          cooldownSeconds: Number(prefs.cooldownSeconds) || 300,
+          exchanges: Array.isArray(prefs.exchanges) && prefs.exchanges.length > 0 ? prefs.exchanges : ["all"],
+          blacklist: Array.isArray(prefs.blacklist) ? prefs.blacklist : [],
+          blacklistCustom: typeof prefs.blacklistCustom === "string" ? prefs.blacklistCustom : "",
+          trendline: {
+            enabled: prefs.trendline?.enabled !== undefined ? prefs.trendline.enabled : true,
+            timeframes: Array.isArray(prefs.trendline?.timeframes) && prefs.trendline.timeframes.length > 0 ? prefs.trendline.timeframes : ["5m", "15m", "1h", "4h"],
+            minTouches: Number(prefs.trendline?.minTouches) || 2,
+            distancePct: Number(prefs.trendline?.distancePct) || 1.0,
+            direction: prefs.trendline?.direction || "all"
+          },
+          level: {
+            enabled: prefs.level?.enabled !== undefined ? prefs.level.enabled : true,
+            timeframes: Array.isArray(prefs.level?.timeframes) && prefs.level.timeframes.length > 0 ? prefs.level.timeframes : ["5m", "15m", "1h", "4h"],
+            minTouches: Number(prefs.level?.minTouches) || 2,
+            distancePct: Number(prefs.level?.distancePct) || 1.0,
+            direction: prefs.level?.direction || "all"
+          },
+          retest: {
+            enabled: prefs.retest?.enabled !== undefined ? prefs.retest.enabled : true,
+            timeframes: Array.isArray(prefs.retest?.timeframes) && prefs.retest.timeframes.length > 0 ? prefs.retest.timeframes : ["5m", "15m", "1h", "4h"],
+            direction: prefs.retest?.direction || "all"
+          }
+        }
+      });
+      seenChatIds.add(chatId);
+    }
+
+    const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
+    if (adminChatId && !seenChatIds.has(adminChatId)) {
+      subscribers.push({
+        userId: "admin",
+        chatId: adminChatId,
+        settings: {
+          tgEnabled: true,
+          cooldownSeconds: 300,
+          exchanges: ["all"],
+          blacklist: [],
+          blacklistCustom: "",
+          trendline: { enabled: true, timeframes: ["5m", "15m", "1h", "4h"], minTouches: 2, distancePct: 1.0, direction: "all" },
+          level: { enabled: true, timeframes: ["5m", "15m", "1h", "4h"], minTouches: 2, distancePct: 1.0, direction: "all" },
+          retest: { enabled: true, timeframes: ["5m", "15m", "1h", "4h"], direction: "all" }
+        }
+      });
+    }
+
+    if (subscribers.length === 0) return;
 
     for (const signal of signals) {
       if (!signal || !signal.type || !signal.sym) continue;
@@ -3376,23 +3515,18 @@ server.listen(PORT, () => {
       const touches = meta?.touches || (meta?.p1Idx !== undefined ? 2 : 1);
       const dist = meta?.dist !== undefined ? Number(meta.dist) : 0.5;
 
-      for (const user of proUsersWithTg) {
-        const chatId = user.telegramChatId || user.telegramId;
-        if (!chatId) continue;
+      for (const sub of subscribers) {
+        const { chatId, settings: s, userId } = sub;
+        if (!s || !s.tgEnabled) continue;
 
-        // STRICT USER ISOLATION: Each user has their own independent personal settings
-        const s = user.preferences?.formationAlerts;
-        // If this specific user has not explicitly configured and turned ON Telegram formation alerts, SKIP!
-        if (!s || s.tgEnabled !== true) continue;
-
-        // Check exchange
+        // Check exchange filter
         const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
         if (!allowedExs.includes("all") && !allowedExs.includes(ex) && !allowedExs.includes(String(ex).toUpperCase())) continue;
 
         // Check blacklist
         const rawSym = String(sym).toUpperCase().replace(/[^A-Z0-9]/g, "");
         const baseSym = String(base || sym).toUpperCase().replace(/[^A-Z0-9]/g, "");
-        const bl = Array.isArray(s.blacklist) ? s.blacklist.map(x => x.toUpperCase()) : ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE"];
+        const bl = Array.isArray(s.blacklist) ? s.blacklist.map(x => x.toUpperCase()) : [];
         const customBl = typeof s.blacklistCustom === "string" ? s.blacklistCustom.toUpperCase().split(/[,;\s]+/).map(x => x.trim()).filter(Boolean) : [];
         const allBl = new Set([...bl, ...customBl]);
         if (allBl.has(rawSym) || allBl.has(baseSym)) continue;
@@ -3440,7 +3574,7 @@ server.listen(PORT, () => {
 
         // Cooldown check per user + coin + pattern + tf
         const cooldownSec = Number(s.cooldownSeconds) || 300;
-        const cdKey = `${user.id}:${ex}:${sym}:${type}:${tf}`;
+        const cdKey = `${userId}:${ex}:${sym}:${type}:${tf}`;
         const lastSent = serverFormationAlertCooldown.get(cdKey) || 0;
         if (now - lastSent < cooldownSec * 1000) continue;
 
@@ -3464,9 +3598,9 @@ server.listen(PORT, () => {
 
         let msg = "";
         if (type === "trendline") {
-          const dirLabel = signal.direction === "long" ? "Long" : "Short";
+          const dirLabel = signal.direction === "long" ? "Long (Поддержка)" : "Short (Сопротивление)";
           msg =
-            `<b>Сигнал формации: Наклонный уровень (Наклонка)</b>\n` +
+            `⚡ <b>Сигнал формации: Наклонный уровень (Наклонка)</b>\n\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
             `• <b>Направление:</b> ${dirLabel}\n` +
@@ -3475,11 +3609,11 @@ server.listen(PORT, () => {
             `• <b>Цена наклона:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `─────────────────────────\n` +
-            `<b>Obsidian Screener</b>`;
+            `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
         } else if (type === "level") {
-          const dirLabel = signal.direction === "long" ? "Long" : "Short";
+          const dirLabel = signal.direction === "long" ? "Long (Поддержка)" : "Short (Сопротивление)";
           msg =
-            `<b>Сигнал формации: Горизонтальный уровень (Горизонталка)</b>\n` +
+            `⚡ <b>Сигнал формации: Горизонтальный уровень (Горизонталка)</b>\n\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
             `• <b>Тип уровня:</b> ${dirLabel}\n` +
@@ -3488,12 +3622,12 @@ server.listen(PORT, () => {
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `─────────────────────────\n` +
-            `<b>Obsidian Screener</b>`;
+            `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
         } else if (type === "retest") {
-          const dirLabel = signal.direction === "long" ? "Long" : "Short";
-          const srcLabel = meta.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";
+          const dirLabel = signal.direction === "long" ? "Long (Отскок вверх)" : "Short (Отскок вниз)";
+          const srcLabel = meta?.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";
           msg =
-            `<b>Сигнал формации: Подтвержденный ретест (Ретест)</b>\n` +
+            `⚡ <b>Сигнал формации: Подтвержденный ретест (Ретест)</b>\n\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
             `• <b>Тип ретеста:</b> ${dirLabel}\n` +
@@ -3502,9 +3636,8 @@ server.listen(PORT, () => {
             `• <b>Цена уровня:</b> $${price}\n` +
             `• <b>Текущая цена:</b> $${actualPrice}\n` +
             `─────────────────────────\n` +
-            `<b>Obsidian Screener</b>`;
+            `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
         }
-
 
         let photoBuffer = null;
         if (Array.isArray(rawCandles) && rawCandles.length > 5 && typeof renderServerChartSnapshot === "function") {
@@ -3524,7 +3657,6 @@ server.listen(PORT, () => {
             console.warn(`[24/7 CHART RENDER FAIL]`, e.message);
           }
         }
-
 
         if (msg) {
           console.log(`[24/7 TG ALERT] Dispatching ${type} ${photoBuffer ? "with photo" : ""} for ${sym} (${tf}) to chatId ${chatId}`);
