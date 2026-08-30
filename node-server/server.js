@@ -3258,7 +3258,7 @@ server.listen(PORT, () => {
           return true;
         })
         .sort((a, b) => (b.v || 0) - (a.v || 0))
-        .slice(0, 300); // Comprehensive top 300 crypto pairs across all exchanges
+        .slice(0, 300);
 
       if (list.length === 0) {
         isScanningPatterns = false;
@@ -3269,6 +3269,10 @@ server.listen(PORT, () => {
       const timeframes = ["15m", "5m", "1h", "4h"];
       let newSignalsCount = 0;
       const PARALLEL_CONCURRENCY = 14;
+
+      // Use a Map for O(1) keyed replacement instead of O(n) .filter() on every coin
+      if (!scanAllPatterns._pMap) scanAllPatterns._pMap = new Map();
+      const pMap = scanAllPatterns._pMap;
 
       for (let i = 0; i < list.length; i += PARALLEL_CONCURRENCY) {
         const batch = list.slice(i, i + PARALLEL_CONCURRENCY);
@@ -3288,11 +3292,10 @@ server.listen(PORT, () => {
               const lastCandle = candles[candles.length - 1];
               const curPrice = lastCandle ? lastCandle.c : (t.p || 0);
 
-              // 1. Precompute formations for Screener & Alerts
-              const detectedCascades = serverLevels.detectCascades(candles, 2);
-              const detectedHorizontals = serverLevels.detectHorizontals(candles, 2);
-              const detectedTrendlines = serverLevels.detectTrendlines(candles, 2);
-              const detectedRetests = serverLevels.detectRetests(candles);
+              // ── Unified single-pass formation scan (1 normalize + 1 swings + 1 ATR) ──
+              const formations = serverLevels.scanAll(candles, 2);
+              const { cascades: detectedCascades, horizontals: detectedHorizontals,
+                      trendlines: detectedTrendlines, retests: detectedRetests } = formations;
 
               if (!cachedFormationMaps.cascades[tf]) cachedFormationMaps.cascades[tf] = Object.create(null);
               if (!cachedFormationMaps.levels[tf]) cachedFormationMaps.levels[tf] = Object.create(null);
@@ -3300,64 +3303,78 @@ server.listen(PORT, () => {
               if (!cachedFormationMaps.retest[tf]) cachedFormationMaps.retest[tf] = Object.create(null);
               if (!cachedTfMaps[tf]) cachedTfMaps[tf] = Object.create(null);
 
-              if (detectedCascades && detectedCascades.length > 0) {
+              if (detectedCascades.length > 0) {
                 cachedFormationMaps.cascades[tf][coinKey] = detectedCascades;
                 cachedTfMaps[tf][coinKey] = detectedCascades;
-                serverFormationsMap.set(`${ex}:${sym}:${tf}`, detectedCascades);
+                serverFormationsMap.set(`${coinKey}:${tf}`, detectedCascades);
               } else {
                 delete cachedFormationMaps.cascades[tf][coinKey];
                 delete cachedTfMaps[tf][coinKey];
-                serverFormationsMap.delete(`${ex}:${sym}:${tf}`);
+                serverFormationsMap.delete(`${coinKey}:${tf}`);
               }
 
-              if (detectedHorizontals && detectedHorizontals.length > 0) {
+              if (detectedHorizontals.length > 0) {
                 cachedFormationMaps.levels[tf][coinKey] = detectedHorizontals;
               } else {
                 delete cachedFormationMaps.levels[tf][coinKey];
               }
 
-              if (detectedTrendlines && detectedTrendlines.length > 0) {
+              if (detectedTrendlines.length > 0) {
                 cachedFormationMaps.trendline[tf][coinKey] = detectedTrendlines;
               } else {
                 delete cachedFormationMaps.trendline[tf][coinKey];
               }
 
-              if (detectedRetests && detectedRetests.length > 0) {
+              if (detectedRetests.length > 0) {
                 cachedFormationMaps.retest[tf][coinKey] = detectedRetests;
               } else {
                 delete cachedFormationMaps.retest[tf][coinKey];
               }
 
+              // ── Pattern signals (patternDetector already calls formationEngine
+              //    internally, but those results are cached in its own scope) ──
               const meta = { ex, sym, base, tf };
               const signals = patternDetector.scanCandles(meta, candles);
 
               if (signals && signals.length > 0) {
-                patternsCache = patternsCache.filter(p => !(p.ex === ex && p.sym === sym && p.tf === tf));
-                for (const sig of signals) {
-                  patternsCache.push(sig);
-                  newSignalsCount++;
-                }
+                // O(1) keyed replacement instead of O(n) filter
+                const mapKey = `${coinKey}:${tf}`;
+                pMap.set(mapKey, signals);
+                newSignalsCount += signals.length;
                 checkAndDispatchServerFormationAlerts(signals, curPrice, candles);
               }
             } catch (_) {}
           }
         }));
-        // Gentle micro-yield between batches
-        await new Promise(r => setTimeout(r, 20));
+        // Micro-yield between batches
+        if (i + PARALLEL_CONCURRENCY < list.length) {
+          await new Promise(r => setTimeout(r, 15));
+        }
       }
 
-      patternsCache.sort((a, b) => b.ts - a.ts);
-      if (patternsCache.length > 5000) {
-        patternsCache = patternsCache.slice(0, 5000);
+      // Rebuild flat patternsCache from map (already deduped)
+      const allSignals = [];
+      for (const sigs of pMap.values()) {
+        for (let i = 0; i < sigs.length; i++) allSignals.push(sigs[i]);
+      }
+      allSignals.sort((a, b) => b.ts - a.ts);
+      patternsCache = allSignals.length > 5000 ? allSignals.slice(0, 5000) : allSignals;
+
+      // Evict stale entries from pMap (older than 10 minutes)
+      if (pMap.size > 2000) {
+        const cutoff = Date.now() - 600000;
+        for (const [key, sigs] of pMap) {
+          if (!sigs.length || (sigs[0].ts && sigs[0].ts < cutoff)) pMap.delete(key);
+        }
       }
 
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`[PATTERNS 24/7] Cycle done in ${elapsedSec}s. ${newSignalsCount} active signals. Precomputed levels: ${serverFormationsMap.size}`);
+      console.log(`[PATTERNS 24/7] Cycle done in ${elapsedSec}s. ${newSignalsCount} signals. Formations: ${serverFormationsMap.size}. Coins: ${list.length}`);
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      setTimeout(scanAllPatterns, 5000);
+      setTimeout(scanAllPatterns, 6000);
     }
   }
 

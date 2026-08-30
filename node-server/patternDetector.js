@@ -449,78 +449,68 @@ function scanCandles(meta, candles, cfgOverride = {}) {
   const structs    = detectStructureBreaks(candles, swings);
   const impulses   = detectImpulses(candles, cfg);
 
-  // 1. Dominant Unbroken Trendlines (1-in-1 identical to Screener Tab)
+  // ── FormationEngine unified scan (1 normalize + 1 swings pass for all 3) ──
   try {
-    const rawTls = formationEngine.detectTrendlines(candles, 2);
-    for (const tl of rawTls) {
-      const endPrice = tl.endPrice;
-      const dist = Math.abs(priceNow - endPrice) / priceNow;
-      if (dist <= 0.08) {
-        signals.push({
-          type: 'trendline',
-          ex, sym, base, tf,
-          price: +endPrice.toFixed(4),
-          direction: tl.direction === 'down' ? 'long' : 'short',
-          confidence: Math.min(5, Math.max(2, tl.touches || 2)),
-          ts: now,
-          meta: {
-            tlType: tl.direction === 'down' ? 'asc' : 'desc',
-            slope: +(tl.slope || 0).toFixed(6),
-            touches: tl.touches || 2,
-            dist: +(dist * 100).toFixed(2),
-            p1Idx: tl.p1?.idx,
-            p1Price: tl.p1?.price,
-            p2Idx: tl.p2?.idx,
-            p2Price: tl.p2?.price
-          }
-        });
-      }
-    }
-  } catch (_) {}
+    const fmAll = formationEngine.scanAll(candles, 2);
 
-  // 2. Clean Unbroken Horizontal Levels (1-in-1 identical to Screener Tab)
-  try {
-    const rawHoriz = formationEngine.detectHorizontals(candles, 2);
-    for (const hl of rawHoriz) {
-      const dist = Math.abs(priceNow - hl.price) / priceNow;
-      if (dist <= 0.08) {
-        signals.push({
-          type: 'level',
-          ex, sym, base, tf,
-          price: +hl.price.toFixed(4),
-          direction: hl.direction === 'down' ? 'long' : 'short',
-          confidence: Math.min(5, Math.max(2, hl.touches || 2)),
-          ts: now,
-          meta: {
-            touches: hl.touches || 2,
-            dist: +(dist * 100).toFixed(2),
-            direction: hl.direction
-          }
-        });
-      }
-    }
-  } catch (_) {}
-
-  // 3. Retests & Approaching Retests from FormationEngine
-  try {
-    const confirmedRetests = formationEngine.detectRetests(candles);
-    for (const rt of confirmedRetests) {
-      const dist = Math.abs(priceNow - rt.price) / priceNow;
-      signals.push({
-        type: 'retest',
-        ex, sym, base, tf,
-        price: +rt.price.toFixed(4),
-        direction: rt.direction === 'up' ? 'long' : 'short',
-        confidence: 5,
-        ts: rt.touchTime || now,
-        meta: {
-          status: 'confirmed',
-          touches: rt.touches || 2,
-          dist: +(dist * 100).toFixed(2),
-          touchIdx: rt.touchIdx,
-          swingIdx: rt.swingIdx
+    // 1. Dominant Unbroken Trendlines
+    if (fmAll.trendlines) {
+      for (const tl of fmAll.trendlines) {
+        const endPrice = tl.endPrice;
+        const dist = Math.abs(priceNow - endPrice) / priceNow;
+        if (dist <= 0.08) {
+          signals.push({
+            type: 'trendline', ex, sym, base, tf,
+            price: +endPrice.toFixed(4),
+            direction: tl.direction === 'down' ? 'long' : 'short',
+            confidence: Math.min(5, Math.max(2, tl.touches || 2)),
+            ts: now,
+            meta: {
+              tlType: tl.direction === 'down' ? 'asc' : 'desc',
+              slope: +(tl.slope || 0).toFixed(6),
+              touches: tl.touches || 2,
+              dist: +(dist * 100).toFixed(2),
+              p1Idx: tl.p1?.idx, p1Price: tl.p1?.price,
+              p2Idx: tl.p2?.idx, p2Price: tl.p2?.price
+            }
+          });
         }
-      });
+      }
+    }
+
+    // 2. Clean Unbroken Horizontal Levels
+    if (fmAll.horizontals) {
+      for (const hl of fmAll.horizontals) {
+        const dist = Math.abs(priceNow - hl.price) / priceNow;
+        if (dist <= 0.08) {
+          signals.push({
+            type: 'level', ex, sym, base, tf,
+            price: +hl.price.toFixed(4),
+            direction: hl.direction === 'down' ? 'long' : 'short',
+            confidence: Math.min(5, Math.max(2, hl.touches || 2)),
+            ts: now,
+            meta: { touches: hl.touches || 2, dist: +(dist * 100).toFixed(2), direction: hl.direction }
+          });
+        }
+      }
+    }
+
+    // 3. Confirmed Retests
+    if (fmAll.retests) {
+      for (const rt of fmAll.retests) {
+        const dist = Math.abs(priceNow - rt.price) / priceNow;
+        signals.push({
+          type: 'retest', ex, sym, base, tf,
+          price: +rt.price.toFixed(4),
+          direction: rt.direction === 'up' ? 'long' : 'short',
+          confidence: 5, ts: rt.touchTime || now,
+          meta: {
+            status: 'confirmed', touches: rt.touches || 2,
+            dist: +(dist * 100).toFixed(2),
+            touchIdx: rt.touchIdx, swingIdx: rt.swingIdx
+          }
+        });
+      }
     }
   } catch (_) {}
 
