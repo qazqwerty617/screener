@@ -3266,7 +3266,7 @@ server.listen(PORT, () => {
         return;
       }
 
-      const timeframes = ["15m", "5m", "1h", "4h"];
+      const timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
       let newSignalsCount = 0;
       const PARALLEL_CONCURRENCY = 16;
 
