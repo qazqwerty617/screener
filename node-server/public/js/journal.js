@@ -1416,23 +1416,56 @@
     if (descEl) descEl.value = trade.note || "";
     if (concEl) concEl.value = "";
 
+    // 1. Draw smooth dark loading state on canvas
+    const ctx = canvas.getContext("2d");
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = (rect.width || 900) * dpr;
+    canvas.height = (rect.height || 460) * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.fillStyle = "#0b0e14";
+    ctx.fillRect(0, 0, rect.width || 900, rect.height || 460);
+    ctx.fillStyle = "rgba(107,114,128,0.75)";
+    ctx.font = "13px Inter, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Загрузка графика " + (trade.symbol || "") + "...", (rect.width || 900) / 2, (rect.height || 460) / 2);
+
     modal.style.display = "flex";
     setupTradeChartEvents(canvas);
 
     try {
-      const exCode = trade.exchange === "Binance" ? "BN" : (trade.exchange === "Bybit" ? "BB" : "OX");
+      const exMap = {
+        Binance: "BN", Bybit: "BB", OKX: "OX", Bitget: "BG", Gate: "GT", "Gate.io": "GT",
+        MEXC: "MX", KuCoin: "KC", BingX: "BX", Hyperliquid: "HL", HTX: "HT",
+        BN: "BN", BB: "BB", OX: "OX", BG: "BG", GT: "GT", MX: "MX", KC: "KC", BX: "BX", HL: "HL", HT: "HT"
+      };
+      const exCode = exMap[trade.exchange] || "BN";
       const duration = Math.max(0, Number(trade.durationMs) || ((Number(trade.exitTime) || 0) - (Number(trade.entryTime) || 0)));
       const tf = duration <= 20 * 60_000 ? "1m" : duration <= 2 * 3600_000 ? "5m" : duration <= 12 * 3600_000 ? "15m" : "1h";
-      const res = await fetch(`/api/klines?ex=${exCode}&sym=${encodeURIComponent(trade.symbol)}&tf=${tf}&lite=1`);
-      if (res.ok) {
-        const rawKlines = await res.json();
-        const candles = [];
+      const tfMs = tf === "1m" ? 60000 : tf === "5m" ? 300000 : tf === "15m" ? 900000 : 3600000;
+
+      // Determine trade timestamp for historical centering
+      let tradeTs = Number(trade.exitTime) || Number(trade.entryTime) || 0;
+      if (!tradeTs && trade.date) {
+        tradeTs = new Date(trade.date.replace(" ", "T") + (trade.date.includes("Z") ? "" : "Z")).getTime();
+        if (isNaN(tradeTs)) tradeTs = new Date(trade.date).getTime();
+      }
+
+      // If trade is older than 8 hours, calculate before timestamp to capture historical trade
+      const isPast = tradeTs > 0 && (Date.now() - tradeTs > 8 * 3600000);
+      const beforeTs = isPast ? tradeTs + 150 * tfMs : null;
+
+      // Fast parallel racer: Direct Exchange API (30ms) vs Server Proxy
+      const directPromise = fetchDirectJournalKlines(exCode, trade.symbol, tf, beforeTs).then(c => (c && c.length > 0 ? c : Promise.reject()));
+      const serverUrl = `/api/klines?ex=${exCode}&sym=${encodeURIComponent(trade.symbol)}&tf=${tf}&lite=1${beforeTs ? `&before=${beforeTs}` : ""}`;
+      const serverPromise = fetch(serverUrl).then(r => r.json()).then(rawKlines => {
+        const parsed = [];
         if (Array.isArray(rawKlines) && rawKlines.length > 0) {
           if (typeof rawKlines[0] === "object" && rawKlines[0] !== null && "t" in rawKlines[0]) {
-            candles.push(...rawKlines);
+            parsed.push(...rawKlines);
           } else {
             for (let i = 0; i < rawKlines.length; i += 6) {
-              candles.push({
+              parsed.push({
                 t: Number(rawKlines[i]),
                 o: Number(rawKlines[i+1]),
                 h: Number(rawKlines[i+2]),
@@ -1443,16 +1476,106 @@
             }
           }
         }
+        return parsed.length > 0 ? parsed : Promise.reject();
+      });
+
+      let candles = [];
+      try {
+        candles = await Promise.any([directPromise, serverPromise]);
+      } catch (_) {
+        try {
+          candles = await fetchDirectJournalKlines(exCode, trade.symbol, tf, null);
+        } catch (__) {
+          candles = [];
+        }
+      }
+
+      if (candles && candles.length > 0) {
         chartState.candles = candles;
         resetChartViewState(canvas);
         renderInteractiveChart(canvas);
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#0b0e14";
+        ctx.fillRect(0, 0, rect.width || 900, rect.height || 460);
+        ctx.fillStyle = "rgba(255,255,255,0.4)";
+        ctx.fillText("Нет данных графика для этой сделки", (rect.width || 900) / 2, (rect.height || 460) / 2);
       }
     } catch (e) {
       console.warn("Failed to load trade candles:", e);
     }
   }
 
+  async function fetchDirectJournalKlines(ex, sym, tf, beforeTs) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    try {
+      let resultCandles = [];
+      const tfMs = tf === "1m" ? 60000 : tf === "5m" ? 300000 : tf === "15m" ? 900000 : 3600000;
+      const endTs = beforeTs && Number.isFinite(beforeTs) && beforeTs > 0 ? beforeTs : Date.now();
+      const encSym = encodeURIComponent(sym);
+
+      if (ex === "BN" || ex === "AD") {
+        const endParam = beforeTs ? `&endTime=${endTs}` : "";
+        let r = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${encSym}&interval=${tf}&limit=1000${endParam}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        if (!Array.isArray(r) || r.length === 0) {
+          r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${encSym}&interval=${tf}&limit=1000${endParam}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        }
+        if (Array.isArray(r) && r.length > 0) {
+          resultCandles = r.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] || 0 }));
+        }
+      } else if (ex === "BB") {
+        const bbTfMap = { "1m": "1", "5m": "5", "15m": "15", "1h": "60" };
+        const endParam = beforeTs ? `&end=${endTs}` : "";
+        const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${encSym}&interval=${bbTfMap[tf] || "1"}&limit=1000${endParam}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        const list = r?.result?.list || [];
+        if (Array.isArray(list) && list.length > 0) {
+          resultCandles = list.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] || 0 })).reverse();
+        }
+      } else if (ex === "OX") {
+        const oxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H" };
+        const afterParam = beforeTs ? `&after=${endTs}` : "";
+        const oxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? `${sym.replace(/USDT$/, "")}-USDT-SWAP` : sym);
+        const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(oxSym)}&bar=${oxTfMap[tf] || "1m"}&limit=300${afterParam}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        const data = r?.data || [];
+        if (Array.isArray(data) && data.length > 0) {
+          resultCandles = data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[6] || +k[5] || 0 })).reverse();
+        }
+      } else if (ex === "BG") {
+        const bgTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H" };
+        const endParam = beforeTs ? `&endTime=${endTs}` : "";
+        const bgSym = sym.endsWith("USDT") ? `${sym}_UMCBL` : sym;
+        const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?symbol=${encodeURIComponent(bgSym)}&granularity=${bgTfMap[tf] || "1m"}&limit=1000${endParam}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        const data = r?.data || [];
+        if (Array.isArray(data) && data.length > 0) {
+          resultCandles = data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] || 0 })).reverse();
+        }
+      } else if (ex === "GT") {
+        const endParam = beforeTs ? `&to=${Math.floor(endTs / 1000)}` : "";
+        const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000${endParam}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        if (Array.isArray(r) && r.length > 0) {
+          resultCandles = r.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) || 0 }));
+        }
+      } else if (ex === "MX") {
+        const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
+        const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60" };
+        const startSec = Math.floor((endTs - 1000 * tfMs) / 1000);
+        const endSec = Math.floor(endTs / 1000);
+        const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(mxSym)}?interval=${mxTfMap[tf] || "Min1"}&start=${startSec}&end=${endSec}`, { signal: controller.signal }).then(res => res.json()).catch(() => null);
+        if (r?.data?.time) {
+          resultCandles = r.data.time.map((t, i) => ({ t: t * 1000, o: +r.data.open[i], h: +r.data.high[i], l: +r.data.low[i], c: +r.data.close[i], v: +(r.data.amount?.[i] || r.data.vol?.[i] || 0) }));
+        }
+      }
+      return resultCandles.filter(c => c && Number.isFinite(c.t) && c.o > 0 && c.c > 0);
+    } catch (_) {
+      return [];
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   function setupTradeChartEvents(canvas) {
+
     if (canvas._hasInteractiveEvents) return;
     canvas._hasInteractiveEvents = true;
 
@@ -1823,19 +1946,23 @@
 
     // Find trade candle index by timestamp and center on it
     let centerIdx = candles.length - 1; // default: latest
-    if (trade && trade.date) {
-      const tradeTs = new Date(trade.date.replace(" ", "T") + ":00Z").getTime();
-      if (tradeTs > 0) {
-        let bestDist = Infinity;
-        for (let i = 0; i < candles.length; i++) {
-          const dist = Math.abs(candles[i].t - tradeTs);
-          if (dist < bestDist) {
-            bestDist = dist;
-            centerIdx = i;
-          }
+    let tradeTs = Number(trade?.entryTime) || Number(trade?.exitTime) || 0;
+    if (!tradeTs && trade && trade.date) {
+      tradeTs = new Date(trade.date.replace(" ", "T") + (trade.date.includes("Z") ? "" : "Z")).getTime();
+      if (isNaN(tradeTs)) tradeTs = new Date(trade.date).getTime();
+    }
+
+    if (tradeTs > 0) {
+      let bestDist = Infinity;
+      for (let i = 0; i < candles.length; i++) {
+        const dist = Math.abs(candles[i].t - tradeTs);
+        if (dist < bestDist) {
+          bestDist = dist;
+          centerIdx = i;
         }
       }
     }
+
 
     // Center the chart on the trade candle
     const centerX = centerIdx * chartState.candleWidth + chartState.candleWidth / 2;

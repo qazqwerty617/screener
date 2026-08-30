@@ -63,17 +63,59 @@ function renderServerChartSnapshot(candles, meta, signal) {
 
   // ── Coin Stats HUD Card (Изм, Объем, NATR, Фандинг) ──
   const hudX = badgeX + tfBadgeW + 16;
-  const chg24 = firstCandle.o > 0 ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : 0;
-  const isChgUp = chg24 >= 0;
-  const chgText = (isChgUp ? "+" : "") + chg24.toFixed(2) + "%";
 
-  let sumVol = 0;
-  for (const c of candleList) sumVol += (c.v || 0) * (c.c || 1);
-  const vol24Str = sumVol >= 1e9 ? `$${(sumVol / 1e9).toFixed(1)}B` : sumVol >= 1e6 ? `$${(sumVol / 1e6).toFixed(1)}M` : `$${(sumVol / 1e3).toFixed(0)}K`;
+  // 1. Genuine 24h Change
+  const rawChg = (meta && meta.chg !== undefined && typeof meta.chg === "number" && !isNaN(meta.chg))
+    ? meta.chg
+    : (signal && signal.meta && signal.meta.pctChange !== undefined && !isNaN(signal.meta.pctChange))
+    ? signal.meta.pctChange
+    : (firstCandle.o > 0 ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : 0);
+  const isChgUp = rawChg >= 0;
+  const chgText = (isChgUp ? "+" : "") + Number(rawChg).toFixed(2) + "%";
 
-  let lH = 0, lL = Infinity;
-  for (const c of candleList) { if (c.h > lH) lH = c.h; if (c.l < lL) lL = c.l; }
-  const natrVal = lastCandle.c > 0 && lH >= lL ? Math.max(0, Math.min(100, ((lH - lL) / lastCandle.c) * 100 * 0.45)) : 12.5;
+  // 2. Genuine 24h Volume
+  const rawVol = (meta && meta.vol !== undefined && Number(meta.vol) > 0)
+    ? Number(meta.vol)
+    : (signal && signal.meta && signal.meta.vol !== undefined && Number(signal.meta.vol) > 0)
+    ? Number(signal.meta.vol)
+    : null;
+
+  let vol24Str;
+  if (rawVol !== null && rawVol > 0) {
+    if (rawVol >= 1e9) vol24Str = `$${(rawVol / 1e9).toFixed(2)}B`;
+    else if (rawVol >= 1e6) vol24Str = `$${(rawVol / 1e6).toFixed(2)}M`;
+    else if (rawVol >= 1e3) vol24Str = `$${(rawVol / 1e3).toFixed(1)}K`;
+    else vol24Str = `$${rawVol.toFixed(0)}`;
+  } else {
+    let sumVol = 0;
+    for (const c of candleList) sumVol += (c.v || 0);
+    if (sumVol >= 1e9) vol24Str = `$${(sumVol / 1e9).toFixed(2)}B`;
+    else if (sumVol >= 1e6) vol24Str = `$${(sumVol / 1e6).toFixed(2)}M`;
+    else if (sumVol >= 1e3) vol24Str = `$${(sumVol / 1e3).toFixed(1)}K`;
+    else vol24Str = `$${sumVol.toFixed(0)}`;
+  }
+
+  // 3. Genuine NATR
+  let natrVal = 0;
+  if (meta && meta.natr !== undefined && Number.isFinite(meta.natr) && meta.natr > 0) {
+    natrVal = Number(meta.natr);
+  } else {
+    let lH = 0, lL = Infinity;
+    for (const c of candleList) { if (c.h > lH) lH = c.h; if (c.l < lL) lL = c.l; }
+    natrVal = lastCandle.c > 0 && lH >= lL ? ((lH - lL) / lastCandle.c) * 100 : 0;
+  }
+  natrVal = Math.max(0, Math.min(100, natrVal));
+  const natrText = natrVal.toFixed(1) + "%";
+
+  // 4. Genuine Funding Rate
+  let fundText = "+0.0100%";
+  let fundCol = "#fbbf24";
+  if (meta && meta.funding !== undefined && meta.funding !== null && Number.isFinite(Number(meta.funding))) {
+    const rawF = Number(meta.funding);
+    const fundPct = Math.abs(rawF) < 0.01 ? (rawF * 100) : rawF;
+    fundText = (fundPct >= 0 ? "+" : "") + fundPct.toFixed(4) + "%";
+    fundCol = fundPct >= 0 ? "#fbbf24" : "#f87171";
+  }
 
   let curStatX = hudX;
   const renderStatPill = (label, val, valCol) => {
@@ -107,25 +149,50 @@ function renderServerChartSnapshot(candles, meta, signal) {
 
   renderStatPill("ИЗМ", chgText, isChgUp ? "#22c55e" : "#ef4444");
   renderStatPill("ОБЪЕМ", vol24Str, "#ffffff");
-  renderStatPill("NATR", natrVal.toFixed(1) + "%", "#a855f7");
-  renderStatPill("ФАНДИНГ", "+0.0100%", "#fbbf24");
+  renderStatPill("NATR", natrText, "#a855f7");
+  renderStatPill("ФАНДИНГ", fundText, fundCol);
 
-  // Top Right Title (Clean, NO Emojis)
+
+  // Top Right Title (Clean, Professional HUD)
   ctx.textAlign = "right";
-  ctx.fillStyle = "#c084fc";
-  ctx.font = "bold 12px sans-serif";
-  ctx.fillText("OBSIDIAN FORMATION ALERT", W - 22, 20);
-
   const sigType = signal?.type || "trendline";
-  const touches = signal?.meta?.touches || 2;
-  const dist = signal?.meta?.dist !== undefined ? signal.meta.dist : "0.5";
-  let subtitle = `Наклонка: ${touches} касания · до линии ${dist}%`;
-  if (sigType === "level") subtitle = `Горизонтальный уровень: ${touches} касания · до линии ${dist}%`;
-  else if (sigType === "retest") subtitle = `Подтвержденный ретест: отскок · ${dist}%`;
+  const isPumpSig = sigType === "pump";
+  const isDumpSig = sigType === "dump";
+  const isPriceAlert = sigType === "price_level" || sigType === "price";
 
-  ctx.fillStyle = "#94a3b8";
-  ctx.font = "500 10.5px sans-serif";
-  ctx.fillText(subtitle, W - 22, 34);
+  if (isPumpSig) {
+    ctx.fillStyle = "#22c55e";
+    ctx.font = "bold 13px sans-serif";
+    ctx.fillText("⚡ OBSIDIAN PUMP RADAR", W - 22, 20);
+    ctx.font = "600 11px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+    const pctStr = signal?.meta?.pctChange ? `+${signal.meta.pctChange.toFixed(2)}%` : "IMPULSE UP";
+    ctx.fillText(`Импульс цены: ${pctStr}`, W - 22, 36);
+  } else if (isDumpSig) {
+    ctx.fillStyle = "#ef4444";
+    ctx.font = "bold 13px sans-serif";
+    ctx.fillText("⚡ OBSIDIAN DUMP RADAR", W - 22, 20);
+    ctx.font = "600 11px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+    const pctStr = signal?.meta?.pctChange ? `${signal.meta.pctChange.toFixed(2)}%` : "IMPULSE DOWN";
+    ctx.fillText(`Сброс цены: ${pctStr}`, W - 22, 36);
+  } else if (isPriceAlert) {
+    ctx.fillStyle = "#38bdf8";
+    ctx.font = "bold 13px sans-serif";
+    ctx.fillText("🔔 OBSIDIAN PRICE ALERT", W - 22, 20);
+    ctx.font = "600 11px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+    ctx.fillText("Достигнут целевой уровень цены", W - 22, 36);
+  } else {
+    ctx.fillStyle = "#c084fc";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText("OBSIDIAN FORMATION ALERT", W - 22, 20);
+    ctx.font = "600 11px sans-serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    const touches = signal?.meta?.touches || 2;
+    const subText = sigType === "trendline" ? `Наклонная линия · ${touches} касания` : sigType === "level" ? `Уровень S/R · ${touches} касания` : "Подтвержденный ретест";
+    ctx.fillText(subText, W - 22, 36);
+  }
   ctx.restore();
 
   // ── Price Bounds ──
@@ -272,11 +339,11 @@ function renderServerChartSnapshot(candles, meta, signal) {
         ctx.stroke();
       });
     }
-  } else if (sigType === "level" || sigType === "retest") {
+  } else if (sigType === "level" || sigType === "retest" || sigType === "price_level" || sigType === "price") {
     const lvlPrice = signal?.price || lastCandle.c;
     const ly = toY(lvlPrice);
 
-    ctx.strokeStyle = sigType === "retest" ? "#38bdf8" : "#f59e0b";
+    ctx.strokeStyle = (sigType === "retest" || sigType === "price_level" || sigType === "price") ? "#38bdf8" : "#f59e0b";
     ctx.lineWidth = 1.6;
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
@@ -286,6 +353,8 @@ function renderServerChartSnapshot(candles, meta, signal) {
     ctx.setLineDash([]);
   }
   ctx.restore();
+
+
 
   // ── Live / Last Candle Price Badge on Right Scale ──
   const liveY = toY(lastCandle.c);

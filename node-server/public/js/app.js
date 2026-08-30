@@ -2764,7 +2764,25 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
 
 function drawChart() {
-  if (!candles.length || !chartW || !chartH) return;
+  if (!chartW || !chartH) return;
+  if (typeof isLoadingKlines !== "undefined" && isLoadingKlines || !candles || candles.length < 2) {
+    if ((typeof isLoadingKlines !== "undefined" && isLoadingKlines) || !candles || !candles.length) {
+      const dpr = window.devicePixelRatio || 1;
+      ctx.clearRect(0, 0, chartW, chartH);
+      ctx.fillStyle = typeof getCanvasBgColor === "function" ? getCanvasBgColor() : "#0d0f14";
+      ctx.fillRect(0, 0, chartW, chartH);
+      vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      vCtx.clearRect(0, 0, chartW, volH);
+      vCtx.fillStyle = typeof getCanvasBgColor === "function" ? getCanvasBgColor() : "#0d0f14";
+      vCtx.fillRect(0, 0, chartW, volH);
+      ctx.fillStyle = "rgba(107,114,128,.4)";
+      ctx.font = "12px Inter";
+      ctx.textAlign = "center";
+      ctx.fillText("Loading " + (typeof activeSym !== "undefined" && activeSym ? activeSym : "") + "...", chartW / 2, chartH / 2);
+      ctx.textAlign = "left";
+    }
+    return;
+  }
 
 
   // Calculate active indicators first to determine volH
@@ -5668,6 +5686,21 @@ document.addEventListener("DOMContentLoaded", () => {
       if (typeof refreshCharts === "function") refreshCharts();
       if (typeof drawChart === "function") drawChart();
     } catch (_) {}
+
+    // 9. Revert exchange selection to Binance only (Free Tier)
+    try {
+      if (listEx !== "BN") {
+        listEx = "BN";
+        if (typeof syncExcDropdown === "function") syncExcDropdown("BN");
+        needRebuild = true;
+      }
+      if (activeEx !== "BN") {
+        activeEx = "BN";
+        activeSym = "BTCUSDT";
+        if (typeof updateSymInfo === "function") updateSymInfo();
+        if (typeof fetchKlines === "function") fetchKlines("BN", "BTCUSDT", activeTf);
+      }
+    } catch (_) {}
   }
   window.revertToDefaultFreeState = revertToDefaultFreeState;
 
@@ -5679,10 +5712,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (authCloseBtn) authCloseBtn.style.display = "block";
 
     const isPro = !!(user && user.plan === "pro");
+    document.body.classList.toggle("user-is-pro", isPro);
 
     // Automatically revert appearance and disable PRO features when PRO subscription ends or is revoked
     if (lastKnownProStatus && !isPro) {
       revertToDefaultFreeState();
+    } else if (!isPro) {
+      // Free user: ensure exchange selection is Binance
+      if (listEx !== "BN") {
+        listEx = "BN";
+        if (typeof syncExcDropdown === "function") syncExcDropdown("BN");
+        needRebuild = true;
+      }
+      if (activeEx !== "BN") {
+        activeEx = "BN";
+        activeSym = "BTCUSDT";
+        if (typeof updateSymInfo === "function") updateSymInfo();
+        if (typeof fetchKlines === "function") fetchKlines("BN", "BTCUSDT", activeTf);
+      }
     }
     lastKnownProStatus = isPro;
     localStorage.setItem("obsidian_was_pro", isPro ? "true" : "false");
@@ -6776,6 +6823,7 @@ function sanitizeCandles(list, maxLimit = 3000) {
 let currentLoadedEx = null;
 let currentLoadedSym = null;
 let currentLoadedTf = null;
+let isLoadingKlines = false;
 
 function mergeCandles(existingList, incomingList, maxLimit = 3000) {
   if (!Array.isArray(incomingList) || incomingList.length === 0) return existingList || [];
@@ -6970,6 +7018,7 @@ async function fetchKlines(ex, sym, tf) {
     currentLoadedTf = tf;
   }
 
+  isLoadingKlines = true;
   isLoadingOlderCandles = false;
   hasReachedStartOfHistory = false;
   offsetX = 0;
@@ -6992,29 +7041,28 @@ async function fetchKlines(ex, sym, tf) {
   ctx.fillText("Loading " + sym + "...", chartW / 2, chartH / 2);
   ctx.textAlign = "left";
 
-  // Connect WebSocket stream immediately (0ms delay) while HTTP fetches candles in parallel
-  connectKlWs(ex, sym, tf);
-
   try {
     const key = `${ex}|${sym}|${tf}`;
     const cached = KLINES_CACHE.get(key);
     let loadedSuccess = false;
 
     // 1. Instant cache hit (0ms)
-    if (cached && Date.now() - cached.ts < KLINES_CACHE_TTL_MS) {
+    if (cached && Date.now() - cached.ts < KLINES_CACHE_TTL_MS && Array.isArray(cached.data) && cached.data.length > 1) {
       candles = sanitizeCandles(cached.data);
-      if (candles.length > 0) {
+      if (candles.length > 1) {
+        isLoadingKlines = false;
         loadedSuccess = true;
         updateOHLC();
         if (!chartW || !chartH) resizeChart();
         chartNeedsDraw = true;
+        drawChart();
       }
     }
 
     // 2. Ultra-fast parallel racer: Direct Exchange REST API and Server Proxy in parallel
     if (!loadedSuccess) {
-      const directPromise = fetchDirectKlines(ex, sym, tf).then(c => (c && c.length > 0 ? c : Promise.reject()));
-      const serverPromise = fetchServerKlines(ex, sym, tf, 1).then(c => (c && c.length > 0 ? c : Promise.reject()));
+      const directPromise = fetchDirectKlines(ex, sym, tf).then(c => (c && c.length > 1 ? c : Promise.reject()));
+      const serverPromise = fetchServerKlines(ex, sym, tf, 1).then(c => (c && c.length > 1 ? c : Promise.reject()));
 
       let fastCandles = [];
       try {
@@ -7024,8 +7072,9 @@ async function fetchKlines(ex, sym, tf) {
       }
 
       if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf) {
-        if (fastCandles && fastCandles.length > 0) {
+        if (fastCandles && fastCandles.length > 1) {
           candles = fastCandles;
+          isLoadingKlines = false;
           KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
           loadedSuccess = true;
           updateOHLC();
@@ -7042,8 +7091,9 @@ async function fetchKlines(ex, sym, tf) {
       fetchServerKlines(ex, sym, tf, 0)
         .then(parsed => {
           if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
-          if (Array.isArray(parsed) && parsed.length > 0) {
+          if (Array.isArray(parsed) && parsed.length > 1) {
             candles = mergeCandles(candles, parsed);
+            isLoadingKlines = false;
             KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
             chartNeedsDraw = true;
             drawChart();
@@ -7061,8 +7111,13 @@ async function fetchKlines(ex, sym, tf) {
       ctx.fillStyle = "var(--rd)";
       ctx.fillText("Loading error: " + err.message, chartW / 2, chartH / 2);
     }
+  } finally {
+    if (fetchToken === klFetchToken && candles.length > 1) {
+      isLoadingKlines = false;
+    }
   }
 }
+
 
 async function loadOlderHistory(ex, sym, tf) {
   if (isLoadingOlderCandles || hasReachedStartOfHistory || !candles.length) return;
@@ -7159,11 +7214,7 @@ function appendCandle(k) {
   const clean = sanitizeCandle(k, null);
   if (!clean) return;
 
-  if (!candles.length) {
-    candles = [clean];
-    chartNeedsDraw = true;
-    updateOHLC();
-    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+  if (isLoadingKlines || !candles.length) {
     return;
   }
 
@@ -7240,6 +7291,14 @@ function applyMainMarketTick(data, isRelay = false) {
   const eventLow = +data[3] || price;
   if (!(price > 0)) return;
 
+  // Always update ticker price in memory and header
+  const ticker = coins.get(`${activeEx}:${activeSym}`);
+  if (ticker) {
+    ticker.prev = ticker.p;
+    ticker.p = price;
+    ticker.displayP = price;
+  }
+
   // If direct high-speed exchange WebSocket is active, ignore delayed ticks from server relay!
   if (isRelay && klWs && klWs.readyState === 1) return;
 
@@ -7253,21 +7312,10 @@ function applyMainMarketTick(data, isRelay = false) {
   const tfMs = TF_MS[activeTf] || 60000;
   const now = (eventTime > 1e11) ? eventTime : Date.now();
 
-  if (!candles.length) {
-    const barStart = getBarStart(now, activeTf);
-    candles = [{
-      t: barStart,
-      o: price,
-      h: Math.max(price, eventHigh),
-      l: Math.min(price, eventLow),
-      c: price,
-      v: 0
-    }];
-    chartNeedsDraw = true;
-    updateOHLC();
-    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+  if (isLoadingKlines || !candles.length) {
     return;
   }
+
 
   let last = candles[candles.length - 1];
   const candleEnd = last.t + tfMs;
@@ -7309,15 +7357,8 @@ function applyMainMarketTick(data, isRelay = false) {
     last.c = price;
   }
 
-  // Update ticker display price directly
-  const ticker = coins.get(`${activeEx}:${activeSym}`);
-  if (ticker) {
-    ticker.prev = ticker.p;
-    ticker.p = price;
-    ticker.displayP = price;
-  }
-
   chartNeedsDraw = true;
+
   updateOHLC();
   checkPriceAlerts(activeEx, activeSym, price, eventHigh, eventLow);
 
@@ -7694,6 +7735,11 @@ function isStablecoinBase(c) {
 }
 
 function rebuildList() {
+  const isPro = !!(window.currentUser && window.currentUser.plan === "pro");
+  if (!isPro && listEx !== "BN") {
+    listEx = "BN";
+    if (typeof syncExcDropdown === "function") syncExcDropdown("BN");
+  }
   let list = Array.from(coins.values());
 
   // тФАтФАтФА Filter: USDT Futures Only тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -8348,6 +8394,7 @@ if (settingsBtn && settingsOverlay) {
     }
     settingsOverlay.style.display = "flex";
     settingsOverlay.classList.add("open");
+    if (typeof window.pdSyncModalUI === "function") window.pdSyncModalUI();
   };
   const closeSettings = () => {
     settingsOverlay.style.display = "none";
@@ -8371,20 +8418,29 @@ if (settingsBtn && settingsOverlay) {
       document.querySelectorAll(".settings-pane").forEach(p => {
         p.classList.toggle("active", p.id === targetId);
       });
+      if (tab.dataset.tab === "notifications" && typeof window.pdSyncModalUI === "function") {
+        window.pdSyncModalUI();
+      }
     };
   });
 
-  // Theme switching placeholder
+  // Theme switching
   document.querySelectorAll(".theme-opt").forEach(opt => {
     opt.onclick = () => {
       document.querySelectorAll(".theme-opt").forEach(o => o.classList.remove("active"));
       opt.classList.add("active");
       const theme = opt.dataset.theme;
-      if (theme === "dark") updateBgColor("#0d0f14");
-      if (theme === "black") updateBgColor("#000000");
-      if (theme === "blue") updateBgColor("#0a0c1a");
+      let c = "#0d0f14";
+      if (theme === "dark") c = "#0d0f14";
+      if (theme === "black") c = "#000000";
+      if (theme === "blue") c = "#0a0c1a";
+      pendingBg = c;
+      const bgPrev = $("bg-color-preview");
+      if (bgPrev) bgPrev.style.backgroundColor = c;
+      updateBgColor(c, pendingOpacity || 100, true);
     };
   });
+
 
   // ═══ Formations Overlay Settings Init ═══
   (function initFormationsOverlay() {
@@ -8679,7 +8735,7 @@ if (settingsBtn && settingsOverlay) {
 
       preview.onclick = (e) => {
         e.stopPropagation();
-        document.querySelectorAll(".color-dropdown").forEach(d => {
+        document.querySelectorAll(".color-dropdown.open").forEach(d => {
           if (d !== dropdown) d.classList.remove("open");
         });
         dropdown.classList.toggle("open");
@@ -8694,26 +8750,30 @@ if (settingsBtn && settingsOverlay) {
         };
       });
 
-      plusBtn.onclick = () => hiddenInput.click();
-      hiddenInput.oninput = (e) => {
-        curColor = e.target.value;
-        preview.style.backgroundColor = hexToRgba(curColor, curOpacity);
-        onUpdate(curColor, curOpacity);
-      };
+      if (plusBtn && hiddenInput) {
+        plusBtn.onclick = () => hiddenInput.click();
+        hiddenInput.oninput = (e) => {
+          curColor = e.target.value;
+          preview.style.backgroundColor = hexToRgba(curColor, curOpacity);
+          onUpdate(curColor, curOpacity);
+        };
+      }
 
-      opacitySlider.oninput = (e) => {
-        curOpacity = e.target.value;
-        opacityVal.textContent = curOpacity + "%";
-        preview.style.backgroundColor = hexToRgba(curColor, curOpacity);
-        onUpdate(curColor, curOpacity);
-      };
+      if (opacitySlider && opacityVal) {
+        opacitySlider.oninput = (e) => {
+          curOpacity = e.target.value;
+          opacityVal.textContent = curOpacity + "%";
+          preview.style.backgroundColor = hexToRgba(curColor, curOpacity);
+          onUpdate(curColor, curOpacity);
+        };
+      }
 
       return {
         setColor: (c, o) => {
           curColor = c; curOpacity = o;
           preview.style.backgroundColor = hexToRgba(c, o);
-          opacitySlider.value = o;
-          opacityVal.textContent = o + "%";
+          if (opacitySlider) opacitySlider.value = o;
+          if (opacityVal) opacityVal.textContent = o + "%";
         },
         getColor: () => curColor,
         getOpacity: () => curOpacity
@@ -8752,12 +8812,10 @@ if (settingsBtn && settingsOverlay) {
 
     const formationColorState = { ...DEFAULT_FORMATION_COLORS };
 
-    // Global access
     window.candleSettings = candleState;
     window.volumeSettings = volumeState;
     window.formationColorSettings = formationColorState;
 
-    // Load settings
     const loadSettings = () => {
       const savedCandles = localStorage.getItem("screener-candle-settings");
       if (savedCandles) Object.assign(candleState, JSON.parse(savedCandles));
@@ -8772,15 +8830,15 @@ if (settingsBtn && settingsOverlay) {
         } catch (_) {}
       }
 
-      $("set-candle-body").checked = candleState.body.show;
-      $("set-candle-border").checked = candleState.border.show;
-      $("set-candle-wick").checked = candleState.wick.show;
-      $("set-show-volume").checked = volumeState.show;
+      if ($("set-candle-body")) $("set-candle-body").checked = candleState.body.show;
+      if ($("set-candle-border")) $("set-candle-border").checked = candleState.border.show;
+      if ($("set-candle-wick")) $("set-candle-wick").checked = candleState.wick.show;
+      if ($("set-show-volume")) $("set-show-volume").checked = volumeState.show;
 
       const compact = localStorage.getItem("screener-compact-list") === "true";
       const compactEl = $("set-compact-list");
       if (compactEl) compactEl.checked = compact;
-      if (compact) $("coin-list").classList.add("compact");
+      if (compact) $("coin-list")?.classList.add("compact");
 
       const anim = localStorage.getItem("screener-chart-anim") !== "false";
       const animEl = $("set-chart-anim");
@@ -8814,7 +8872,7 @@ if (settingsBtn && settingsOverlay) {
           refreshCharts();
         };
       } else if (id.startsWith("volume-")) {
-        const side = id.split("-")[1]; // up/down
+        const side = id.split("-")[1];
         initialColor = volumeState[side];
         initialOpacity = volumeState[side + "Op"];
         onUpdate = (c, o) => {
@@ -8860,8 +8918,12 @@ if (settingsBtn && settingsOverlay) {
     });
 
     function refreshCharts() {
-      if (typeof drawChart === "function") drawChart();
-      if (typeof chartInstances !== "undefined") chartInstances.forEach(inst => inst.draw());
+      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+      if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+        chartInstances.forEach(inst => {
+          if (inst && typeof inst.draw === "function") inst.draw();
+        });
+      }
     }
 
     if (axisPreview && axisDropdown) {
@@ -8873,15 +8935,15 @@ if (settingsBtn && settingsOverlay) {
       document.addEventListener("click", (e) => {
         if (!axisDropdown.contains(e.target) && !e.target.closest(".custom-color-picker") && e.target !== axisPreview) {
           axisDropdown.classList.remove("open");
-          document.querySelectorAll(".color-dropdown").forEach(d => d.classList.remove("open"));
+          document.querySelectorAll(".color-dropdown.open").forEach(d => d.classList.remove("open"));
         }
       });
 
       axisDropdown.querySelectorAll(".c-swatch").forEach(swatch => {
         swatch.onclick = () => {
           pendingAxisColor = swatch.dataset.color;
-          axisPreview.style.backgroundColor = pendingAxisColor;
-          updateAxisColor(pendingAxisColor, pendingAxisOpacity, false);
+          if (axisPreview) axisPreview.style.backgroundColor = pendingAxisColor;
+          updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
           axisDropdown.classList.remove("open");
         };
       });
@@ -8890,8 +8952,8 @@ if (settingsBtn && settingsOverlay) {
         addCustomAxis.onclick = () => hiddenAxisPicker.click();
         hiddenAxisPicker.oninput = (e) => {
           pendingAxisColor = e.target.value;
-          axisPreview.style.backgroundColor = pendingAxisColor;
-          updateAxisColor(pendingAxisColor, pendingAxisOpacity, false);
+          if (axisPreview) axisPreview.style.backgroundColor = pendingAxisColor;
+          updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
         };
       }
 
@@ -8899,78 +8961,133 @@ if (settingsBtn && settingsOverlay) {
         axisOpacitySlider.oninput = (e) => {
           pendingAxisOpacity = e.target.value;
           axisOpacityVal.textContent = pendingAxisOpacity + "%";
-          updateAxisColor(pendingAxisColor, pendingAxisOpacity, false);
+          updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
         };
       }
     }
 
-    // Apply button
+    // Apply button (Master Save Across All Tabs)
     if (applyBtn) {
       applyBtn.onclick = () => {
         updateBgColor(pendingBg, pendingOpacity, true);
         updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
 
-        candleState.body.show = $("set-candle-body").checked;
-        candleState.border.show = $("set-candle-border").checked;
-        candleState.wick.show = $("set-candle-wick").checked;
+        if ($("set-candle-body")) candleState.body.show = $("set-candle-body").checked;
+        if ($("set-candle-border")) candleState.border.show = $("set-candle-border").checked;
+        if ($("set-candle-wick")) candleState.wick.show = $("set-candle-wick").checked;
         localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
 
-        const compact = $("set-compact-list").checked;
+        const compact = $("set-compact-list") ? $("set-compact-list").checked : false;
         localStorage.setItem("screener-compact-list", compact);
-        $("coin-list").classList.toggle("compact", compact);
+        $("coin-list")?.classList.toggle("compact", compact);
 
-        const anim = $("set-chart-anim").checked;
+        const anim = $("set-chart-anim") ? $("set-chart-anim").checked : true;
         localStorage.setItem("screener-chart-anim", anim);
         INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
 
-        volumeState.show = $("set-show-volume").checked;
+        if ($("set-show-volume")) volumeState.show = $("set-show-volume").checked;
         localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
 
         localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
 
+        if (typeof saveFormationAlertSettings === "function" && typeof currentFormationAlertSettings !== "undefined") {
+          saveFormationAlertSettings(currentFormationAlertSettings);
+        }
+        if (typeof pdSave === "function" && typeof pdSettings !== "undefined") {
+          pdSave(pdSettings);
+        }
+
         refreshCharts();
-        if (settingsOverlay) settingsOverlay.classList.remove("open");
+        if (typeof showToast === "function") {
+          showToast({ title: "Настройки сохранены", message: "Все параметры оформления и уведомлений успешно применены", type: "success" });
+        }
+        if (typeof closeSettingsModal === "function") closeSettingsModal();
       };
     }
 
-    // Reset button
+    // Reset button (Master Universal Reset)
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
       resetBtn.onclick = () => {
-        if (confirm("Вы уверены, что хотите сбросить все настройки к начальным?")) {
-          // Clear settings but keep drawings
-          const keysToKeep = [];
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (
-              key.startsWith("crypto_drawings_") ||
-              key.startsWith("obsidian_auth_") ||
-              key.startsWith("obsidian_tg_") ||
-              key === "crypto_tags" ||
-              key === "crypto_tool_colors"
-            ) {
-              keysToKeep.push({ key, val: localStorage.getItem(key) });
-            }
-          }
-          localStorage.clear();
-          keysToKeep.forEach(item => localStorage.setItem(item.key, item.val));
-          location.reload();
+        // 1. Reset theme and background color to default dark (#0d0f14)
+        pendingBg = "#0d0f14";
+        pendingOpacity = "100";
+        if (opacitySlider) opacitySlider.value = "100";
+        if (opacityVal) opacityVal.textContent = "100%";
+        if (bgPreview) bgPreview.style.backgroundColor = "#0d0f14";
+        document.querySelectorAll(".theme-opt").forEach(o => o.classList.toggle("active", o.dataset.theme === "dark"));
+        updateBgColor("#0d0f14", 100, true);
+
+        // 2. Reset axis text color to default
+        pendingAxisColor = "#d1d4dc";
+        pendingAxisOpacity = "100";
+        if (axisOpacitySlider) axisOpacitySlider.value = "100";
+        if (axisOpacityVal) axisOpacityVal.textContent = "100%";
+        if (axisPreview) axisPreview.style.backgroundColor = "#d1d4dc";
+        updateAxisColor("#d1d4dc", 100, true);
+
+        // 3. Reset screener sidebar color
+        updateScreenerBgColor("#0d0f14", true);
+
+        // 4. Reset candle settings
+        if ($("set-candle-body")) $("set-candle-body").checked = true;
+        if ($("set-candle-border")) $("set-candle-border").checked = true;
+        if ($("set-candle-wick")) $("set-candle-wick").checked = true;
+        candleState.body.show = true;
+        candleState.border.show = true;
+        candleState.wick.show = true;
+        localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
+
+        // 5. Reset compact & animation & volume
+        if ($("set-compact-list")) $("set-compact-list").checked = false;
+        localStorage.setItem("screener-compact-list", "false");
+        $("coin-list")?.classList.remove("compact");
+
+        if ($("set-chart-anim")) $("set-chart-anim").checked = true;
+        localStorage.setItem("screener-chart-anim", "true");
+        INTERP_SPEED = DEFAULT_INTERP_SPEED;
+
+        if ($("set-show-volume")) $("set-show-volume").checked = true;
+        volumeState.show = true;
+        localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
+
+        // 6. Reset Pump / Dump Scanner settings to default OFF
+        if (typeof DEFAULT_PD_SETTINGS !== "undefined") {
+          pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+          if (typeof pdSave === "function") pdSave(pdSettings);
+          if (typeof pdSyncModalUI === "function") pdSyncModalUI();
+        }
+
+        // 7. Reset Formation Alert settings to default OFF
+        if (typeof DEFAULT_FORMATION_ALERT_SETTINGS !== "undefined") {
+          currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+          if (typeof saveFormationAlertSettings === "function") saveFormationAlertSettings(currentFormationAlertSettings);
+          if (typeof syncFormationUI === "function") syncFormationUI();
+        }
+
+        refreshCharts();
+        if (typeof showToast === "function") {
+          showToast({
+            title: "Сброс настроек",
+            message: "Все настройки оформления, графиков и уведомлений сброшены к начальным",
+            type: "success"
+          });
         }
       };
     }
 
     // Initial load
     setTimeout(() => {
-      opacitySlider.value = pendingOpacity;
-      opacityVal.textContent = pendingOpacity + "%";
+      if (opacitySlider) opacitySlider.value = pendingOpacity;
+      if (opacityVal) opacityVal.textContent = pendingOpacity + "%";
       updateBgColor(pendingBg, pendingOpacity, false);
-      bgPreview.style.backgroundColor = pendingBg;
+      if (bgPreview) bgPreview.style.backgroundColor = pendingBg;
 
       if (axisOpacitySlider) {
         axisOpacitySlider.value = pendingAxisOpacity;
-        axisOpacityVal.textContent = pendingAxisOpacity + "%";
+        if (axisOpacityVal) axisOpacityVal.textContent = pendingAxisOpacity + "%";
         updateAxisColor(pendingAxisColor, pendingAxisOpacity, false);
-        axisPreview.style.backgroundColor = pendingAxisColor;
+        if (axisPreview) axisPreview.style.backgroundColor = pendingAxisColor;
       }
     }, 100);
   }
@@ -8982,8 +9099,7 @@ function updateAxisColor(color, opacity = 100, save = true) {
     localStorage.setItem("screener-axis-color", color);
     localStorage.setItem("screener-axis-opacity", opacity);
   }
-  // Force redraw all charts to apply text color
-  if (typeof drawChart === "function") drawChart();
+  if (typeof drawChart === "function") requestAnimationFrame(drawChart);
 }
 
 function getAxisTextColor() {
@@ -9020,30 +9136,49 @@ function updateScreenerHeaderColor(color, save = true) {
   updateScreenerBgColor(color, save);
 }
 
+let currentActiveBgColor = localStorage.getItem("screener-bg-color") || "#0d0f14";
+let currentActiveBgOpacity = localStorage.getItem("screener-bg-opacity") || "100";
+
 function updateBgColor(color, opacity = 100, save = true) {
+  if (!color) color = "#0d0f14";
+  currentActiveBgColor = color;
+  currentActiveBgOpacity = opacity;
+
   const rgba = hexToRgba(color, opacity);
   document.documentElement.style.setProperty("--bg", rgba);
   document.documentElement.style.setProperty("--bg2", rgba);
+
+  const chartArea = document.getElementById("chart-area");
+  if (chartArea) chartArea.style.backgroundColor = rgba;
+
+  const mainCanvas = document.getElementById("chart-canvas");
+  if (mainCanvas) mainCanvas.style.backgroundColor = rgba;
+
+  const volCanvas = document.getElementById("vol-canvas");
+  if (volCanvas) volCanvas.style.backgroundColor = rgba;
 
   if (save) {
     localStorage.setItem("screener-bg-color", color);
     localStorage.setItem("screener-bg-opacity", opacity);
   }
 
-  // Force redraw all charts if initialized
-  if (typeof drawChart === "function") drawChart();
+  // Force redraw main chart
+  if (typeof drawChart === "function") {
+    requestAnimationFrame(drawChart);
+  }
 
   if (typeof screenerView !== "undefined" && (screenerView === "multichart" || activeView === "formations")) {
-    // Redraw all ChartInstances
-    if (typeof chartInstances !== "undefined") {
-      chartInstances.forEach(inst => inst.draw());
+    if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+      chartInstances.forEach(inst => {
+        if (inst && typeof inst.draw === "function") inst.draw();
+      });
     }
   }
 }
 
 function getCanvasBgColor() {
-  const color = localStorage.getItem("screener-bg-color") || "#0d0f14";
-  const opacity = localStorage.getItem("screener-bg-opacity") || "100";
+  const color = currentActiveBgColor || localStorage.getItem("screener-bg-color") || "#0d0f14";
+  const opacity = currentActiveBgOpacity || localStorage.getItem("screener-bg-opacity") || "100";
   return hexToRgba(color, opacity);
 }
 
@@ -9055,6 +9190,15 @@ function updateSymInfo() {
 }
 
 function selectCoin(c) {
+  if (!c) return;
+  const isPro = !!(window.currentUser && window.currentUser.plan === "pro");
+  if (c.ex && c.ex !== "BN" && !isPro) {
+    if (typeof openProModal === "function") {
+      const exName = (typeof EXC_NAMES !== "undefined" && EXC_NAMES[c.ex]) || c.ex;
+      openProModal(`Биржа ${exName}`);
+    }
+    return;
+  }
   const ok = rowEls.get(`${activeEx}:${activeSym}`);
   if (ok) ok.el.classList.remove("sel");
   activeEx = c.ex;
@@ -9101,7 +9245,7 @@ function toggleExcDropdown() {
     excBtn.setAttribute("aria-expanded", "false");
   } else {
     const rect = excBtn.getBoundingClientRect();
-    const menuWidth = 205;
+    const menuWidth = 225;
     excMenu.style.position = "fixed";
     excMenu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 340) + "px";
     let rightPos = Math.max(8, window.innerWidth - rect.right);
@@ -9135,6 +9279,17 @@ document.querySelectorAll("#exc-menu .exc-item:not(.disabled)").forEach((item) =
     const cex = item.dataset.cex,
       label = item.dataset.label,
       img = item.dataset.img;
+
+    const isPro = !!(window.currentUser && window.currentUser.plan === "pro");
+    if (cex !== "BN" && !isPro) {
+      excMenu.classList.remove("open");
+      excBtn.classList.remove("open");
+      excBtn.setAttribute("aria-expanded", "false");
+      if (typeof openProModal === "function") {
+        openProModal(`Биржа ${label || "Все биржи"}`);
+      }
+      return;
+    }
     document.querySelectorAll("#exc-menu .exc-item").forEach((x) => {
       x.classList.remove("on");
       x.setAttribute("aria-selected", "false");
@@ -15490,35 +15645,51 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 }
 
 function sendTelegramAlert(message, photoDataUrl = null) {
-  const activeUser = window.currentUser;
-  const chatId = activeUser?.telegramChatId || activeUser?.telegramId || localStorage.getItem("obsidian_tg_chat_id");
+  const activeUser = window.currentUser || {};
+  const inputEl = document.getElementById("pd-tg-chat-id-input");
+  const inputChatId = (inputEl && inputEl.value.trim()) || "";
+  const chatId = inputChatId || activeUser.telegramChatId || activeUser.telegramId || localStorage.getItem("obsidian_tg_chat_id") || localStorage.getItem("obsidian_telegram_id") || "";
+  if (inputChatId && !localStorage.getItem("obsidian_tg_chat_id")) {
+    localStorage.setItem("obsidian_tg_chat_id", inputChatId);
+  }
+
   const headers = { "Content-Type": "application/json" };
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
+  const token = (typeof authToken === "string" && authToken) ? authToken : (localStorage.getItem("obsidian_auth_token") || "");
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   const hasPhoto = photoDataUrl && typeof photoDataUrl === "string" && photoDataUrl.startsWith("data:image");
-  console.log(`[ALERT TG] hasPhoto=${!!hasPhoto}, photoLen=${photoDataUrl ? photoDataUrl.length : 0}, chatId=${chatId}`);
-
   const endpoint = hasPhoto ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
   const body = hasPhoto
     ? { chatId: chatId || undefined, caption: message, photoDataUrl }
     : { chatId: chatId || undefined, message };
+
 
   fetch(endpoint, {
     method: "POST",
     headers,
     body: JSON.stringify(body)
   }).then(async r => {
-    const d = await r.json();
-    console.log(`[ALERT TG] Response status=${r.status}`, d);
-    if (!r.ok || !d.success) {
-      console.warn("Telegram alert dispatch result:", d);
+    const d = await r.json().catch(() => ({}));
+    if (hasPhoto && (!r.ok || !d.success)) {
+      // Retry immediately as plain text if photo request was rejected or failed
+      fetch("/api/notifications/telegram", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ chatId: chatId || undefined, message })
+      }).catch(() => {});
     }
   }).catch(err => {
-    console.error("Telegram alert dispatch error:", err);
+    console.error("[TELEGRAM ALERT ERROR]", err);
+    fetch("/api/notifications/telegram", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ chatId: chatId || undefined, message })
+    }).catch(() => {});
   });
 }
+
 
 async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
   if (!price || price <= 0) return;
@@ -15730,12 +15901,29 @@ function renderPriceAlertsList() {
   // UI grid was removed; this is intentionally a no-op.
 }
 
-function loadPriceAlerts() {
+async function loadPriceAlerts() {
   try {
     const raw = localStorage.getItem("obsidian_price_alerts");
     priceAlerts = raw ? JSON.parse(raw) : [];
-    // Filter out old triggered alerts on load
     priceAlerts = priceAlerts.filter(a => !a.triggered);
+
+    // Fetch from 24/7 server store
+    const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
+    if (token) {
+      const res = await fetch("/api/user/price-alerts", {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.success && Array.isArray(d.alerts) && d.alerts.length) {
+          const mergedMap = new Map();
+          for (const a of priceAlerts) if (a.id) mergedMap.set(a.id, a);
+          for (const a of d.alerts) if (a.id) mergedMap.set(a.id, a);
+          priceAlerts = Array.from(mergedMap.values()).filter(a => !a.triggered);
+          localStorage.setItem("obsidian_price_alerts", JSON.stringify(priceAlerts));
+        }
+      }
+    }
   } catch (_) { priceAlerts = []; }
 }
 
@@ -15744,8 +15932,19 @@ function savePriceAlerts() {
     // Save only active alerts
     const active = priceAlerts.filter(a => !a.triggered);
     localStorage.setItem("obsidian_price_alerts", JSON.stringify(active));
+
+    // Sync to 24/7 Server Monitor
+    const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
+    if (token) {
+      fetch("/api/user/price-alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ alerts: active })
+      }).catch(() => {});
+    }
   } catch (_) {}
 }
+
 
 function playAlertSound(kind = "chime") {
   try {
@@ -15915,6 +16114,13 @@ function bindProFeatureGate() {
 
       event.preventDefault();
       event.stopImmediatePropagation();
+      const excMenuEl = $("exc-menu");
+      const excBtnEl = $("exc-btn");
+      if (excMenuEl) excMenuEl.classList.remove("open");
+      if (excBtnEl) {
+        excBtnEl.classList.remove("open");
+        excBtnEl.setAttribute("aria-expanded", "false");
+      }
       openProModal(proTarget.dataset.proFeature || "Эта функция");
     }, true);
   });
@@ -16445,11 +16651,12 @@ function initNotificationsUI() {
     const s = currentFormationAlertSettings;
 
     // 1. General Alert Settings
-    const setSound = $("set-sound-enabled");
-    const setToast = $("set-toast-enabled");
+    const setSound = $("pd-sound-enabled") || $("set-sound-enabled");
+    const setToast = $("pd-toast-enabled") || $("set-toast-enabled");
     const setTgModal = $("fmt-modal-tg-enabled");
     const setSoundModal = $("fmt-modal-sound-enabled");
     const setToastModal = $("fmt-modal-toast-enabled");
+
 
     if (setSound) setSound.checked = !!s.soundEnabled;
     if (setToast) setToast.checked = !!s.toastEnabled;
@@ -16536,18 +16743,14 @@ function initNotificationsUI() {
     playAlertSound("chime");
     showToast({
       title: "Тестовый сигнал",
-      message: "Звук и всплывающая карточка работают корректно!" +
-               `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к формациям</span> ↗</div>`,
-      type: "info",
-      hint: "Нажмите, чтобы перейти к формациям",
-      onClick: () => {
-        if (typeof window.switchView === "function") window.switchView("formations");
-      }
+      message: "Звук и всплывающая карточка работают корректно!",
+      type: "info"
     });
     if (currentFormationAlertSettings.tgEnabled) {
-      sendTelegramAlert("Obsidian Formation & Price Alert\n\nТестовый сигнал из скринера получен успешно!");
+      sendTelegramAlert("Obsidian Screener\n\nТестовый сигнал получен успешно!");
     }
   }
+
 
   async function triggerTestFormationTgAlert() {
     playAlertSound("chime");
@@ -16603,37 +16806,15 @@ function initNotificationsUI() {
   });
 
   // Formation Modal Reset button
+  // Formation alert reset button
   $("btn-reset-formation-alerts")?.addEventListener("click", () => {
     localStorage.removeItem("obsidian_formation_alerts_user_configured");
     currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
     saveFormationAlertSettings(currentFormationAlertSettings);
-    localStorage.removeItem("obsidian_formation_alerts_user_configured");
     syncFormationUI();
     showToast({ title: "Сброс настроек", message: "Все алерты формаций отключены по умолчанию", type: "info" });
   });
 
-  // Settings Apply button hook
-  const applyBtn = $("settings-apply-btn");
-  if (applyBtn) {
-    applyBtn.onclick = () => {
-      saveFormationAlertSettings(currentFormationAlertSettings);
-      showToast({ title: "Настройки сохранены", message: "Параметры уведомлений успешно применены", type: "success" });
-      if (typeof closeSettingsModal === "function") closeSettingsModal();
-    };
-  }
-
-  // Settings Reset button hook
-  const resetBtn = $("settings-reset-btn");
-  if (resetBtn) {
-    resetBtn.onclick = () => {
-      localStorage.removeItem("obsidian_formation_alerts_user_configured");
-      currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
-      saveFormationAlertSettings(currentFormationAlertSettings);
-      localStorage.removeItem("obsidian_formation_alerts_user_configured");
-      syncFormationUI();
-      showToast({ title: "Сброс настроек", message: "Все алерты формаций отключены по умолчанию", type: "info" });
-    };
-  }
 
   // ═══ 24/7 Background Formation Alert Scanner Engine ═══
   const formationAlertCooldownMap = new Map();
@@ -17063,3 +17244,951 @@ if (document.readyState === "loading") {
 }
 
 })();
+
+// ══════════════════════════════════════════════════════════════════════════
+// PUMP / DUMP SCANNER  ─  Client-Side Per-Account Alert Engine
+// ══════════════════════════════════════════════════════════════════════════
+(function () {
+  "use strict";
+
+  // ── Default Settings ────────────────────────────────────────────────────
+  // ── Default Settings ────────────────────────────────────────────────────
+  const DEFAULT_PD_SETTINGS = {
+    enabled: false,
+    soundEnabled: true,
+    toastEnabled: true,
+    tgEnabled: false,
+    exchanges: ["BN", "BB", "OX"],
+    direction: "both",        // "both" | "pump" | "dump"
+    marketType: "both",       // "both" | "futures" | "spot"
+    minPct: 3,                // minimum % change to trigger
+    periodMinutes: 5,         // lookback window in minutes (= bars on 1m TF)
+    minVolume: 0,             // minimum 24h volume in USD
+    cooldownSeconds: 300,     // per-symbol cooldown
+    maxCards: 50,             // max alert cards in the panel
+  };
+
+  let pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+  let pdScanInterval = null;
+  let pdScanRunning = false;
+  const pdCooldownMap = new Map();   // key "EX:SYM" → timestamp last fired
+  const pdAlertCards = [];           // [{id, ex, sym, pct, dir, price, ts}]
+  const pdKlinesCache = new Map();   // key "EX:SYM" → {ts, data:[]}
+  const PD_KLINES_TTL = 28000;       // 28 s cache for 1m klines
+
+  // ── Load / Save ─────────────────────────────────────────────────────────
+  function pdLoad() {
+    try {
+      const raw = localStorage.getItem("obsidian_pump_alert_settings");
+      const isConfigured = localStorage.getItem("obsidian_pump_alerts_user_configured") === "true";
+      if (raw && isConfigured) {
+        const parsed = JSON.parse(raw);
+        pdSettings = { ...DEFAULT_PD_SETTINGS, ...parsed,
+          exchanges: Array.isArray(parsed.exchanges) && parsed.exchanges.length ? parsed.exchanges : [...DEFAULT_PD_SETTINGS.exchanges],
+          marketType: parsed.marketType || "both"
+        };
+      } else {
+        pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+      }
+    } catch (_) {
+      pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+    }
+    window.pdSettings = pdSettings;
+    return pdSettings;
+  }
+
+  function pdSave(s) {
+    localStorage.setItem("obsidian_pump_alerts_user_configured", "true");
+    pdSettings = s || pdSettings;
+    localStorage.setItem("obsidian_pump_alert_settings", JSON.stringify(pdSettings));
+    window.pdSettings = pdSettings;
+    pdSyncToServer(pdSettings).catch(() => {});
+    pdRestartScanner();
+  }
+
+  async function pdSyncToServer(settings) {
+    try {
+      const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
+      if (!token) return;
+      const tgChatId = localStorage.getItem("obsidian_tg_chat_id") || (window.currentUser && (window.currentUser.telegramChatId || window.currentUser.telegramId)) || "";
+      const payload = {
+        tgEnabled: !!settings.tgEnabled,
+        telegramChatId: tgChatId,
+        pumpDump: settings,
+        pumpAlerts: settings
+      };
+      await fetch("/api/user/notification-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify(payload)
+      });
+      await fetch("/api/user/pump-alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify(settings)
+      });
+    } catch (_) {}
+  }
+
+  async function pdLoadFromServer() {
+    try {
+      const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
+      if (!token) return;
+      const res = await fetch("/api/user/notification-settings", {
+        headers: { "Authorization": `Bearer ${token}` }
+      });
+      if (!res.ok) return;
+      const d = await res.json();
+      if (d.success && d.settings) {
+        const isConfigured = localStorage.getItem("obsidian_pump_alerts_user_configured") === "true";
+        if (d.settings.telegramChatId && !localStorage.getItem("obsidian_tg_chat_id")) {
+          localStorage.setItem("obsidian_tg_chat_id", d.settings.telegramChatId);
+        }
+        if (!isConfigured) {
+          const s = d.settings.pumpDump || d.settings.pumpAlerts || d.settings;
+          pdSettings = { ...DEFAULT_PD_SETTINGS, ...s,
+            exchanges: Array.isArray(s.exchanges) && s.exchanges.length ? s.exchanges : [...DEFAULT_PD_SETTINGS.exchanges],
+            marketType: s.marketType || "both"
+          };
+          localStorage.setItem("obsidian_pump_alert_settings", JSON.stringify(pdSettings));
+          window.pdSettings = pdSettings;
+          pdRestartScanner();
+          pdSyncModalUI();
+        }
+      }
+    } catch (_) {}
+  }
+
+
+  // ── High-Speed Real-Time Live Price Ring Buffer ────────────────────────
+  const pdPriceRing = new Map(); // key "EX:SYM" → [{ t, p }]
+  let pdIsSeeded = false;
+
+  function pdTrackPrice(key, price) {
+    if (!price || price <= 0) return;
+    const now = Date.now();
+    let ring = pdPriceRing.get(key);
+    if (!ring) {
+      ring = [];
+      pdPriceRing.set(key, ring);
+    }
+    const lastSample = ring[ring.length - 1];
+    if (!lastSample || now - lastSample.t >= 2000) {
+      ring.push({ t: now, p: price });
+      if (ring.length > 900) ring.shift(); // 30 mins history at 2s resolution
+    }
+
+    // Instant real-time breakout detection on live tick
+    if (pdSettings.enabled && pdIsSeeded) {
+      pdCheckLiveTick(key, price, ring, now);
+    }
+  }
+
+  function pdCheckLiveTick(key, currentPrice, ring, now) {
+    if (!ring || ring.length < 3) return;
+    const colonIdx = key.indexOf(":");
+    if (colonIdx <= 0) return;
+    const ex = key.substring(0, colonIdx);
+    const sym = key.substring(colonIdx + 1);
+
+    if (pdSettings.exchanges && pdSettings.exchanges.length && !pdSettings.exchanges.includes(ex)) return;
+
+    // Market Type filter (Spot / Futures)
+    const c = window.coins ? window.coins.get(key) : null;
+    const isFutures = (c && ((c.funding && c.funding !== 0) || (c.oi && c.oi > 0))) || sym.includes("SWAP") || sym.includes("PERP") || sym.endsWith("USDTM") || (!sym.endsWith("_SPOT"));
+    if (pdSettings.marketType === "futures" && !isFutures) return;
+    if (pdSettings.marketType === "spot" && isFutures) return;
+
+    const cooldownMs = (pdSettings.cooldownSeconds || 300) * 1000;
+    const lastFired = pdCooldownMap.get(key) || 0;
+    if (now - lastFired < cooldownMs) return;
+
+    const bars = Math.max(1, Math.round(pdSettings.periodMinutes));
+    const minPct = Math.abs(pdSettings.minPct) || 1;
+    const dir = pdSettings.direction || "both";
+    const minVol = pdSettings.minVolume || 0;
+    const targetTs = now - bars * 60 * 1000;
+
+    if (minVol > 0 && c && c.v && c.v < minVol) return;
+
+    let pastSample = ring[0];
+    for (let i = 0; i < ring.length; i++) {
+      if (Math.abs(ring[i].t - targetTs) < Math.abs(pastSample.t - targetTs)) {
+        pastSample = ring[i];
+      }
+    }
+
+    if (!pastSample || !pastSample.p || pastSample.p <= 0) return;
+    if (now - pastSample.t < 8000) return;
+
+    const changePct = ((currentPrice - pastSample.p) / pastSample.p) * 100;
+    const absPct = Math.abs(changePct);
+    if (absPct < minPct) return;
+
+    const isPump = changePct > 0;
+    const isDump = changePct < 0;
+    if (dir === "pump" && !isPump) return;
+    if (dir === "dump" && !isDump) return;
+
+    // Trigger immediately!
+    pdCooldownMap.set(key, now);
+    pdFireAlert({
+      ex,
+      sym,
+      pct: changePct,
+      price: currentPrice,
+      vol: (c && c.v) || 0,
+      bars
+    });
+  }
+
+
+  // Hook into price updates in coins map
+  setInterval(() => {
+    if (!window.coins) return;
+    for (const [key, c] of window.coins.entries()) {
+      if (c && c.p > 0) pdTrackPrice(key, c.p);
+    }
+  }, 2000);
+
+  // ── Scanner Loop (Dual Engine: Server + In-Memory) ────────────────────────
+  async function pdRunScan() {
+    if (pdScanRunning || !pdSettings.enabled) return;
+    pdScanRunning = true;
+    try {
+      const bars = Math.max(1, Math.round(pdSettings.periodMinutes));
+      const minPct = Math.abs(pdSettings.minPct) || 1;
+      const dir = pdSettings.direction || "both";
+      const cooldownMs = (pdSettings.cooldownSeconds || 300) * 1000;
+      const minVol = pdSettings.minVolume || 0;
+      const now = Date.now();
+
+      // Check Server High-Speed Scanner
+      try {
+        const exParam = Array.isArray(pdSettings.exchanges) && pdSettings.exchanges.length ? pdSettings.exchanges.join(",") : "";
+        const mtParam = pdSettings.marketType || "both";
+        const r = await fetch(`/api/market/pump-alerts?period=${bars}&minPct=${minPct}&dir=${dir}&marketType=${mtParam}&ex=${encodeURIComponent(exParam)}&minVol=${minVol}`, {
+          cache: "no-store"
+        });
+        if (r.ok) {
+          const data = await r.json();
+          if (data && Array.isArray(data.alerts)) {
+            if (!pdIsSeeded) {
+              // First run: quietly seed top existing moves into the feed without blast spamming
+              pdIsSeeded = true;
+              const topInit = data.alerts.slice(0, 5);
+              for (const alert of topInit) {
+                const cdKey = `${alert.ex}:${alert.sym}`;
+                pdCooldownMap.set(cdKey, now);
+                pdAddCard({
+                  ex: alert.ex,
+                  sym: alert.sym,
+                  pct: alert.pct,
+                  price: alert.price,
+                  pctStr: (alert.pct >= 0 ? "+" : "") + alert.pct.toFixed(2) + "%",
+                  dirLabel: alert.pct > 0 ? "PUMP" : "DUMP",
+                  exFull: typeof getFullExchangeName === "function" ? getFullExchangeName(alert.ex) : alert.ex,
+                  timeStr: new Date(alert.ts || now).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+                  dateStr: `${String(new Date(alert.ts || now).getDate()).padStart(2, "0")}.${String(new Date(alert.ts || now).getMonth() + 1).padStart(2, "0")}`,
+                  periodLabel: `${bars}м`,
+                  volStr: alert.vol >= 1e9 ? (alert.vol / 1e9).toFixed(2) + "B" : alert.vol >= 1e6 ? (alert.vol / 1e6).toFixed(1) + "M" : alert.vol > 0 ? (alert.vol / 1e3).toFixed(0) + "K" : "—"
+                });
+              }
+            } else {
+              // Real-time: alert individually as each new coin breaks threshold
+              for (const alert of data.alerts) {
+                const cdKey = `${alert.ex}:${alert.sym}`;
+                const lastFired = pdCooldownMap.get(cdKey) || 0;
+                if (now - lastFired < cooldownMs) continue;
+
+                pdCooldownMap.set(cdKey, now);
+                await pdFireAlert({
+                  ex: alert.ex,
+                  sym: alert.sym,
+                  pct: alert.pct,
+                  price: alert.price,
+                  vol: alert.vol,
+                  bars: alert.bars || bars
+                });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[PD SERVER SCAN]", err);
+      }
+
+    } catch (err) {
+      console.error("[PD SCANNER ERROR]", err);
+    } finally {
+      pdScanRunning = false;
+    }
+  }
+
+
+  // ── Universal Chart Navigation Helper ────────────────────────────────────
+  window.openCoinChart = function (ex, sym) {
+    if (!sym) return;
+    const targetEx = ex || window.activeEx || "BN";
+    let targetSym = sym;
+
+    // 1. Close alert slide panel if open
+    if (typeof pdClosePanel === "function") pdClosePanel();
+
+    // 2. Close settings modal if open
+    const settingsOverlay = document.getElementById("settings-overlay");
+    if (settingsOverlay) settingsOverlay.style.display = "none";
+
+    // 3. Close formations modal if open
+    const fmtModal = document.getElementById("fmt-scanner-modal");
+    if (fmtModal) fmtModal.style.display = "none";
+
+    // 4. Switch to screener view
+    if (typeof switchView === "function") switchView("screener");
+
+    // 5. Look up coin in coins Map
+    let coinObj = null;
+    if (window.coins) {
+      coinObj = window.coins.get(`${targetEx}:${targetSym}`);
+      if (!coinObj) {
+        const baseSym = targetSym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "");
+        for (const c of window.coins.values()) {
+          if (c.ex === targetEx && (c.sym === targetSym || c.base === baseSym || c.sym === targetSym + "USDT" || c.sym.startsWith(baseSym))) {
+            coinObj = c;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!coinObj) {
+      coinObj = { ex: targetEx, sym: targetSym, key: `${targetEx}:${targetSym}` };
+    }
+
+    if (typeof selectCoin === "function") {
+      selectCoin(coinObj);
+    }
+  };
+  window.pdOpenChart = window.openCoinChart;
+
+
+  // ── Alert Dispatch ───────────────────────────────────────────────────────
+  async function pdFireAlert({ ex, sym, pct, price, vol, bars }) {
+    const isPump = pct > 0;
+    const dirLabel = isPump ? "PUMP" : "DUMP";
+    const dirLabelRu = isPump ? "Памп" : "Дамп";
+    const exFull = typeof getFullExchangeName === "function" ? getFullExchangeName(ex) : ex;
+    const pctStr = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+    const priceStr = typeof fP === "function" ? fP(price) : (typeof price === "number" ? price.toFixed(6) : price);
+    const volStr = vol >= 1e9 ? (vol/1e9).toFixed(2)+"B" : vol >= 1e6 ? (vol/1e6).toFixed(1)+"M" : vol > 0 ? (vol/1e3).toFixed(0)+"K" : "—";
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
+    const periodLabel = bars >= 60 ? `${(bars/60).toFixed(bars%60===0?0:1)}ч` : `${bars}м`;
+
+    console.log(`[PD ALERT] [${dirLabel}] ${sym} (${exFull}) ${pctStr} за ${periodLabel}`);
+
+    // 1. Add card to panel
+    pdAddCard({ ex, sym, pct, price: priceStr, pctStr, dirLabel, exFull, timeStr, dateStr, periodLabel, volStr });
+
+    // 2. Sound
+    if (pdSettings.soundEnabled) {
+      try { if (typeof playAlertSound === "function") playAlertSound(isPump ? "chime" : "beep"); } catch (_) {}
+    }
+
+    // 3. Toast with instant 1-click chart opening
+    if (pdSettings.toastEnabled && typeof showToast === "function") {
+      try {
+        showToast({
+          title: `${dirLabelRu}: ${sym} (${pctStr})`,
+          message: `<b>${sym}</b> · ${exFull}<br><span style="color:${isPump ? '#22c55e' : '#ef4444'};font-weight:700;">${pctStr}</span> за <b>${periodLabel}</b> · $${priceStr}<div style="margin-top:5px;font-size:11px;color:#a78bfa;font-weight:600;display:flex;align-items:center;gap:4px;"><span>Открыть график</span> ↗</div>`,
+          type: "price_alert",
+          durationMs: 8000,
+          hint: "Нажмите, чтобы открыть график монеты",
+          onClick: () => {
+            window.openCoinChart(ex, sym);
+          }
+        });
+      } catch (_) {}
+    }
+
+    // 4. TG with chart snapshot
+    if (pdSettings.tgEnabled && typeof sendTelegramAlert === "function") {
+      try {
+        const cleanSym = sym.toUpperCase();
+        let photoDataUrl = null;
+        if (typeof captureChartSnapshot === "function") {
+          try {
+            const snapPromise = captureChartSnapshot(cleanSym, typeof price === "number" ? price : parseFloat(price) || 0, 0, "5m", ex);
+            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 2500));
+            photoDataUrl = await Promise.race([snapPromise, timeoutPromise]);
+          } catch (_) {
+            photoDataUrl = null;
+          }
+        }
+        const tgMsg =
+          `─── <b>[${dirLabel}] ${sym}</b> ───\n` +
+          `• <b>Биржа:</b> ${exFull}\n` +
+          `• <b>Изменение:</b> <b>${pctStr}</b> за ${periodLabel}\n` +
+          `• <b>Цена:</b> $${priceStr}\n` +
+          `• <b>Объём 24ч:</b> $${volStr}\n` +
+          `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+          `─────────────────────────\n` +
+          `⚡ <b>Obsidian Radar</b>`;
+        console.log(`[PD ALERT] Dispatching TG alert for ${cleanSym} (${exFull}), photo: ${!!photoDataUrl}`);
+        sendTelegramAlert(tgMsg, photoDataUrl);
+      } catch (tgErr) {
+        console.warn("[PD TG DISPATCH ERROR]", tgErr);
+      }
+    } else if (!pdSettings.tgEnabled) {
+      console.log(`[PD ALERT] TG notifications disabled in settings (pdSettings.tgEnabled is false)`);
+    }
+  }
+
+  // ── Alert Card Panel ─────────────────────────────────────────────────────
+  function pdAddCard(data) {
+    const id = `pd-card-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    pdAlertCards.unshift({ id, ...data });
+    if (pdAlertCards.length > (pdSettings.maxCards || 50)) pdAlertCards.length = pdSettings.maxCards || 50;
+    pdRenderCards();
+    pdUpdateBadge();
+  }
+
+  function pdRenderCards() {
+    const panel = document.getElementById("pd-alerts-list");
+    if (!panel) return;
+    if (pdAlertCards.length === 0) {
+      panel.innerHTML = `<div class="pd-empty">Алертов пока нет. Сканер активен.<br><span style="color:var(--t3);font-size:11px;">Ожидаем движение ≥ ${pdSettings.minPct}% за ${pdSettings.periodMinutes}м...</span></div>`;
+      return;
+    }
+    panel.innerHTML = pdAlertCards.map(c => `
+      <div class="pd-alert-card ${c.pct > 0 ? "pd-pump" : "pd-dump"}" onclick="window.openCoinChart('${c.ex}','${c.sym}')">
+        <div class="pd-card-left">
+          <div class="pd-card-icon-badge ${c.pct > 0 ? "pd-badge-pump" : "pd-badge-dump"}">
+            ${c.pct > 0
+              ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>'
+              : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>'
+            }
+          </div>
+          <div class="pd-card-info">
+            <div class="pd-card-sym">${c.sym}<span class="pd-card-ex">${c.exFull}</span></div>
+            <div class="pd-card-meta">${c.dateStr} ${c.timeStr} · ${c.periodLabel} · Vol: $${c.volStr}</div>
+          </div>
+        </div>
+        <div class="pd-card-right">
+          <div class="pd-card-pct ${c.pct > 0 ? "pd-up" : "pd-down"}">${c.pctStr}</div>
+          <div class="pd-card-price">$${c.price}</div>
+        </div>
+      </div>`).join("");
+  }
+
+
+  function pdUpdateBadge() {
+    const badge = document.getElementById("pd-alert-badge");
+    if (!badge) return;
+    badge.textContent = pdAlertCards.length > 0 ? pdAlertCards.length : "";
+    badge.style.display = pdAlertCards.length > 0 ? "flex" : "none";
+  }
+
+  function pdOpenPanel() {
+    const panel = document.getElementById("pd-alerts-panel");
+    if (!panel) return;
+    pdRenderCards();
+    panel.classList.add("open");
+  }
+
+  function pdClosePanel() {
+    const panel = document.getElementById("pd-alerts-panel");
+    if (panel) panel.classList.remove("open");
+  }
+
+  window.pdOpenPanel = pdOpenPanel;
+  window.pdClosePanel = pdClosePanel;
+
+
+  // ── Scanner start/stop ───────────────────────────────────────────────────
+  function pdRestartScanner() {
+    if (pdScanInterval) { clearInterval(pdScanInterval); pdScanInterval = null; }
+    if (!pdSettings.enabled) return;
+    // First run immediately (500ms), then every 5s
+    setTimeout(pdRunScan, 500);
+    pdScanInterval = setInterval(pdRunScan, 5000);
+  }
+
+  window.pdRunScan = pdRunScan;
+
+  // ── Modal Tab UI ─────────────────────────────────────────────────────────
+  function updateTgBadgeStatus() {
+    const badge = document.getElementById("tg-connect-status-badge");
+    const inputEl = document.getElementById("pd-tg-chat-id-input");
+    const activeUser = window.currentUser || {};
+    const chatId = (inputEl && inputEl.value.trim()) || activeUser.telegramChatId || activeUser.telegramId || localStorage.getItem("obsidian_tg_chat_id") || "";
+    
+    if (inputEl && !inputEl.value && chatId) {
+      inputEl.value = chatId;
+    }
+
+    if (badge) {
+      if (chatId) {
+        badge.textContent = `✓ Привязан (${chatId})`;
+        badge.style.background = "rgba(34, 197, 94, 0.15)";
+        badge.style.color = "#86efac";
+        badge.style.border = "1px solid rgba(34, 197, 94, 0.3)";
+      } else {
+        badge.textContent = "Не привязан";
+        badge.style.background = "rgba(239, 68, 68, 0.12)";
+        badge.style.color = "#fca5a5";
+        badge.style.border = "1px solid rgba(239, 68, 68, 0.25)";
+      }
+    }
+  }
+
+  function pdSyncModalUI() {
+    const s = pdSettings;
+
+    // Master toggle
+    const masterToggle = document.getElementById("pd-enabled-toggle");
+    if (masterToggle) masterToggle.checked = !!s.enabled;
+
+    // Status pill
+    const statusPill = document.getElementById("pd-status-pill");
+    if (statusPill) {
+      statusPill.classList.toggle("active", !!s.enabled);
+      const textEl = statusPill.querySelector(".pd-status-text");
+      if (textEl) textEl.textContent = s.enabled ? "Активен" : "Выключен";
+    }
+
+    // Notification toggles
+    const tgToggle = document.getElementById("pd-tg-enabled");
+    const soundToggle = document.getElementById("pd-sound-enabled");
+    const toastToggle = document.getElementById("pd-toast-enabled");
+    if (tgToggle) tgToggle.checked = !!s.tgEnabled;
+    if (soundToggle) soundToggle.checked = !!s.soundEnabled;
+    if (toastToggle) toastToggle.checked = !!s.toastEnabled;
+
+    updateTgBadgeStatus();
+
+    // Direction
+    document.querySelectorAll("#pd-direction-group button[data-val]").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.val === String(s.direction));
+    });
+
+    // Market Type (both / futures / spot)
+    document.querySelectorAll("#pd-market-type-group button[data-val]").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.val === String(s.marketType || "both"));
+    });
+
+    // % threshold (presets & custom input)
+    const customPctInput = document.getElementById("pd-custom-pct");
+    if (customPctInput) customPctInput.value = s.minPct || 3;
+    document.querySelectorAll("#pd-pct-group button[data-val]").forEach(btn => {
+      btn.classList.toggle("active", Number(btn.dataset.val) === Number(s.minPct));
+    });
+
+    // Period (presets & custom input)
+    const customPeriodInput = document.getElementById("pd-custom-period");
+    if (customPeriodInput) customPeriodInput.value = s.periodMinutes || 5;
+    document.querySelectorAll("#pd-period-group button[data-val]").forEach(btn => {
+      btn.classList.toggle("active", Number(btn.dataset.val) === Number(s.periodMinutes));
+    });
+
+    // Volume
+    document.querySelectorAll("#pd-volume-group button[data-val]").forEach(btn => {
+      btn.classList.toggle("active", Number(btn.dataset.val) === Number(s.minVolume));
+    });
+
+    // Cooldown
+    document.querySelectorAll("#pd-cooldown-group button[data-val]").forEach(btn => {
+      btn.classList.toggle("active", Number(btn.dataset.val) === Number(s.cooldownSeconds));
+    });
+
+    // Exchanges
+    const exAll = document.querySelector("#pd-exchanges-group button[data-ex='all']");
+    const exBtns = document.querySelectorAll("#pd-exchanges-group button[data-ex]:not([data-ex='all'])");
+    const isAll = s.exchanges.includes("all") || s.exchanges.length >= 10;
+    if (exAll) exAll.classList.toggle("active", isAll);
+    exBtns.forEach(btn => {
+      btn.classList.toggle("active", isAll || s.exchanges.includes(btn.dataset.ex));
+    });
+  }
+
+  function pdBindModalUI() {
+    // Telegram Chat ID input
+    const tgChatInput = document.getElementById("pd-tg-chat-id-input");
+    if (tgChatInput) {
+      const savedChatId = localStorage.getItem("obsidian_tg_chat_id") || (window.currentUser && (window.currentUser.telegramChatId || window.currentUser.telegramId)) || "";
+      if (savedChatId && !tgChatInput.value) tgChatInput.value = savedChatId;
+      const onTgChatChange = () => {
+        const val = tgChatInput.value.trim();
+        if (val) localStorage.setItem("obsidian_tg_chat_id", val);
+        updateTgBadgeStatus();
+      };
+      tgChatInput.oninput = onTgChatChange;
+      tgChatInput.onchange = onTgChatChange;
+    }
+
+    // Connect Bot button
+    const connectBotBtn = document.getElementById("btn-tg-connect-bot");
+    if (connectBotBtn) {
+      connectBotBtn.onclick = async () => {
+        const token = (typeof authToken === "string" && authToken) ? authToken : (localStorage.getItem("obsidian_auth_token") || "");
+        let botUrl = "https://t.me/ObsidianScreenerBot";
+        if (token) {
+          try {
+            const res = await fetch("/api/auth/telegram-link-token", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }
+            });
+            const d = await res.json();
+            if (d.success && d.botUrl) {
+              botUrl = d.botUrl;
+            }
+          } catch (_) {}
+        }
+        window.open(botUrl, "_blank");
+        if (typeof showToast === "function") {
+          showToast({
+            title: "Подключение Telegram",
+            message: "Открываем бота <b>@ObsidianScreenerBot</b>. Нажмите «Запустить» (Start) в Telegram для привязки.",
+            type: "info",
+            durationMs: 7000
+          });
+        }
+      };
+    }
+
+    // Test Telegram Alert button
+    const testTgBtn = document.getElementById("btn-test-tg-alert");
+    if (testTgBtn) {
+      testTgBtn.onclick = async () => {
+        const inputEl = document.getElementById("pd-tg-chat-id-input");
+        const activeUser = window.currentUser || {};
+        let chatId = (inputEl && inputEl.value.trim()) || activeUser.telegramChatId || activeUser.telegramId || localStorage.getItem("obsidian_tg_chat_id") || "";
+        
+        if (inputEl && inputEl.value.trim()) {
+          localStorage.setItem("obsidian_tg_chat_id", inputEl.value.trim());
+        }
+
+        if (!chatId) {
+          if (typeof showToast === "function") {
+            showToast({
+              title: "Telegram не указан",
+              message: "Введите ваш Telegram Chat ID в поле ввода или нажмите «Подключить бота».",
+              type: "error",
+              durationMs: 7000
+            });
+          }
+          if (inputEl) inputEl.focus();
+          return;
+        }
+
+        if (typeof showToast === "function") {
+          showToast({
+            title: "Отправка тестового сигнала...",
+            message: `Отправляем алерт на Chat ID: ${chatId}`,
+            type: "info",
+            durationMs: 3000
+          });
+        }
+
+        try {
+          const headers = { "Content-Type": "application/json" };
+          const token = (typeof authToken === "string" && authToken) ? authToken : (localStorage.getItem("obsidian_auth_token") || "");
+          if (token) headers["Authorization"] = `Bearer ${token}`;
+
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const testMsg = `⚡ <b>[TEST] Obsidian Radar Alert</b>\n• <b>Статус:</b> Оповещения подключены успешно!\n• <b>Время:</b> ${timeStr}\n─────────────────────────\n<b>Obsidian Screener</b>`;
+
+          const res = await fetch("/api/notifications/telegram", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ chatId, message: testMsg })
+          });
+          const d = await res.json();
+          if (res.ok && d.success) {
+            updateTgBadgeStatus();
+            if (typeof showToast === "function") {
+              showToast({
+                title: "Тест доставлен!",
+                message: "Тестовое оповещение успешно отправлено в ваш Telegram!",
+                type: "success",
+                durationMs: 5000
+              });
+            }
+          } else {
+            if (typeof showToast === "function") {
+              showToast({
+                title: "Ошибка отправки в Telegram",
+                message: d.error || d.reason || "Убедитесь, что вы нажали /start в боте @ObsidianScreenerBot",
+                type: "error",
+                durationMs: 8000
+              });
+            }
+          }
+        } catch (err) {
+          if (typeof showToast === "function") {
+            showToast({
+              title: "Ошибка соединения",
+              message: err.message || "Не удалось связаться с сервером",
+              type: "error",
+              durationMs: 6000
+            });
+          }
+        }
+      };
+    }
+
+    // Panel toggle button
+    const panelBtn = document.getElementById("pd-panel-btn");
+    if (panelBtn) {
+      panelBtn.onclick = () => {
+        const panel = document.getElementById("pd-alerts-panel");
+        if (!panel) return;
+        if (panel.classList.contains("open")) pdClosePanel();
+        else pdOpenPanel();
+      };
+    }
+
+    // Close panel overlay
+    const panelOverlay = document.getElementById("pd-alerts-panel");
+    if (panelOverlay) {
+      panelOverlay.onclick = (e) => {
+        if (e.target === panelOverlay) pdClosePanel();
+      };
+    }
+
+    // Clear cards
+    const clearBtn = document.getElementById("pd-clear-cards");
+    if (clearBtn) {
+      clearBtn.onclick = () => {
+        pdAlertCards.length = 0;
+        pdRenderCards();
+        pdUpdateBadge();
+      };
+    }
+
+    // Master enable toggle
+    const masterToggle = document.getElementById("pd-enabled-toggle");
+    if (masterToggle) {
+      masterToggle.onchange = () => {
+        pdSettings.enabled = masterToggle.checked;
+        const statusPill = document.getElementById("pd-status-pill");
+        if (statusPill) {
+          statusPill.classList.toggle("active", masterToggle.checked);
+          const textEl = statusPill.querySelector(".pd-status-text");
+          if (textEl) textEl.textContent = masterToggle.checked ? "Активен" : "Выключен";
+        }
+        pdSave(pdSettings);
+      };
+    }
+
+    // Direction (auto-save immediately on click)
+    document.querySelectorAll("#pd-direction-group button[data-val]").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#pd-direction-group button[data-val]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        pdSettings.direction = btn.dataset.val;
+        pdSave(pdSettings);
+      };
+    });
+
+    // Market Type: Futures / Spot / Both (auto-save immediately on click)
+    document.querySelectorAll("#pd-market-type-group button[data-val]").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#pd-market-type-group button[data-val]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        pdSettings.marketType = btn.dataset.val;
+        pdSave(pdSettings);
+      };
+    });
+
+    // % preset buttons (auto-save immediately on click)
+    const customPctInput = document.getElementById("pd-custom-pct");
+    document.querySelectorAll("#pd-pct-group button[data-val]").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#pd-pct-group button[data-val]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const val = Number(btn.dataset.val);
+        pdSettings.minPct = val;
+        if (customPctInput) customPctInput.value = val;
+        pdSave(pdSettings);
+      };
+    });
+
+    // Custom % input
+    if (customPctInput) {
+      const handleCustomPct = () => {
+        const val = parseFloat(customPctInput.value);
+        if (!isNaN(val) && val > 0) {
+          pdSettings.minPct = val;
+          document.querySelectorAll("#pd-pct-group button[data-val]").forEach(btn => {
+            btn.classList.toggle("active", Number(btn.dataset.val) === val);
+          });
+          pdSave(pdSettings);
+        }
+      };
+      customPctInput.oninput = handleCustomPct;
+      customPctInput.onchange = handleCustomPct;
+    }
+
+    // Period preset buttons (auto-save immediately on click)
+    const customPeriodInput = document.getElementById("pd-custom-period");
+    document.querySelectorAll("#pd-period-group button[data-val]").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#pd-period-group button[data-val]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        const val = Number(btn.dataset.val);
+        pdSettings.periodMinutes = val;
+        if (customPeriodInput) customPeriodInput.value = val;
+        pdSave(pdSettings);
+      };
+    });
+
+    // Custom Period input
+    if (customPeriodInput) {
+      const handleCustomPeriod = () => {
+        const val = parseFloat(customPeriodInput.value);
+        if (!isNaN(val) && val > 0) {
+          pdSettings.periodMinutes = val;
+          document.querySelectorAll("#pd-period-group button[data-val]").forEach(btn => {
+            btn.classList.toggle("active", Number(btn.dataset.val) === val);
+          });
+          pdSave(pdSettings);
+        }
+      };
+      customPeriodInput.oninput = handleCustomPeriod;
+      customPeriodInput.onchange = handleCustomPeriod;
+    }
+
+    // Volume buttons (auto-save immediately on click)
+    document.querySelectorAll("#pd-volume-group button[data-val]").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#pd-volume-group button[data-val]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        pdSettings.minVolume = Number(btn.dataset.val);
+        pdSave(pdSettings);
+      };
+    });
+
+    // Cooldown buttons (auto-save immediately on click)
+    document.querySelectorAll("#pd-cooldown-group button[data-val]").forEach(btn => {
+      btn.onclick = () => {
+        document.querySelectorAll("#pd-cooldown-group button[data-val]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        pdSettings.cooldownSeconds = Number(btn.dataset.val);
+        pdSave(pdSettings);
+      };
+    });
+
+    // TG/Sound/Toast toggles (auto-save immediately on change)
+    const tgToggle = document.getElementById("pd-tg-enabled");
+    const soundToggle = document.getElementById("pd-sound-enabled");
+    const toastToggle = document.getElementById("pd-toast-enabled");
+    if (tgToggle) {
+      tgToggle.onchange = () => {
+        pdSettings.tgEnabled = tgToggle.checked;
+        pdSave(pdSettings);
+        if (tgToggle.checked) {
+          const user = window.currentUser || {};
+          const hasTg = !!(user.telegramChatId || user.telegramId || localStorage.getItem("obsidian_tg_chat_id"));
+          if (!hasTg && typeof showToast === "function") {
+            showToast({
+              title: "Telegram уведомления",
+              message: "Для получения сигналов в Telegram, откройте бота <b>@ObsidianScreenerBot</b> и отправьте /start",
+              type: "info",
+              durationMs: 7000
+            });
+          }
+        }
+      };
+    }
+    if (soundToggle) soundToggle.onchange = () => { pdSettings.soundEnabled = soundToggle.checked; pdSave(pdSettings); };
+    if (toastToggle) toastToggle.onchange = () => { pdSettings.toastEnabled = toastToggle.checked; pdSave(pdSettings); };
+
+    // Exchange buttons (multi-select, auto-save immediately on click)
+    document.querySelectorAll("#pd-exchanges-group button[data-ex]").forEach(btn => {
+      btn.onclick = () => {
+        const ex = btn.dataset.ex;
+        if (ex === "all") {
+          const isActive = btn.classList.contains("active");
+          if (!isActive) {
+            document.querySelectorAll("#pd-exchanges-group button[data-ex]").forEach(b => b.classList.add("active"));
+            pdSettings.exchanges = ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"];
+          } else {
+            document.querySelectorAll("#pd-exchanges-group button[data-ex]").forEach(b => b.classList.remove("active"));
+            pdSettings.exchanges = [];
+          }
+        } else {
+          btn.classList.toggle("active");
+          const allBtn = document.querySelector("#pd-exchanges-group button[data-ex='all']");
+          const activeExs = Array.from(document.querySelectorAll("#pd-exchanges-group button[data-ex]:not([data-ex='all']).active")).map(b => b.dataset.ex);
+          pdSettings.exchanges = activeExs;
+          if (allBtn) allBtn.classList.toggle("active", activeExs.length === 10);
+        }
+        pdSave(pdSettings);
+      };
+    });
+
+    // Save button (visual confirmation)
+    const saveBtn = document.getElementById("pd-save-btn");
+    if (saveBtn) {
+      saveBtn.onclick = () => {
+        if (customPctInput) {
+          const v = parseFloat(customPctInput.value);
+          if (!isNaN(v) && v > 0) pdSettings.minPct = v;
+        }
+        if (customPeriodInput) {
+          const v = parseFloat(customPeriodInput.value);
+          if (!isNaN(v) && v > 0) pdSettings.periodMinutes = v;
+        }
+        pdSave(pdSettings);
+        const origHTML = saveBtn.innerHTML;
+        saveBtn.innerHTML = "<span>✓</span> Сохранено и запущено!";
+        saveBtn.style.background = "linear-gradient(135deg, #15803d 0%, #16a34a 100%)";
+        setTimeout(() => {
+          saveBtn.innerHTML = origHTML;
+          saveBtn.style.background = "";
+        }, 2200);
+      };
+    }
+
+    // Reset button
+    const resetBtn = document.getElementById("pd-reset-btn");
+    if (resetBtn) {
+      resetBtn.onclick = () => {
+        pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+        pdSave(pdSettings);
+        pdSyncModalUI();
+      };
+    }
+  }
+
+
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  function pdInit() {
+    pdLoad();
+    pdLoadFromServer();
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => {
+        pdBindModalUI();
+        pdSyncModalUI();
+        pdRestartScanner();
+      });
+    } else {
+      pdBindModalUI();
+      pdSyncModalUI();
+      pdRestartScanner();
+    }
+  }
+
+  window.pdInit = pdInit;
+  window.pdSettings = pdSettings;
+  window.pdSyncModalUI = pdSyncModalUI;
+
+  // Auto-init (delayed to not block initial render)
+  setTimeout(pdInit, 1500);
+})();
+

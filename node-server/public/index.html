@@ -63,9 +63,10 @@
         <!-- NAV -->
         <nav id="nav" role="navigation" aria-label="Главное меню">
             <div class="logo" aria-label="Obsidian">
-                <img src="/img/logo.svg" alt="Obsidian Logo" class="logo-img" />
+                <img src="/favicon.ico" alt="Obsidian Logo" class="logo-img" onerror="this.src='/favicon.png'" />
                 <span class="logo-c">OBSIDIAN</span><span class="logo-rest" id="logo-tier-badge">FREE</span>
             </div>
+
             <div class="ntabs" role="tablist">
                 <div class="ntab on" role="tab" aria-selected="true" onclick="switchView('screener')">
                     Скринер
@@ -101,7 +102,12 @@
                         <circle cx="12" cy="7" r="4"></circle>
                     </svg>
                 </button>
-                <button class="lang-btn" title="Язык">Ru</button>
+                <button class="profile-btn pd-panel-nav-btn" id="pd-panel-btn" title="Лента сигналов Памп / Дамп" style="position:relative;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span id="pd-alert-badge" class="pd-alert-badge" style="display:none;"></span>
+                </button>
                 <button class="settings-btn" id="settings-btn" data-pro-feature="Настройки интерфейса" title="Настройки оформления (PRO)">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -249,77 +255,89 @@
                             <span class="exc-arrow">▼</span>
                         </div>
                         <div class="exc-menu" id="exc-menu" role="listbox" aria-label="Выбор биржи">
-                            <div class="exc-item" data-cex="" data-label="Все биржи" data-img="" role="option">
+                            <div class="exc-item" data-cex="" data-label="Все биржи" data-img="" role="option" data-pro-feature="Все биржи" data-pro-only="true">
                                 <div class="exc-dot"
                                     style="background: center/contain no-repeat url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect width=%2224%22 height=%2224%22 rx=%226%22 fill=%22%230D0F14%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%223%22 fill=%22%23F0B90B%22/%3E%3Ccircle cx=%2216%22 cy=%228%22 r=%223%22 fill=%22%23F7A600%22/%3E%3Ccircle cx=%228%22 cy=%2216%22 r=%223%22 fill=%22%2300F0FF%22/%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%223%22 fill=%22%232EBD85%22/%3E%3C/svg%3E')">
                                 </div>
-                                Все биржи
+                                <span class="exc-label">Все биржи</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item on" data-cex="BN" data-label="Binance Futures" data-img="/img/BN.svg"
                                 role="option" aria-selected="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/BN.svg')">
                                 </div>
-                                Binance Futures
+                                <span class="exc-label">Binance Futures</span>
+                                <span class="exc-free-tag">FREE</span>
                             </div>
                             <div class="exc-item" data-cex="BB" data-label="Bybit Futures" data-img="/img/BB.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа Bybit Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/BB.svg')">
                                 </div>
-                                Bybit Futures
+                                <span class="exc-label">Bybit Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="OX" data-label="OKX Futures" data-img="/img/OK.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа OKX Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/OK.svg')">
                                 </div>
-                                OKX Futures
+                                <span class="exc-label">OKX Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="BG" data-label="Bitget Futures" data-img="/img/BG.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа Bitget Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/BG.svg')">
                                 </div>
-                                Bitget Futures
+                                <span class="exc-label">Bitget Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="GT" data-label="Gate Futures" data-img="/img/GT.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа Gate Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/GT.svg')">
                                 </div>
-                                Gate Futures
+                                <span class="exc-label">Gate Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="MX" data-label="MEXC Futures" data-img="/img/MX.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа MEXC Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/MX.svg')">
                                 </div>
-                                MEXC Futures
+                                <span class="exc-label">MEXC Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="KC" data-label="KuCoin Futures" data-img="/img/KC.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа KuCoin Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/KC.svg')">
                                 </div>
-                                KuCoin Futures
+                                <span class="exc-label">KuCoin Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="BX" data-label="BingX Futures" data-img="/img/BX.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа BingX Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/BX.svg')">
                                 </div>
-                                BingX Futures
+                                <span class="exc-label">BingX Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="HT" data-label="HTX Futures" data-img="/img/HX.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа HTX Futures" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/HX.svg')">
                                 </div>
-                                HTX Futures
+                                <span class="exc-label">HTX Futures</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="HL" data-label="Hyperliquid" data-img="/img/HL.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа Hyperliquid" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/HL.svg')">
                                 </div>
-                                Hyperliquid
+                                <span class="exc-label">Hyperliquid</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                             <div class="exc-item" data-cex="AD" data-label="Asterdex" data-img="/img/AS.svg"
-                                role="option">
+                                role="option" data-pro-feature="Биржа Asterdex" data-pro-only="true">
                                 <div class="exc-dot" style="background: center/contain no-repeat url('/img/AS.svg')">
                                 </div>
-                                Asterdex
+                                <span class="exc-label">Asterdex</span>
+                                <span class="exc-pro-badge">PRO 👑</span>
                             </div>
                         </div>
                     </div>
@@ -330,98 +348,89 @@
                     <!-- Draw toolbar — floating vertical left -->
                     <div id="draw-tools">
                         <button class="dt-btn on" data-tool="none" title="Курсор (V)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.6"
-                                    stroke-linecap="round" />
-                                <line x1="8" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.6"
-                                    stroke-linecap="round" />
-                                <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" stroke-width="1.6"
-                                    stroke-linecap="round" />
-                                <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.6"
-                                    stroke-linecap="round" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <line x1="9" y1="2.5" x2="9" y2="6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <line x1="9" y1="11.5" x2="9" y2="15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <line x1="2.5" y1="9" x2="6.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <line x1="11.5" y1="9" x2="15.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="h-ray" title="Горизонтальный луч">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <circle cx="3" cy="8" r="1.2" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <line x1="4.5" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <circle cx="4" cy="9" r="1.75" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                <line x1="5.75" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="alert" title="Ценовой алерт (A)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <path d="M8 2C5.8 2 4 3.8 4 6V9.5L2.5 11H13.5L12 9.5V6C12 3.8 10.2 2 8 2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-                                <path d="M6.5 13C6.8 13.6 7.4 14 8 14C8.6 14 9.2 13.6 9.5 13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <path d="M9 2.5C6.5 2.5 4.5 4.5 4.5 7V11L3 12.5H15L13.5 11V7C13.5 4.5 11.5 2.5 9 2.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                <path d="M7.5 14C7.8 14.9 8.3 15.5 9 15.5C9.7 15.5 10.2 14.9 10.5 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="line" title="Линия (L)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <circle cx="3" cy="13" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <circle cx="13" cy="3" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <line x1="3.7" y1="12.3" x2="12.3" y2="3.7" stroke="currentColor" stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <circle cx="3.5" cy="14.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                <circle cx="14.5" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                <line x1="4.6" y1="13.4" x2="13.4" y2="4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="rect" title="Прямоугольник">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <rect x="3" y="4.5" width="10" height="7" rx="1" stroke="currentColor"
-                                    stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <circle cx="4" cy="4" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <circle cx="14" cy="4" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <circle cx="4" cy="14" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <circle cx="14" cy="14" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <line x1="5.4" y1="4" x2="12.6" y2="4" stroke="currentColor" stroke-width="1.3"/>
+                                <line x1="5.4" y1="14" x2="12.6" y2="14" stroke="currentColor" stroke-width="1.3"/>
+                                <line x1="4" y1="5.4" x2="4" y2="12.6" stroke="currentColor" stroke-width="1.3"/>
+                                <line x1="14" y1="5.4" x2="14" y2="12.6" stroke="currentColor" stroke-width="1.3"/>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="brush" title="Кисть (B)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <path d="M12 2L14 4L5 13H3V11L12 2Z" stroke="currentColor" stroke-width="1.2"
-                                    stroke-linecap="round" stroke-linejoin="round" />
-                                <path d="M10 4L12 6" stroke="currentColor" stroke-width="1.2" />
-                                <path d="M3 11C3 11 3.5 12 4.5 13C5.5 14 5.5 14 5.5 14" stroke="currentColor"
-                                    stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <path d="M3 15C3 15 3.5 12 5.5 10.5L11.5 4.5C12.3 3.7 13.7 3.7 14.5 4.5C15.3 5.3 15.3 6.7 14.5 7.5L8.5 13.5C7 15.5 3 15 3 15Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M9.5 6.5L12.5 9.5" stroke="currentColor" stroke-width="1.3"/>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="ruler" title="Линейка">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <rect x="2" y="5" width="12" height="6" rx="1" transform="rotate(-45 8 8)"
-                                    stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <line x1="6" y1="6" x2="7" y2="7" stroke="currentColor" stroke-width="1" />
-                                <line x1="8" y1="8" x2="9" y2="9" stroke="currentColor" stroke-width="1" />
-                                <line x1="10" y1="10" x2="11" y2="11" stroke="currentColor" stroke-width="1" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <g transform="rotate(-45 9 9)">
+                                    <rect x="2" y="6" width="14" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                    <line x1="5" y1="6" x2="5" y2="8.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    <line x1="7.5" y1="6" x2="7.5" y2="9.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    <line x1="10" y1="6" x2="10" y2="8.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    <line x1="12.5" y1="6" x2="12.5" y2="9.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                </g>
                             </svg>
                         </button>
                         <button class="dt-btn" data-tool="fibgrid" title="Коррекция Фибоначчи">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <line x1="2" y1="4" x2="11" y2="4" stroke="currentColor" stroke-width="1.2" />
-                                <line x1="2" y1="7" x2="14" y2="7" stroke="currentColor" stroke-width="1.2" />
-                                <line x1="2" y1="10" x2="12" y2="10" stroke="currentColor" stroke-width="1.2" />
-                                <line x1="2" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.2" />
-                                <circle cx="12" cy="4" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <circle cx="14" cy="7" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <circle cx="2" cy="13" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <line x1="2.5" y1="3.5" x2="15.5" y2="3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <line x1="2.5" y1="7.2" x2="13.2" y2="7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <circle cx="14.5" cy="7.2" r="1.3" stroke="currentColor" stroke-width="1.2" fill="none"/>
+                                <line x1="2.5" y1="10.8" x2="15.5" y2="10.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <circle cx="3.5" cy="14.5" r="1.3" stroke="currentColor" stroke-width="1.2" fill="none"/>
+                                <line x1="4.8" y1="14.5" x2="15.5" y2="14.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <div class="dt-sep"></div>
                         <button class="dt-btn" id="magnet-btn" title="Магнит (M)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <path d="M3 3 C3 3 3 10 8 10 C13 10 13 3 13 3" stroke="currentColor" stroke-width="1.4"
-                                    stroke-linecap="round" fill="none" />
-                                <line x1="3" y1="3" x2="3" y2="6" stroke="currentColor" stroke-width="1.8"
-                                    stroke-linecap="round" />
-                                <line x1="13" y1="3" x2="13" y2="6" stroke="currentColor" stroke-width="1.8"
-                                    stroke-linecap="round" />
-                                <line x1="6" y1="10" x2="6" y2="13" stroke="currentColor" stroke-width="1.4"
-                                    stroke-linecap="round" />
-                                <line x1="10" y1="10" x2="10" y2="13" stroke="currentColor" stroke-width="1.4"
-                                    stroke-linecap="round" />
-                                <line x1="5.5" y1="13" x2="7" y2="13" stroke="currentColor" stroke-width="1.4"
-                                    stroke-linecap="round" />
-                                <line x1="9" y1="13" x2="10.5" y2="13" stroke="currentColor" stroke-width="1.4"
-                                    stroke-linecap="round" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <path d="M3.5 14.5V6.5C3.5 3.5 6 1.5 9 1.5C12 1.5 14.5 3.5 14.5 6.5V14.5H11.5V6.5C11.5 5 10.5 4 9 4C7.5 4 6.5 5 6.5 6.5V14.5H3.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                <line x1="3.5" y1="11" x2="6.5" y2="11" stroke="currentColor" stroke-width="1.4"/>
+                                <line x1="11.5" y1="11" x2="14.5" y2="11" stroke="currentColor" stroke-width="1.4"/>
                             </svg>
                         </button>
                         <div class="dt-sep"></div>
                         <button class="dt-btn del" id="clear-draw" title="Очистить (Del)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <path d="M3 4H13M6 4V2.5H10V4M5.5 4L6 13H10L10.5 4" stroke="currentColor"
-                                    stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <path d="M3 4.5H15M6.5 4.5V2.5H11.5V4.5M5.5 4.5L6.2 15H11.8L12.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                <line x1="7.8" y1="7.5" x2="7.8" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <line x1="10.2" y1="7.5" x2="10.2" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                             </svg>
                         </button>
                     </div>
+
 
                     <div id="chart-density-panel" class="chart-density-panel" aria-label="Настройки плотностей">
                         <div class="chart-density-panel-head">
@@ -1266,78 +1275,89 @@
                         <canvas id="bt-vol-canvas"></canvas>
                         <div id="bt-draw-tools" aria-label="Инструменты разметки">
                             <button class="dt-btn bt-dt-btn on" data-bt-tool="none" title="Курсор и перемещение (V)">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.6"
-                                        stroke-linecap="round" />
-                                    <line x1="8" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.6"
-                                        stroke-linecap="round" />
-                                    <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" stroke-width="1.6"
-                                        stroke-linecap="round" />
-                                    <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.6"
-                                        stroke-linecap="round" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <line x1="9" y1="2.5" x2="9" y2="6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <line x1="9" y1="11.5" x2="9" y2="15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <line x1="2.5" y1="9" x2="6.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                    <line x1="11.5" y1="9" x2="15.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                                 </svg>
                             </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="h-ray" title="Горизонтальный луч">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <circle cx="3" cy="8" r="1.2" stroke="currentColor" stroke-width="1.2" />
-                                    <line x1="4.5" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.2" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <circle cx="4" cy="9" r="1.75" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                    <line x1="5.75" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                                 </svg>
                             </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="line" title="Линия (L)">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <circle cx="3" cy="13" r="1" stroke="currentColor" stroke-width="1.2" />
-                                    <circle cx="13" cy="3" r="1" stroke="currentColor" stroke-width="1.2" />
-                                    <line x1="3.7" y1="12.3" x2="12.3" y2="3.7" stroke="currentColor"
-                                        stroke-width="1.2" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <circle cx="3.5" cy="14.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                    <circle cx="14.5" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                    <line x1="4.6" y1="13.4" x2="13.4" y2="4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                                 </svg>
                             </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="rect" title="Прямоугольник">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <rect x="3" y="4.5" width="10" height="7" rx="1" stroke="currentColor"
-                                        stroke-width="1.2" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <circle cx="4" cy="4" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                    <circle cx="14" cy="4" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                    <circle cx="4" cy="14" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                    <circle cx="14" cy="14" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                    <line x1="5.4" y1="4" x2="12.6" y2="4" stroke="currentColor" stroke-width="1.3"/>
+                                    <line x1="5.4" y1="14" x2="12.6" y2="14" stroke="currentColor" stroke-width="1.3"/>
+                                    <line x1="4" y1="5.4" x2="4" y2="12.6" stroke="currentColor" stroke-width="1.3"/>
+                                    <line x1="14" y1="5.4" x2="14" y2="12.6" stroke="currentColor" stroke-width="1.3"/>
                                 </svg>
                             </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="brush" title="Кисть (B)">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <path d="M12 2L14 4L5 13H3V11L12 2Z" stroke="currentColor" stroke-width="1.2"
-                                        stroke-linejoin="round" />
-                                    <path d="M10 4L12 6" stroke="currentColor" stroke-width="1.2" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <path d="M3 15C3 15 3.5 12 5.5 10.5L11.5 4.5C12.3 3.7 13.7 3.7 14.5 4.5C15.3 5.3 15.3 6.7 14.5 7.5L8.5 13.5C7 15.5 3 15 3 15Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M9.5 6.5L12.5 9.5" stroke="currentColor" stroke-width="1.3"/>
                                 </svg>
                             </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="ruler" title="Линейка">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <rect x="2" y="5" width="12" height="6" rx="1" transform="rotate(-45 8 8)"
-                                        stroke="currentColor" stroke-width="1.2" />
-                                    <line x1="6" y1="6" x2="7" y2="7" stroke="currentColor" />
-                                    <line x1="9" y1="9" x2="10" y2="10" stroke="currentColor" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <g transform="rotate(-45 9 9)">
+                                        <rect x="2" y="6" width="14" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                        <line x1="5" y1="6" x2="5" y2="8.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                        <line x1="7.5" y1="6" x2="7.5" y2="9.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                        <line x1="10" y1="6" x2="10" y2="8.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                        <line x1="12.5" y1="6" x2="12.5" y2="9.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    </g>
                                 </svg>
                             </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="fibgrid" title="Коррекция Фибоначчи">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <line x1="2" y1="4" x2="11" y2="4" stroke="currentColor" stroke-width="1.2" />
-                                    <line x1="2" y1="7" x2="14" y2="7" stroke="currentColor" stroke-width="1.2" />
-                                    <line x1="2" y1="10" x2="12" y2="10" stroke="currentColor" stroke-width="1.2" />
-                                    <line x1="2" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.2" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <line x1="2.5" y1="3.5" x2="15.5" y2="3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                    <line x1="2.5" y1="7.2" x2="13.2" y2="7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                    <circle cx="14.5" cy="7.2" r="1.3" stroke="currentColor" stroke-width="1.2" fill="none"/>
+                                    <line x1="2.5" y1="10.8" x2="15.5" y2="10.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                    <circle cx="3.5" cy="14.5" r="1.3" stroke="currentColor" stroke-width="1.2" fill="none"/>
+                                    <line x1="4.8" y1="14.5" x2="15.5" y2="14.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                                 </svg>
                             </button>
                             <div class="dt-sep"></div>
                             <button class="dt-btn bt-dt-btn" id="bt-magnet" title="Магнит (M)">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <path d="M3 3C3 3 3 10 8 10C13 10 13 3 13 3" stroke="currentColor"
-                                        stroke-width="1.4" />
-                                    <line x1="3" y1="3" x2="3" y2="6" stroke="currentColor" stroke-width="1.8" />
-                                    <line x1="13" y1="3" x2="13" y2="6" stroke="currentColor" stroke-width="1.8" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <path d="M3.5 14.5V6.5C3.5 3.5 6 1.5 9 1.5C12 1.5 14.5 3.5 14.5 6.5V14.5H11.5V6.5C11.5 5 10.5 4 9 4C7.5 4 6.5 5 6.5 6.5V14.5H3.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                    <line x1="3.5" y1="11" x2="6.5" y2="11" stroke="currentColor" stroke-width="1.4"/>
+                                    <line x1="11.5" y1="11" x2="14.5" y2="11" stroke="currentColor" stroke-width="1.4"/>
                                 </svg>
                             </button>
                             <div class="dt-sep"></div>
-                            <button class="dt-btn bt-dt-btn" id="bt-undo" title="Отменить">↶</button>
+                            <button class="dt-btn bt-dt-btn" id="bt-undo" title="Отменить (Ctrl+Z)">
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <path d="M4.5 7.5L2 5L4.5 2.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <path d="M2.5 5H10.5C13.5 5 15.5 7 15.5 10C15.5 13 13.5 15 10.5 15H5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                </svg>
+                            </button>
                             <button class="dt-btn bt-dt-btn del" id="bt-clear" title="Очистить (Del)">
-                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                    <path d="M3 4H13M6 4V2.5H10V4M5.5 4L6 13H10L10.5 4" stroke="currentColor"
-                                        stroke-width="1.4" stroke-linecap="round" />
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <path d="M3 4.5H15M6.5 4.5V2.5H11.5V4.5M5.5 4.5L6.2 15H11.8L12.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                    <line x1="7.8" y1="7.5" x2="7.8" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                    <line x1="10.2" y1="7.5" x2="10.2" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                                 </svg>
                             </button>
                         </div>
+
                         <div id="bt-loader" class="bt-loader">
                             <div class="sp"></div>
                             <span>Подбираем активный сетап…</span>
@@ -1744,14 +1764,12 @@
             flex-direction: column !important;
             align-items: center !important;
             gap: 2px !important;
-            min-width: 34px !important;
-            padding: 6px 4px !important;
-            border: 1px solid rgba(160, 124, 255, 0.16) !important;
-            border-radius: 8px !important;
-            background: linear-gradient(180deg, rgba(94, 58, 238, 0.16) 0%, rgba(18, 20, 30, 0.96) 18%, rgba(18, 20, 30, 0.92) 100%) !important;
-            backdrop-filter: blur(14px) !important;
-            -webkit-backdrop-filter: blur(14px) !important;
-            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+            min-width: 32px !important;
+            padding: 5px 3px !important;
+            border: 1px solid #2a2e39 !important;
+            border-radius: 6px !important;
+            background: #1e222d !important;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45) !important;
             user-select: none !important;
         }
         #j-draw-tools .dt-btn {
@@ -1767,6 +1785,12 @@
             justify-content: center !important;
             transition: background 0.12s, color 0.12s;
             position: relative !important;
+        }
+        #j-draw-tools .dt-btn svg {
+            width: 17px !important;
+            height: 17px !important;
+            display: block !important;
+            flex-shrink: 0 !important;
         }
         #j-draw-tools .dt-btn:hover {
             background: rgba(255, 255, 255, 0.08) !important;
@@ -1784,8 +1808,8 @@
         #j-draw-tools .dt-sep {
             width: 18px !important;
             height: 1px !important;
-            background: rgba(255, 255, 255, 0.1) !important;
-            margin: 3px 0 !important;
+            background: #2a2e39 !important;
+            margin: 2px 0 !important;
         }
     </style>
     <!-- Trade Detail & Candle Chart Visualizer Modal (TMM Style) -->
@@ -1800,66 +1824,77 @@
                 <div style="flex:1; min-width:0; position:relative; background:#0b0e14; border-right:1px solid rgba(255,255,255,0.08); overflow:hidden;">
                     <canvas id="journal-trade-candle-canvas" style="width:100%; height:100%; display:block; cursor:crosshair;"></canvas>
                     <!-- Journal Draw Tools (strictly vertically centered on the left) -->
-                    <div id="j-draw-tools" style="position:absolute; left:10px; top:50%; transform:translateY(-50%); z-index:50; display:flex; flex-direction:column; align-items:center; gap:2px; min-width:34px; padding:6px 4px; border:1px solid rgba(160,124,255,0.16); border-radius:8px; background:linear-gradient(180deg,rgba(94,58,238,0.16) 0%,rgba(18,20,30,0.96) 18%,rgba(18,20,30,0.92) 100%); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); box-shadow:0 14px 32px rgba(0,0,0,0.48),inset 0 1px 0 rgba(255,255,255,0.05); user-select:none;" aria-label="Инструменты разметки">
+                    <div id="j-draw-tools" aria-label="Инструменты разметки">
                         <button class="dt-btn j-dt-btn on" data-j-tool="none" title="Курсор и перемещение (V)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                                <line x1="8" y1="10" x2="8" y2="14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                                <line x1="2" y1="8" x2="6" y2="8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-                                <line x1="10" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <line x1="9" y1="2.5" x2="9" y2="6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <line x1="9" y1="11.5" x2="9" y2="15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <line x1="2.5" y1="9" x2="6.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                                <line x1="11.5" y1="9" x2="15.5" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn j-dt-btn" data-j-tool="h-ray" title="Горизонтальный луч">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <circle cx="3" cy="8" r="1.2" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <line x1="4.5" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <circle cx="4" cy="9" r="1.75" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                <line x1="5.75" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn j-dt-btn" data-j-tool="line" title="Линия (L)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <circle cx="3" cy="13" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <circle cx="13" cy="3" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <line x1="3.7" y1="12.3" x2="12.3" y2="3.7" stroke="currentColor" stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <circle cx="3.5" cy="14.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                <circle cx="14.5" cy="3.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+                                <line x1="4.6" y1="13.4" x2="13.4" y2="4.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <button class="dt-btn j-dt-btn" data-j-tool="rect" title="Прямоугольник">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <rect x="3" y="4.5" width="10" height="7" rx="1" stroke="currentColor" stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <circle cx="4" cy="4" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <circle cx="14" cy="4" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <circle cx="4" cy="14" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <circle cx="14" cy="14" r="1.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                <line x1="5.4" y1="4" x2="12.6" y2="4" stroke="currentColor" stroke-width="1.3"/>
+                                <line x1="5.4" y1="14" x2="12.6" y2="14" stroke="currentColor" stroke-width="1.3"/>
+                                <line x1="4" y1="5.4" x2="4" y2="12.6" stroke="currentColor" stroke-width="1.3"/>
+                                <line x1="14" y1="5.4" x2="14" y2="12.6" stroke="currentColor" stroke-width="1.3"/>
                             </svg>
                         </button>
                         <button class="dt-btn j-dt-btn" data-j-tool="brush" title="Кисть (B)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <path d="M12 2L14 4L5 13H3V11L12 2Z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
-                                <path d="M10 4L12 6" stroke="currentColor" stroke-width="1.2" />
-                                <path d="M3 11C3 11 3.5 12 4.5 13C5.5 14 5.5 14 5.5 14" stroke="currentColor" stroke-width="1.2" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <path d="M3 15C3 15 3.5 12 5.5 10.5L11.5 4.5C12.3 3.7 13.7 3.7 14.5 4.5C15.3 5.3 15.3 6.7 14.5 7.5L8.5 13.5C7 15.5 3 15 3 15Z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M9.5 6.5L12.5 9.5" stroke="currentColor" stroke-width="1.3"/>
                             </svg>
                         </button>
                         <button class="dt-btn j-dt-btn" data-j-tool="ruler" title="Линейка">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <rect x="2" y="5" width="12" height="6" rx="1" transform="rotate(-45 8 8)" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <line x1="6" y1="6" x2="7" y2="7" stroke="currentColor" stroke-width="1" />
-                                <line x1="8" y1="8" x2="9" y2="9" stroke="currentColor" stroke-width="1" />
-                                <line x1="10" y1="10" x2="11" y2="11" stroke="currentColor" stroke-width="1" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <g transform="rotate(-45 9 9)">
+                                    <rect x="2" y="6" width="14" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3" fill="none"/>
+                                    <line x1="5" y1="6" x2="5" y2="8.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    <line x1="7.5" y1="6" x2="7.5" y2="9.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    <line x1="10" y1="6" x2="10" y2="8.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                    <line x1="12.5" y1="6" x2="12.5" y2="9.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                                </g>
                             </svg>
                         </button>
                         <button class="dt-btn j-dt-btn" data-j-tool="fibgrid" title="Коррекция Фибоначчи">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <line x1="2" y1="4" x2="11" y2="4" stroke="currentColor" stroke-width="1.2" />
-                                <line x1="2" y1="7" x2="14" y2="7" stroke="currentColor" stroke-width="1.2" />
-                                <line x1="2" y1="10" x2="12" y2="10" stroke="currentColor" stroke-width="1.2" />
-                                <line x1="2" y1="13" x2="14" y2="13" stroke="currentColor" stroke-width="1.2" />
-                                <circle cx="12" cy="4" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <circle cx="14" cy="7" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
-                                <circle cx="2" cy="13" r="1" stroke="currentColor" stroke-width="1.2" fill="none" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <line x1="2.5" y1="3.5" x2="15.5" y2="3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <line x1="2.5" y1="7.2" x2="13.2" y2="7.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <circle cx="14.5" cy="7.2" r="1.3" stroke="currentColor" stroke-width="1.2" fill="none"/>
+                                <line x1="2.5" y1="10.8" x2="15.5" y2="10.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <circle cx="3.5" cy="14.5" r="1.3" stroke="currentColor" stroke-width="1.2" fill="none"/>
+                                <line x1="4.8" y1="14.5" x2="15.5" y2="14.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                             </svg>
                         </button>
                         <div class="dt-sep"></div>
                         <button class="dt-btn j-dt-btn del" id="j-clear-draw" title="Очистить рисунки (Del)">
-                            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                                <path d="M3 4H13M6 4V2.5H10V4M5.5 4L6 13H10L10.5 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                            <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                <path d="M3 4.5H15M6.5 4.5V2.5H11.5V4.5M5.5 4.5L6.2 15H11.8L12.5 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+                                <line x1="7.8" y1="7.5" x2="7.8" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                                <line x1="10.2" y1="7.5" x2="10.2" y2="12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
                             </svg>
                         </button>
                     </div>
+
                     <div id="j-chart-controls" style="position:absolute; bottom:38px; right:85px; display:flex; gap:4px; background:rgba(15,23,42,0.85); padding:3px 6px; border-radius:5px; border:1px solid rgba(255,255,255,0.12); z-index:10;">
                         <button id="j-chart-reset-btn" class="j-btn" style="font-size:10px; padding:2px 6px;">Сброс</button>
                         <button id="j-chart-zoomin-btn" class="j-btn" style="font-size:10px; padding:2px 6px;">+</button>
@@ -1920,9 +1955,10 @@
             <div id="j-pnl-card-preview-box" class="j-pnl-card-preview">
                 <div class="j-pnl-card-header" style="display:flex; align-items:center; justify-content:space-between;">
                     <div style="display:flex; align-items:center; gap:6px;">
-                        <img src="/img/logo.svg" alt="Obsidian" style="height:18px; width:auto;" />
+                        <img src="/favicon.ico" alt="Obsidian" style="height:18px; width:auto; border-radius:3px;" onerror="this.src='/favicon.png'" />
                         <span style="font-weight:800; font-size:13px; letter-spacing:0.5px;"><span style="color:var(--ac);">OBSIDIAN</span> <span style="color:#fff;">PRO</span></span>
                     </div>
+
                     <span id="j-card-side-badge" class="j-side-badge j-side-long">LONG</span>
                 </div>
                 <div id="j-card-sym" style="font-size:22px; font-weight:800;">BTCUSDT</div>
@@ -1995,10 +2031,10 @@
             <!-- Modal Header -->
             <div class="fmt-modal-header">
                 <div style="display: flex; align-items: center; gap: 12px;">
-                    <div class="fmt-modal-icon">⚡</div>
+                    <div class="fmt-modal-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></div>
                     <div>
-                        <div class="fmt-modal-title">Сигналы и авто-сканер формаций</div>
-                        <div class="fmt-modal-subtitle">Автоматический поиск наклонных линий, уровней и ретестов с отправкой графиков в Telegram</div>
+                        <div class="fmt-modal-title">Авто-сканер формаций</div>
+                        <div class="fmt-modal-subtitle">Поиск наклонных линий, уровней и ретестов с отправкой в Telegram</div>
                     </div>
                 </div>
                 <button type="button" class="fmt-modal-close" id="fmt-modal-close" title="Закрыть">×</button>
@@ -2013,7 +2049,7 @@
                         <div class="fmt-card" id="fmt-card-trendline">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(234, 179, 8, 0.12); color: #eab308;">📐</div>
+                                    <div class="fmt-card-icon" style="background: rgba(234, 179, 8, 0.12); color: #eab308;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="4"></line><polyline points="14 4 20 4 20 10"></polyline></svg></div>
                                     <div>
                                         <div class="fmt-card-title">Наклонный уровень (Наклонка)</div>
                                         <div class="fmt-card-sub">Поиск сформированных наклонных линий тренда</div>
@@ -2060,8 +2096,8 @@
                                     <span class="fmt-setting-label">Тип наклонки:</span>
                                     <div class="fmt-btn-group" id="fmt-trendline-dir-group">
                                         <button type="button" class="fmt-btn active" data-val="all">Все</button>
-                                        <button type="button" class="fmt-btn" data-val="down">Поддержка (Long)</button>
-                                        <button type="button" class="fmt-btn" data-val="up">Сопротивление (Short)</button>
+                                        <button type="button" class="fmt-btn" data-val="down">Long</button>
+                                        <button type="button" class="fmt-btn" data-val="up">Short</button>
                                     </div>
                                 </div>
                             </div>
@@ -2071,7 +2107,7 @@
                         <div class="fmt-card" id="fmt-card-level">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(99, 102, 241, 0.12); color: #818cf8;">➖</div>
+                                    <div class="fmt-card-icon" style="background: rgba(99, 102, 241, 0.12); color: #818cf8;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><circle cx="8" cy="9" r="1.5" fill="currentColor"></circle><circle cx="16" cy="15" r="1.5" fill="currentColor"></circle></svg></div>
                                     <div>
                                         <div class="fmt-card-title">Горизонтальный уровень (Горизонталка)</div>
                                         <div class="fmt-card-sub">Поиск сильных локальных и старших ценовых уровней</div>
@@ -2118,8 +2154,8 @@
                                     <span class="fmt-setting-label">Тип уровня:</span>
                                     <div class="fmt-btn-group" id="fmt-level-dir-group">
                                         <button type="button" class="fmt-btn active" data-val="all">Все</button>
-                                        <button type="button" class="fmt-btn" data-val="support">Поддержка</button>
-                                        <button type="button" class="fmt-btn" data-val="resistance">Сопротивление</button>
+                                        <button type="button" class="fmt-btn" data-val="support">Long</button>
+                                        <button type="button" class="fmt-btn" data-val="resistance">Short</button>
                                     </div>
                                 </div>
                             </div>
@@ -2132,7 +2168,7 @@
                         <div class="fmt-card" id="fmt-card-retest">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(34, 197, 94, 0.12); color: #22c55e;">🔄</div>
+                                    <div class="fmt-card-icon" style="background: rgba(34, 197, 94, 0.12); color: #22c55e;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg></div>
                                     <div>
                                         <div class="fmt-card-title">Подтвержденный ретест (Ретест)</div>
                                         <div class="fmt-card-sub">Пробой уровня, закрепление и удержание с обратной стороны</div>
@@ -2156,10 +2192,11 @@
                                     <span class="fmt-setting-label">Тип ретеста:</span>
                                     <div class="fmt-btn-group" id="fmt-retest-dir-group">
                                         <button type="button" class="fmt-btn active" data-val="all">Все</button>
-                                        <button type="button" class="fmt-btn" data-val="up">Бычий (Long)</button>
-                                        <button type="button" class="fmt-btn" data-val="down">Медвежий (Short)</button>
+                                        <button type="button" class="fmt-btn" data-val="up">Long</button>
+                                        <button type="button" class="fmt-btn" data-val="down">Short</button>
                                     </div>
                                 </div>
+
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Стадия ретеста:</span>
                                     <div class="fmt-btn-group" id="fmt-retest-stage-group">
@@ -2183,13 +2220,14 @@
                         <div class="fmt-card">
                             <div class="fmt-card-header">
                                 <div class="fmt-card-title-group">
-                                    <div class="fmt-card-icon" style="background: rgba(56, 189, 248, 0.12); color: #38bdf8;">🔔</div>
+                                    <div class="fmt-card-icon" style="background: rgba(56, 189, 248, 0.12); color: #38bdf8;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg></div>
                                     <div>
                                         <div class="fmt-card-title">Оповещения и фильтры</div>
                                         <div class="fmt-card-sub">Куда и как отправлять найденные сигналы</div>
                                     </div>
                                 </div>
                             </div>
+
                             <div class="fmt-card-body">
                                 <div class="fmt-setting-row">
                                     <span class="fmt-setting-label">Снимок в Telegram:</span>
@@ -2257,7 +2295,7 @@
                 </div>
             </div>
 
-            <!-- Modal Footer -->
+            <!-- Modal Footer (Formations) -->
             <div class="fmt-modal-footer">
                 <div style="display: flex; gap: 8px;">
                     <button type="button" class="btn-test-sound" id="btn-test-sound-fmt" style="padding: 7px 14px; font-size: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); color: #94a3b8; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: 500;">
@@ -2272,10 +2310,34 @@
                     <button type="button" class="settings-apply-btn" id="btn-save-formation-alerts" style="padding: 7px 22px; border-radius: 6px; font-size: 12px; font-weight: 600; background: #3b1d75; color: #ede9fe; border: 1px solid #582cae;">Применить</button>
                 </div>
             </div>
+
+        </div>
+    </div>
+
+
+    <!-- Pump/Dump Alerts Floating Panel -->
+    <div id="pd-alerts-panel" class="pd-alerts-panel">
+        <div class="pd-alerts-inner">
+            <div class="pd-alerts-header">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span class="pd-alerts-title">Лента сигналов Памп / Дамп</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button type="button" id="pd-clear-cards" class="pd-clear-btn" title="Очистить список">Очистить</button>
+                    <button type="button" onclick="window.pdClosePanel()" class="pd-close-btn" title="Закрыть">×</button>
+                </div>
+            </div>
+            <div id="pd-alerts-list" class="pd-alerts-list">
+                <div class="pd-empty">Сканер не запущен.<br><span style="color:var(--t3);font-size:11px;">Включите авто-сканер в Настройки → Уведомления</span></div>
+            </div>
         </div>
     </div>
 
     <!-- Main Settings Modal -->
+
     <div id="settings-overlay" class="modal-overlay" style="display: none;">
         <div id="settings-modal" class="settings-modal">
             <div class="settings-body">
@@ -2532,43 +2594,259 @@
                         </div>
                     </div>
 
+
                     <div class="settings-pane" id="tab-notifications">
                         <h2>Уведомления и Алерты</h2>
 
-                        <!-- Basic Notification Controls -->
+
+                        <!-- 1. Unified Alert Channels & Telegram Section -->
                         <div class="settings-group">
-                            <label>Базовые оповещения</label>
-                            <div class="s-row">
-                                <span>Звуковые сигналы (Beep / Chime)</span>
-                                <label class="switch"><input type="checkbox" id="set-sound-enabled" checked><span class="slider"></span></label>
+                            <label>Каналы оповещений</label>
+                            
+                            <!-- Telegram Channel Card -->
+                            <div class="pd-section-card" style="margin-bottom: 8px;">
+                                <div class="s-row" style="padding: 0; border: none; margin-bottom: 8px;">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                        </svg>
+                                        <span style="font-weight: 600; font-size: 13px;">Telegram оповещения</span>
+                                        <span id="tg-connect-status-badge" style="font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: rgba(255,255,255,0.06); color: var(--t3);">Не привязан</span>
+                                    </div>
+                                    <label class="switch"><input type="checkbox" id="pd-tg-enabled"><span class="slider"></span></label>
+                                </div>
+                                <div style="display: flex; gap: 6px; align-items: center; margin-top: 6px;">
+                                    <input type="text" id="pd-tg-chat-id-input" placeholder="Telegram Chat ID (напр. 123456789)" style="flex: 1; height: 32px; background: var(--bg3); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; padding: 0 10px; font-size: 11px; outline: none;">
+                                    <button type="button" id="btn-tg-connect-bot" style="height: 32px; padding: 0 12px; font-size: 11px; font-weight: 600; background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap;">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                                        Подключить бота
+                                    </button>
+                                    <button type="button" id="btn-test-tg-alert" style="height: 32px; padding: 0 12px; font-size: 11px; font-weight: 600; background: var(--bg3); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 5px; white-space: nowrap;">
+                                        Тест в TG
+                                    </button>
+                                </div>
+                                <div style="margin-top: 6px; font-size: 10px; color: #38bdf8; display: flex; align-items: center; gap: 5px;">
+                                    <span>⚡ 24/7 Серверный мониторинг: работает автономно, даже когда сайт закрыт</span>
+                                </div>
                             </div>
+
+
+                            <!-- Sound Channel Card -->
                             <div class="s-row">
-                                <span>Всплывающие карточки (Toast 5 сек)</span>
-                                <label class="switch"><input type="checkbox" id="set-toast-enabled" checked><span class="slider"></span></label>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                                    </svg>
+                                    <span>Звуковой сигнал</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <button type="button" class="btn-test-sound" id="btn-test-sound" style="padding: 4px 10px; font-size: 11px; background: var(--bg3); border: 1px solid var(--b1); color: var(--t2); border-radius: 5px; cursor: pointer;">Тест звука</button>
+                                    <label class="switch"><input type="checkbox" id="pd-sound-enabled" checked><span class="slider"></span></label>
+                                </div>
                             </div>
-                            <div class="s-row" style="margin-top: 8px;">
-                                <span>Тест звука</span>
-                                <button type="button" class="btn-test-sound" id="btn-test-sound" style="padding: 6px 12px; font-size: 12px; background: var(--bg3); border: 1px solid var(--b1); color: var(--t1); border-radius: 6px; cursor: pointer;">🔊 Проверить сигнал</button>
+
+                            <!-- Toast Channel Card -->
+                            <div class="s-row">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                    <span>Всплывающие карточки (Toast)</span>
+                                </div>
+                                <label class="switch"><input type="checkbox" id="pd-toast-enabled" checked><span class="slider"></span></label>
                             </div>
                         </div>
 
-                        <!-- Formation Alerts Banner / Quick Access -->
-                        <div class="settings-group" style="margin-top: 20px;">
-                            <div style="padding: 16px; background: rgba(124, 58, 237, 0.08); border: 1px solid rgba(124, 58, 237, 0.28); border-radius: 10px; display: flex; flex-direction: column; gap: 10px;">
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <div style="width: 32px; height: 32px; border-radius: 8px; background: rgba(124, 58, 237, 0.2); color: #c4b5fd; display: flex; align-items: center; justify-content: center; font-size: 16px;">⚡</div>
+                        <!-- 2. Pump/Dump Scanner Section -->
+                        <div class="settings-group" style="margin-top: 18px;">
+                            <div class="pd-settings-hero">
+                                <div class="pd-hero-info">
+                                    <div class="pd-hero-icon">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M23 6l-9.5 9.5-5-5L1 18"></path>
+                                            <path d="M17 6h6v6"></path>
+                                        </svg>
+                                    </div>
                                     <div>
-                                        <div style="font-weight: 700; font-size: 13px; color: #fff;">Авто-сканер и алерты формаций</div>
-                                        <div style="font-size: 11px; color: #94a3b8;">Настройка наклонных линий, уровней и ретестов с отправкой графиков в Telegram</div>
+                                        <div class="pd-hero-title">Сканер Памп / Дамп</div>
+                                        <div class="pd-hero-sub">Мониторинг резких импульсов цены в реальном времени</div>
                                     </div>
                                 </div>
-                                <button type="button" id="btn-open-fmt-from-settings" style="width: 100%; padding: 9px 16px; background: var(--ac); color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px; transition: background 0.15s; margin-top: 4px;">
-                                    Открыть панель алертов по формациям
+                                <div class="pd-hero-controls">
+                                    <button type="button" onclick="window.pdOpenPanel && window.pdOpenPanel()" class="pd-pill-btn" style="padding: 4px 10px; font-size: 11px; font-weight: 600; color: #a78bfa; border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.08); display: flex; align-items: center; gap: 4px;">
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+                                        Лента сигналов
+                                    </button>
+                                    <div class="pd-status-pill" id="pd-status-pill">
+                                        <span class="pd-dot"></span>
+                                        <span class="pd-status-text">Выключен</span>
+                                    </div>
+                                    <label class="switch" title="Включить / Выключить сканер"><input type="checkbox" id="pd-enabled-toggle"><span class="slider"></span></label>
+                                </div>
+                            </div>
+
+                            <!-- Exchanges Card -->
+                            <div class="pd-section-card">
+                                <div class="pd-section-card-header">
+                                    <span class="pd-section-label">Биржи для сканирования</span>
+                                    <span class="pd-section-sub">Мультивыбор</span>
+                                </div>
+                                <div class="pd-exchange-grid" id="pd-exchanges-group">
+                                    <button type="button" class="pd-pill-btn" data-ex="all">Все</button>
+                                    <button type="button" class="pd-pill-btn active" data-ex="BN">Binance</button>
+                                    <button type="button" class="pd-pill-btn active" data-ex="BB">Bybit</button>
+                                    <button type="button" class="pd-pill-btn active" data-ex="OX">OKX</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="BG">Bitget</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="GT">Gate.io</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="MX">MEXC</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="HL">Hyperliquid</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="BX">BingX</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="KC">KuCoin</button>
+                                    <button type="button" class="pd-pill-btn" data-ex="HT">HTX</button>
+                                </div>
+                            </div>
+
+                            <!-- Direction Segmented -->
+                            <div class="pd-section-card">
+                                <div class="pd-section-card-header">
+                                    <span class="pd-section-label">Направление импульса</span>
+                                </div>
+                                <div class="pd-dir-bar" id="pd-direction-group">
+                                    <button type="button" class="pd-dir-btn active" data-val="both">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 10 12 15 17 10"></polyline><polyline points="17 14 12 9 7 14"></polyline></svg>
+                                        <span>Памп и Дамп</span>
+                                    </button>
+                                    <button type="button" class="pd-dir-btn" data-val="pump">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.2"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                                        <span>Только Памп</span>
+                                    </button>
+                                    <button type="button" class="pd-dir-btn" data-val="dump">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
+                                        <span>Только Дамп</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Market Type Segmented (Futures / Spot) -->
+                            <div class="pd-section-card">
+                                <div class="pd-section-card-header">
+                                    <span class="pd-section-label">Тип рынка</span>
+                                </div>
+                                <div class="pd-dir-bar" id="pd-market-type-group">
+                                    <button type="button" class="pd-dir-btn active" data-val="both">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                                        <span>Фьючерсы + Спот</span>
+                                    </button>
+                                    <button type="button" class="pd-dir-btn" data-val="futures">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                        <span>Только Фьючерсы</span>
+                                    </button>
+                                    <button type="button" class="pd-dir-btn" data-val="spot">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle></svg>
+                                        <span>Только Спот</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Min % Threshold + Custom % Input -->
+                            <div class="pd-section-card">
+                                <div class="pd-section-card-header">
+                                    <span class="pd-section-label">Мин. изменение цены (%)</span>
+                                </div>
+                                <div class="pd-value-row">
+                                    <div class="pd-presets" id="pd-pct-group">
+                                        <button type="button" class="pd-pill-btn" data-val="1">1%</button>
+                                        <button type="button" class="pd-pill-btn" data-val="2">2%</button>
+                                        <button type="button" class="pd-pill-btn active" data-val="3">3%</button>
+                                        <button type="button" class="pd-pill-btn" data-val="5">5%</button>
+                                        <button type="button" class="pd-pill-btn" data-val="7">7%</button>
+                                        <button type="button" class="pd-pill-btn" data-val="10">10%</button>
+                                        <button type="button" class="pd-pill-btn" data-val="15">15%</button>
+                                    </div>
+                                    <div class="pd-custom-input-box" title="Введите свой процент">
+                                        <input type="number" id="pd-custom-pct" min="0.1" max="500" step="0.1" placeholder="Свой %" value="3">
+                                        <span class="pd-suffix">%</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Period / Lookback + Custom Time Input -->
+                            <div class="pd-section-card">
+                                <div class="pd-section-card-header">
+                                    <span class="pd-section-label">Период наблюдения</span>
+                                </div>
+                                <div class="pd-value-row">
+                                    <div class="pd-presets" id="pd-period-group">
+                                        <button type="button" class="pd-pill-btn" data-val="1">1м</button>
+                                        <button type="button" class="pd-pill-btn" data-val="3">3м</button>
+                                        <button type="button" class="pd-pill-btn active" data-val="5">5м</button>
+                                        <button type="button" class="pd-pill-btn" data-val="15">15м</button>
+                                        <button type="button" class="pd-pill-btn" data-val="30">30м</button>
+                                        <button type="button" class="pd-pill-btn" data-val="60">1ч</button>
+                                        <button type="button" class="pd-pill-btn" data-val="240">4ч</button>
+                                    </div>
+                                    <div class="pd-custom-input-box" title="Введите своё время в минутах">
+                                        <input type="number" id="pd-custom-period" min="1" max="1440" step="1" placeholder="Своё время" value="5">
+                                        <span class="pd-suffix">мин</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Two Columns: Volume + Cooldown -->
+                            <div class="pd-two-col">
+                                <div class="pd-section-card" style="margin-bottom:0;">
+                                    <div class="pd-section-card-header">
+                                        <span class="pd-section-label">Мин. объём 24ч</span>
+                                    </div>
+                                    <div class="pd-presets" id="pd-volume-group">
+                                        <button type="button" class="pd-pill-btn active" data-val="0">Все</button>
+                                        <button type="button" class="pd-pill-btn" data-val="1000000">&gt;$1M</button>
+                                        <button type="button" class="pd-pill-btn" data-val="5000000">&gt;$5M</button>
+                                        <button type="button" class="pd-pill-btn" data-val="10000000">&gt;$10M</button>
+                                        <button type="button" class="pd-pill-btn" data-val="50000000">&gt;$50M</button>
+                                    </div>
+                                </div>
+
+                                <div class="pd-section-card" style="margin-bottom:0;">
+                                    <div class="pd-section-card-header">
+                                        <span class="pd-section-label">Кулдаун повтора</span>
+                                    </div>
+                                    <div class="pd-presets" id="pd-cooldown-group">
+                                        <button type="button" class="pd-pill-btn" data-val="60">1мин</button>
+                                        <button type="button" class="pd-pill-btn active" data-val="300">5мин</button>
+                                        <button type="button" class="pd-pill-btn" data-val="900">15мин</button>
+                                        <button type="button" class="pd-pill-btn" data-val="1800">30мин</button>
+                                        <button type="button" class="pd-pill-btn" data-val="3600">1ч</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 3. Formations Quick Link Card -->
+                        <div class="settings-group" style="margin-top: 18px;">
+                            <div style="padding: 12px 14px; background: rgba(124, 58, 237, 0.07); border: 1px solid rgba(124, 58, 237, 0.22); border-radius: 8px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                                <div style="display: flex; align-items: center; gap: 9px;">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c4b5fd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                                        <polyline points="2 17 12 22 22 17"></polyline>
+                                        <polyline points="2 12 12 17 22 12"></polyline>
+                                    </svg>
+                                    <div>
+                                        <div style="font-weight: 600; font-size: 12px; color: #fff;">Алерты графических формаций</div>
+                                        <div style="font-size: 11px; color: #94a3b8;">Наклонные линии, каскады уровней и ретесты</div>
+                                    </div>
+                                </div>
+                                <button type="button" id="btn-open-fmt-from-settings" style="padding: 6px 12px; background: var(--ac); color: #fff; border: none; border-radius: 5px; font-weight: 600; cursor: pointer; font-size: 11px; white-space: nowrap;">
+                                    Настроить формации
                                 </button>
                             </div>
                         </div>
                     </div>
+
                     <div class="settings-pane" id="tab-trading">
+
                         <h2>Трейдинг</h2>
                         <p style="color: var(--t2); font-size: 12px;">Здесь будут настройки быстрого перехода на биржи...</p>
                     </div>
