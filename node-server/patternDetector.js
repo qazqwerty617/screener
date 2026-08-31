@@ -479,17 +479,23 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     }
 
     // 2. Clean Unbroken Horizontal Levels
-    if (fmAll.horizontals) {
+    if (fmAll.horizontals && Array.isArray(fmAll.horizontals)) {
       for (const hl of fmAll.horizontals) {
         const dist = Math.abs(priceNow - hl.price) / priceNow;
         if (dist <= 0.08) {
+          const isSupport = hl.direction === 'down';
           signals.push({
             type: 'level', ex, sym, base, tf,
             price: +hl.price.toFixed(4),
-            direction: hl.direction === 'down' ? 'long' : 'short',
+            direction: isSupport ? 'long' : 'short',
             confidence: Math.min(5, Math.max(2, hl.touches || 2)),
             ts: now,
-            meta: { touches: hl.touches || 2, dist: +(dist * 100).toFixed(2), direction: hl.direction }
+            meta: {
+              touches: hl.touches || 2,
+              dist: +(dist * 100).toFixed(2),
+              direction: hl.direction,
+              levelType: isSupport ? 'support' : 'resistance'
+            }
           });
         }
       }

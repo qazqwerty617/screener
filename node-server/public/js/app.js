@@ -16354,21 +16354,21 @@ const DEFAULT_FORMATION_ALERT_SETTINGS = {
   blacklistCustom: "",
   trendline: {
     enabled: true,
-    timeframes: ["5m", "15m", "1h", "4h"],
+    timeframes: ["1m", "5m", "15m", "1h", "4h", "1d"],
     minTouches: 2,
     distancePct: 0.8,
     direction: "all" // "all" | "down" (support/long) | "up" (resistance/short)
   },
   level: {
     enabled: true,
-    timeframes: ["5m", "15m", "1h", "4h"],
+    timeframes: ["1m", "5m", "15m", "1h", "4h", "1d"],
     minTouches: 2,
     distancePct: 0.8,
     direction: "all" // "all" | "support" | "resistance"
   },
   retest: {
     enabled: true,
-    timeframes: ["5m", "15m", "1h", "4h"],
+    timeframes: ["1m", "5m", "15m", "1h", "4h", "1d"],
     direction: "all", // "all" | "up" | "down"
     stage: "confirmed", // "confirmed" | "approaching" | "both"
     maxAgeCandles: 30

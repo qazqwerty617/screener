@@ -145,20 +145,22 @@
 
   // ── 1. Horizontal S/R ──────────────────────────────────────────────────────
 
+  // ── 1. Horizontal S/R (Levels) ─────────────────────────────────────────────
+
   function _detectHorizontals(ctx, minTouches) {
     if (!ctx) return [];
     const { candles, n, lastPrice, range, prof, highs, lows } = ctx;
-    const clusterTol = range / lastPrice * 0.35;
-    const ct = clusterTol < 0.0012 ? 0.0012 : (clusterTol > 0.0045 ? 0.0045 : clusterTol);
-    const closeTol = range * 0.08 < lastPrice * 0.0012 ? range * 0.08 : lastPrice * 0.0012;
-    const wickTol = range * 0.20 < lastPrice * 0.0030 ? range * 0.20 : lastPrice * 0.0030;
-    const minT = minTouches > 1 ? minTouches : 1;
+    const clusterTol = range / lastPrice * 0.40;
+    const ct = clusterTol < 0.0020 ? 0.0020 : (clusterTol > 0.0060 ? 0.0060 : clusterTol);
+    const minT = minTouches > 1 ? minTouches : 2;
     const candidates = [];
 
     for (let side = 0; side < 2; side++) {
       const resistance = side === 0;
       const pts = resistance ? highs : lows;
-      // Inline clustering
+      if (!pts || pts.length === 0) continue;
+
+      // Group swing points into price clusters
       const clusters = [];
       for (let pi = 0; pi < pts.length; pi++) {
         const p = pts[pi];
@@ -169,41 +171,64 @@
           if ((d < 0 ? -d : d) / cl.center <= ct) { best = cl; break; }
         }
         if (!best) {
-          best = { center: p.price, price: p.price, indices: [p.idx], count: 0, maxP: p.price, minP: p.price };
+          best = { center: p.price, prices: [p.price], indices: [p.idx], maxP: p.price, minP: p.price };
           clusters.push(best);
+        } else {
+          best.prices.push(p.price);
+          best.indices.push(p.idx);
+          if (p.price > best.maxP) best.maxP = p.price;
+          if (p.price < best.minP) best.minP = p.price;
+          best.center = (best.center * (best.prices.length - 1) + p.price) / best.prices.length;
         }
-        best.indices.push(p.idx);
-        best.count++;
-        if (p.price > best.maxP) best.maxP = p.price;
-        if (p.price < best.minP) best.minP = p.price;
-        best.center = (best.center * (best.count - 1) + p.price) / best.count;
-        best.price = resistance ? best.maxP : best.minP;
       }
 
       for (let ci = 0; ci < clusters.length; ci++) {
         const cl = clusters[ci];
-        const first = cl.indices[0];
-        for (let k = 1; k < cl.indices.length; k++) {
-          if (cl.indices[k] < first) cl.indices[0] = cl.indices[k];
+        // Unique swing indices (at least 2 bars apart)
+        const uniqueIndices = [];
+        const seen = new Set();
+        for (let k = 0; k < cl.indices.length; k++) {
+          const idx = cl.indices[k];
+          if (!seen.has(idx)) {
+            seen.add(idx);
+            uniqueIndices.push(idx);
+          }
         }
-        const firstIdx = cl.indices[0];
-        if (resistance ? cl.price <= lastPrice * 0.999 : cl.price >= lastPrice * 1.001) continue;
-        const distPct = (cl.price - lastPrice) / lastPrice;
+        uniqueIndices.sort((a, b) => a - b);
+
+        const distinctTouches = [];
+        for (let k = 0; k < uniqueIndices.length; k++) {
+          if (distinctTouches.length === 0 || uniqueIndices[k] - distinctTouches[distinctTouches.length - 1] >= 2) {
+            distinctTouches.push(uniqueIndices[k]);
+          }
+        }
+
+        if (distinctTouches.length < minT) continue;
+
+        const lvlPrice = resistance ? cl.maxP : cl.minP;
+        const distPct = (lvlPrice - lastPrice) / lastPrice;
         const absDist = distPct < 0 ? -distPct : distPct;
         if (absDist > prof.maxDistPct * 1.5) continue;
-        if (!isClean(candles, cl.price, firstIdx, resistance, closeTol, wickTol)) continue;
-        const touchIndices = countTouches(candles, cl.price, firstIdx, resistance, range);
-        if (touchIndices.length < minT) continue;
-        const lastTouchIdx = touchIndices[touchIndices.length - 1];
+
+        // Level must not be completely broken through by current price
+        if (resistance && lastPrice > lvlPrice * 1.005) continue;
+        if (!resistance && lastPrice < lvlPrice * 0.995) continue;
+
+        const firstIdx = distinctTouches[0];
+        const lastTouchIdx = distinctTouches[distinctTouches.length - 1];
         const age = n - 1 - lastTouchIdx;
-        const dAtr = (cl.price - lastPrice) / range;
-        const absDatr = dAtr < 0 ? -dAtr : dAtr;
+        const dAtr = absDist * lastPrice / range;
+
         candidates.push({
-          price: cl.price, endPrice: cl.price, swingIdx: firstIdx,
-          direction: resistance ? "up" : "down",
-          touchIndices, touches: touchIndices.length,
-          distPct: +((absDist) * 100).toFixed(2), age,
-          strength: touchIndices.length * 8 - (absDatr < 10 ? absDatr : 10) * 1.5 - age / 30,
+          price: +lvlPrice.toFixed(6),
+          endPrice: +lvlPrice.toFixed(6),
+          swingIdx: firstIdx,
+          direction: resistance ? "up" : "down", // "up" = resistance above, "down" = support below
+          touchIndices: distinctTouches,
+          touches: distinctTouches.length,
+          distPct: +(absDist * 100).toFixed(2),
+          age,
+          strength: distinctTouches.length * 15 - (dAtr < 5 ? dAtr : 5) * 2 - age / 40,
           isHorizontal: true,
         });
       }

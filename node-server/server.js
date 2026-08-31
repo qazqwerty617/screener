@@ -3188,12 +3188,12 @@ server.listen(PORT, () => {
 
   function getTfTtlMs(tf) {
     const low = String(tf || "").toLowerCase();
-    if (low === "1d") return 10 * 60 * 1000; // 10 min cache for 1D
-    if (low === "4h") return 5 * 60 * 1000;  // 5 min cache for 4H
-    if (low === "1h") return 3 * 60 * 1000;  // 3 min cache for 1H
-    if (low === "15m") return 90 * 1000;     // 1.5 min cache for 15M
-    if (low === "5m") return 45 * 1000;      // 45 sec cache for 5M
-    return 20 * 1000;
+    if (low === "1d") return 30 * 60 * 1000; // 30 min cache for 1D
+    if (low === "4h") return 15 * 60 * 1000; // 15 min cache for 4H
+    if (low === "1h") return 8 * 60 * 1000;  // 8 min cache for 1H
+    if (low === "15m") return 3 * 60 * 1000; // 3 min cache for 15M
+    if (low === "5m") return 90 * 1000;      // 90 sec cache for 5M
+    return 45 * 1000;                         // 45 sec cache for 1M
   }
 
   async function getCachedCandlesForScanner(ex, sym, tf) {
@@ -3232,7 +3232,7 @@ server.listen(PORT, () => {
 
     try {
       const candlesPromise = fetchFullHistory(ex, sym, tf, true);
-      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2800));
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 5000));
       const candles = await Promise.race([candlesPromise, timeoutPromise]);
       if (Array.isArray(candles) && candles.length >= 20) {
         scannerCandleCache.set(key, {
@@ -3243,7 +3243,7 @@ server.listen(PORT, () => {
       }
     } catch (e) {
       if (String(e).includes("418") || String(e).includes("429")) {
-        exchangeBackoffs.set(ex, now + 60000);
+        exchangeBackoffs.set(ex, now + 3000); // 3 sec micro-backoff instead of 60s freeze
       }
     }
     return cached ? cached.candles : [];
@@ -3577,9 +3577,9 @@ server.listen(PORT, () => {
           const targetDir = s.level.direction || "all";
           if (touches < minT || dist > maxD) continue;
           if (targetDir !== "all") {
-            const sigDir = signal.direction === "long" ? "down" : "up";
-            if ((targetDir === "support" || targetDir === "down" || targetDir === "long") && sigDir !== "down") continue;
-            if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short") && sigDir !== "up") continue;
+            const isSupport = signal.direction === "long" || meta?.levelType === "support" || meta?.direction === "down";
+            if ((targetDir === "support" || targetDir === "down" || targetDir === "long" || targetDir === "Long") && !isSupport) continue;
+            if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short" || targetDir === "Short") && isSupport) continue;
           }
         } else if (type === "retest") {
           if (!s.retest?.enabled) continue;
@@ -3588,8 +3588,8 @@ server.listen(PORT, () => {
           const targetDir = s.retest.direction || "all";
           if (targetDir !== "all") {
             const sigDir = signal.direction === "long" ? "up" : "down";
-            if ((targetDir === "up" || targetDir === "long") && sigDir !== "up") continue;
-            if ((targetDir === "down" || targetDir === "short") && sigDir !== "down") continue;
+            if ((targetDir === "up" || targetDir === "long" || targetDir === "Long") && sigDir !== "up") continue;
+            if ((targetDir === "down" || targetDir === "short" || targetDir === "Short") && sigDir !== "down") continue;
           }
         } else {
           continue;
@@ -3634,7 +3634,8 @@ server.listen(PORT, () => {
             `─────────────────────────\n` +
             `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
         } else if (type === "level") {
-          const dirLabel = signal.direction === "long" ? "Long (Поддержка)" : "Short (Сопротивление)";
+          const isSupport = signal.direction === "long" || meta?.levelType === "support" || meta?.direction === "down";
+          const dirLabel = isSupport ? "Long (Поддержка)" : "Short (Сопротивление)";
           msg =
             `⚡ <b>Сигнал формации: Горизонтальный уровень (Горизонталка)</b>\n\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
