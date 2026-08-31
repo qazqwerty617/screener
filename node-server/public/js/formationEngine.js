@@ -210,9 +210,12 @@
         const absDist = distPct < 0 ? -distPct : distPct;
         if (absDist > prof.maxDistPct * 1.5) continue;
 
-        // Level must not be completely broken through by current price
-        if (resistance && lastPrice > lvlPrice * 1.005) continue;
-        if (!resistance && lastPrice < lvlPrice * 0.995) continue;
+        // Level must not be broken through by current price or latest candle
+        if (resistance) {
+          if (lastPrice >= lvlPrice || candles[n - 1].c >= lvlPrice || candles[n - 1].h > lvlPrice * 1.0015) continue;
+        } else {
+          if (lastPrice <= lvlPrice || candles[n - 1].c <= lvlPrice || candles[n - 1].l < lvlPrice * 0.9985) continue;
+        }
 
         const firstIdx = distinctTouches[0];
         const lastTouchIdx = distinctTouches[distinctTouches.length - 1];
@@ -313,8 +316,7 @@
     if (!ctx) return [];
     const { candles, n, lastPrice, range, highs, lows } = ctx;
     const touchTol = range * 0.16 > lastPrice * 0.0028 ? range * 0.16 : lastPrice * 0.0028;
-    const crossBodyTol = range * 0.08 > lastPrice * 0.0014 ? range * 0.08 : lastPrice * 0.0014;
-    const crossWickTol = range * 0.20 > lastPrice * 0.0032 ? range * 0.20 : lastPrice * 0.0032;
+    const crossWickTol = range * 0.18 > lastPrice * 0.0030 ? range * 0.18 : lastPrice * 0.0030;
     const minimum = minTouches > 2 ? minTouches : 2;
     const slopeLimit = range * 0.15;
     const minDeparture = range * 0.18;
@@ -333,18 +335,18 @@
           if (resistance && slope > slopeLimit) continue;
           if (!resistance && slope < -slopeLimit) continue;
 
-          // Check for crossing
+          // Check for crossing (unbroken trendline)
           let crossed = false, breaches = 0;
           for (let k = p1.idx; k < n; k++) {
             const line = p1.price + slope * (k - p1.idx);
             if (!(line > 0)) { crossed = true; break; }
             const c = candles[k];
             if (resistance) {
-              if (c.c > line + crossBodyTol) { crossed = true; break; }
-              if (c.h > line + crossWickTol && ++breaches > 2) { crossed = true; break; }
+              if (c.c > line) { crossed = true; break; }
+              if (c.h > line + crossWickTol && ++breaches > 1) { crossed = true; break; }
             } else {
-              if (c.c < line - crossBodyTol) { crossed = true; break; }
-              if (c.l < line - crossWickTol && ++breaches > 2) { crossed = true; break; }
+              if (c.c < line) { crossed = true; break; }
+              if (c.l < line - crossWickTol && ++breaches > 1) { crossed = true; break; }
             }
           }
           if (crossed) continue;
@@ -374,7 +376,13 @@
 
           const endPrice = p1.price + slope * (n - 1 - p1.idx);
           if (!(endPrice > 0)) continue;
-          if (resistance ? lastPrice > endPrice + crossBodyTol : lastPrice < endPrice - crossBodyTol) continue;
+
+          // Strictly reject if price has already crossed or closed beyond the line
+          if (resistance) {
+            if (lastPrice >= endPrice || candles[n - 1].c >= endPrice || candles[n - 1].h > endPrice * 1.0015) continue;
+          } else {
+            if (lastPrice <= endPrice || candles[n - 1].c <= endPrice || candles[n - 1].l < endPrice * 0.9985) continue;
+          }
 
           const distPct = ((endPrice - lastPrice) / lastPrice);
           const absDist = distPct < 0 ? -distPct : distPct;

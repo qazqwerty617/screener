@@ -457,16 +457,22 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     if (fmAll.trendlines) {
       for (const tl of fmAll.trendlines) {
         const endPrice = tl.endPrice;
+        const isResistance = tl.direction === 'up'; // 'up' = resistance (Short); 'down' = support (Long)
+
+        // Strict unviolated check: price must NOT have breached the line
+        if (isResistance && (priceNow >= endPrice || lastC.c >= endPrice || lastC.h > endPrice * 1.0015)) continue;
+        if (!isResistance && (priceNow <= endPrice || lastC.c <= endPrice || lastC.l < endPrice * 0.9985)) continue;
+
         const dist = Math.abs(priceNow - endPrice) / priceNow;
         if (dist <= 0.08) {
           signals.push({
             type: 'trendline', ex, sym, base, tf,
             price: +endPrice.toFixed(4),
-            direction: tl.direction === 'down' ? 'long' : 'short',
+            direction: isResistance ? 'short' : 'long',
             confidence: Math.min(5, Math.max(2, tl.touches || 2)),
             ts: now,
             meta: {
-              tlType: tl.direction === 'down' ? 'asc' : 'desc',
+              tlType: isResistance ? 'desc' : 'asc',
               slope: +(tl.slope || 0).toFixed(6),
               touches: tl.touches || 2,
               dist: +(dist * 100).toFixed(2),
@@ -481,9 +487,14 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     // 2. Clean Unbroken Horizontal Levels
     if (fmAll.horizontals && Array.isArray(fmAll.horizontals)) {
       for (const hl of fmAll.horizontals) {
+        const isSupport = hl.direction === 'down';
+
+        // Strict unviolated check: price must NOT have breached the level
+        if (!isSupport && (priceNow >= hl.price || lastC.c >= hl.price || lastC.h > hl.price * 1.0015)) continue;
+        if (isSupport && (priceNow <= hl.price || lastC.c <= hl.price || lastC.l < hl.price * 0.9985)) continue;
+
         const dist = Math.abs(priceNow - hl.price) / priceNow;
         if (dist <= 0.08) {
-          const isSupport = hl.direction === 'down';
           signals.push({
             type: 'level', ex, sym, base, tf,
             price: +hl.price.toFixed(4),

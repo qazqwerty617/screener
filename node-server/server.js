@@ -3554,6 +3554,8 @@ server.listen(PORT, () => {
         const allBl = new Set([...bl, ...customBl]);
         if (allBl.has(rawSym) || allBl.has(baseSym)) continue;
 
+        const actualPrice = signal.curPrice || fallbackCurPrice || price;
+
         // Check pattern type enabled & thresholds
         if (type === "trendline") {
           if (!s.trendline?.enabled) continue;
@@ -3563,6 +3565,12 @@ server.listen(PORT, () => {
           const maxD = Number(s.trendline.distancePct) || 1.0;
           const targetDir = s.trendline.direction || "all";
           if (touches < minT || dist > maxD) continue;
+
+          // Reject if price has already broken through the trendline
+          const isResistance = signal.direction === "short" || meta?.tlType === "desc" || meta?.direction === "up";
+          if (isResistance && actualPrice >= price * 1.0005) continue;
+          if (!isResistance && actualPrice <= price * 0.9995) continue;
+
           if (targetDir !== "all") {
             const sigDir = signal.direction === "long" ? "down" : "up";
             if ((targetDir === "down" || targetDir === "support" || targetDir === "long") && sigDir !== "down") continue;
@@ -3576,8 +3584,13 @@ server.listen(PORT, () => {
           const maxD = Number(s.level.distancePct) || 1.0;
           const targetDir = s.level.direction || "all";
           if (touches < minT || dist > maxD) continue;
+
+          // Reject if price has already broken through the horizontal level
+          const isSupport = signal.direction === "long" || meta?.levelType === "support" || meta?.direction === "down";
+          if (!isSupport && actualPrice >= price * 1.0005) continue;
+          if (isSupport && actualPrice <= price * 0.9995) continue;
+
           if (targetDir !== "all") {
-            const isSupport = signal.direction === "long" || meta?.levelType === "support" || meta?.direction === "down";
             if ((targetDir === "support" || targetDir === "down" || targetDir === "long" || targetDir === "Long") && !isSupport) continue;
             if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short" || targetDir === "Short") && isSupport) continue;
           }
@@ -3617,7 +3630,6 @@ server.listen(PORT, () => {
           AD: "AsterDex"
         };
         const exFull = exNames[ex] || ex;
-        const actualPrice = signal.curPrice || fallbackCurPrice || price;
 
         let msg = "";
         if (type === "trendline") {
