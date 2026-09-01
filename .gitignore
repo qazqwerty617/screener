@@ -25,6 +25,13 @@ node-server/check_*.js
 node-server/diag*.js
 node-server/test_*.js
 node-server/test-*.js
+node-server/tests/check_*.js
+node-server/tests/diagnose_*.js
+node-server/tests/test_*.js
+node-server/tests/analyze_*.js
+node-server/tests/find_*.js
+node-server/tests/set_*.js
+node-server/scripts/
 tmp*.png
 
 
@@ -56,8 +63,15 @@ go-scanner/scanner
 
 # Deployment scripts & temp auth helpers
 deploy.ps1
+remote.ps1
 askpass*.bat
 check_bx.py
+node-server/tests/run_remote_test.ps1
+node-server/tests/test_remote_fetch.py
+node-server/correlation_cache.json
+node-server/admin_audit*.json
+*.corrupted.*
+
 
 
 

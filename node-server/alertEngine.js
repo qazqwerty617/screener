@@ -5,7 +5,8 @@
 // Operates 24/7 even when user browsers are completely closed / offline.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const https = require("https");
+const telegramQueue = require("./telegramQueue");
+const { sharedStore, SPAN_MS } = require("./priceHistoryStore");
 
 let tickersMap = null;
 let telegramBotModule = null;
@@ -20,14 +21,39 @@ try {
   console.warn("[ALERT ENGINE] serverChartRenderer not available:", e.message);
 }
 
-// Ring buffer of price history per key "EX:SYM"
-// Map<string, Array<{ t: number, p: number }>>
-const priceHistoryMap = new Map();
-const MAX_HISTORY_MS = 4 * 60 * 60 * 1000; // 4 hours history
+// Compact shared price history (typed-array ring buffers). See
+// priceHistoryStore.js for why the old Map<string, Array<{t,p}>> layout had to
+// go: at the live ticker count it consumed hundreds of MB and triggered process
+// recycles that wiped every in-memory alert cooldown.
+const priceHistory = sharedStore;
+const HISTORY_KEY_TTL_MS = 6 * 60 * 60 * 1000; // drop delisted/stale symbols
+let lastHistoryPruneAt = 0;
 
 // Cooldown tracker per chatId:key
 // Map<string, number> (key: `${chatId}:${ex}:${sym}:${type}`) -> timestamp
 const cooldownTracker = new Map();
+const COOLDOWN_MAX_ENTRIES = 20000;
+const COOLDOWN_TTL_MS = 60 * 60 * 1000;
+// After a failed send, retry this soon instead of waiting out the full cooldown
+// (which loses the alert) or retrying immediately (which hot-loops on outages).
+const FAILED_SEND_RETRY_MS = 60 * 1000;
+let lastCooldownPruneAt = 0;
+
+// Unconditional periodic prune. The previous version only ran inside the
+// "an alert fired" branch, so a quiet market never reclaimed anything.
+function pruneCooldownTracker(now) {
+  if (now - lastCooldownPruneAt < 60000 && cooldownTracker.size < COOLDOWN_MAX_ENTRIES) return;
+  lastCooldownPruneAt = now;
+  for (const [key, ts] of cooldownTracker) {
+    if (now - ts > COOLDOWN_TTL_MS) cooldownTracker.delete(key);
+  }
+  if (cooldownTracker.size > COOLDOWN_MAX_ENTRIES) {
+    // Still oversized: evict oldest first to keep the map strictly bounded.
+    const entries = Array.from(cooldownTracker.entries()).sort((a, b) => a[1] - b[1]);
+    const excess = cooldownTracker.size - COOLDOWN_MAX_ENTRIES;
+    for (let i = 0; i < excess; i++) cooldownTracker.delete(entries[i][0]);
+  }
+}
 
 // Default 24/7 Alert settings
 const DEFAULT_USER_ALERT_SETTINGS = {
@@ -87,9 +113,7 @@ function getExchangeFullName(code) {
 // Low-level helper to send direct text message fallback
 async function sendTelegramMessage(chatId, text) {
   if (!chatId || !text) return false;
-
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
-  if (!botToken) return false;
+  if (!process.env.TELEGRAM_BOT_TOKEN && !process.env.ADMIN_BOT_TOKEN) return false;
 
   if (userStoreModule && typeof userStoreModule.isTelegramAlertsEnabled === "function") {
     if (!userStoreModule.isTelegramAlertsEnabled(chatId)) {
@@ -97,64 +121,18 @@ async function sendTelegramMessage(chatId, text) {
     }
   }
 
-  if (telegramBotModule && typeof telegramBotModule.sendTelegramMessage === "function") {
-    try {
-      const res = await telegramBotModule.sendTelegramMessage(chatId, text);
-      if (res && res.ok) return true;
-    } catch (_) {}
-  }
-
-  return new Promise((resolve) => {
-    try {
-      const payload = JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true
-      });
-
-      const req = https.request(
-        {
-          hostname: "api.telegram.org",
-          port: 443,
-          path: `/bot${botToken}/sendMessage`,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload)
-          },
-          timeout: 8000
-        },
-        (res) => {
-          let data = "";
-          res.on("data", chunk => data += chunk);
-          res.on("end", () => {
-            try {
-              const parsed = JSON.parse(data);
-              resolve(!!parsed.ok);
-            } catch (_) {
-              resolve(false);
-            }
-          });
-        }
-      );
-
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => { req.destroy(); resolve(false); });
-      req.write(payload);
-      req.end();
-    } catch (_) {
-      resolve(false);
-    }
-  });
+  const res = await telegramQueue.enqueue({ chatId, text });
+  return !!(res && res.ok);
 }
 
-// Full helper to send Photo (with chart) or fallback to text
-async function sendTelegramAlert(chatId, text, photoBuffer = null) {
+// Full helper to send Photo (with chart) or fallback to text.
+// Returns a Telegram file_id (string) when a chart was uploaded, `true` on a
+// successful text-only send, and `false` when delivery ultimately failed.
+// Callers must treat a falsy result as "not delivered" and refrain from arming
+// an alert cooldown, otherwise the alert is silently lost.
+async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null, group = null) {
   if (!chatId || !text) return false;
-
-  const botToken = process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
-  if (!botToken) return false;
+  if (!process.env.TELEGRAM_BOT_TOKEN && !process.env.ADMIN_BOT_TOKEN) return false;
 
   if (userStoreModule && typeof userStoreModule.isTelegramAlertsEnabled === "function") {
     if (!userStoreModule.isTelegramAlertsEnabled(chatId)) {
@@ -162,90 +140,151 @@ async function sendTelegramAlert(chatId, text, photoBuffer = null) {
     }
   }
 
-  if (photoBuffer && Buffer.isBuffer(photoBuffer)) {
-    try {
-      const blob = new Blob([photoBuffer], { type: "image/png" });
-      const form = new FormData();
-      form.append("chat_id", String(chatId));
-      form.append("caption", text);
-      form.append("parse_mode", "HTML");
-      form.append("photo", blob, "chart_alert.png");
-
-      const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-        method: "POST",
-        body: form,
-        signal: AbortSignal.timeout(10000)
-      });
-      const parsed = await tgRes.json();
-      if (parsed.ok) {
-        return true;
-      }
-      console.warn("[ALERT ENGINE] sendPhoto fail:", parsed.description);
-    } catch (e) {
-      console.warn("[ALERT ENGINE] sendPhoto error:", e.message);
-    }
-  }
-
-  return sendTelegramMessage(chatId, text);
+  const res = await telegramQueue.enqueue({ chatId, text, photoBuffer, fileId, group });
+  if (!res || !res.ok) return false;
+  return res.fileId || true;
 }
 
-// ── Direct Exchange Real Klines Fetcher (Fallback if server cache misses) ────
+// ── Direct Exchange Real Klines Fetcher (Fast lightweight 60 bars) ───────────
 async function fetchDirectExchangeCandles(ex, sym, tf = "1m") {
   try {
-    let cleanSym = sym.replace("_SPOT", "");
-    let url = "";
+    const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
+    const cleanSym = sym.replace(/_SPOT$/i, "");
+    const urls = [];
 
     if (ex === "BN") {
-      url = `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=${tf}&limit=100`;
+      if (isSpot) {
+        urls.push(`https://data-api.binance.vision/api/v3/klines?symbol=${cleanSym}&interval=${tf}&limit=60`);
+        urls.push(`https://api.binance.com/api/v3/klines?symbol=${cleanSym}&interval=${tf}&limit=60`);
+      } else {
+        urls.push(`https://data-api.binance.vision/api/v3/klines?symbol=${cleanSym}&interval=${tf}&limit=60`);
+        urls.push(`https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSym}&interval=${tf}&limit=60`);
+        urls.push(`https://api.binance.com/api/v3/klines?symbol=${cleanSym}&interval=${tf}&limit=60`);
+      }
     } else if (ex === "BB") {
       const bybitTf = tf === "1m" ? "1" : tf === "5m" ? "5" : tf === "15m" ? "15" : tf === "1h" ? "60" : "5";
-      url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${cleanSym}&interval=${bybitTf}&limit=100`;
+      if (isSpot) {
+        urls.push(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${cleanSym}&interval=${bybitTf}&limit=60`);
+      } else {
+        urls.push(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${cleanSym}&interval=${bybitTf}&limit=60`);
+        urls.push(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${cleanSym}&interval=${bybitTf}&limit=60`);
+      }
     } else if (ex === "OX") {
       const oxSym = cleanSym.includes("-") ? cleanSym : `${cleanSym.replace(/USDT$/, "")}-USDT-SWAP`;
-      url = `https://www.okx.com/api/v5/market/candles?instId=${oxSym}&bar=${tf}&limit=100`;
+      urls.push(`https://www.okx.com/api/v5/market/candles?instId=${oxSym}&bar=${tf}&limit=60`);
+      urls.push(`https://www.okx.com/api/v5/market/candles?instId=${cleanSym.replace(/USDT$/, "")}-USDT&bar=${tf}&limit=60`);
     } else if (ex === "BG") {
       const bgSym = cleanSym.endsWith("USDT") ? `${cleanSym}_UMCBL` : cleanSym;
-      url = `https://api.bitget.com/api/v2/mix/market/candles?symbol=${bgSym}&granularity=${tf}&limit=100`;
+      urls.push(`https://api.bitget.com/api/v2/mix/market/candles?symbol=${bgSym}&granularity=${tf}&limit=60`);
+      urls.push(`https://api.bitget.com/api/v2/spot/market/candles?symbol=${cleanSym}&granularity=${tf}&limit=60`);
     } else if (ex === "GT") {
-      url = `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${cleanSym}&interval=${tf}&limit=100`;
+      urls.push(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${cleanSym}&interval=${tf}&limit=60`);
+      urls.push(`https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=${cleanSym.replace(/USDT$/, "_USDT")}&interval=${tf}&limit=60`);
+    } else if (ex === "MX") {
+      const mxSym = cleanSym.includes("_") ? cleanSym : (cleanSym.endsWith("USDT") ? cleanSym.replace(/USDT$/i, "_USDT") : cleanSym + "_USDT");
+      const mxTf = tf === "1m" ? "Min1" : tf === "5m" ? "Min5" : tf === "15m" ? "Min15" : "Min60";
+      urls.push(`https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${mxTf}&limit=60`);
+    } else if (ex === "BX") {
+      const bxSym = cleanSym.includes("-") ? cleanSym : `${cleanSym.replace(/USDT$/, "")}-USDT`;
+      urls.push(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${tf}&limit=60`);
+    } else if (ex === "KC") {
+      const ksym = cleanSym.includes("-") ? cleanSym : `${cleanSym.replace(/USDT$/, "")}-USDT`;
+      urls.push(`https://api.kucoin.com/api/v1/market/candles?type=${tf === "1m" ? "1min" : tf === "5m" ? "5min" : tf === "15m" ? "15min" : "1hour"}&symbol=${ksym}`);
+    } else if (ex === "HT") {
+      const hsym = cleanSym.toLowerCase();
+      urls.push(`https://api.huobi.pro/market/history/kline?period=${tf === "1m" ? "1min" : tf === "5m" ? "5min" : tf === "15m" ? "15min" : "60min"}&size=60&symbol=${hsym}`);
+    } else if (ex === "HL") {
+      try {
+        const tfMs = tf === "15m" ? 900000 : (tf === "5m" ? 300000 : 60000);
+        const data = await fetch("https://api.hyperliquid.xyz/info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "candleSnapshot", req: { coin: cleanSym, interval: tf, startTime: Date.now() - (60 * tfMs), endTime: Date.now() } }),
+          signal: AbortSignal.timeout(4000)
+        }).then(r => r.json());
+        if (Array.isArray(data) && data.length >= 5) {
+          return data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }));
+        }
+      } catch (_) {}
     }
 
-    if (!url) return null;
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+        if (!res.ok) continue;
+        const data = await res.json();
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(3500) });
-    const data = await res.json();
+        const candles = [];
+        if ((ex === "BN" || url.includes("binance")) && Array.isArray(data)) {
+          for (const k of data) {
+            candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
+          }
+        } else if (ex === "BB" && data?.result?.list) {
+          for (const k of data.result.list) {
+            candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
+          }
+          candles.reverse();
+        } else if (ex === "OX" && data?.data) {
+          for (const k of data.data) {
+            candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
+          }
+          candles.reverse();
+        } else if (ex === "BG" && Array.isArray(data?.data)) {
+          for (const k of data.data) {
+            candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
+          }
+          candles.reverse();
+        } else if (ex === "GT" && Array.isArray(data)) {
+          for (const k of data) {
+            candles.push({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c });
+          }
+        } else if (ex === "MX" && Array.isArray(data?.data?.time)) {
+          for (let i = 0; i < data.data.time.length; i++) {
+            const c = +data.data.close[i];
+            candles.push({
+              t: +data.data.time[i] * 1000,
+              o: +data.data.open[i],
+              h: +data.data.high[i],
+              l: +data.data.low[i],
+              c,
+              v: data.data.vol ? +data.data.vol[i] * c : 1000
+            });
+          }
+        } else if (ex === "BX" && Array.isArray(data?.data)) {
+          for (const k of data.data) {
+            const closeP = +(k.close || k.c || 0);
+            candles.push({
+              t: +(k.time || k.t || 0),
+              o: +(k.open || k.o || 0),
+              h: +(k.high || k.h || 0),
+              l: +(k.low || k.l || 0),
+              c: closeP,
+              v: +(k.volume || k.v || 0) * closeP
+            });
+          }
+        } else if (ex === "KC" && Array.isArray(data?.data)) {
+          for (const k of data.data) {
+            candles.push({ t: +k[0] * 1000, o: +k[1], c: +k[2], h: +k[3], l: +k[4], v: +k[5] * +k[2] });
+          }
+          candles.reverse();
+        } else if (ex === "HT" && Array.isArray(data?.data)) {
+          for (const k of data.data) {
+            candles.push({ t: +k.id * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.vol });
+          }
+          candles.reverse();
+        }
 
-    const candles = [];
-    if (ex === "BN" && Array.isArray(data)) {
-      for (const k of data) {
-        candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
-      }
-    } else if (ex === "BB" && data?.result?.list) {
-      for (const k of data.result.list) {
-        candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
-      }
-      candles.reverse();
-    } else if (ex === "OX" && data?.data) {
-      for (const k of data.data) {
-        candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
-      }
-      candles.reverse();
-    } else if (ex === "BG" && Array.isArray(data?.data)) {
-      for (const k of data.data) {
-        candles.push({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] * +k[4] });
-      }
-      candles.reverse();
-    } else if (ex === "GT" && Array.isArray(data)) {
-      for (const k of data) {
-        candles.push({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c });
-      }
+        if (candles.length >= 5) return candles;
+      } catch (_) {}
     }
 
-    return candles.length >= 10 ? candles : null;
+    return null;
   } catch (_) {
     return null;
   }
 }
+
+let broadcastAlertFn = null;
 
 // ── 1. Price History Sampling ───────────────────────────────────────────────
 function sampleTickers() {
@@ -253,28 +292,33 @@ function sampleTickers() {
   const now = Date.now();
 
   for (const t of tickersMap.values()) {
-    if (!t || !t.key || !t.p || t.p <= 0) continue;
-
-    let hist = priceHistoryMap.get(t.key);
-    if (!hist) {
-      hist = [];
-      priceHistoryMap.set(t.key, hist);
+    try {
+      if (!t || !t.key) continue;
+      priceHistory.push(t.key, now, t.p);
+    } catch (err) {
+      // Same rationale as the scan loop: one bad entry must not cost the whole
+      // sampling pass, which would blind pump/dump detection for every symbol.
+      console.warn(`[ALERT ENGINE] Sampling failed for a ticker: ${err.message}`);
     }
+  }
 
-    const last = hist[hist.length - 1];
-    if (!last || (now - last.t >= 3000) || (Math.abs(t.p - last.p) / last.p >= 0.0005)) {
-      hist.push({ t: now, p: t.p });
-    }
-
-    const cutoff = now - MAX_HISTORY_MS;
-    while (hist.length > 2 && hist[0].t < cutoff) {
-      hist.shift();
-    }
+  // Reclaim keys for symbols that stopped ticking (delistings, renamed pairs).
+  if (now - lastHistoryPruneAt > 10 * 60 * 1000) {
+    lastHistoryPruneAt = now;
+    priceHistory.pruneStale(now, HISTORY_KEY_TTL_MS);
   }
 }
 
-// ── 2. Get All Active Alert Subscribers ─────────────────────────────────────
+// ── 2. Get All Active Alert Subscribers (Cached for 2.5s for zero CPU overhead) ──
+let cachedSubscribers = null;
+let lastSubscribersFetch = 0;
+
 function getAllAlertSubscribers() {
+  const now = Date.now();
+  if (cachedSubscribers && (now - lastSubscribersFetch < 2500)) {
+    return cachedSubscribers;
+  }
+
   const subscribers = [];
   const seenChatIds = new Set();
 
@@ -285,14 +329,26 @@ function getAllAlertSubscribers() {
       const chatId = u.telegramChatId || u.telegramId;
       if (!chatId) continue;
 
-      const prefs = (u.preferences && u.preferences.notifications) || {};
-      const tgEnabled = prefs.tgEnabled !== undefined ? prefs.tgEnabled : (u.isTelegramAlertsEnabled !== false);
+      const prefs = u.preferences || {};
+      const notifPrefs = prefs.notifications || {};
+      const pdUserPrefs = notifPrefs.pumpDump || notifPrefs.pumpAlerts || prefs.pumpAlerts || prefs.pumpDump || {};
+
+      // `tgAlertsEnabled` is the field userStore actually persists (see
+      // linkTelegramBot / setTelegramAlertsEnabledByChatId). The previous read of
+      // `isTelegramAlertsEnabled` never existed on any user record, so this
+      // expression was always true and pump/dump was effectively opt-out.
+      const tgEnabled = pdUserPrefs.tgEnabled !== undefined
+        ? !!pdUserPrefs.tgEnabled
+        : (notifPrefs.tgEnabled !== undefined
+            ? !!notifPrefs.tgEnabled
+            : (u.tgAlertsEnabled === true));
 
       if (!tgEnabled) continue;
 
       const pumpDump = {
         ...DEFAULT_USER_ALERT_SETTINGS.pumpDump,
-        ...(prefs.pumpDump || {})
+        ...pdUserPrefs,
+        enabled: pdUserPrefs.enabled !== undefined ? !!pdUserPrefs.enabled : true
       };
 
       const priceAlerts = Array.isArray(u.priceAlerts) ? u.priceAlerts : (Array.isArray(prefs.priceAlerts) ? prefs.priceAlerts : []);
@@ -303,7 +359,7 @@ function getAllAlertSubscribers() {
         chatId: String(chatId),
         pumpDump,
         priceAlerts,
-        formationAlerts: prefs.formationAlerts || DEFAULT_USER_ALERT_SETTINGS.formationAlerts
+        formationAlerts: notifPrefs.formationAlerts || prefs.formationAlerts || DEFAULT_USER_ALERT_SETTINGS.formationAlerts
       });
     }
   }
@@ -313,27 +369,193 @@ function getAllAlertSubscribers() {
     subscribers.push({
       userId: "admin",
       chatId: adminChatId,
-      pumpDump: { ...DEFAULT_USER_ALERT_SETTINGS.pumpDump, enabled: true },
+      pumpDump: {
+        ...DEFAULT_USER_ALERT_SETTINGS.pumpDump,
+        enabled: true,
+        minPct: 2.0,
+        periodMinutes: 5,
+        exchanges: ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"]
+      },
       priceAlerts: [],
       formationAlerts: { enabled: true }
     });
   }
 
+  cachedSubscribers = subscribers;
+  lastSubscribersFetch = now;
   return subscribers;
 }
 
-// ── 3. Scan Pump / Dump for Subscribers (With Authentic Ultra-HD Charts) ────
+// Build authentic candles from in-memory recorded price history if exchange APIs fail
+function buildCandlesFromHistory(ex, sym, tf = "1m") {
+  const key = `${ex}:${sym}`;
+  let hist = priceHistory.toSeries(key);
+  if (hist.length < 2) hist = priceHistory.toSeries(`${ex}:${sym.replace(/_SPOT$/i, "")}`);
+  if (hist.length < 2) return null;
+
+  // Buckets must not be finer than the sampling resolution, otherwise most
+  // buckets hold a single sample and the chart looks like a staircase.
+  const tfMs = tf === "15m" ? 900000 : (tf === "5m" ? 300000 : 60000);
+  const buckets = new Map();
+
+  for (const pt of hist) {
+    const bucketStart = Math.floor(pt.t / tfMs) * tfMs;
+    let b = buckets.get(bucketStart);
+    if (!b) {
+      b = { t: bucketStart, o: pt.p, h: pt.p, l: pt.p, c: pt.p, v: 1000 };
+      buckets.set(bucketStart, b);
+    } else {
+      if (pt.p > b.h) b.h = pt.p;
+      if (pt.p < b.l) b.l = pt.p;
+      b.c = pt.p;
+    }
+  }
+
+  let candles = Array.from(buckets.values()).sort((a, b) => a.t - b.t);
+  if (candles.length === 0) return null;
+
+  // Pad back up to 25 candles if history is young, so chart renderer always has a rich baseline
+  if (candles.length < 20) {
+    const first = candles[0];
+    const padded = [];
+    const padCount = 20 - candles.length;
+    for (let i = padCount; i > 0; i--) {
+      padded.push({
+        t: first.t - (i * tfMs),
+        o: first.o,
+        h: first.o * 1.0002,
+        l: first.o * 0.9998,
+        c: first.o,
+        v: 800
+      });
+    }
+    candles = [...padded, ...candles];
+  }
+
+  return candles;
+}
+
+// Helper to fetch chart candles fast (cached first, non-blocking fallback)
+async function getCandlesForAlert(ex, sym, targetTf) {
+  try {
+    let candles = null;
+    const now = Date.now();
+
+    // 1. Instant check: is it in server klinesCache and fresh (< 2 mins)? (0ms)
+    if (typeof fetchCandlesFn === "function") {
+      const cached = await fetchCandlesFn(ex, sym, targetTf);
+      if (Array.isArray(cached) && cached.length >= 10) {
+        const lastT = cached[cached.length - 1]?.t || 0;
+        if (now - lastT < 600000) { // must be within last 10 minutes
+          candles = cached;
+        }
+      }
+    }
+
+    // 2. Direct exchange REST API (Binance Futures/Spot, Bybit, OKX, Bitget, Gate, etc.)
+    if (!Array.isArray(candles) || candles.length < 10) {
+      candles = await fetchDirectExchangeCandles(ex, sym, targetTf);
+    }
+
+    // 3. If coin is newly listed or few candles (< 30) and timeframe is > 1m, try 1m candles for better resolution
+    if ((!Array.isArray(candles) || candles.length < 30) && targetTf !== "1m") {
+      const candles1m = await fetchDirectExchangeCandles(ex, sym, "1m");
+      if (Array.isArray(candles1m) && candles1m.length > (candles ? candles.length : 0)) {
+        candles = candles1m;
+      }
+    }
+
+    // 4. In-memory recorded live price history fallback
+    if (!Array.isArray(candles) || candles.length < 5) {
+      candles = buildCandlesFromHistory(ex, sym, targetTf);
+    }
+
+    // Ensure all numeric fields are proper Numbers and synced with live ticker price
+    if (Array.isArray(candles) && candles.length >= 3) {
+      const mapped = candles.map(c => ({
+        t: +c.t,
+        o: +c.o,
+        h: +c.h,
+        l: +c.l,
+        c: +c.c,
+        v: Number.isFinite(+c.v) ? +c.v : 1000
+      }));
+      // Sync last candle close with live ticker price
+      const t = tickersMap ? tickersMap.get(`${ex}:${sym}`) : null;
+      if (t && t.p > 0 && mapped.length > 0) {
+        const last = mapped[mapped.length - 1];
+        last.c = t.p;
+        if (t.p > last.h) last.h = t.p;
+        if (t.p < last.l) last.l = t.p;
+      }
+      return mapped;
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ── 3. Scan Pump / Dump for Subscribers (With Fast Ultra-HD Charts & WS Push) ──
+let isScanningPD = false;
+
 async function scanPumpDump() {
-  if (!tickersMap) return;
-  const subscribers = getAllAlertSubscribers();
-  if (!subscribers.length) return;
+  if (!tickersMap || isScanningPD) return;
+  isScanningPD = true;
 
-  const now = Date.now();
+  try {
+    const subscribers = getAllAlertSubscribers();
+    const now = Date.now();
+    const activeSubscribers = subscribers.filter(s => s.pumpDump && s.pumpDump.enabled);
 
-  for (const sub of subscribers) {
+    // If no subscribers and no WS clients, return early
+    if (!activeSubscribers.length && !broadcastAlertFn) return;
+
+  for (const t of tickersMap.values()) {
+    try {
+      processTicker(t, now, activeSubscribers);
+    } catch (err) {
+      // Isolate per ticker: a single malformed entry must not abort the
+      // remaining thousands for this tick. The key is read defensively because
+      // reading it is itself what may have thrown.
+      let label = "unknown";
+      try { label = String(t && t.key) || "unknown"; } catch (_) {}
+      console.warn(`[ALERT ENGINE] Ticker scan failed for ${label}: ${err.message}`);
+    }
+  }
+
+  } catch (err) {
+    console.error("[ALERT ENGINE SCAN ERROR]", err);
+  } finally {
+    isScanningPD = false;
+  }
+}
+
+function processTicker(t, now, activeSubscribers) {
+  if (!t || !t.key || !t.p || t.p <= 0 || !Number.isFinite(t.p)) return;
+
+  const [exCode, sym] = t.key.split(":");
+  if (!exCode || !sym) return;
+
+  // Filter out non-crypto or stock
+  if (!/^[A-Za-z0-9_\-]+$/.test(sym)) return;
+  if (typeof isNonCryptoOrStockFn === "function" && isNonCryptoOrStockFn(null, sym)) return;
+
+  const sampleCount = priceHistory.sampleCount(t.key);
+  if (sampleCount < 2) return;
+  const oldestSampleTime = priceHistory.oldestTime(t.key);
+
+  const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
+
+  // Check matching subscribers for this ticker
+  const matchingSubs = [];
+  let minPeriodMins = 5;
+  let detectedPctChange = 0;
+  let detectedPastPrice = 0;
+  let detectedIsPump = false;
+
+  for (const sub of activeSubscribers) {
     const pd = sub.pumpDump;
-    if (!pd || !pd.enabled) continue;
-
     const periodMins = Number(pd.periodMinutes) || 5;
     const periodMs = periodMins * 60 * 1000;
     const minPct = Number(pd.minPct) || 3;
@@ -344,228 +566,300 @@ async function scanPumpDump() {
     const allowedExs = Array.isArray(pd.exchanges) ? pd.exchanges : ["all"];
     const isAllEx = allowedExs.includes("all");
 
-    for (const t of tickersMap.values()) {
-      if (!t || !t.key || !t.p || t.p <= 0) continue;
+    if (!isAllEx && !allowedExs.includes(exCode)) continue;
+    if (minVol > 0 && (t.v || 0) < minVol) continue;
+    if (marketFilter === "futures" && isSpot) continue;
+    if (marketFilter === "spot" && !isSpot) continue;
 
-      const [exCode, sym] = t.key.split(":");
-      if (!exCode || !sym) continue;
+    const targetTime = now - periodMs;
+    let pastPoint = priceHistory.findAtOrBefore(t.key, targetTime);
+    // findAtOrBefore already falls back to the oldest retained sample; only
+    // accept that fallback when the window is at least partially covered.
+    if (pastPoint && pastPoint.t > targetTime && !(now - oldestSampleTime >= periodMs * 0.35)) {
+      pastPoint = null;
+    }
 
-      // Filter out non-crypto, stock or weird non-ASCII unicode glyph tokens
-      if (!/^[A-Za-z0-9_\-]+$/.test(sym)) continue;
-      if (typeof isNonCryptoOrStockFn === "function" && isNonCryptoOrStockFn(null, sym)) continue;
+    if (!pastPoint || pastPoint.p <= 0 || !Number.isFinite(pastPoint.p)) continue;
+    if (Math.abs(now - pastPoint.t) < periodMs * 0.35) continue;
 
-      if (!isAllEx && !allowedExs.includes(exCode)) continue;
-      if (minVol > 0 && (t.v || 0) < minVol) continue;
+    const pctChange = ((t.p - pastPoint.p) / pastPoint.p) * 100;
+    const absPct = Math.abs(pctChange);
+    const maxDrop = periodMins <= 1 ? 35 : periodMins <= 5 ? 50 : 75;
+    if (pctChange <= -maxDrop || pctChange >= 250 || absPct < minPct || !Number.isFinite(pctChange)) continue;
 
-      const isSpot = sym.includes("_SPOT") || (!sym.endsWith("USDT") && !sym.endsWith("PERP"));
-      if (marketFilter === "futures" && isSpot) continue;
-      if (marketFilter === "spot" && !isSpot) continue;
+    const isPump = pctChange > 0;
+    if (dirFilter === "pump" && !isPump) continue;
+    if (dirFilter === "dump" && isPump) continue;
 
-      const hist = priceHistoryMap.get(t.key);
-      if (!hist || hist.length < 2) continue;
+    const cooldownKey = `${sub.chatId}:${t.key}:${isPump ? "pump" : "dump"}`;
+    const lastFired = cooldownTracker.get(cooldownKey) || 0;
+    if (now - lastFired < cooldownMs) continue;
 
-      const targetTime = now - periodMs;
-      let pastPoint = hist[0];
-      for (let i = hist.length - 1; i >= 0; i--) {
-        if (hist[i].t <= targetTime) {
-          pastPoint = hist[i];
-          break;
-        }
+    // Arm the cooldown provisionally so concurrent 400ms ticks cannot dispatch
+    // the same alert twice while this one is still in flight. On a failed
+    // delivery it is shortened to a brief retry window (see below) rather
+    // than left in place, so the alert is neither lost nor spammed.
+    cooldownTracker.set(cooldownKey, now);
+    matchingSubs.push({ sub, pctChange, pastPrice: pastPoint.p, isPump, periodMins, cooldownKey, cooldownMs });
+
+    detectedPctChange = pctChange;
+    detectedPastPrice = pastPoint.p;
+    detectedIsPump = isPump;
+    minPeriodMins = periodMins;
+  }
+
+  // Check 5-minute threshold for real-time WebSocket broadcast to website users
+  const target5m = now - 5 * 60 * 1000;
+  let p5m = priceHistory.findAtOrBefore(t.key, target5m);
+  if (p5m && p5m.t > target5m && !(now - oldestSampleTime >= 60000)) p5m = null;
+  const defaultPctChange = (p5m && p5m.p > 0 && t.p > 0) ? ((t.p - p5m.p) / p5m.p) * 100 : 0;
+
+  const absDefaultPct = Math.abs(defaultPctChange);
+  
+  const shouldBroadcastWs = (matchingSubs.length > 0 && Math.abs(detectedPctChange) <= 200 && detectedPctChange > -75) ||
+    (p5m && absDefaultPct >= 2.5 && absDefaultPct <= 200 && defaultPctChange > -50);
+
+  if (shouldBroadcastWs && typeof broadcastAlertFn === "function") {
+    const wsPct = matchingSubs.length > 0 ? detectedPctChange : defaultPctChange;
+    if (Math.abs(wsPct) <= 200 && wsPct > -75 && Number.isFinite(wsPct)) {
+      const wsIsPump = wsPct > 0;
+      const wsKey = `ws:${t.key}:${wsIsPump ? "pump" : "dump"}`;
+      const lastWsSent = cooldownTracker.get(wsKey) || 0;
+      if (now - lastWsSent >= 30000) { // 30s broadcast cooldown per coin/direction
+        cooldownTracker.set(wsKey, now);
+        broadcastAlertFn("pump_dump_alert", {
+          key: t.key,
+          ex: exCode,
+          sym: sym.replace("_SPOT", ""),
+          pct: Math.round(wsPct * 100) / 100,
+          price: t.p,
+          pastPrice: matchingSubs.length > 0 ? detectedPastPrice : (p5m ? p5m.p : t.p),
+          vol: t.v || 0,
+          bars: minPeriodMins,
+          ts: now
+        });
       }
+    }
+  }
 
-      if (!pastPoint || pastPoint.p <= 0) continue;
+  if (matchingSubs.length === 0) return;
 
-      const pctChange = ((t.p - pastPoint.p) / pastPoint.p) * 100;
-      const absPct = Math.abs(pctChange);
+  pruneCooldownTracker(now);
 
-      if (absPct < minPct) continue;
+  // Process and dispatch matching Telegram alerts asynchronously
+  (async () => {
+    const exFull = getExchangeFullName(exCode);
+    const cleanSym = sym.replace("_SPOT", "");
+    const timeStr = new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const icon = detectedIsPump ? "🟢" : "🔴";
+    const title = detectedIsPump ? "PUMP DETECTED" : "DUMP DETECTED";
+    const sign = detectedIsPump ? "+" : "";
+    const tfStr = minPeriodMins >= 60 ? `${(minPeriodMins / 60).toFixed(0)}H` : `${minPeriodMins}M`;
 
-      const isPump = pctChange > 0;
-      if (dirFilter === "pump" && !isPump) continue;
-      if (dirFilter === "dump" && isPump) continue;
+    const msg =
+      `${icon} <b>${title} [${sign}${detectedPctChange.toFixed(2)}%]</b>\n\n` +
+      `• <b>Инструмент:</b> ${exFull} · <code>${cleanSym}</code>\n` +
+      `• <b>Период:</b> ${minPeriodMins} мин\n` +
+      `• <b>Текущая цена:</b> $${formatPrice(t.p)}\n` +
+      `• <b>Цена до импульса:</b> $${formatPrice(detectedPastPrice)}\n` +
+      `• <b>Объём 24ч:</b> ${formatVolume(t.v || 0)}\n` +
+      `─────────────────────────\n` +
+      `⚡ <b>Obsidian Screener</b>`;
 
-      const cooldownKey = `${sub.chatId}:${t.key}:${isPump ? "pump" : "dump"}`;
-      const lastFired = cooldownTracker.get(cooldownKey) || 0;
-      if (now - lastFired < cooldownMs) continue;
-
-      cooldownTracker.set(cooldownKey, now);
-
-      if (cooldownTracker.size > 10000) {
-        for (const [k, ts] of cooldownTracker.entries()) {
-          if (now - ts > 3600000) cooldownTracker.delete(k);
-        }
-      }
-
-      const timeStr = new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      const exFull = getExchangeFullName(exCode);
-      const cleanSym = sym.replace("_SPOT", "");
-      const icon = isPump ? "🟢" : "🔴";
-      const title = isPump ? "PUMP DETECTED" : "DUMP DETECTED";
-      const sign = isPump ? "+" : "";
-      const tfStr = periodMins >= 60 ? `${(periodMins / 60).toFixed(0)}H` : `${periodMins}M`;
-
-      const msg =
-        `${icon} <b>${title} [${sign}${pctChange.toFixed(2)}%]</b>\n\n` +
-        `• <b>Инструмент:</b> ${exFull} · <code>${cleanSym}</code>\n` +
-        `• <b>Период:</b> ${periodMins} мин\n` +
-        `• <b>Текущая цена:</b> $${formatPrice(t.p)}\n` +
-        `• <b>Цена до импульса:</b> $${formatPrice(pastPoint.p)}\n` +
-        `• <b>Объём 24ч:</b> ${formatVolume(t.v || 0)}\n` +
-        `• <b>Время:</b> ${timeStr}\n` +
-        `─────────────────────────\n` +
-        `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
-
-      // Fetch 100% Real Exchange Candlesticks (First from server klinesCache, then direct exchange API)
-      let photoBuffer = null;
-      if (serverChartRenderer && typeof serverChartRenderer.renderServerChartSnapshot === "function") {
-        try {
-          let candles = null;
-          const targetTf = periodMins >= 60 ? "1h" : (periodMins >= 15 ? "15m" : (periodMins >= 5 ? "5m" : "1m"));
-
-          if (typeof fetchCandlesFn === "function") {
-            candles = await fetchCandlesFn(exCode, sym, targetTf);
-            if (!candles || candles.length < 15) {
-              candles = await fetchCandlesFn(exCode, sym, "1m");
-            }
-          }
-
-          if (!candles || candles.length < 15) {
-            candles = await fetchDirectExchangeCandles(exCode, sym, targetTf);
-          }
-
-          if (Array.isArray(candles) && candles.length >= 10) {
+    // Render chart ONCE for this alert event (bounded by 12s timeout)
+    let photoBuffer = null;
+    if (serverChartRenderer && typeof serverChartRenderer.renderServerChartSnapshot === "function") {
+      try {
+        const chartTask = (async () => {
+          const targetTf = minPeriodMins >= 60 ? "1h" : (minPeriodMins >= 15 ? "15m" : (minPeriodMins >= 5 ? "5m" : "1m"));
+          const candles = await getCandlesForAlert(exCode, sym, targetTf);
+          if (Array.isArray(candles) && candles.length >= 5) {
             const meta = {
               ex: exCode,
               sym: cleanSym,
               tf: tfStr,
               vol: t.v || 0,
-              chg: t.chg !== undefined ? t.chg : pctChange,
+              chg: t.chg !== undefined ? t.chg : detectedPctChange,
               funding: t.funding,
               natr: (t.h && t.l && t.p > 0) ? ((t.h - t.l) / t.p) * 100 : undefined
             };
             const signal = {
-              type: isPump ? "pump" : "dump",
-              direction: isPump ? "long" : "short",
+              type: detectedIsPump ? "pump" : "dump",
+              direction: detectedIsPump ? "long" : "short",
               price: t.p,
-              meta: { pctChange, pastPrice: pastPoint.p, periodMinutes: periodMins, vol: t.v || 0 }
+              meta: { pctChange: detectedPctChange, pastPrice: detectedPastPrice, periodMinutes: minPeriodMins, vol: t.v || 0 }
             };
-            photoBuffer = serverChartRenderer.renderServerChartSnapshot(candles, meta, signal);
+            return serverChartRenderer.renderServerChartSnapshot(candles, meta, signal);
           }
-
-        } catch (err) {
-          console.warn("[ALERT ENGINE] Chart render error:", err.message);
+          return null;
+        })();
+        const chartTimeout = new Promise(resolve => setTimeout(() => resolve(null), 12000));
+        photoBuffer = await Promise.race([chartTask, chartTimeout]);
+        if (photoBuffer) {
+          console.log(`[ALERT ENGINE] Rendered chart for ${exCode}:${cleanSym} (${photoBuffer.length} bytes)`);
+        } else {
+          console.warn(`[ALERT ENGINE] Chart generation skipped or timed out for ${exCode}:${cleanSym}`);
         }
+      } catch (err) {
+        console.warn("[ALERT ENGINE] Chart render error:", err.message);
       }
-
-      sendTelegramAlert(sub.chatId, msg, photoBuffer).catch(() => {});
     }
-  }
+
+    // Dispatch to all matching subscribers. The queue serialises the sends,
+    // honours Telegram's rate limits and reuses one chart upload for the
+    // whole group via `group`.
+    const groupToken = `pd:${t.key}:${detectedIsPump ? "pump" : "dump"}:${now}`;
+    for (const entry of matchingSubs) {
+      let delivered = false;
+      try {
+        const res = await sendTelegramAlert(entry.sub.chatId, msg, photoBuffer, null, groupToken);
+        delivered = !!res;
+      } catch (err) {
+        console.warn(`[ALERT ENGINE] Send failed for ${entry.sub.chatId}: ${err.message}`);
+      }
+      if (!delivered) {
+        // Shorten the cooldown to a brief retry window instead of consuming the
+        // full one. Releasing it entirely would hot-loop against a dead
+        // Telegram API on every 400ms tick.
+        const retryAt = Date.now() - entry.cooldownMs + FAILED_SEND_RETRY_MS;
+        cooldownTracker.set(entry.cooldownKey, retryAt);
+        console.warn(`[ALERT ENGINE] Alert not delivered to ${entry.sub.chatId} for ${t.key}; retry in ${Math.round(FAILED_SEND_RETRY_MS / 1000)}s`);
+      }
+    }
+  })().catch(e => console.warn("[ALERT ENGINE] Dispatch error:", e.message));
 }
 
 // ── 4. Scan Price Level Alerts for Subscribers (With Authentic HD Charts) ───
+let isScanningPriceAlerts = false;
+
 async function scanPriceAlerts() {
-  if (!tickersMap) return;
-  const subscribers = getAllAlertSubscribers();
-  if (!subscribers.length) return;
+  if (!tickersMap || isScanningPriceAlerts) return;
+  isScanningPriceAlerts = true;
 
-  const now = Date.now();
+  try {
+    const subscribers = getAllAlertSubscribers();
+    if (!subscribers.length) return;
 
-  for (const sub of subscribers) {
-    if (!sub.priceAlerts || !sub.priceAlerts.length) continue;
+    const now = Date.now();
 
-    let changed = false;
+    for (const sub of subscribers) {
+      if (!sub.priceAlerts || !sub.priceAlerts.length) continue;
 
-    for (let i = sub.priceAlerts.length - 1; i >= 0; i--) {
-      const alert = sub.priceAlerts[i];
-      if (!alert || alert.triggered || !alert.targetPrice) continue;
+      for (let i = sub.priceAlerts.length - 1; i >= 0; i--) {
+        const alert = sub.priceAlerts[i];
+        if (!alert || alert.triggered || !alert.targetPrice) continue;
 
-      const ex = alert.ex || "BN";
-      const sym = (alert.sym || "").toUpperCase();
-      const key = `${ex}:${sym}`;
+        const ex = alert.ex || "BN";
+        const sym = (alert.sym || "").toUpperCase();
+        const key = `${ex}:${sym}`;
 
-      const t = tickersMap.get(key);
-      if (!t || !t.p || t.p <= 0) continue;
+        const t = tickersMap.get(key);
+        if (!t || !t.p || t.p <= 0) continue;
 
-      const targetPrice = Number(alert.targetPrice);
-      const curPrice = Number(t.p);
-      const createdP = Number(alert.createdP || alert.startPrice || 0);
+        const targetPrice = Number(alert.targetPrice);
+        const curPrice = Number(t.p);
+        const createdP = Number(alert.createdP || alert.startPrice || 0);
 
-      let isHit = false;
-      if (t.h && t.l && t.h >= targetPrice && t.l <= targetPrice) {
-        isHit = true;
-      } else if (Math.abs(curPrice - targetPrice) / targetPrice <= 0.001) {
-        isHit = true;
-      } else if (createdP > 0) {
-        if (createdP < targetPrice && curPrice >= targetPrice) isHit = true;
-        else if (createdP > targetPrice && curPrice <= targetPrice) isHit = true;
-      }
+        let isHit = false;
+        if (t.h && t.l && t.h >= targetPrice && t.l <= targetPrice) {
+          isHit = true;
+        } else if (Math.abs(curPrice - targetPrice) / targetPrice <= 0.001) {
+          isHit = true;
+        } else if (createdP > 0) {
+          if (createdP < targetPrice && curPrice >= targetPrice) isHit = true;
+          else if (createdP > targetPrice && curPrice <= targetPrice) isHit = true;
+        }
 
-      if (isHit) {
-        alert.triggered = true;
-        changed = true;
+        if (isHit) {
+          // Mark as in-flight, not consumed: the alert is only removed from the
+          // user's list once Telegram confirms delivery, so a failed send does
+          // not destroy it.
+          if (alert._dispatching) continue;
+          alert._dispatching = true;
 
-        const timeStr = new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const exFull = getExchangeFullName(ex);
+          const exFull = getExchangeFullName(ex);
 
-        const msg =
-          `🔔 <b>ЦЕЛЕВОЙ УРОВЕНЬ ДОСТИГНУТ!</b>\n\n` +
-          `• <b>Инструмент:</b> ${exFull} · <code>${sym}</code>\n` +
-          `• <b>Целевая цена:</b> $${formatPrice(targetPrice)}\n` +
-          `• <b>Текущая цена:</b> $${formatPrice(curPrice)}\n` +
-          `• <b>Время:</b> ${timeStr}\n` +
-          `─────────────────────────\n` +
-          `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
+          const msg =
+            `🔔 <b>ЦЕЛЕВОЙ УРОВЕНЬ ДОСТИГНУТ!</b>\n\n` +
+            `• <b>Инструмент:</b> ${exFull} · <code>${sym}</code>\n` +
+            `• <b>Целевая цена:</b> $${formatPrice(targetPrice)}\n` +
+            `• <b>Текущая цена:</b> $${formatPrice(curPrice)}\n` +
+            `─────────────────────────\n` +
+            `⚡ <b>Obsidian Screener</b>`;
 
-        let photoBuffer = null;
-        if (serverChartRenderer && typeof serverChartRenderer.renderServerChartSnapshot === "function") {
-          try {
-            let candles = null;
-            if (typeof fetchCandlesFn === "function") {
-              candles = await fetchCandlesFn(ex, sym, "15m");
-              if (!candles || candles.length < 15) {
-                candles = await fetchCandlesFn(ex, sym, "1m");
+          const targetAlert = alert;
+          const targetSub = sub;
+
+          (async () => {
+            let photoBuffer = null;
+            if (serverChartRenderer && typeof serverChartRenderer.renderServerChartSnapshot === "function") {
+              try {
+                const candles = await getCandlesForAlert(ex, sym, "15m");
+                if (Array.isArray(candles) && candles.length >= 10) {
+                  const meta = {
+                    ex,
+                    sym,
+                    tf: "15M",
+                    vol: t.v || 0,
+                    chg: t.chg || 0,
+                    funding: t.funding,
+                    natr: (t.h && t.l && t.p > 0) ? ((t.h - t.l) / t.p) * 100 : undefined
+                  };
+                  const signal = {
+                    type: "price_level",
+                    direction: curPrice >= targetPrice ? "long" : "short",
+                    price: targetPrice,
+                    meta: { targetPrice, curPrice, vol: t.v || 0 }
+                  };
+                  photoBuffer = serverChartRenderer.renderServerChartSnapshot(candles, meta, signal);
+                }
+              } catch (err) {
+                console.warn(`[PRICE ALERT] Chart render failed for ${ex}:${sym}: ${err.message}`);
               }
             }
-            if (!candles || candles.length < 15) {
-              candles = await fetchDirectExchangeCandles(ex, sym, "15m");
+
+            let delivered = false;
+            try {
+              delivered = !!(await sendTelegramAlert(targetSub.chatId, msg, photoBuffer));
+            } catch (err) {
+              console.warn(`[PRICE ALERT] Send failed for ${targetSub.chatId}: ${err.message}`);
             }
 
-            if (Array.isArray(candles) && candles.length >= 10) {
-              const meta = {
-                ex,
-                sym,
-                tf: "15M",
-                vol: t.v || 0,
-                chg: t.chg || 0,
-                funding: t.funding,
-                natr: (t.h && t.l && t.p > 0) ? ((t.h - t.l) / t.p) * 100 : undefined
-              };
-              const signal = {
-                type: "price_level",
-                direction: curPrice >= targetPrice ? "long" : "short",
-                price: targetPrice,
-                meta: { targetPrice, curPrice, vol: t.v || 0 }
-              };
-              photoBuffer = serverChartRenderer.renderServerChartSnapshot(candles, meta, signal);
+            targetAlert._dispatching = false;
+            if (!delivered) {
+              console.warn(`[PRICE ALERT] Not delivered to ${targetSub.chatId} for ${ex}:${sym}; alert kept for retry`);
+              return;
             }
 
-          } catch (_) {}
+            const idx = targetSub.priceAlerts.indexOf(targetAlert);
+            if (idx >= 0) targetSub.priceAlerts.splice(idx, 1);
+            persistPriceAlerts(targetSub);
+          })().catch(err => {
+            targetAlert._dispatching = false;
+            console.warn("[PRICE ALERT] Dispatch error:", err.message);
+          });
         }
-
-        sendTelegramAlert(sub.chatId, msg, photoBuffer).catch(() => {});
-        sub.priceAlerts.splice(i, 1);
       }
     }
+  } catch (err) {
+    console.error("[PRICE ALERT SCAN ERROR]", err);
+  } finally {
+    isScanningPriceAlerts = false;
+  }
+}
 
-    if (changed && userStoreModule && sub.userId && sub.userId !== "admin") {
-      try {
-        const u = userStoreModule.findUser(sub.userId);
-        if (u) {
-          u.priceAlerts = sub.priceAlerts;
-          userStoreModule.updateUserPreferences(sub.userId, { priceAlerts: sub.priceAlerts });
-        }
-      } catch (_) {}
-    }
+function persistPriceAlerts(sub) {
+  if (!userStoreModule || !sub || !sub.userId || sub.userId === "admin") return;
+  try {
+    const stored = sub.priceAlerts.map(a => {
+      const { _dispatching, ...rest } = a;
+      return rest;
+    });
+    const u = userStoreModule.findUser(sub.userId);
+    if (u) u.priceAlerts = stored;
+    userStoreModule.updateUserPreferences(sub.userId, { priceAlerts: stored });
+  } catch (err) {
+    console.warn(`[PRICE ALERT] Failed to persist alerts for ${sub.userId}: ${err.message}`);
   }
 }
 
@@ -579,22 +873,27 @@ function init(options = {}) {
   userStoreModule = options.userStore || null;
   fetchCandlesFn = options.fetchCandles || null;
   isNonCryptoOrStockFn = options.isNonCryptoOrStock || null;
+  broadcastAlertFn = typeof options.broadcastAlert === "function" ? options.broadcastAlert : null;
 
   if (samplingTimer) clearInterval(samplingTimer);
   if (scanningTimer) clearInterval(scanningTimer);
 
-  samplingTimer = setInterval(sampleTickers, 3000);
-
-  scanningTimer = setInterval(() => {
+  samplingTimer = setInterval(() => {
     try {
-      scanPumpDump();
-      scanPriceAlerts();
+      sampleTickers();
     } catch (err) {
-      console.error("[ALERT ENGINE ERROR]", err.message);
+      console.error("[ALERT ENGINE SAMPLER ERROR]", err.message);
     }
-  }, 4000);
+  }, 400);
 
-  console.log("⚡ [ALERT ENGINE] 24/7 Authentic Ultra-HD Chart Background Alert Engine initialized successfully.");
+  // Both scans are async and self-guarded against re-entry; attach a catch so a
+  // rejection cannot escape as an unhandled promise rejection.
+  scanningTimer = setInterval(() => {
+    scanPumpDump().catch(err => console.error("[ALERT ENGINE PD ERROR]", err.message));
+    scanPriceAlerts().catch(err => console.error("[ALERT ENGINE PRICE ERROR]", err.message));
+  }, 400);
+
+  console.log("⚡ [ALERT ENGINE] Ultra-Fast Real-Time 24/7 Background Alert Engine initialized (400ms cycle).");
 }
 
 module.exports = {
@@ -604,5 +903,9 @@ module.exports = {
   scanPriceAlerts,
   sendTelegramMessage,
   sendTelegramAlert,
+  getCandlesForAlert,
+  getQueueStats: telegramQueue.getStats,
+  priceHistory,
+  getHistoryStats: () => priceHistory.stats(),
   DEFAULT_USER_ALERT_SETTINGS
 };

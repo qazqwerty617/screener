@@ -56,14 +56,32 @@
         if (low && (candles[i - j].l <= il || candles[i + j].l < il)) low = false;
         if (!high && !low) break;
       }
-      if (high) out.push({ idx: i, price: ih, type: "high" });
-      if (low) out.push({ idx: i, price: il, type: "low" });
+      if (high) {
+        let prom = w;
+        for (let j = w + 1; j <= 60; j++) {
+          const leftOk = (i - j < 0) || (candles[i - j].h < ih);
+          const rightOk = (i + j >= n) || (candles[i + j].h <= ih);
+          if (leftOk && rightOk) prom = j;
+          else break;
+        }
+        out.push({ idx: i, price: ih, type: "high", prominence: prom });
+      }
+      if (low) {
+        let prom = w;
+        for (let j = w + 1; j <= 60; j++) {
+          const leftOk = (i - j < 0) || (candles[i - j].l > il);
+          const rightOk = (i + j >= n) || (candles[i + j].l >= il);
+          if (leftOk && rightOk) prom = j;
+          else break;
+        }
+        out.push({ idx: i, price: il, type: "low", prominence: prom });
+      }
     }
     return out;
   }
 
   function tfProfile(candles) {
-    if (candles.length < 3) return { maxDistPct: 0.12, maxLvl: 4, swW: 3, maxLook: 250, minSpPct: 0.0025 };
+    if (candles.length < 3) return { maxDistPct: 0.08, maxLvl: 4, swW: 3, maxLook: 150, minSpPct: 0.0025 };
     // Sample median diff from last 10 candles
     let med = 0;
     const end = candles.length - 1;
@@ -77,12 +95,12 @@
       diffs.sort((a, b) => a - b);
       med = diffs[diffs.length >> 1] / 60000;
     }
-    if (med <= 1)   return { maxDistPct: 0.06, maxLvl: 4, swW: 3, maxLook: 200, minSpPct: 0.0015 };
-    if (med <= 5)   return { maxDistPct: 0.12, maxLvl: 4, swW: 3, maxLook: 250, minSpPct: 0.0025 };
-    if (med <= 15)  return { maxDistPct: 0.18, maxLvl: 5, swW: 3, maxLook: 300, minSpPct: 0.0040 };
-    if (med <= 60)  return { maxDistPct: 0.28, maxLvl: 5, swW: 4, maxLook: 320, minSpPct: 0.0060 };
-    if (med <= 240) return { maxDistPct: 0.38, maxLvl: 5, swW: 4, maxLook: 350, minSpPct: 0.0080 };
-    return { maxDistPct: 0.65, maxLvl: 6, swW: 5, maxLook: 400, minSpPct: 0.0150 };
+    if (med <= 1)   return { maxDistPct: 0.035, maxLvl: 4, swW: 3, maxLook: 120, minSpPct: 0.0015 };
+    if (med <= 5)   return { maxDistPct: 0.055, maxLvl: 4, swW: 3, maxLook: 150, minSpPct: 0.0025 };
+    if (med <= 15)  return { maxDistPct: 0.085, maxLvl: 5, swW: 3, maxLook: 180, minSpPct: 0.0040 };
+    if (med <= 60)  return { maxDistPct: 0.120, maxLvl: 5, swW: 4, maxLook: 200, minSpPct: 0.0060 };
+    if (med <= 240) return { maxDistPct: 0.180, maxLvl: 5, swW: 4, maxLook: 220, minSpPct: 0.0080 };
+    return { maxDistPct: 0.250, maxLvl: 6, swW: 5, maxLook: 250, minSpPct: 0.0120 };
   }
 
   // ── Precomputed context (shared across all detectors in a single scan) ─────
@@ -106,16 +124,13 @@
 
   // ── Level cleanliness & touch tracking ─────────────────────────────────────
 
-  function isClean(candles, level, startIdx, resistance, closeTol, wickTol) {
-    let breaches = 0;
+  function isClean(candles, level, startIdx, resistance) {
     for (let i = startIdx + 1, len = candles.length; i < len; i++) {
       const c = candles[i];
       if (resistance) {
-        if (c.c > level + closeTol) return false;
-        if (c.h > level + wickTol && ++breaches > 2) return false;
+        if (c.c > level || c.o > level || c.h > level) return false;
       } else {
-        if (c.c < level - closeTol) return false;
-        if (c.l < level - wickTol && ++breaches > 2) return false;
+        if (c.c < level || c.o < level || c.l < level) return false;
       }
     }
     return true;
@@ -143,8 +158,6 @@
     return touches;
   }
 
-  // ── 1. Horizontal S/R ──────────────────────────────────────────────────────
-
   // ── 1. Horizontal S/R (Levels) ─────────────────────────────────────────────
 
   function _detectHorizontals(ctx, minTouches) {
@@ -153,12 +166,13 @@
     const clusterTol = range / lastPrice * 0.40;
     const ct = clusterTol < 0.0020 ? 0.0020 : (clusterTol > 0.0060 ? 0.0060 : clusterTol);
     const minT = minTouches > 1 ? minTouches : 2;
-    const candidates = [];
+    const out = [];
 
     for (let side = 0; side < 2; side++) {
       const resistance = side === 0;
       const pts = resistance ? highs : lows;
       if (!pts || pts.length === 0) continue;
+      const candidates = [];
 
       // Group swing points into price clusters
       const clusters = [];
@@ -184,74 +198,110 @@
 
       for (let ci = 0; ci < clusters.length; ci++) {
         const cl = clusters[ci];
-        // Unique swing indices (at least 2 bars apart)
-        const uniqueIndices = [];
-        const seen = new Set();
-        for (let k = 0; k < cl.indices.length; k++) {
-          const idx = cl.indices[k];
-          if (!seen.has(idx)) {
-            seen.add(idx);
-            uniqueIndices.push(idx);
-          }
-        }
-        uniqueIndices.sort((a, b) => a - b);
+        const lvlPrice = resistance ? cl.maxP : cl.minP;
+        const sortedIndices = Array.from(new Set(cl.indices)).sort((a, b) => a - b);
+        if (sortedIndices.length === 0) continue;
 
-        const distinctTouches = [];
-        for (let k = 0; k < uniqueIndices.length; k++) {
-          if (distinctTouches.length === 0 || uniqueIndices[k] - distinctTouches[distinctTouches.length - 1] >= 2) {
-            distinctTouches.push(uniqueIndices[k]);
+        const touchTol = Math.max(range * 0.06, lastPrice * 0.0006);
+        const minDep = Math.max(range * 0.20, lastPrice * 0.0020);
+
+        // The anchor must itself sit within touch tolerance of the level price.
+        // Cluster membership only guarantees closeness to the drifting cluster
+        // mean (up to 0.60%), not to maxP/minP, so it is validated explicitly.
+        let firstIdx = -1;
+        for (let ii = 0; ii < sortedIndices.length; ii++) {
+          const cand = sortedIndices[ii];
+          const cw = resistance ? candles[cand].h : candles[cand].l;
+          if (Math.abs(cw - lvlPrice) <= touchTol) { firstIdx = cand; break; }
+        }
+        if (firstIdx < 0) continue;
+
+        const pLen = pts.length;
+        const distinctTouches = [firstIdx];
+
+        for (let pi = 0; pi < pLen; pi++) {
+          const s = pts[pi];
+          if (s.idx <= firstIdx) continue;
+          const wick = resistance ? candles[s.idx].h : candles[s.idx].l;
+          const wickDiff = Math.abs(wick - lvlPrice);
+          if (wickDiff <= touchTol) {
+            const lastT = distinctTouches[distinctTouches.length - 1];
+            if (s.idx - lastT >= 5) {
+              let hadDeparture = false;
+              for (let k = lastT + 1; k < s.idx; k++) {
+                const dist = resistance ? (lvlPrice - candles[k].c) : (candles[k].c - lvlPrice);
+                if (dist >= minDep) {
+                  hadDeparture = true;
+                  break;
+                }
+              }
+              if (hadDeparture) {
+                distinctTouches.push(s.idx);
+              }
+            }
           }
         }
 
         if (distinctTouches.length < minT) continue;
 
-        const lvlPrice = resistance ? cl.maxP : cl.minP;
-        const distPct = (lvlPrice - lastPrice) / lastPrice;
-        const absDist = distPct < 0 ? -distPct : distPct;
-        if (absDist > prof.maxDistPct * 1.5) continue;
+        const distPct = Math.abs(lvlPrice - lastPrice) / lastPrice;
+        if (distPct > prof.maxDistPct) continue;
 
-        // Level must not be broken through by current price or latest candle
-        if (resistance) {
-          if (lastPrice >= lvlPrice || candles[n - 1].c >= lvlPrice || candles[n - 1].h > lvlPrice * 1.0015) continue;
-        } else {
-          if (lastPrice <= lvlPrice || candles[n - 1].c <= lvlPrice || candles[n - 1].l < lvlPrice * 0.9985) continue;
-        }
-
-        const firstIdx = distinctTouches[0];
         const lastTouchIdx = distinctTouches[distinctTouches.length - 1];
         const age = n - 1 - lastTouchIdx;
-        const dAtr = absDist * lastPrice / range;
+        if (age > 60) continue;
+
+        if (resistance) {
+          if (lastPrice >= lvlPrice || candles[n - 1].c >= lvlPrice || candles[n - 1].h > lvlPrice) continue;
+        } else {
+          if (lastPrice <= lvlPrice || candles[n - 1].c <= lvlPrice || candles[n - 1].l < lvlPrice) continue;
+        }
+
+        let levelPierced = false;
+        // Scan from the earliest cluster member, not just the validated anchor,
+        // so a pierce between the cluster start and the anchor is still caught.
+        for (let k = sortedIndices[0]; k < n; k++) {
+          const c = candles[k];
+          if (resistance) {
+            if (c.c > lvlPrice || c.o > lvlPrice || c.h > lvlPrice) { levelPierced = true; break; }
+          } else {
+            if (c.c < lvlPrice || c.o < lvlPrice || c.l < lvlPrice) { levelPierced = true; break; }
+          }
+        }
+        if (levelPierced) continue;
+
+        const dAtr = distPct * lastPrice / range;
 
         candidates.push({
           price: +lvlPrice.toFixed(6),
           endPrice: +lvlPrice.toFixed(6),
+          direction: resistance ? "up" : "down",
           swingIdx: firstIdx,
-          direction: resistance ? "up" : "down", // "up" = resistance above, "down" = support below
+          swingTime: candles[firstIdx].t,
           touchIndices: distinctTouches,
+          touchTimes: distinctTouches.map(ti => candles[ti].t),
           touches: distinctTouches.length,
-          distPct: +(absDist * 100).toFixed(2),
-          age,
-          strength: distinctTouches.length * 15 - (dAtr < 5 ? dAtr : 5) * 2 - age / 40,
-          isHorizontal: true,
+          distPct: +(distPct * 100).toFixed(2),
+          isCascade: false, age,
+          strength: distinctTouches.length * 28 + (5 - (dAtr < 5 ? dAtr : 5)) * 8 + ((60 - age) > 0 ? 60 - age : 0) * 0.25,
         });
+      }
+
+      candidates.sort((a, b) => b.strength - a.strength);
+      const sp = lastPrice * 0.003;
+      let keptForSide = 0;
+      for (let i = 0; i < candidates.length && keptForSide < 3; i++) {
+        let dup = false;
+        for (let k = 0; k < out.length; k++) {
+          if (out[k].direction !== candidates[i].direction) continue;
+          const d = out[k].price - candidates[i].price;
+          if ((d < 0 ? -d : d) <= sp) { dup = true; break; }
+        }
+        if (!dup) { out.push(candidates[i]); keptForSide++; }
       }
     }
 
-    candidates.sort((a, b) => b.strength - a.strength);
-    const kept = [];
-    const minSp = range * 0.12 < lastPrice * 0.0025 ? range * 0.12 : lastPrice * 0.0025;
-    for (let i = 0; i < candidates.length && kept.length < 10; i++) {
-      const item = candidates[i];
-      let dup = false;
-      for (let k = 0; k < kept.length; k++) {
-        if (kept[k].direction === item.direction) {
-          const d = kept[k].price - item.price;
-          if ((d < 0 ? -d : d) <= minSp) { dup = true; break; }
-        }
-      }
-      if (!dup) kept.push(item);
-    }
-    return kept;
+    return out;
   }
 
   // ── 2. Cascades ────────────────────────────────────────────────────────────
@@ -259,10 +309,35 @@
   function _detectCascades(ctx, minCount) {
     if (!ctx) return [];
     const { candles, n, lastPrice, range, prof, sw } = ctx;
-    const closeTol = range * 0.09 < lastPrice * 0.0015 ? range * 0.09 : lastPrice * 0.0015;
-    const wickTol = range * 0.22 < lastPrice * 0.0035 ? range * 0.22 : lastPrice * 0.0035;
     const minC = minCount > 1 ? minCount : 1;
     const minStartIdx = n > prof.maxLook ? n - prof.maxLook : prof.swW;
+
+    function isClean(candles, level, startIdx, resistance) {
+      for (let i = startIdx + 1, len = candles.length; i < len; i++) {
+        const c = candles[i];
+        if (resistance) { if (c.c > level || c.o > level || c.h > level) return false; }
+        else { if (c.c < level || c.o < level || c.l < level) return false; }
+      }
+      return true;
+    }
+
+    function countTouches(candles, level, startIdx, resistance, range) {
+      const touchTol = range * 0.15 > level * 0.0025 ? range * 0.15 : level * 0.0025;
+      const minDep = range * 0.20 > level * 0.0030 ? range * 0.20 : level * 0.0030;
+      const touches = [startIdx];
+      let departed = false, last = startIdx;
+      for (let i = startIdx + 1, len = candles.length; i < len; i++) {
+        const c = candles[i];
+        const dist = resistance ? (level - c.c) : (c.c - level);
+        if (dist >= minDep) departed = true;
+        if (departed) {
+          const wick = resistance ? c.h : c.l;
+          const d = wick - level;
+          if ((d < 0 ? -d : d) <= touchTol && i - last >= 3) { touches.push(i); last = i; departed = false; }
+        }
+      }
+      return touches;
+    }
 
     const ups = [], downs = [];
     for (let i = 0; i < sw.length; i++) {
@@ -272,18 +347,18 @@
         if (s.price <= lastPrice * 0.999) continue;
         const dp = (s.price - lastPrice) / lastPrice;
         if (dp > prof.maxDistPct) continue;
-        if (!isClean(candles, s.price, s.idx, true, closeTol, wickTol)) continue;
+        if (!isClean(candles, s.price, s.idx, true)) continue;
         const ti = countTouches(candles, s.price, s.idx, true, range);
-        ups.push({ price: s.price, endPrice: s.price, swingIdx: s.idx, direction: "up",
-          touchIndices: ti, touches: ti.length, distPct: +(dp * 100).toFixed(2), age: n - 1 - s.idx });
+        ups.push({ price: s.price, endPrice: s.price, swingIdx: s.idx, swingTime: candles[s.idx].t, direction: "up",
+          touchIndices: ti, touchTimes: ti.map(t => candles[t].t), touches: ti.length, distPct: +(dp * 100).toFixed(2), age: n - 1 - s.idx });
       } else {
         if (s.price >= lastPrice * 1.001) continue;
         const dp = (lastPrice - s.price) / lastPrice;
         if (dp > prof.maxDistPct) continue;
-        if (!isClean(candles, s.price, s.idx, false, closeTol, wickTol)) continue;
+        if (!isClean(candles, s.price, s.idx, false)) continue;
         const ti = countTouches(candles, s.price, s.idx, false, range);
-        downs.push({ price: s.price, endPrice: s.price, swingIdx: s.idx, direction: "down",
-          touchIndices: ti, touches: ti.length, distPct: +(dp * 100).toFixed(2), age: n - 1 - s.idx });
+        downs.push({ price: s.price, endPrice: s.price, swingIdx: s.idx, swingTime: candles[s.idx].t, direction: "down",
+          touchIndices: ti, touchTimes: ti.map(t => candles[t].t), touches: ti.length, distPct: +(dp * 100).toFixed(2), age: n - 1 - s.idx });
       }
     }
 
@@ -310,96 +385,178 @@
     return out;
   }
 
-  // ── 3. Trendlines ─────────────────────────────────────────────────────────
+  // ── 3. Trendlines (Clean Unbroken Diagonal S/R Channels) ──────────────────
 
   function _detectTrendlines(ctx, minTouches) {
     if (!ctx) return [];
-    const { candles, n, lastPrice, range, highs, lows } = ctx;
-    const touchTol = range * 0.16 > lastPrice * 0.0028 ? range * 0.16 : lastPrice * 0.0028;
-    const crossWickTol = range * 0.18 > lastPrice * 0.0030 ? range * 0.18 : lastPrice * 0.0030;
+    const { candles, n, lastPrice, range, prof, highs, lows } = ctx;
     const minimum = minTouches > 2 ? minTouches : 2;
-    const slopeLimit = range * 0.15;
-    const minDeparture = range * 0.18;
+    const slopeLimit = range * 0.12;
+    const maxLookback = prof.maxLook ? prof.maxLook * 1.5 : 180;
+    const maxExtX = n - 1 + 25;
 
-    function collect(pts, resistance) {
+    // Strict geometric rule: Lines on the SAME side (two resistances or two supports) MUST NOT cross or intersect
+    function linesIntersectSameSide(l1, l2) {
+      const startX = Math.min(l1.p1.idx, l2.p1.idx);
+      const endX = maxExtX;
+      const dSlope = l1.slope - l2.slope;
+      if (Math.abs(dSlope) < 1e-9) {
+        const dPrice = Math.abs(l1.endPrice - l2.endPrice) / l2.endPrice;
+        return dPrice < 0.015;
+      }
+      const intersectX = ((l2.p1.price - l2.slope * l2.p1.idx) - (l1.p1.price - l1.slope * l1.p1.idx)) / dSlope;
+      return (intersectX >= startX && intersectX <= endX);
+    }
+
+    function collect(pts, isHigh) {
       const candidates = [];
-      const recent = pts.length > 120 ? pts.slice(-120) : pts;
+      const recent = pts.length > 90 ? pts.slice(-90) : pts;
       const pLen = recent.length;
 
       for (let i = 0; i < pLen - 1; i++) {
         for (let j = i + 1; j < pLen; j++) {
           const p1 = recent[i], p2 = recent[j];
           const span = p2.idx - p1.idx;
-          if (span < 8) continue;
-          const slope = (p2.price - p1.price) / span;
-          if (resistance && slope > slopeLimit) continue;
-          if (!resistance && slope < -slopeLimit) continue;
+          if (span < 20) continue;
+          if (n - 1 - p1.idx > maxLookback) continue;
 
-          // Check for crossing (unbroken trendline)
-          let crossed = false, breaches = 0;
-          for (let k = p1.idx; k < n; k++) {
+          const slope = (p2.price - p1.price) / span;
+
+          // Resistance (highs) MUST be descending (slope < 0, Lower Highs)
+          // Support (lows) MUST be ascending (slope > 0, Higher Lows)
+          if (isHigh && (slope >= 0 || slope < -slopeLimit)) continue;
+          if (!isHigh && (slope <= 0 || slope > slopeLimit)) continue;
+
+          // Reject lines that are almost flat (require at least 0.35% real price diagonal across the span)
+          if (Math.abs(p1.price - p2.price) / p1.price < 0.0035) continue;
+          if (Math.abs(slope * span) < range * 0.20) continue;
+
+          const tolPrice = Math.max(range * 0.025, lastPrice * 0.0005);
+          let crossed = false;
+          // Check from the earliest relevant candle (p1.idx - 25) through latest candle n - 1
+          const checkStart = Math.max(0, p1.idx - 25);
+          for (let k = checkStart; k < n; k++) {
             const line = p1.price + slope * (k - p1.idx);
             if (!(line > 0)) { crossed = true; break; }
             const c = candles[k];
-            if (resistance) {
-              if (c.c > line) { crossed = true; break; }
-              if (c.h > line + crossWickTol && ++breaches > 1) { crossed = true; break; }
+            if (isHigh) {
+              if (c.c > line + tolPrice || c.o > line + tolPrice || c.h > line + tolPrice * 1.5) { crossed = true; break; }
             } else {
-              if (c.c < line) { crossed = true; break; }
-              if (c.l < line - crossWickTol && ++breaches > 1) { crossed = true; break; }
+              if (c.c < line - tolPrice || c.o < line - tolPrice || c.l < line - tolPrice * 1.5) { crossed = true; break; }
             }
           }
           if (crossed) continue;
 
-          // Count touches
-          const touches = [p1.idx];
-          let departed = false, lastT = p1.idx;
-          for (let k = p1.idx + 1; k < n; k++) {
-            const line = p1.price + slope * (k - p1.idx);
-            const c = candles[k];
-            const dist = resistance ? (line - c.c) : (c.c - line);
-            if (dist >= minDeparture) departed = true;
-            if (departed) {
-              const wick = resistance ? c.h : c.l;
-              const d = wick - line;
-              if ((d < 0 ? -d : d) <= touchTol && k - lastT >= 3) {
-                touches.push(k);
-                lastT = k;
-                departed = false;
+          // Anchor points p1 and p2 form the 2 primary structural touches
+          const touches = [p1.idx, p2.idx];
+          const touchTol = Math.max(range * 0.025, lastPrice * 0.0012);
+          const minDep = Math.max(range * 0.06, lastPrice * 0.003);
+
+          // Find genuine intermediate or subsequent touches with mandatory price departure
+          for (let pi = 0; pi < pLen; pi++) {
+            const s = recent[pi];
+            if (s.idx === p1.idx || s.idx === p2.idx || s.idx < p1.idx) continue;
+
+            const line = p1.price + slope * (s.idx - p1.idx);
+            if (line <= 0) continue;
+            const wick = isHigh ? candles[s.idx].h : candles[s.idx].l;
+            const wickDiff = Math.abs(wick - line);
+            if (wickDiff > touchTol) continue;
+
+            // Find closest existing touches before and after s.idx
+            let prevTouch = -1;
+            let nextTouch = Infinity;
+            for (const t of touches) {
+              if (t < s.idx && t > prevTouch) prevTouch = t;
+              if (t > s.idx && t < nextTouch) nextTouch = t;
+            }
+            if (prevTouch === -1 || s.idx - prevTouch < 6) continue;
+            if (nextTouch !== Infinity && nextTouch - s.idx < 6) continue;
+
+            // Must have departed from the line before s.idx (between prevTouch and s.idx)
+            let hadDepartureBefore = false;
+            for (let k = prevTouch + 1; k < s.idx; k++) {
+              const lineK = p1.price + slope * (k - p1.idx);
+              const dist = isHigh ? (lineK - candles[k].c) : (candles[k].c - lineK);
+              if (dist >= minDep) {
+                hadDepartureBefore = true;
+                break;
               }
             }
+            if (!hadDepartureBefore) continue;
+
+            // If there is an existing touch after s.idx (e.g. p2), price must also depart after s.idx before nextTouch
+            if (nextTouch !== Infinity) {
+              let hadDepartureAfter = false;
+              for (let k = s.idx + 1; k < nextTouch; k++) {
+                const lineK = p1.price + slope * (k - p1.idx);
+                const dist = isHigh ? (lineK - candles[k].c) : (candles[k].c - lineK);
+                if (dist >= minDep) {
+                  hadDepartureAfter = true;
+                  break;
+                }
+              }
+              if (!hadDepartureAfter) continue;
+            }
+
+            if (!touches.includes(s.idx)) {
+              touches.push(s.idx);
+              touches.sort((a, b) => a - b);
+            }
           }
+
+          touches.sort((a, b) => a - b);
+
           if (touches.length < minimum) continue;
 
           const lastTouchAge = n - 1 - touches[touches.length - 1];
-          if (lastTouchAge > 120) continue;
+          if (lastTouchAge > 90) continue;
 
           const endPrice = p1.price + slope * (n - 1 - p1.idx);
           if (!(endPrice > 0)) continue;
 
-          // Strictly reject if price has already crossed or closed beyond the line
-          if (resistance) {
-            if (lastPrice >= endPrice || candles[n - 1].c >= endPrice || candles[n - 1].h > endPrice * 1.0015) continue;
+          if (isHigh) {
+            if (lastPrice > endPrice * 1.002 || candles[n - 1].c > endPrice * 1.0015) continue;
           } else {
-            if (lastPrice <= endPrice || candles[n - 1].c <= endPrice || candles[n - 1].l < endPrice * 0.9985) continue;
+            if (lastPrice < endPrice * 0.998 || candles[n - 1].c < endPrice * 0.9985) continue;
           }
 
-          const distPct = ((endPrice - lastPrice) / lastPrice);
-          const absDist = distPct < 0 ? -distPct : distPct;
-          const absDatr = absDist * lastPrice / range;
+          const distPct = Math.abs(endPrice - lastPrice) / lastPrice;
+          if (distPct > prof.maxDistPct) continue;
+
           const totalSpan = n - 1 - p1.idx;
+          const p1Prom = p1.prominence || 3;
+          const p2Prom = p2.prominence || 3;
+          const touchCoverage = (touches[touches.length - 1] - touches[0]) / Math.max(1, totalSpan);
+
+          // Structural strength:
+          // 1. High prominence anchor (major peak/trough)
+          // 2. Number of touches
+          // 3. Wide span covering the active trend cycle
+          // 4. Good touch distribution
+          const p1Bonus = Math.min(p1Prom, 40) * 3.0;
+          const p2Bonus = Math.min(p2Prom, 30) * 1.0;
+          const touchScore = touches.length * 35;
+          const spanScore = Math.min(totalSpan, 150) * 0.4;
+          const coverageScore = touchCoverage * 25;
+          const recencyScore = Math.max(0, 60 - lastTouchAge) * 0.25;
+          const distPenalty = (distPct / prof.maxDistPct) * 12;
+
+          const strength = p1Bonus + p2Bonus + touchScore + spanScore + coverageScore + recencyScore - distPenalty;
 
           candidates.push({
             p1: { idx: p1.idx, price: p1.price, t: candles[p1.idx].t },
             p2: { idx: p2.idx, price: p2.price, t: candles[p2.idx].t },
             slope, endPrice: +endPrice.toFixed(6),
-            direction: resistance ? "up" : "down",
+            direction: isHigh ? "up" : "down",
+            isHigh: isHigh,
             swingIndices: touches,
+            touchTimes: touches.map(ti => candles[ti].t),
+            touchPrices: touches.map(ti => (isHigh ? candles[ti].h : candles[ti].l)),
             touches: touches.length,
-            distPct: +(absDist * 100).toFixed(2),
+            distPct: +(distPct * 100).toFixed(2),
             isTrendline: true, span: totalSpan, lastTouchAge,
-            strength: touches.length * 30 + (totalSpan < 180 ? totalSpan : 180) * 0.25 +
-              (5 - (absDatr < 5 ? absDatr : 5)) * 8 + ((80 - lastTouchAge) > 0 ? 80 - lastTouchAge : 0) * 0.20,
+            strength
           });
         }
       }
@@ -408,19 +565,27 @@
       const kept = [];
       for (let i = 0; i < candidates.length && kept.length < 2; i++) {
         const c = candidates[i];
-        let dup = false;
+        let hasConflict = false;
         for (let k = 0; k < kept.length; k++) {
-          const d = kept[k].endPrice - c.endPrice;
-          if ((d < 0 ? -d : d) / c.endPrice < 0.008) { dup = true; break; }
-          const sd = kept[k].slope - c.slope;
-          if ((sd < 0 ? -sd : sd) < 0.0001) { dup = true; break; }
+          if (linesIntersectSameSide(kept[k], c)) { hasConflict = true; break; }
         }
-        if (!dup) kept.push(c);
+        if (!hasConflict) kept.push(c);
       }
       return kept;
     }
 
-    return [...collect(highs, true), ...collect(lows, false)];
+    const upLines = collect(highs, true);
+    const downLines = collect(lows, false);
+
+    // Cross-validate Resistance vs Support: within past candles (up to n-1), resistance must stay above support
+    const validDownLines = downLines.filter(dl => {
+      for (const ul of upLines) {
+        if (ul.endPrice < dl.endPrice) return false;
+      }
+      return true;
+    });
+
+    return [...upLines, ...validDownLines];
   }
 
   // ── 4. Retests ─────────────────────────────────────────────────────────────

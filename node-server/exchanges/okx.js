@@ -143,6 +143,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (!initialized) {
              initialized = true;
              console.log("[OX] Live data flowing");
+             if (updateExStatus) updateExStatus("OX", "online");
              for (const [k] of tickers) { if (k.startsWith("OX:")) dirtyKeys.add(k); }
           }
         } catch (_) {}

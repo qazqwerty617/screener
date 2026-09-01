@@ -32,6 +32,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         added++;
       }
       console.log(`[BX] Loaded ${added} symbols`);
+      if (updateExStatus) updateExStatus("BX", "online");
       for (const [k] of tickers) { if (k.startsWith("BX:")) dirtyKeys.add(k); }
       connectWs();
       // Always start REST polling as backup

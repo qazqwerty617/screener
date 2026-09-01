@@ -80,21 +80,20 @@ function detectSwings(candles, window = 3) {
 // ─── 2. Horizontal S/R Levels ─────────────────────────────────────────────────
 
 function detectLevels(candles, swings, cfg = DEFAULT_CONFIG) {
-  const tol = cfg.levelTolerance;
+  const tol = cfg.levelTolerance || 0.0035;
+  const minDep = tol * 1.8;
   const clusters = [];
 
   for (const sw of swings) {
     const found = clusters.find(cl => Math.abs(cl.price - sw.price) / cl.price <= tol);
     if (found) {
       found.swings.push(sw);
-      found.touches++;
       found.lastTouch = Math.max(found.lastTouch, sw.idx);
       found.volSum += sw.v;
       found.price = found.swings.reduce((s, x) => s + x.price, 0) / found.swings.length;
     } else {
       clusters.push({
         price: sw.price,
-        touches: 1,
         lastTouch: sw.idx,
         volSum: sw.v,
         swings: [sw]
@@ -103,19 +102,55 @@ function detectLevels(candles, swings, cfg = DEFAULT_CONFIG) {
   }
 
   const last = candles.length - 1;
-  return clusters
-    .filter(cl => cl.touches >= cfg.minTouches)
-    .map(cl => {
-      const zone = [cl.price * (1 - tol), cl.price * (1 + tol)];
-      const recency = Math.max(0, 1 - (last - cl.lastTouch) / candles.length);
-      const strength = Math.min(5, Math.round(
-        (Math.min(cl.touches, 6) / 6) * 2.5 +
-        recency * 1.5 +
-        (cl.volSum / cl.touches > avgVol(candles, last, 50) ? 1 : 0)
-      ));
-      return { price: cl.price, zone, touches: cl.touches, lastTouch: cl.lastTouch, avgVol: cl.volSum / cl.touches, strength };
-    })
-    .sort((a, b) => b.strength - a.strength);
+  const result = [];
+
+  for (const cl of clusters) {
+    const sortedSwings = cl.swings.slice().sort((a, b) => a.idx - b.idx);
+    const firstIdx = sortedSwings[0].idx;
+
+    // Count distinct touches with clear price departure
+    let distinctTouches = 1;
+    let lastIdx = firstIdx;
+    let departed = false;
+
+    for (let i = firstIdx + 1; i < candles.length; i++) {
+      const c = candles[i];
+      const dist = Math.abs(c.c - cl.price) / cl.price;
+      if (dist >= minDep) {
+        departed = true;
+      }
+      if (departed && (i - lastIdx >= 4)) {
+        const wickDist = Math.min(Math.abs(c.h - cl.price), Math.abs(c.l - cl.price)) / cl.price;
+        if (wickDist <= tol * 1.4) {
+          distinctTouches++;
+          lastIdx = i;
+          departed = false;
+        }
+      }
+    }
+
+    const minT = typeof cfg.minTouches === "number" ? cfg.minTouches : 2;
+    if (distinctTouches < minT) continue;
+
+    const zone = [cl.price * (1 - tol), cl.price * (1 + tol)];
+    const recency = Math.max(0, 1 - (last - cl.lastTouch) / candles.length);
+    const strength = Math.min(5, Math.round(
+      (Math.min(distinctTouches, 6) / 6) * 2.5 +
+      recency * 1.5 +
+      (cl.volSum / sortedSwings.length > avgVol(candles, last, 50) ? 1 : 0)
+    ));
+
+    result.push({
+      price: cl.price,
+      zone,
+      touches: distinctTouches,
+      lastTouch: cl.lastTouch,
+      avgVol: cl.volSum / sortedSwings.length,
+      strength
+    });
+  }
+
+  return result.sort((a, b) => b.strength - a.strength);
 }
 
 // ─── 3. Trendline Detection ───────────────────────────────────────────────────
@@ -131,22 +166,29 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
 
   function tryPair(p1, p2, type) {
     const span = p2.idx - p1.idx;
-    if (span < 10) return null;
+    if (span < 12) return null;
     const angle = Math.abs(slopeDegrees(p1, p2));
     if (angle < minAngle) return null;
 
-    let touches = 2;
-    let departed = false;
-    let lastTouch = p2.idx;
     const tol = cfg.levelTolerance || 0.0035;
-    const minDeparturePct = tol * 1.8;
+    const minDeparturePct = tol * 1.6;
 
-    // Check every single candle through the end of array (i < candles.length)
+    // Check piercing along the trendline: closes must stay on correct side
     for (let i = p1.idx + 1; i < candles.length; i++) {
       const lp = linePrice(p1, p2, i);
       const c = candles[i];
-      if (type === 'asc'  && (c.c < lp * (1 - tol * 1.2) || c.l < lp * (1 - tol * 2.0))) return null;
-      if (type === 'desc' && (c.c > lp * (1 + tol * 1.2) || c.h > lp * (1 + tol * 2.0))) return null;
+      if (type === 'asc'  && (c.c < lp * (1 - tol * 1.1) || c.l < lp * (1 - tol * 1.8))) return null;
+      if (type === 'desc' && (c.c > lp * (1 + tol * 1.1) || c.h > lp * (1 + tol * 1.8))) return null;
+    }
+
+    // Anchor points p1 and p2 form 2 initial touches
+    let touches = 2;
+    let lastTouch = p2.idx;
+    let departed = false;
+
+    for (let i = p1.idx + 1; i < candles.length; i++) {
+      const lp = linePrice(p1, p2, i);
+      const c = candles[i];
 
       // Measure departure from line
       const dist = type === 'asc' ? (c.c - lp) / lp : (lp - c.c) / lp;
@@ -154,9 +196,9 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
         departed = true;
       }
 
-      // Check if this candle represents a discrete re-touch after departure
+      // Check discrete touch after departure (at least 4 candles away from last touch)
       const wickDist = type === 'asc' ? Math.abs(c.l - lp) / lp : Math.abs(c.h - lp) / lp;
-      if (departed && i > p2.idx && wickDist <= tol * 1.6 && (i - lastTouch) >= 5) {
+      if (departed && i > p2.idx && (i - lastTouch >= 4) && wickDist <= tol * 1.2) {
         touches++;
         lastTouch = i;
         departed = false;
@@ -166,18 +208,21 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
     return { type, p1, p2, touches, slope: slopeDegrees(p1, p2) };
   }
 
-  for (let i = 0; i < lows.length - 1; i++) {
-    for (let j = i + 1; j < lows.length; j++) {
-      if (lows[j].price > lows[i].price) {
-        const line = tryPair(lows[i], lows[j], 'asc');
+  const scanLows = lows.slice(-15);
+  const scanHighs = highs.slice(-15);
+
+  for (let i = 0; i < scanLows.length - 1; i++) {
+    for (let j = i + 1; j < scanLows.length; j++) {
+      if (scanLows[j].price > scanLows[i].price) {
+        const line = tryPair(scanLows[i], scanLows[j], 'asc');
         if (line) candidateLines.push(line);
       }
     }
   }
-  for (let i = 0; i < highs.length - 1; i++) {
-    for (let j = i + 1; j < highs.length; j++) {
-      if (highs[j].price < highs[i].price) {
-        const line = tryPair(highs[i], highs[j], 'desc');
+  for (let i = 0; i < scanHighs.length - 1; i++) {
+    for (let j = i + 1; j < scanHighs.length; j++) {
+      if (scanHighs[j].price < scanHighs[i].price) {
+        const line = tryPair(scanHighs[i], scanHighs[j], 'desc');
         if (line) candidateLines.push(line);
       }
     }
@@ -215,7 +260,6 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
 function detectBreakouts(candles, levels, trendlines, cfg = DEFAULT_CONFIG) {
   const events  = [];
   const last    = candles.length - 1;
-  // lookback must cover at least retestMaxBars so retests near last bar are found
   const lookback = Math.min(cfg.retestMaxBars + 5, last);
   const avVol   = avgVol(candles, last, cfg.breakoutVolBars);
 
@@ -227,8 +271,8 @@ function detectBreakouts(candles, levels, trendlines, cfg = DEFAULT_CONFIG) {
     const volConfirmed = c.v > avVol * cfg.breakoutVolMult;
 
     levels.forEach((lv, lvIdx) => {
-      if (i - lv.lastTouch > 50) return;  // level too old
-      if (lv.touches > 4) return;          // too many touches = congestion zone, not clean S/R
+      if (i - lv.lastTouch > 50) return;
+      if (lv.touches > 4) return;
       const [zLo, zHi] = lv.zone;
       if (body_hi > zHi && candles[i - 1].c <= zHi) {
         events.push({ sourceType: 'level', sourceIdx: lvIdx, barIdx: i, direction: 'up', breakPrice: lv.price, volConfirmed });
@@ -250,8 +294,6 @@ function detectBreakouts(candles, levels, trendlines, cfg = DEFAULT_CONFIG) {
   }
   return events;
 }
-
-// ─── 5. Retest Detection ─────────────────────────────────────────────────────
 
 function detectRetests(candles, breakEvents, cfg = DEFAULT_CONFIG) {
   const results = [];
@@ -445,9 +487,12 @@ function scanCandles(meta, candles, cfgOverride = {}) {
   const levels     = detectLevels(candles, swings, cfg);
   const trendlines = detectTrendlines(candles, swings, cfg);
   const breakouts  = detectBreakouts(candles, levels, trendlines, cfg);
-  const retests    = detectRetests(candles, breakouts, cfg);
   const structs    = detectStructureBreaks(candles, swings);
   const impulses   = detectImpulses(candles, cfg);
+  // detectRetests(candles, breakouts, cfg) is intentionally NOT called here.
+  // Its result was never read — retest signals come from formationEngine below —
+  // yet it accounted for ~45% of this function's runtime on every scanned
+  // (coin, timeframe) pair.
 
   // ── FormationEngine unified scan (1 normalize + 1 swings pass for all 3) ──
   try {
@@ -459,25 +504,27 @@ function scanCandles(meta, candles, cfgOverride = {}) {
         const endPrice = tl.endPrice;
         const isResistance = tl.direction === 'up'; // 'up' = resistance (Short); 'down' = support (Long)
 
-        // Strict unviolated check: price must NOT have breached the line
-        if (isResistance && (priceNow >= endPrice || lastC.c >= endPrice || lastC.h > endPrice * 1.0015)) continue;
-        if (!isResistance && (priceNow <= endPrice || lastC.c <= endPrice || lastC.l < endPrice * 0.9985)) continue;
+        // Unviolated check: candle body must not close beyond the line
+        if (isResistance && (priceNow > endPrice * 1.002 || lastC.c > endPrice * 1.0015)) continue;
+        if (!isResistance && (priceNow < endPrice * 0.998 || lastC.c < endPrice * 0.9985)) continue;
 
         const dist = Math.abs(priceNow - endPrice) / priceNow;
-        if (dist <= 0.08) {
+        if (dist <= 0.04) {
           signals.push({
             type: 'trendline', ex, sym, base, tf,
-            price: +endPrice.toFixed(4),
+            price: endPrice,
             direction: isResistance ? 'short' : 'long',
             confidence: Math.min(5, Math.max(2, tl.touches || 2)),
             ts: now,
             meta: {
               tlType: isResistance ? 'desc' : 'asc',
-              slope: +(tl.slope || 0).toFixed(6),
+              slope: Number(tl.slope || 0),
               touches: tl.touches || 2,
+              swingIndices: tl.swingIndices || [tl.p1?.idx, tl.p2?.idx],
               dist: +(dist * 100).toFixed(2),
               p1Idx: tl.p1?.idx, p1Price: tl.p1?.price,
-              p2Idx: tl.p2?.idx, p2Price: tl.p2?.price
+              p2Idx: tl.p2?.idx, p2Price: tl.p2?.price,
+              isHigh: isResistance
             }
           });
         }
@@ -487,22 +534,24 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     // 2. Clean Unbroken Horizontal Levels
     if (fmAll.horizontals && Array.isArray(fmAll.horizontals)) {
       for (const hl of fmAll.horizontals) {
-        const isSupport = hl.direction === 'down';
+        const isSupport = hl.direction === 'down'; // 'down' = support (Long); 'up' = resistance (Short)
 
-        // Strict unviolated check: price must NOT have breached the level
-        if (!isSupport && (priceNow >= hl.price || lastC.c >= hl.price || lastC.h > hl.price * 1.0015)) continue;
-        if (isSupport && (priceNow <= hl.price || lastC.c <= hl.price || lastC.l < hl.price * 0.9985)) continue;
+        // Unviolated check: candle body must not close beyond the level
+        if (!isSupport && (priceNow > hl.price * 1.002 || lastC.c > hl.price * 1.0015)) continue;
+        if (isSupport && (priceNow < hl.price * 0.998 || lastC.c < hl.price * 0.9985)) continue;
 
         const dist = Math.abs(priceNow - hl.price) / priceNow;
-        if (dist <= 0.08) {
+        if (dist <= 0.04) {
           signals.push({
             type: 'level', ex, sym, base, tf,
-            price: +hl.price.toFixed(4),
+            price: hl.price,
             direction: isSupport ? 'long' : 'short',
             confidence: Math.min(5, Math.max(2, hl.touches || 2)),
             ts: now,
             meta: {
               touches: hl.touches || 2,
+              touchIndices: hl.touchIndices || [hl.swingIdx],
+              swingIdx: hl.swingIdx,
               dist: +(dist * 100).toFixed(2),
               direction: hl.direction,
               levelType: isSupport ? 'support' : 'resistance'

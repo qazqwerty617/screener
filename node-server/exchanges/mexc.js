@@ -50,6 +50,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         added++;
       }
       console.log(`[MX] Loaded ${added} symbols`);
+      if (updateExStatus) updateExStatus("MX", "online");
       for (const [k] of tickers) { if (k.startsWith("MX:")) dirtyKeys.add(k); }
       connectWs();
       startRestPolling();

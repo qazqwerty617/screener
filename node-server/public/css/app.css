@@ -495,10 +495,13 @@ button {
 }
 
 .exc-dot {
-    width: 28px;
+    width: 24px;
     height: 18px;
     border-radius: 2px;
     flex-shrink: 0;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: contain !important;
     opacity: 1 !important;
 }
 

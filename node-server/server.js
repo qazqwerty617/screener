@@ -51,6 +51,8 @@ const httpsAgent = new https.Agent({
   timeout: 60000,
 });
 
+
+
 const compression = require('compression');
 const patternDetector = require("./patternDetector");
 const serverLevels = require("./serverLevels");
@@ -166,6 +168,17 @@ let marketSequence = 0;
 // тФАтФАтФА Monitoring тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exStatus = new Map();
 const arbitrageEngine = createArbitrageEngine(tickers, exStatus);
+const correlationEngine = require("./correlationEngine");
+correlationEngine.init(tickers, (type, data) => {
+  if (clients.size > 0) {
+    const msg = JSON.stringify({ type, data });
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(msg); } catch (_) {}
+      }
+    }
+  }
+});
 let depthAnalyzer = null;
 let statusBroadcastTimer = null;
 
@@ -473,6 +486,8 @@ const paymentGateway = require("./paymentGateway");
 const adminBot = require("./adminBot");
 const { registerPaymentRoutes, createSlidingWindowLimiter } = require("./paymentRoutes");
 const { renderServerChartSnapshot } = require("./serverChartRenderer");
+const telegramQueue = require("./telegramQueue");
+const priceHistoryStore = require("./priceHistoryStore");
 const securityShield = require("./securityShield");
 
 // ── HTTP + WebSocket server ──
@@ -483,7 +498,7 @@ const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10);
 if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 10) {
   app.set("trust proxy", trustProxyHops);
 }
-app.use(compression());
+app.use(compression({ level: 1, threshold: 1024 }));
 app.use((req, res, next) => {
   // Skip global JSON parser for endpoints requiring larger payload limits
   if (req.path === "/api/notifications/telegram-photo" || req.path === "/api/bug-report") return next();
@@ -549,19 +564,8 @@ wss.on("connection", (ws, req) => {
   if (!securityShield.registerWsConnection(ip)) {
     return ws.close(1008, "Banned by Security Shield");
   }
-  const origin = String(req.headers.origin || "");
-  const host = String(req.headers.host || "");
-  try {
-    if (origin && new URL(origin).host !== host) {
-      securityShield.unregisterWsConnection(ip);
-      return ws.close(1008, "origin rejected");
-    }
-  } catch (_) {
-    securityShield.unregisterWsConnection(ip);
-    return ws.close(1008, "origin rejected");
-  }
   const ipCount = wsClientsByIp.get(ip) || 0;
-  if (ipCount >= 12) {
+  if (ipCount >= 50) {
     securityShield.unregisterWsConnection(ip);
     return ws.close(1013, "connection limit");
   }
@@ -588,7 +592,7 @@ wss.on("connection", (ws, req) => {
       for (const t of tickers.values()) {
         snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
       }
-      ws.send(JSON.stringify({ type: "snapshot", data: snap }));
+      ws.send(JSON.stringify({ type: "snapshot", data: snap, correlations: correlationEngine.getCorrelations() }));
     }
   } catch (err) {
     console.error("[WS CLIENT] Error sending initial data:", err.message);
@@ -652,7 +656,7 @@ wss.on("connection", (ws, req) => {
           for (const t of tickers.values()) {
             snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
           }
-          ws.send(JSON.stringify({ type: "snapshot", data: snap }));
+          ws.send(JSON.stringify({ type: "snapshot", data: snap, correlations: correlationEngine.getCorrelations() }));
         }
       }
     } catch (_) {}
@@ -1270,10 +1274,24 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
       const r = await fetchImpl(url, options);
       if (!r.ok) {
         const text = await r.text();
+        if (url.includes("fapi.binance.com")) {
+          try {
+            const fallbackUrl = url.replace("https://fapi.binance.com/fapi/v1/klines", "https://data-api.binance.vision/api/v3/klines");
+            const r2 = await fetchImpl(fallbackUrl, options);
+            if (r2.ok) return await r2.json();
+          } catch (_) {}
+        }
         throw new Error(`HTTP ${r.status}: ${text.slice(0, 100)}`);
       }
       return await r.json();
     } catch (e) {
+      if (url.includes("fapi.binance.com")) {
+        try {
+          const fallbackUrl = url.replace("https://fapi.binance.com/fapi/v1/klines", "https://data-api.binance.vision/api/v3/klines");
+          const r2 = await fetchImpl(fallbackUrl, { method, signal: ctrl.signal, headers });
+          if (r2.ok) return await r2.json();
+        } catch (_) {}
+      }
       if (i === retries) throw e;
       await new Promise((r) => setTimeout(r, 500 * (i + 1)));
     } finally {
@@ -1309,9 +1327,15 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
   const endMs = Number.isFinite(+before) && +before > 0 ? +before : Date.now();
   const startMs = endMs - (limit * tfMs);
 
+  const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
+  const cleanSym = sym.replace(/_SPOT$/i, "");
+
   if (ex === "BN" || ex === "AD") {
+    if (isSpot) {
+      return `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSym}&interval=${tf}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
+    }
     const base = ex === "BN" ? "fapi.binance.com" : "fapi.asterdex.com";
-    return `https://${base}/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
+    return `https://${base}/fapi/v1/klines?symbol=${cleanSym}&interval=${tf}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
   }
   if (ex === "BB") {
     return `https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TF_MAP.BB[tf] || "60"}&limit=${limit}` + (before ? `&end=${before - 1}` : "");
@@ -1961,6 +1985,13 @@ app.get("/api/tickers", (req, res) => {
   for (const t of tickers.values()) flat.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
   res.json(flat);
 });
+
+app.get("/api/correlations", (req, res) => {
+  setPublicCors(req, res);
+  res.setHeader("Cache-Control", "public, max-age=2");
+  res.setHeader("Content-Type", "application/json");
+  res.json(correlationEngine.getCorrelations());
+});
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", tickers: tickers.size, clients: clients.size, dirty: dirtyKeys.size, exchanges: Object.fromEntries(exStatus) });
 });
@@ -2034,7 +2065,7 @@ async function runJournalSync(userId, exchangeInput, options = {}) {
   const maxAge = typeof options.maxAge === "number" ? options.maxAge : 8000;
   if (!options.force && current?.result && Date.now() - current.at < maxAge) return current.result;
   if (!options.force && current?.pending) return current.pending;
-  const pending = syncJournal({ exchange, ...credentials }).then(result => {
+  const pending = syncJournal({ exchange, ...credentials, fast: !!options.fast }).then(result => {
     journalSyncCache.set(cacheKey, { at: Date.now(), result });
     return result;
   }).catch(error => {
@@ -2092,7 +2123,7 @@ app.get("/api/journal/live", async (req, res) => {
   const exchange = journalCredentials.canonicalExchange(req.query.exchange);
   if (!exchange) return res.status(400).json({ error: "Биржа не поддерживается" });
   try {
-    return res.json(journalPayload(await runJournalSync(user.id, exchange, { maxAge: 2000 }), req.query.symbol));
+    return res.json(journalPayload(await runJournalSync(user.id, exchange, { maxAge: 400, fast: true }), req.query.symbol));
   } catch (error) {
     return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
   }
@@ -2547,18 +2578,48 @@ app.get("/api/orchestrator/status", (req, res) => {
 });
 
 app.post("/api/user/formation-alerts", express.json({ limit: "5mb" }), (req, res) => {
+  setPublicCors(req, res);
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-  const user = userStore.getUserByToken(token);
-  if (!user) {
-    return res.status(401).json({ error: "Неавторизован" });
-  }
   const settings = req.body || {};
-  const currentPrefs = userStore.getUserPreferences(user.id) || {};
-  currentPrefs.formationAlerts = settings;
-  const updated = userStore.updateUserPreferences(user.id, currentPrefs);
-  console.log(`[USER PREFS] Updated formationAlerts for user ${user.id} (${user.telegramId || user.telegramChatId || "no tg"}):`, JSON.stringify(settings));
-  res.json({ success: true, preferences: updated });
+  const tgId = String(settings.telegramChatId || settings.tgChatId || settings.chatId || "").trim();
+
+  let user = token ? userStore.getUserByToken(token) : null;
+  if (!user && tgId && typeof userStore.getAllUsersRaw === "function") {
+    const all = userStore.getAllUsersRaw() || {};
+    for (const u of Object.values(all)) {
+      if (u && (String(u.telegramChatId) === tgId || String(u.telegramId) === tgId)) {
+        user = u;
+        break;
+      }
+    }
+  }
+
+  if (user) {
+    if (tgId) {
+      // Must go through userStore: `user` may be a sanitized copy whose fields
+      // are never persisted.
+      userStore.setTelegramChatId(user.id, tgId);
+    }
+    const currentPrefs = userStore.getUserPreferences(user.id) || {};
+    currentPrefs.formationAlerts = settings;
+    const updated = userStore.updateUserPreferences(user.id, currentPrefs);
+    if (tgId) {
+      if (!global._formationAlertsByChatId) global._formationAlertsByChatId = new Map();
+      global._formationAlertsByChatId.set(tgId, settings);
+    }
+    console.log(`[USER PREFS] Updated formationAlerts for user ${user.id} (${tgId}): minTouches=${settings.trendline?.minTouches}`);
+    return res.json({ success: true, preferences: updated });
+  }
+
+  if (tgId) {
+    if (!global._formationAlertsByChatId) global._formationAlertsByChatId = new Map();
+    global._formationAlertsByChatId.set(tgId, settings);
+    console.log(`[GLOBAL PREFS] Saved formationAlerts for chatId ${tgId}: minTouches=${settings.trendline?.minTouches}`);
+    return res.json({ success: true, settings });
+  }
+
+  res.json({ success: true });
 });
 
 app.get("/api/user/pump-alerts", (req, res) => {
@@ -2582,6 +2643,14 @@ app.post("/api/user/pump-alerts", express.json({ limit: "5mb" }), (req, res) => 
   const settings = req.body || {};
   const currentPrefs = userStore.getUserPreferences(user.id) || {};
   currentPrefs.pumpAlerts = settings;
+  if (!currentPrefs.notifications) currentPrefs.notifications = {};
+  currentPrefs.notifications.pumpDump = {
+    ...(currentPrefs.notifications.pumpDump || {}),
+    ...settings
+  };
+  if (settings.tgEnabled !== undefined) {
+    currentPrefs.notifications.tgEnabled = !!settings.tgEnabled;
+  }
   const updated = userStore.updateUserPreferences(user.id, currentPrefs);
   console.log(`[USER PREFS] Updated pumpAlerts for user ${user.id}:`, JSON.stringify(settings));
   res.json({ success: true, preferences: updated });
@@ -2619,9 +2688,20 @@ app.post("/api/user/notification-settings", express.json({ limit: "2mb" }), (req
     ...(preferences.notifications || {}),
     ...incoming
   };
+  if (incoming.pumpDump) {
+    preferences.pumpAlerts = {
+      ...(preferences.pumpAlerts || {}),
+      ...incoming.pumpDump
+    };
+  } else if (incoming.pumpAlerts) {
+    preferences.pumpAlerts = {
+      ...(preferences.pumpAlerts || {}),
+      ...incoming.pumpAlerts
+    };
+  }
 
   if (incoming.telegramChatId && String(incoming.telegramChatId).trim()) {
-    user.telegramChatId = String(incoming.telegramChatId).trim();
+    userStore.setTelegramChatId(user.id, String(incoming.telegramChatId).trim());
   }
 
   const updated = userStore.updateUserPreferences(user.id, preferences);
@@ -2635,7 +2715,10 @@ app.get("/api/user/price-alerts", (req, res) => {
   if (!user) {
     return res.status(401).json({ error: "Неавторизован" });
   }
-  const alerts = Array.isArray(user.priceAlerts) ? user.priceAlerts : [];
+  const prefs = userStore.getUserPreferences(user.id) || {};
+  const alerts = Array.isArray(user.priceAlerts)
+    ? user.priceAlerts
+    : (Array.isArray(prefs.priceAlerts) ? prefs.priceAlerts : []);
   res.json({ success: true, alerts });
 });
 
@@ -2647,33 +2730,40 @@ app.post("/api/user/price-alerts", express.json({ limit: "5mb" }), (req, res) =>
     return res.status(401).json({ error: "Неавторизован" });
   }
   const { alerts } = req.body || {};
+  let count = Array.isArray(user.priceAlerts) ? user.priceAlerts.length : 0;
   if (Array.isArray(alerts)) {
-    user.priceAlerts = alerts;
+    // Persist on the real record, not on the sanitized copy.
+    userStore.setUserPriceAlerts(user.id, alerts);
     const preferences = userStore.getUserPreferences(user.id) || {};
     preferences.priceAlerts = alerts;
     userStore.updateUserPreferences(user.id, preferences);
+    count = alerts.length;
   }
-  res.json({ success: true, count: (user.priceAlerts || []).length });
+  res.json({ success: true, count });
 });
 
 
 // ─── High-Speed Market Pump / Dump Scanner Engine ───────────────────────────
-const tickerPriceRing = new Map(); // key => [{ t, p }]
+// Shares alertEngine's compact typed-array history instead of keeping a second
+// object-per-sample ring buffer. The duplicate store was the other half of the
+// memory growth that made the orchestrator recycle this process (and wipe every
+// in-memory alert cooldown) several times an hour.
+const tickerPriceRing = priceHistoryStore.sharedStore;
+const RING_KEY_TTL_MS = 60 * 60 * 1000;
+let lastRingPruneAt = 0;
 
 setInterval(() => {
   const now = Date.now();
   for (const [key, t] of tickers.entries()) {
     if (!t || !t.p || t.p <= 0) continue;
-    let ring = tickerPriceRing.get(key);
-    if (!ring) {
-      ring = [];
-      tickerPriceRing.set(key, ring);
-    }
-    ring.push({ t: now, p: t.p });
-    // Retain 1200 samples (1 hour at 3s resolution)
-    if (ring.length > 1200) ring.shift();
+    tickerPriceRing.push(key, now, t.p);
   }
-}, 3000);
+
+  if (now - lastRingPruneAt > 10 * 60 * 1000) {
+    lastRingPruneAt = now;
+    tickerPriceRing.pruneStale(now, RING_KEY_TTL_MS);
+  }
+}, 1000);
 
 app.get("/api/market/pump-alerts", (req, res) => {
   setPublicCors(req, res);
@@ -2685,6 +2775,7 @@ app.get("/api/market/pump-alerts", (req, res) => {
   const marketType = (req.query.marketType || req.query.mt || "both").toLowerCase();
   const rawExchanges = req.query.ex || req.query.exchanges || "";
   const allowedEx = rawExchanges ? rawExchanges.split(",").map(e => e.trim().toUpperCase()).filter(Boolean) : null;
+  const isAllEx = !allowedEx || allowedEx.length === 0 || allowedEx.includes("ALL");
   const minVol = parseFloat(req.query.minVol) || 0;
   const now = Date.now();
   const lookbackMs = periodMinutes * 60 * 1000;
@@ -2696,7 +2787,7 @@ app.get("/api/market/pump-alerts", (req, res) => {
     if (!t || !t.p || t.p <= 0) continue;
     const ex = t.ex || (key.indexOf(":") > 0 ? key.split(":")[0] : "");
     const sym = t.sym || (key.indexOf(":") > 0 ? key.split(":")[1] : key);
-    if (allowedEx && allowedEx.length > 0 && !allowedEx.includes(ex)) continue;
+    if (!isAllEx && allowedEx && allowedEx.length > 0 && !allowedEx.includes(ex)) continue;
     if (minVol > 0 && t.v && t.v < minVol) continue;
 
     // Spot vs Futures discrimination
@@ -2704,25 +2795,17 @@ app.get("/api/market/pump-alerts", (req, res) => {
     if (marketType === "futures" && !isFutures) continue;
     if (marketType === "spot" && isFutures) continue;
 
-    const ring = tickerPriceRing.get(key);
+    const ring = tickerPriceRing;
     let pastPrice = null;
-    if (ring && ring.length > 0) {
-      let closest = ring[0];
-      for (let i = 0; i < ring.length; i++) {
-        if (Math.abs(ring[i].t - targetTs) < Math.abs(closest.t - targetTs)) {
-          closest = ring[i];
-        }
-      }
-      if (closest && closest.p > 0) {
-        pastPrice = closest.p;
-      }
+    const nearest = ring.findNearest(key, targetTs);
+    // Require the historical sample to be reasonably close to the target timeframe
+    if (nearest && nearest.p > 0 && nearest.diffMs <= Math.max(lookbackMs * 0.7, 45000)) {
+      pastPrice = nearest.p;
     }
 
     if (!pastPrice || pastPrice <= 0) {
       if (t.o && t.o > 0 && periodMinutes >= 60) {
         pastPrice = t.o;
-      } else if (t.prev && t.prev > 0) {
-        pastPrice = t.prev;
       }
     }
 
@@ -2730,7 +2813,10 @@ app.get("/api/market/pump-alerts", (req, res) => {
 
     const changePct = ((t.p - pastPrice) / pastPrice) * 100;
     const absPct = Math.abs(changePct);
-    if (absPct < minPct) continue;
+    
+    // Anomaly / Glitch Filter: Reject physical impossibilities (e.g. -100% dump on live coins or > 250% 1m spike)
+    const maxDrop = periodMinutes <= 1 ? 35 : periodMinutes <= 5 ? 50 : 75;
+    if (changePct <= -maxDrop || changePct >= 250 || absPct < minPct || !Number.isFinite(changePct)) continue;
 
     const isPump = changePct > 0;
     const isDump = changePct < 0;
@@ -2760,6 +2846,16 @@ app.get("/api/market/pump-alerts", (req, res) => {
   });
 });
 
+
+app.get("/api/tickers", (req, res) => {
+  setPublicCors(req, res);
+  res.setHeader("Cache-Control", "no-cache, max-age=1");
+  const snap = ["s"];
+  for (const t of tickers.values()) {
+    snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
+  }
+  res.json(snap);
+});
 
 app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
   const { userId, plan } = req.body || {};
@@ -2899,19 +2995,10 @@ function resolveTelegramTargetChatId(req) {
     }
   }
 
-  // Check all users in userStore for linked Telegram ID
-  if (typeof userStore.getAllUsersRaw === "function") {
-    const rawUsers = Object.values(userStore.getAllUsersRaw() || {});
-    for (const u of rawUsers) {
-      if (u && (u.telegramChatId || u.telegramId)) {
-        return String(u.telegramChatId || u.telegramId).trim();
-      }
-    }
-  }
-
-  const adminId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
-  if (adminId) return adminId;
-
+  // No explicit target and no authenticated caller: refuse rather than guess.
+  // Falling back to "the first user that has a Telegram id" delivered one
+  // person's alerts into an unrelated stranger's chat and let unauthenticated
+  // callers push arbitrary HTML through the bot.
   return "";
 }
 
@@ -3045,6 +3132,67 @@ app.get("/api/formations/map", compression(), (req, res) => {
     }
   }
   res.json(map);
+});
+
+// ── Pre-compressed static assets (gzip once, serve from memory) ──
+const staticCache = new Map();
+function preCompressStatic(relPath) {
+  try {
+    const absPath = path.join(__dirname, "public", relPath);
+    const raw = fs.readFileSync(absPath);
+    const ext = path.extname(relPath).toLowerCase();
+    const mimeTypes = { ".js": "application/javascript; charset=UTF-8", ".css": "text/css; charset=UTF-8", ".html": "text/html; charset=UTF-8", ".svg": "image/svg+xml" };
+    const contentType = mimeTypes[ext] || "application/octet-stream";
+    const gzipped = zlib.gzipSync(raw, { level: 6 });
+    staticCache.set(relPath, { raw, gzipped, contentType, etag: `"${Date.now().toString(36)}"` });
+  } catch (_) {}
+}
+// Pre-compress the heaviest static assets on startup
+["js/app.js", "index.html"].forEach(f => preCompressStatic(f));
+// Also pre-compress any CSS files
+try {
+  const cssDir = path.join(__dirname, "public", "css");
+  if (fs.existsSync(cssDir)) {
+    for (const f of fs.readdirSync(cssDir)) {
+      if (f.endsWith(".css")) preCompressStatic("css/" + f);
+    }
+  }
+} catch (_) {}
+console.log(`[STATIC] Pre-compressed ${staticCache.size} static assets into memory cache.`);
+
+// Serve pre-compressed assets with ~0ms latency
+app.use((req, res, next) => {
+  if (req.method !== "GET" && req.method !== "HEAD") return next();
+  let urlPath = req.path;
+  if (urlPath === "/") urlPath = "index.html";
+  else if (urlPath.startsWith("/")) urlPath = urlPath.substring(1);
+  
+  const cached = staticCache.get(urlPath);
+  if (!cached) return next();
+  
+  const acceptGzip = String(req.headers["accept-encoding"] || "").includes("gzip");
+  res.setHeader("Content-Type", cached.contentType);
+  res.setHeader("ETag", cached.etag);
+  res.setHeader("Vary", "Accept-Encoding");
+  
+  if (urlPath.endsWith(".html")) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  } else {
+    res.setHeader("Cache-Control", "no-cache, must-revalidate, max-age=0");
+  }
+  
+  // Check ETag (304 Not Modified)
+  if (req.headers["if-none-match"] === cached.etag) {
+    return res.status(304).end();
+  }
+  
+  if (acceptGzip) {
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Content-Length", cached.gzipped.length);
+    return res.end(cached.gzipped);
+  }
+  res.setHeader("Content-Length", cached.raw.length);
+  return res.end(cached.raw);
 });
 
 app.use(express.static(path.join(__dirname, "public"), {
@@ -3186,14 +3334,24 @@ server.listen(PORT, () => {
   const scannerCandleCache = new Map(); // key -> { candles, expiresAt }
   const exchangeBackoffs = new Map(); // ex -> backoffUntilTimestamp
 
+  function broadcastAlert(type, data) {
+    if (!clients || clients.size === 0 || !data) return;
+    const msg = JSON.stringify({ type, data });
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(msg); } catch (_) {}
+      }
+    }
+  }
+
   function getTfTtlMs(tf) {
     const low = String(tf || "").toLowerCase();
-    if (low === "1d") return 30 * 60 * 1000; // 30 min cache for 1D
-    if (low === "4h") return 15 * 60 * 1000; // 15 min cache for 4H
-    if (low === "1h") return 8 * 60 * 1000;  // 8 min cache for 1H
-    if (low === "15m") return 3 * 60 * 1000; // 3 min cache for 15M
-    if (low === "5m") return 90 * 1000;      // 90 sec cache for 5M
-    return 45 * 1000;                         // 45 sec cache for 1M
+    if (low === "1d") return 15 * 60 * 1000; // 15 min cache for 1D
+    if (low === "4h") return 8 * 60 * 1000;  // 8 min cache for 4H
+    if (low === "1h") return 4 * 60 * 1000;  // 4 min cache for 1H
+    if (low === "15m") return 90 * 1000;     // 90 sec cache for 15M
+    if (low === "5m") return 30 * 1000;      // 30 sec cache for 5M
+    return 15 * 1000;                         // 15 sec cache for 1M
   }
 
   async function getCachedCandlesForScanner(ex, sym, tf) {
@@ -3232,7 +3390,7 @@ server.listen(PORT, () => {
 
     try {
       const candlesPromise = fetchFullHistory(ex, sym, tf, true);
-      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 5000));
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2500));
       const candles = await Promise.race([candlesPromise, timeoutPromise]);
       if (Array.isArray(candles) && candles.length >= 20) {
         scannerCandleCache.set(key, {
@@ -3253,9 +3411,10 @@ server.listen(PORT, () => {
     if (isScanningPatterns) return;
     isScanningPatterns = true;
     const startTime = Date.now();
+    let nextDelayMs = 1500;
 
     try {
-      // ── Scan ALL crypto pairs on ALL exchanges (no limit) ──
+      // ── Scan liquid crypto pairs on all exchanges (top liquid coins) ──
       const list = Array.from(tickers.values())
         .filter(t => {
           if (!t || !t.key || !t.p || t.p <= 0) return false;
@@ -3264,17 +3423,21 @@ server.listen(PORT, () => {
           if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") || k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) return false;
           return true;
         })
-        .sort((a, b) => (b.v || 0) - (a.v || 0)); // Most liquid first for batch ordering
+        .sort((a, b) => (b.v || 0) - (a.v || 0))
+        .slice(0, 1500); // Expanded to top 1500 liquid pairs (~700+ unique coins across all exchanges)
 
       if (list.length === 0) {
-        isScanningPatterns = false;
-        setTimeout(scanAllPatterns, 5000);
+        // Deliberately no reschedule here: the `finally` block below always
+        // re-arms the loop. Scheduling in both places spawned duplicate scan
+        // chains on every empty-ticker cycle during startup.
+        nextDelayMs = 10000;
         return;
       }
 
-      const timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"];
+      const activeTimeframes = ["1m", "5m", "15m", "1h", "4h"];
+      const now = Date.now();
       let newSignalsCount = 0;
-      const PARALLEL_CONCURRENCY = 16;
+      const PARALLEL_CONCURRENCY = 40;
 
       // Use a Map for O(1) keyed replacement instead of O(n) .filter() on every coin
       if (!scanAllPatterns._pMap) scanAllPatterns._pMap = new Map();
@@ -3290,13 +3453,13 @@ server.listen(PORT, () => {
           const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
           const coinKey = `${ex}:${sym}`;
 
-          for (const tf of timeframes) {
+          for (const tf of activeTimeframes) {
             try {
               const candles = await getCachedCandlesForScanner(ex, sym, tf);
               if (!candles || candles.length < 25) continue;
 
               const lastCandle = candles[candles.length - 1];
-              const curPrice = lastCandle ? lastCandle.c : (t.p || 0);
+              const curPrice = (t && t.p > 0) ? t.p : (lastCandle ? lastCandle.c : 0);
 
               // ── Unified single-pass formation scan (1 normalize + 1 swings + 1 ATR) ──
               const formations = serverLevels.scanAll(candles, 2);
@@ -3337,13 +3500,11 @@ server.listen(PORT, () => {
                 delete cachedFormationMaps.retest[tf][coinKey];
               }
 
-              // ── Pattern signals (patternDetector already calls formationEngine
-              //    internally, but those results are cached in its own scope) ──
+              // ── Pattern signals ──
               const meta = { ex, sym, base, tf };
               const signals = patternDetector.scanCandles(meta, candles);
 
               if (signals && signals.length > 0) {
-                // O(1) keyed replacement instead of O(n) filter
                 const mapKey = `${coinKey}:${tf}`;
                 pMap.set(mapKey, signals);
                 newSignalsCount += signals.length;
@@ -3352,13 +3513,13 @@ server.listen(PORT, () => {
             } catch (_) {}
           }
         }));
-        // Micro-yield between batches
+        // Smooth micro-yield between batches to keep event loop latency < 1ms
         if (i + PARALLEL_CONCURRENCY < list.length) {
-          await new Promise(r => setTimeout(r, 15));
+          await new Promise(r => setTimeout(r, 5));
         }
       }
 
-      // Rebuild flat patternsCache from map (already deduped)
+      // Rebuild flat patternsCache from map
       const allSignals = [];
       for (const sigs of pMap.values()) {
         for (let i = 0; i < sigs.length; i++) allSignals.push(sigs[i]);
@@ -3366,8 +3527,8 @@ server.listen(PORT, () => {
       allSignals.sort((a, b) => b.ts - a.ts);
       patternsCache = allSignals.length > 5000 ? allSignals.slice(0, 5000) : allSignals;
 
-      // Evict stale entries from pMap (older than 10 minutes)
-      if (pMap.size > 2000) {
+      // Evict stale entries from pMap
+      if (pMap.size > 5000) {
         const cutoff = Date.now() - 600000;
         for (const [key, sigs] of pMap) {
           if (!sigs.length || (sigs[0].ts && sigs[0].ts < cutoff)) pMap.delete(key);
@@ -3375,108 +3536,153 @@ server.listen(PORT, () => {
       }
 
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`[PATTERNS 24/7] Cycle done in ${elapsedSec}s. ${newSignalsCount} signals. Formations: ${serverFormationsMap.size}. Coins: ${list.length}`);
+      if (newSignalsCount > 0 || Math.random() < 0.05) {
+        console.log(`[PATTERNS 24/7] Fast cycle done in ${elapsedSec}s. ${newSignalsCount} signals. Formations: ${serverFormationsMap.size}. Liquid coins: ${list.length}`);
+      }
     } catch (err) {
       console.error("[PATTERNS] Error during scan:", err);
     } finally {
       isScanningPatterns = false;
-      setTimeout(scanAllPatterns, 6000);
+      setTimeout(scanAllPatterns, nextDelayMs);
     }
   }
 
   // 24/7 Autonomous Server-Side Formation Alert Dispatcher
   const serverFormationAlertCooldown = new Map();
+  const FORMATION_COOLDOWN_MAX = 40000;
+  const FORMATION_COOLDOWN_TTL_MS = 2 * 60 * 60 * 1000;
+  const FORMATION_FAILED_RETRY_MS = 60 * 1000;
+  let lastFormationCooldownPruneAt = 0;
 
-  async function sendServerTelegramAlert(chatId, caption, photoBuffer) {
-    const token = process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
+  // The key space is subscribers x 1500 tickers x 5 timeframes x 3 pattern
+  // types, so this map has to be pruned or it grows without bound for the whole
+  // process lifetime.
+  function pruneFormationCooldowns(now) {
+    if (now - lastFormationCooldownPruneAt < 60000 && serverFormationAlertCooldown.size < FORMATION_COOLDOWN_MAX) return;
+    lastFormationCooldownPruneAt = now;
+    for (const [key, ts] of serverFormationAlertCooldown) {
+      if (now - ts > FORMATION_COOLDOWN_TTL_MS) serverFormationAlertCooldown.delete(key);
+    }
+    if (serverFormationAlertCooldown.size > FORMATION_COOLDOWN_MAX) {
+      const entries = Array.from(serverFormationAlertCooldown.entries()).sort((a, b) => a[1] - b[1]);
+      const excess = serverFormationAlertCooldown.size - FORMATION_COOLDOWN_MAX;
+      for (let i = 0; i < excess; i++) serverFormationAlertCooldown.delete(entries[i][0]);
+    }
+  }
 
+  // ── In-Play Movers Cache (top active gainers + losers by |chg%| with 24h vol) ──
+  let inPlayMoversSet = new Set();
+  let inPlayLastUpdate = 0;
+  function refreshInPlayMovers() {
+    const now = Date.now();
+    if (now - inPlayLastUpdate < 8000) return; // refresh every 8s
+    inPlayLastUpdate = now;
+    const all = Array.from(tickers.values())
+      .filter(t => t && t.key && t.p > 0 && typeof t.chg === "number" && Number.isFinite(t.chg))
+      .sort((a, b) => Math.abs(b.chg) - Math.abs(a.chg));
+    const topMovers = all.slice(0, 100); // top 100 movers
+    const newSet = new Set();
+    for (const t of topMovers) {
+      newSet.add(t.key);
+      const colonIdx = t.key.indexOf(':');
+      if (colonIdx > 0) {
+        const ex = t.key.substring(0, colonIdx);
+        const sym = t.key.substring(colonIdx + 1);
+        const cleanSym = sym.replace(/_SPOT$/i, "");
+        const base = t.base || cleanSym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '');
+        newSet.add(sym);
+        newSet.add(cleanSym);
+        newSet.add(base);
+        newSet.add(`${ex}:${cleanSym}`);
+      }
+    }
+    inPlayMoversSet = newSet;
+  }
+
+  // Routes formation alerts through the shared outbound queue so they obey the
+  // same global/per-chat Telegram rate limits as pump/dump alerts and honour
+  // retry_after instead of being dropped on 429. Returns true only on confirmed
+  // delivery — callers rely on that to decide whether to arm a cooldown.
+  async function sendServerTelegramAlert(chatId, caption, photoBuffer, group) {
     if (userStore && typeof userStore.isTelegramAlertsEnabled === "function") {
       if (!userStore.isTelegramAlertsEnabled(chatId)) {
         return false;
       }
     }
 
-    if (photoBuffer && Buffer.isBuffer(photoBuffer) && token) {
-      try {
-        const blob = new Blob([photoBuffer], { type: "image/png" });
-        const form = new FormData();
-        form.append("chat_id", String(chatId));
-        form.append("caption", caption);
-        form.append("parse_mode", "HTML");
-        form.append("photo", blob, "chart_alert.png");
-
-        const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-          method: "POST",
-          body: form,
-          signal: AbortSignal.timeout(10000)
-        });
-        const parsed = await tgRes.json();
-        if (parsed.ok) {
-          console.log(`[24/7 TG PHOTO SENT] Sent chart photo for alert to ${chatId}`);
-          return true;
-        }
-        console.warn(`[24/7 TG PHOTO FAIL]`, parsed.description);
-      } catch (e) {
-        console.warn(`[24/7 TG PHOTO SEND FAIL]`, e.message);
-      }
-    }
-
-    // Fallback to text message
-    if (telegramBot && typeof telegramBot.sendTelegramMessage === "function") {
-      return telegramBot.sendTelegramMessage(chatId, caption);
-    }
-    if (token) {
-      try {
-        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: String(chatId),
-            text: caption,
-            parse_mode: "HTML",
-            disable_web_page_preview: true
-          }),
-          signal: AbortSignal.timeout(8000)
-        });
-        const parsed = await res.json();
-        return !!parsed.ok;
-      } catch (_) {}
-    }
-    return false;
+    const res = await telegramQueue.enqueue({ chatId, text: caption, photoBuffer, group });
+    return !!(res && res.ok);
   }
 
   function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice, rawCandles) {
     if (!Array.isArray(signals) || signals.length === 0) return;
     const now = Date.now();
-    const allUsers = Object.values(userStore.getAllUsersRaw ? userStore.getAllUsersRaw() : {});
+    pruneFormationCooldowns(now);
 
+    // ── Validated Instant WebSocket Broadcast to Website Clients ──
+    for (const signal of signals) {
+      if (!signal || !signal.type || !signal.sym) continue;
+      const actualPrice = signal.curPrice || fallbackCurPrice || signal.price;
+      const touches = signal.meta?.touches || (signal.meta?.p1Idx !== undefined ? 2 : 1);
+      const dist = signal.meta?.dist !== undefined ? Number(signal.meta.dist) : 0.5;
+
+      // Filter out signals that are too far away or not enough touches
+      if (dist > 1.0 || touches < 2) continue;
+
+      let typeName = "";
+      if (signal.type === "trendline") {
+        typeName = "Наклонный уровень (Наклонка)";
+        const isResistance = signal.direction === "short" || signal.meta?.tlType === "desc" || signal.meta?.direction === "up";
+        if (isResistance && actualPrice >= signal.price) continue;
+        if (!isResistance && actualPrice <= signal.price) continue;
+      } else if (signal.type === "level") {
+        typeName = "Горизонтальный уровень (Горизонталка)";
+        const isSupport = signal.direction === "long" || signal.meta?.levelType === "support" || signal.meta?.direction === "down";
+        if (!isSupport && actualPrice >= signal.price) continue;
+        if (isSupport && actualPrice <= signal.price) continue;
+      } else if (signal.type === "retest") {
+        typeName = "Подтвержденный ретест (Ретест)";
+      } else {
+        continue;
+      }
+
+      broadcastAlert("formation_alert", {
+        ex: signal.ex,
+        sym: signal.sym,
+        base: signal.base,
+        tf: signal.tf,
+        type: signal.type,
+        typeName,
+        price: signal.price,
+        targetPrice: signal.price,
+        curPrice: actualPrice,
+        touches,
+        distPct: dist.toFixed(2),
+        direction: signal.direction,
+        meta: signal.meta,
+        ts: now
+      });
+    }
+
+    const allUsers = Object.values(userStore.getAllUsersRaw ? userStore.getAllUsersRaw() : {});
     const subscribers = [];
     const seenChatIds = new Set();
 
     for (const u of allUsers) {
       if (!u || u.blocked) continue;
-      const chatId = String(u.telegramChatId || u.telegramId || u.tgChatId || u.chatId || "").trim();
+      const userChatId = String(u.telegramChatId || u.telegramId || u.tgChatId || u.chatId || "").trim();
+      const globalOverride = userChatId ? (global._formationAlertsByChatId && global._formationAlertsByChatId.get(userChatId)) : null;
+      const prefs = {
+        ...((u.preferences && u.preferences.formationAlerts) || 
+            (u.preferences && u.preferences.notifications && u.preferences.notifications.formationAlerts) || 
+            u.formationAlerts || {}),
+        ...(globalOverride || {})
+      };
+      const chatId = String(userChatId || prefs.telegramChatId || "").trim();
       if (!chatId) continue;
 
-      const isProOrAdmin = 
-        u.plan === "pro" || 
-        u.plan === "vip" ||
-        u.role === "admin" ||
-        u.role === "PRO Trader" ||
-        u.role === "VIP Trader" ||
-        u.isAdmin === true ||
-        (u.planExpiresAt && new Date(u.planExpiresAt).getTime() > now) ||
-        chatId === String(process.env.ADMIN_CHAT_ID || "").trim() ||
-        chatId === String(process.env.TELEGRAM_ADMIN_ID || "").trim();
-
-      if (!isProOrAdmin) continue;
-
-      const prefs = (u.preferences && u.preferences.formationAlerts) || 
-                    (u.preferences && u.preferences.notifications && u.preferences.notifications.formationAlerts) || 
-                    u.formationAlerts || {};
-
-      // If user has not explicitly disabled, default to enabled for connected TG users
-      const tgEnabled = prefs.tgEnabled !== undefined ? prefs.tgEnabled : true;
+      const isMasterAdmin = chatId === String(process.env.ADMIN_CHAT_ID || "").trim() || chatId === String(process.env.TELEGRAM_ADMIN_ID || "").trim();
+      const tgEnabled = prefs.tgEnabled !== undefined ? !!prefs.tgEnabled : (isMasterAdmin ? true : false);
       if (!tgEnabled) continue;
 
       subscribers.push({
@@ -3488,28 +3694,69 @@ server.listen(PORT, () => {
           exchanges: Array.isArray(prefs.exchanges) && prefs.exchanges.length > 0 ? prefs.exchanges : ["all"],
           blacklist: Array.isArray(prefs.blacklist) ? prefs.blacklist : [],
           blacklistCustom: typeof prefs.blacklistCustom === "string" ? prefs.blacklistCustom : "",
+          inPlayOnly: !!prefs.inPlayOnly,
           trendline: {
-            enabled: prefs.trendline?.enabled !== undefined ? prefs.trendline.enabled : true,
+            enabled: prefs.trendline?.enabled !== undefined ? !!prefs.trendline.enabled : true,
             timeframes: Array.isArray(prefs.trendline?.timeframes) && prefs.trendline.timeframes.length > 0 ? prefs.trendline.timeframes : ["5m", "15m", "1h", "4h"],
-            minTouches: Number(prefs.trendline?.minTouches) || 2,
-            distancePct: Number(prefs.trendline?.distancePct) || 1.0,
+            minTouches: (prefs.trendline?.minTouches !== undefined && Number(prefs.trendline?.minTouches) > 0) ? Number(prefs.trendline.minTouches) : 4,
+            distancePct: (prefs.trendline?.distancePct !== undefined && Number(prefs.trendline?.distancePct) > 0) ? Number(prefs.trendline.distancePct) : 0.5,
             direction: prefs.trendline?.direction || "all"
           },
           level: {
-            enabled: prefs.level?.enabled !== undefined ? prefs.level.enabled : true,
+            enabled: prefs.level?.enabled !== undefined ? !!prefs.level.enabled : true,
             timeframes: Array.isArray(prefs.level?.timeframes) && prefs.level.timeframes.length > 0 ? prefs.level.timeframes : ["5m", "15m", "1h", "4h"],
-            minTouches: Number(prefs.level?.minTouches) || 2,
-            distancePct: Number(prefs.level?.distancePct) || 1.0,
+            minTouches: (prefs.level?.minTouches !== undefined && Number(prefs.level?.minTouches) > 0) ? Number(prefs.level.minTouches) : 4,
+            distancePct: (prefs.level?.distancePct !== undefined && Number(prefs.level?.distancePct) > 0) ? Number(prefs.level.distancePct) : 0.5,
             direction: prefs.level?.direction || "all"
           },
           retest: {
-            enabled: prefs.retest?.enabled !== undefined ? prefs.retest.enabled : true,
+            enabled: prefs.retest?.enabled !== undefined ? !!prefs.retest.enabled : true,
             timeframes: Array.isArray(prefs.retest?.timeframes) && prefs.retest.timeframes.length > 0 ? prefs.retest.timeframes : ["5m", "15m", "1h", "4h"],
             direction: prefs.retest?.direction || "all"
           }
         }
       });
       seenChatIds.add(chatId);
+    }
+
+    // Also include any standalone configured chatIds from memory
+    if (global._formationAlertsByChatId) {
+      for (const [cId, s] of global._formationAlertsByChatId.entries()) {
+        if (!seenChatIds.has(cId) && s && s.tgEnabled !== false) {
+          subscribers.push({
+            userId: `chat_${cId}`,
+            chatId: cId,
+            settings: {
+              tgEnabled: true,
+              cooldownSeconds: Number(s.cooldownSeconds) || 300,
+              exchanges: Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"],
+              blacklist: Array.isArray(s.blacklist) ? s.blacklist : [],
+              blacklistCustom: typeof s.blacklistCustom === "string" ? s.blacklistCustom : "",
+              inPlayOnly: !!s.inPlayOnly,
+              trendline: {
+                enabled: s.trendline?.enabled !== undefined ? !!s.trendline.enabled : true,
+                timeframes: Array.isArray(s.trendline?.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h", "4h"],
+                minTouches: (s.trendline?.minTouches !== undefined && Number(s.trendline?.minTouches) > 0) ? Number(s.trendline.minTouches) : 4,
+                distancePct: (s.trendline?.distancePct !== undefined && Number(s.trendline?.distancePct) > 0) ? Number(s.trendline.distancePct) : 0.5,
+                direction: s.trendline?.direction || "all"
+              },
+              level: {
+                enabled: s.level?.enabled !== undefined ? !!s.level.enabled : true,
+                timeframes: Array.isArray(s.level?.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["5m", "15m", "1h", "4h"],
+                minTouches: (s.level?.minTouches !== undefined && Number(s.level?.minTouches) > 0) ? Number(s.level.minTouches) : 4,
+                distancePct: (s.level?.distancePct !== undefined && Number(s.level?.distancePct) > 0) ? Number(s.level.distancePct) : 0.5,
+                direction: s.level?.direction || "all"
+              },
+              retest: {
+                enabled: s.retest?.enabled !== undefined ? !!s.retest.enabled : true,
+                timeframes: Array.isArray(s.retest?.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"],
+                direction: s.retest?.direction || "all"
+              }
+            }
+          });
+          seenChatIds.add(cId);
+        }
+      }
     }
 
     const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
@@ -3519,18 +3766,22 @@ server.listen(PORT, () => {
         chatId: adminChatId,
         settings: {
           tgEnabled: true,
-          cooldownSeconds: 300,
+          cooldownSeconds: 180,
           exchanges: ["all"],
           blacklist: [],
           blacklistCustom: "",
-          trendline: { enabled: true, timeframes: ["5m", "15m", "1h", "4h"], minTouches: 2, distancePct: 1.0, direction: "all" },
-          level: { enabled: true, timeframes: ["5m", "15m", "1h", "4h"], minTouches: 2, distancePct: 1.0, direction: "all" },
-          retest: { enabled: true, timeframes: ["5m", "15m", "1h", "4h"], direction: "all" }
+          trendline: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], minTouches: 4, distancePct: 0.5, direction: "all" },
+          level: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], minTouches: 4, distancePct: 0.5, direction: "all" },
+          retest: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], direction: "all" }
         }
       });
+      seenChatIds.add(adminChatId);
     }
 
     if (subscribers.length === 0) return;
+
+    // Refresh In-Play movers set before processing signals
+    refreshInPlayMovers();
 
     for (const signal of signals) {
       if (!signal || !signal.type || !signal.sym) continue;
@@ -3538,9 +3789,26 @@ server.listen(PORT, () => {
       const touches = meta?.touches || (meta?.p1Idx !== undefined ? 2 : 1);
       const dist = meta?.dist !== undefined ? Number(meta.dist) : 0.5;
 
+      // Filter out distant signals before checking subscriber settings
+      if (dist > 1.2 || touches < 2) continue;
+
+      const matchingSubsForSignal = [];
+
       for (const sub of subscribers) {
         const { chatId, settings: s, userId } = sub;
         if (!s || !s.tgEnabled) continue;
+
+        // Check In-Play filter: skip if user wants only active movers and this coin is not in the set
+        if (s.inPlayOnly) {
+          const cleanSym = String(sym || "").replace(/_SPOT$/i, "");
+          const baseSym = String(base || sym).replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "");
+          const isInPlay = inPlayMoversSet.has(`${ex}:${sym}`) ||
+                           inPlayMoversSet.has(`${ex}:${cleanSym}`) ||
+                           inPlayMoversSet.has(sym) ||
+                           inPlayMoversSet.has(cleanSym) ||
+                           inPlayMoversSet.has(baseSym);
+          if (!isInPlay) continue;
+        }
 
         // Check exchange filter
         const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
@@ -3554,22 +3822,25 @@ server.listen(PORT, () => {
         const allBl = new Set([...bl, ...customBl]);
         if (allBl.has(rawSym) || allBl.has(baseSym)) continue;
 
-        const actualPrice = signal.curPrice || fallbackCurPrice || price;
+        const actualPrice = (fallbackCurPrice && fallbackCurPrice > 0) ? fallbackCurPrice : (signal.curPrice || price);
 
         // Check pattern type enabled & thresholds
         if (type === "trendline") {
           if (!s.trendline?.enabled) continue;
-          const allowedTfs = Array.isArray(s.trendline.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"];
+          const allowedTfs = Array.isArray(s.trendline.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h", "4h"];
           if (!allowedTfs.includes(tf)) continue;
-          const minT = Number(s.trendline.minTouches) || 2;
-          const maxD = Number(s.trendline.distancePct) || 1.0;
+          const minT = Number(s.trendline.minTouches) || 4;
+          const maxD = Number(s.trendline.distancePct) || 0.5;
           const targetDir = s.trendline.direction || "all";
-          if (touches < minT || dist > maxD) continue;
 
-          // Reject if price has already broken through the trendline
-          const isResistance = signal.direction === "short" || meta?.tlType === "desc" || meta?.direction === "up";
-          if (isResistance && actualPrice >= price * 1.0005) continue;
-          if (!isResistance && actualPrice <= price * 0.9995) continue;
+          // Calculate LIVE distance using real-time price
+          const liveDist = actualPrice > 0 ? (Math.abs(actualPrice - price) / actualPrice) * 100 : dist;
+          if (touches < minT || liveDist > maxD) continue;
+
+          // Reject if price has already broken through or crossed past the trendline
+          const isResistance = signal.direction === "short" || meta?.tlType === "desc" || meta?.direction === "up" || meta?.isHigh === true;
+          if (isResistance && actualPrice >= price) continue;
+          if (!isResistance && actualPrice <= price) continue;
 
           if (targetDir !== "all") {
             const sigDir = signal.direction === "long" ? "down" : "up";
@@ -3578,17 +3849,19 @@ server.listen(PORT, () => {
           }
         } else if (type === "level") {
           if (!s.level?.enabled) continue;
-          const allowedTfs = Array.isArray(s.level.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"];
+          const allowedTfs = Array.isArray(s.level.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["5m", "15m", "1h", "4h"];
           if (!allowedTfs.includes(tf)) continue;
-          const minT = Number(s.level.minTouches) || 2;
-          const maxD = Number(s.level.distancePct) || 1.0;
+          const minT = Number(s.level.minTouches) || 4;
+          const maxD = Number(s.level.distancePct) || 0.5;
           const targetDir = s.level.direction || "all";
-          if (touches < minT || dist > maxD) continue;
+
+          const liveDist = actualPrice > 0 ? (Math.abs(actualPrice - price) / actualPrice) * 100 : dist;
+          if (touches < minT || liveDist > maxD) continue;
 
           // Reject if price has already broken through the horizontal level
           const isSupport = signal.direction === "long" || meta?.levelType === "support" || meta?.direction === "down";
-          if (!isSupport && actualPrice >= price * 1.0005) continue;
-          if (isSupport && actualPrice <= price * 0.9995) continue;
+          if (!isSupport && actualPrice >= price) continue;
+          if (isSupport && actualPrice <= price) continue;
 
           if (targetDir !== "all") {
             if ((targetDir === "support" || targetDir === "down" || targetDir === "long" || targetDir === "Long") && !isSupport) continue;
@@ -3596,7 +3869,7 @@ server.listen(PORT, () => {
           }
         } else if (type === "retest") {
           if (!s.retest?.enabled) continue;
-          const allowedTfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"];
+          const allowedTfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"];
           if (!allowedTfs.includes(tf)) continue;
           const targetDir = s.retest.direction || "all";
           if (targetDir !== "all") {
@@ -3614,8 +3887,18 @@ server.listen(PORT, () => {
         const lastSent = serverFormationAlertCooldown.get(cdKey) || 0;
         if (now - lastSent < cooldownSec * 1000) continue;
 
+        // Armed provisionally to prevent duplicate dispatch from overlapping
+        // scans; shortened to a brief retry window below if the send fails, so
+        // a 429 or network error does not silently swallow the alert for the
+        // whole cooldown period.
         serverFormationAlertCooldown.set(cdKey, now);
+        matchingSubsForSignal.push({ chatId, actualPrice, cdKey, cooldownMs: cooldownSec * 1000 });
+      }
 
+      if (matchingSubsForSignal.length === 0) continue;
+
+      // Asynchronously render chart ONCE and send to all matching subscribers
+      (async () => {
         const exNames = {
           BN: "Binance",
           BB: "Bybit",
@@ -3630,21 +3913,33 @@ server.listen(PORT, () => {
           AD: "AsterDex"
         };
         const exFull = exNames[ex] || ex;
+        const actualPrice = matchingSubsForSignal[0].actualPrice;
+
+        function formatDynamicPrice(p) {
+          const num = Number(p);
+          if (!Number.isFinite(num) || num === 0) return "0";
+          if (num >= 100) return num.toFixed(2);
+          if (num >= 1) return num.toFixed(4);
+          if (num >= 0.01) return num.toFixed(5);
+          if (num >= 0.0001) return num.toFixed(7);
+          return num.toFixed(8);
+        }
+
+        const priceStr = formatDynamicPrice(price);
+        const actualPriceStr = formatDynamicPrice(actualPrice);
 
         let msg = "";
         if (type === "trendline") {
-          const dirLabel = signal.direction === "long" ? "Long (Поддержка)" : "Short (Сопротивление)";
           msg =
             `⚡ <b>Сигнал формации: Наклонный уровень (Наклонка)</b>\n\n` +
             `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
             `• <b>Таймфрейм:</b> ${tf}\n` +
-            `• <b>Направление:</b> ${dirLabel}\n` +
             `• <b>Касания:</b> ${touches} касания\n` +
             `• <b>Дистанция:</b> ${dist}% до линии\n` +
-            `• <b>Цена наклона:</b> $${price}\n` +
-            `• <b>Текущая цена:</b> $${actualPrice}\n` +
+            `• <b>Цена наклона:</b> $${priceStr}\n` +
+            `• <b>Текущая цена:</b> $${actualPriceStr}\n` +
             `─────────────────────────\n` +
-            `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
+            `⚡ <b>Obsidian Screener</b>`;
         } else if (type === "level") {
           const isSupport = signal.direction === "long" || meta?.levelType === "support" || meta?.direction === "down";
           const dirLabel = isSupport ? "Long (Поддержка)" : "Short (Сопротивление)";
@@ -3655,10 +3950,10 @@ server.listen(PORT, () => {
             `• <b>Тип уровня:</b> ${dirLabel}\n` +
             `• <b>Касания:</b> ${touches} касания\n` +
             `• <b>Дистанция:</b> ${dist}% до уровня\n` +
-            `• <b>Цена уровня:</b> $${price}\n` +
-            `• <b>Текущая цена:</b> $${actualPrice}\n` +
+            `• <b>Цена уровня:</b> $${priceStr}\n` +
+            `• <b>Текущая цена:</b> $${actualPriceStr}\n` +
             `─────────────────────────\n` +
-            `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
+            `⚡ <b>Obsidian Screener</b>`;
         } else if (type === "retest") {
           const dirLabel = signal.direction === "long" ? "Long (Отскок вверх)" : "Short (Отскок вниз)";
           const srcLabel = meta?.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";
@@ -3669,10 +3964,10 @@ server.listen(PORT, () => {
             `• <b>Тип ретеста:</b> ${dirLabel}\n` +
             `• <b>Основа:</b> ${srcLabel}\n` +
             `• <b>Статус:</b> Подтвержденный отскок (Confirmed)\n` +
-            `• <b>Цена уровня:</b> $${price}\n` +
-            `• <b>Текущая цена:</b> $${actualPrice}\n` +
+            `• <b>Цена уровня:</b> $${priceStr}\n` +
+            `• <b>Текущая цена:</b> $${actualPriceStr}\n` +
             `─────────────────────────\n` +
-            `⚡ <b>Obsidian 24/7 Screener Radar</b>`;
+            `⚡ <b>Obsidian Screener</b>`;
         }
 
         let photoBuffer = null;
@@ -3695,12 +3990,26 @@ server.listen(PORT, () => {
         }
 
         if (msg) {
-          console.log(`[24/7 TG ALERT] Dispatching ${type} ${photoBuffer ? "with photo" : ""} for ${sym} (${tf}) to chatId ${chatId}`);
-          sendServerTelegramAlert(chatId, msg, photoBuffer).catch(err => {
-            console.warn(`[24/7 ALERT ERROR] Failed to send to ${chatId}:`, err.message);
+          // One shared group token => the chart is uploaded once and reused via
+          // file_id for every other recipient of this same signal.
+          const groupToken = `fm:${ex}:${sym}:${type}:${tf}:${now}`;
+          const results = await Promise.allSettled(
+            matchingSubsForSignal.map(({ chatId }) => sendServerTelegramAlert(chatId, msg, photoBuffer, groupToken))
+          );
+          results.forEach((r, i) => {
+            const delivered = r.status === "fulfilled" && r.value === true;
+            if (delivered) return;
+            const target = matchingSubsForSignal[i];
+            // Retry soon rather than after the full cooldown, without releasing
+            // the key entirely (which would hot-loop on a Telegram outage).
+            const retryAt = Date.now() - target.cooldownMs + FORMATION_FAILED_RETRY_MS;
+            serverFormationAlertCooldown.set(target.cdKey, retryAt);
+            console.warn(`[24/7 ALERT NOT DELIVERED] ${ex}:${sym} ${type} ${tf} -> ${target.chatId}; retry in ${Math.round(FORMATION_FAILED_RETRY_MS / 1000)}s`);
           });
         }
-      }
+      })().catch(err => {
+        console.warn(`[24/7 ALERT ERROR]`, err.message);
+      });
     }
   }
 
@@ -3711,11 +4020,14 @@ server.listen(PORT, () => {
       telegramBot,
       userStore,
       isNonCryptoOrStock,
+      broadcastAlert: (type, data) => broadcastAlert(type, data),
       fetchCandles: async (ex, sym, tf) => {
         try {
-          const key = cacheKey(ex, sym, tf || "1m", true);
-          const cached = klinesCache.get(key);
-          if (cached && cached.data && Array.isArray(cached.data) && cached.data.length >= 30) {
+          const cleanSym = String(sym || "").replace(/_SPOT$/i, "");
+          const key = cacheKey(ex, cleanSym, tf || "1m", true);
+          const cached = klinesCache.get(key) || klinesCache.get(cacheKey(ex, sym, tf || "1m", true));
+          const now = Date.now();
+          if (cached && cached.at && (now - cached.at < 30000) && cached.data && Array.isArray(cached.data) && cached.data.length >= 30) {
             const candles = [];
             for (let i = 0; i < cached.data.length; i += 6) {
               candles.push({
@@ -3729,9 +4041,13 @@ server.listen(PORT, () => {
             }
             return candles;
           }
-          const candles = await fetchFullHistory(ex, sym, tf || "1m", true);
-          if (Array.isArray(candles) && candles.length >= 10) {
-            return candles;
+          // Direct live exchange history fetch
+          const fetched = await Promise.race([
+            fetchFullHistory(ex, cleanSym, tf || "1m", true),
+            new Promise(r => setTimeout(() => r(null), 3500))
+          ]);
+          if (Array.isArray(fetched) && fetched.length >= 5) {
+            return fetched;
           }
         } catch (_) {}
         return null;
@@ -3739,12 +4055,9 @@ server.listen(PORT, () => {
     });
   }
 
+  // Initial trigger after 2 seconds
+  setTimeout(scanAllPatterns, 2000);
 
-
-  // Initial trigger after 3 seconds
-  setTimeout(scanAllPatterns, 3000);
-
-  
   // Periodic snapshots as data arrives
   let snapCount = 0;
   const snapTimer = setInterval(() => {

@@ -132,13 +132,12 @@
     return n.toPrecision(5).replace(/0+$/, "").replace(/\.$/, "");
   }
 
-  function formatMoney(value) {
+  function formatMoney(value, includeSign = false) {
     const n = number(value);
-    const sign = n >= 0 ? "+" : "-";
+    const sign = includeSign ? (n >= 0 ? "+" : "-") : (n < 0 ? "-" : "");
     const abs = Math.abs(n);
     if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
     if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(2)}K`;
-    if (abs >= 10) return `${sign}$${abs.toFixed(2)}`;
     return `${sign}$${abs.toFixed(2)}`;
   }
 
@@ -181,13 +180,12 @@
     return { bx, by, width, height };
   }
 
-  function rightScalePill(ctx, x, y, text, color, bgColor = "rgba(12, 16, 26, 0.95)") {
-    if (!ctx || !text) return { bx: 0, by: 0, width: 68, height: 18 };
+  function rightScalePill(ctx, x, y, text, color, bgColor = "rgba(12, 16, 26, 0.95)", fontSize = 11, height = 20) {
+    if (!ctx || !text) return { bx: 0, by: 0, width: 68, height };
     ctx.save();
-    ctx.font = "bold 9.5px Inter, -apple-system, sans-serif";
+    ctx.font = `600 ${fontSize}px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
     const textWidth = ctx.measureText ? (ctx.measureText(text)?.width || 56) : 56;
-    const width = Math.max(68, textWidth + 12);
-    const height = 18;
+    const width = Math.max(64, textWidth + 12);
     // Pinned near the price scale (inside the chart area just to the left of the scale line)
     // Never cut off by canvas border, and leaves price axis numbers fully legible!
     const bx = Math.max(4, x - width - 6);
@@ -206,7 +204,7 @@
     ctx.shadowColor = "transparent";
     ctx.beginPath();
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1.4;
     ctx.moveTo(bx + width, y);
     ctx.lineTo(x, y);
     ctx.stroke();
@@ -277,7 +275,7 @@
     };
     const actionStr = `${actionNames[item.action] || "Сделка"} (${item.side})`;
     const priceStr = `Цена: $${formatPrice(item.price)}`;
-    const qtyStr = item.qty > 0 ? `Объем: ${item.qty} ($${formatMoney(item.price * item.qty)})` : "";
+    const qtyStr = item.qty > 0 ? `Объем: ${item.qty} (${formatMoney(item.price * item.qty, false)})` : "";
     const timeStr = item.time > 0 ? new Date(item.time).toLocaleTimeString() : "";
 
     const lines = [actionStr, priceStr];
@@ -485,52 +483,14 @@
           label: `PnL ${formatPrice(markPrice)}`
         });
 
-        // ── 1.5 PROMINENT PNL BADGE DIRECTLY ON THE CHART ──
+        // ── 1.5 PNL & TVH RIGHT SCALE PILLS (1 плашка PnL и 1 плашка ТВХ) ──
         const sign = pnlPct >= 0 ? "+" : "";
         let pnlText = `${sign}${pnlPct.toFixed(2)}%`;
         if (dollarPnl !== 0 && Number.isFinite(dollarPnl)) {
-          pnlText += ` · ${dollarPnl >= 0 ? "+" : ""}${formatMoney(dollarPnl)}`;
-        }
-        if (isOpen) {
-          pnlText = `● LIVE ${pnlText}`;
+          pnlText += ` · ${formatMoney(dollarPnl, true)}`;
         }
 
-        ctx.save();
-        ctx.font = "bold 10px Inter, -apple-system, sans-serif";
-        const tw = ctx.measureText(pnlText).width;
-        const bw = tw + 14;
-        const bh = 20;
-        let bx = Math.min(width - bw - 4, zoneRight + 4);
-        let by = Math.max(4, Math.min(height - bh - 4, yMark - bh / 2));
-
-        ctx.fillStyle = isProfit ? "rgba(8, 24, 16, 0.95)" : "rgba(28, 10, 14, 0.95)";
-        ctx.strokeStyle = pnlColor;
-        ctx.lineWidth = 1.2;
-        ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
-        ctx.shadowBlur = 4;
-        roundRect(ctx, bx, by, bw, bh, 4);
-        ctx.fill();
-        ctx.stroke();
-
-        ctx.fillStyle = pnlColor;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(pnlText, bx + bw / 2, by + bh / 2);
-        ctx.restore();
-
-        state.hitRegions.push({
-          type: "rect",
-          cycleKey,
-          isOpen,
-          x: bx - 4,
-          y: by - 4,
-          width: bw + 8,
-          height: bh + 8,
-          label: pnlText
-        });
-
-        // ── 1.6 RIGHT SCALE PILLS (ТВХ и PnL) ──
-        const tvhBox = rightScalePill(ctx, width, yEntry, `ТВХ: ${formatPrice(entryAverage)}`, "#38bdf8", "rgba(10, 24, 40, 0.95)");
+        const tvhBox = rightScalePill(ctx, width, yEntry, `ТВХ: ${formatPrice(entryAverage)}`, "#38bdf8", "rgba(10, 24, 40, 0.95)", 10, 18);
         state.hitRegions.push({
           type: "rect",
           cycleKey,
@@ -543,11 +503,11 @@
         });
 
         let yPnlBadge = yMark;
-        if (Math.abs(yPnlBadge - yEntry) < 20) {
-          yPnlBadge = yEntry + (yPnlBadge >= yEntry ? 20 : -20);
+        if (Math.abs(yPnlBadge - yEntry) < 22) {
+          yPnlBadge = yEntry + (yPnlBadge >= yEntry ? 22 : -22);
         }
         const pnlBg = isProfit ? "rgba(10, 30, 20, 0.95)" : "rgba(34, 12, 18, 0.95)";
-        const pnlBox = rightScalePill(ctx, width, yPnlBadge, pnlText, pnlColor, pnlBg);
+        const pnlBox = rightScalePill(ctx, width, yPnlBadge, pnlText, pnlColor, pnlBg, 11, 20);
         state.hitRegions.push({
           type: "rect",
           cycleKey,
@@ -681,7 +641,7 @@
     if (!market || !token || !EXCHANGE_NAMES[market.ex] || state.loading) return;
 
     const isSameSymbol = market.ex === state.exchange && market.sym === state.symbol;
-    if (!force && isSameSymbol && Date.now() - state.lastFetchAt < 1800) return;
+    if (!force && isSameSymbol && Date.now() - state.lastFetchAt < 650) return;
 
     if (!isSameSymbol) {
       state.executions = [];
@@ -785,7 +745,7 @@
     state.timer = setInterval(() => {
       if (document.visibilityState === "visible") refresh(false);
       hookCanvasMouse();
-    }, 2000);
+    }, 800);
     refresh(true);
   }
 

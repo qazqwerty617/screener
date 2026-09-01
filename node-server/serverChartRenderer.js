@@ -210,8 +210,11 @@ function renderServerChartSnapshot(candles, meta, signal) {
   const toY = (p) => TOP + (maxP - p) * (PH / priceRange);
   const toVolY = (v) => volY + VOL_H - (v / maxVol) * (VOL_H - 15);
 
-  const candleStepW = PW / numCandles;
-  const candleBodyW = Math.max(1.8, Math.min(candleStepW * 0.76, candleStepW - 1.2));
+  const effectiveNum = Math.max(numCandles, 55);
+  const candleStepW = PW / effectiveNum;
+  const candleBodyW = Math.max(1.8, Math.min(13, candleStepW * 0.76));
+  const xOffset = PW - (numCandles * candleStepW);
+  const toX = (idx) => xOffset + idx * candleStepW + candleStepW / 2;
 
   // ── Background Grid ──
   const gridStep = priceRange / 7;
@@ -239,7 +242,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
   // ── Candlesticks & Volumes ──
   for (let i = 0; i < numCandles; i++) {
     const c = candleList[i];
-    const cx = i * candleStepW + candleStepW / 2;
+    const cx = toX(i);
     const isUp = c.c >= c.o;
     const col = isUp ? "#22c55e" : "#ef4444";
 
@@ -271,86 +274,95 @@ function renderServerChartSnapshot(candles, meta, signal) {
   ctx.rect(0, TOP, PW, PH);
   ctx.clip();
 
-  const lastCandleX = (numCandles - 1) * candleStepW + candleStepW / 2;
+  const lastCandleX = toX(numCandles - 1);
 
   if (sigType === "trendline") {
-    let x1, y1, x2, y2;
+    const endPrice = Number(signal?.price) || Number(signal?.meta?.endPrice) || lastCandle.c;
     const offset = candles.length - numCandles;
-    const p1Idx = signal?.meta?.p1Idx !== undefined ? signal.meta.p1Idx - offset : -1;
-    const p2Idx = signal?.meta?.p2Idx !== undefined ? signal.meta.p2Idx - offset : -1;
     const p1Price = signal?.meta?.p1Price;
     const p2Price = signal?.meta?.p2Price;
+    const p1Idx = signal?.meta?.p1Idx;
+    const p2Idx = signal?.meta?.p2Idx;
 
-    if (p1Idx >= 0 && p2Idx >= 0 && p1Price && p2Price && p2Idx > p1Idx) {
-      x1 = p1Idx * candleStepW + candleStepW / 2;
-      y1 = toY(p1Price);
-      x2 = p2Idx * candleStepW + candleStepW / 2;
-      y2 = toY(p2Price);
-    } else {
-      // Find clean tangent swing extrema
-      const isAsc = signal?.direction === "long" || signal?.meta?.tlType === "asc";
-      const swings = [];
-      for (let i = 2; i < numCandles - 2; i++) {
-        if (isAsc) {
-          if (candleList[i].l <= candleList[i - 1].l && candleList[i].l <= candleList[i + 1].l) {
-            swings.push({ idx: i, p: candleList[i].l });
-          }
-        } else {
-          if (candleList[i].h >= candleList[i - 1].h && candleList[i].h >= candleList[i + 1].h) {
-            swings.push({ idx: i, p: candleList[i].h });
-          }
-        }
-      }
-      if (swings.length >= 2) {
-        const s1 = swings[Math.max(0, swings.length - 3)];
-        const s2 = swings[swings.length - 1];
-        x1 = s1.idx * candleStepW + candleStepW / 2;
-        y1 = toY(s1.p);
-        x2 = s2.idx * candleStepW + candleStepW / 2;
-        y2 = toY(s2.p);
-      } else {
-        x1 = Math.max(0, numCandles - 35) * candleStepW + candleStepW / 2;
-        y1 = toY(isAsc ? lastCandle.l : lastCandle.h);
-        x2 = (numCandles - 1) * candleStepW + candleStepW / 2;
-        y2 = toY(signal?.price || lastCandle.c);
-      }
+    let slope = Number(signal?.meta?.slope) || 0;
+    if (p1Price !== undefined && p2Price !== undefined && p2Idx !== undefined && p1Idx !== undefined && p2Idx !== p1Idx) {
+      slope = (p2Price - p1Price) / (p2Idx - p1Idx);
     }
 
-    if (x2 > x1) {
-      const slope = (y2 - y1) / (x2 - x1);
-      const lineEndX = lastCandleX + candleStepW * 3;
-      const lineEndY = y1 + slope * (lineEndX - x1);
+    const rawP1 = p1Idx !== undefined ? p1Idx - offset : -1;
+    const startIdx = Math.max(0, rawP1 >= 0 ? rawP1 : 0);
 
-      ctx.strokeStyle = "#eab308";
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(lineEndX, lineEndY);
-      ctx.stroke();
+    const startPrice = endPrice - slope * (numCandles - 1 - startIdx);
+    const x1 = toX(startIdx);
+    const y1 = toY(startPrice);
 
-      // Subtle touch dots
-      [ { x: x1, y: y1 }, { x: x2, y: y2 } ].forEach(pt => {
+    const lineEndX = lastCandleX + candleStepW * 3;
+    const lineEndY = toY(endPrice + slope * 3);
+
+    ctx.strokeStyle = "#eab308";
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(lineEndX, lineEndY);
+    ctx.stroke();
+
+    // Draw all genuine touch dots along the trendline
+    const touchList = Array.isArray(signal?.meta?.swingIndices) && signal.meta.swingIndices.length > 0
+      ? signal.meta.swingIndices
+      : [signal?.meta?.p1Idx, signal?.meta?.p2Idx].filter(idx => idx !== undefined);
+
+    touchList.forEach(tIdx => {
+      const localIdx = tIdx - offset;
+      if (localIdx >= startIdx && localIdx < numCandles) {
+        const dotX = toX(localIdx);
+        const dotPrice = endPrice - slope * (numCandles - 1 - localIdx);
+        const dotY = toY(dotPrice);
         ctx.fillStyle = "#eab308";
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 2.8, 0, Math.PI * 2);
+        ctx.arc(dotX, dotY, 3.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = "#000000";
         ctx.lineWidth = 1;
         ctx.stroke();
-      });
-    }
+      }
+    });
   } else if (sigType === "level" || sigType === "retest" || sigType === "price_level" || sigType === "price") {
     const lvlPrice = signal?.price || lastCandle.c;
     const ly = toY(lvlPrice);
+    const offset = candles.length - numCandles;
+    const originIdx = Number.isFinite(signal?.meta?.swingIdx) ? Math.max(0, signal.meta.swingIdx - offset) : Math.max(0, numCandles - 45);
+    const originX = toX(originIdx);
 
-    ctx.strokeStyle = (sigType === "retest" || sigType === "price_level" || sigType === "price") ? "#38bdf8" : "#f59e0b";
+    const isRetest = sigType === "retest" || sigType === "price_level" || sigType === "price";
+    const lineColor = isRetest ? "#38bdf8" : "#f59e0b";
+
+    ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.6;
-    ctx.setLineDash([6, 4]);
+    ctx.setLineDash(isRetest ? [6, 4] : []);
     ctx.beginPath();
-    ctx.moveTo(0, ly);
+    ctx.moveTo(originX, ly);
     ctx.lineTo(PW, ly);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    // Draw all genuine touch dots along the horizontal level
+    const touchList = Array.isArray(signal?.meta?.touchIndices) && signal.meta.touchIndices.length > 0
+      ? signal.meta.touchIndices
+      : (Number.isFinite(signal?.meta?.swingIdx) ? [signal.meta.swingIdx] : []);
+
+    ctx.fillStyle = lineColor;
+    for (const tIdx of touchList) {
+      const localIdx = tIdx - offset;
+      if (localIdx >= 0 && localIdx < numCandles) {
+        const dotX = toX(localIdx);
+        ctx.beginPath();
+        ctx.arc(dotX, ly, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
   }
   ctx.restore();
 
@@ -425,7 +437,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
     const prevIntervalBucket = Math.floor(prevT / intervalMs);
 
     if (curIntervalBucket !== prevIntervalBucket || (i === 0 && numCandles < 30)) {
-      const cx = i * candleStepW + candleStepW / 2;
+      const cx = toX(i);
       if (cx >= 45 && cx <= PW - 45 && (cx - lastDrawnX) >= 65) {
         const d = new Date(t + 3 * 3600000); // UTC+3
         const hh = String(d.getUTCHours()).padStart(2, "0");

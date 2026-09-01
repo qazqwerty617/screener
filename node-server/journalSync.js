@@ -14,10 +14,11 @@ async function fetchJson(url, options) {
   return data;
 }
 
-async function fetchBybit(apiKey, apiSecret) {
+async function fetchBybit(apiKey, apiSecret, fast = false) {
   const executions = [];
   let cursor = "";
-  for (let page = 0; page < 5; page++) {
+  const maxPages = fast ? 1 : 5;
+  for (let page = 0; page < maxPages; page++) {
     const timestamp = Date.now().toString();
     const recvWindow = "5000";
     const query = `category=linear&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
@@ -51,10 +52,11 @@ async function fetchBinance(apiKey, apiSecret) {
   }));
 }
 
-async function fetchOkx(apiKey, apiSecret, passphrase) {
+async function fetchOkx(apiKey, apiSecret, passphrase, fast = false) {
   const executions = [];
   let after = "";
-  for (let page = 0; page < 5; page++) {
+  const maxPages = fast ? 1 : 5;
+  for (let page = 0; page < maxPages; page++) {
     const timestamp = new Date().toISOString();
     const requestPath = `/api/v5/trade/fills-history?instType=SWAP&limit=100${after ? `&after=${encodeURIComponent(after)}` : ""}`;
     const signature = crypto.createHmac("sha256", apiSecret).update(timestamp + "GET" + requestPath).digest("base64");
@@ -77,11 +79,11 @@ async function fetchOkx(apiKey, apiSecret, passphrase) {
   return executions;
 }
 
-async function syncJournal({ exchange, apiKey, apiSecret, passphrase }) {
+async function syncJournal({ exchange, apiKey, apiSecret, passphrase, fast = false }) {
   let executions;
-  if (exchange === "BB" || exchange === "Bybit") executions = await fetchBybit(apiKey, apiSecret);
+  if (exchange === "BB" || exchange === "Bybit") executions = await fetchBybit(apiKey, apiSecret, fast);
   else if (exchange === "BN" || exchange === "Binance") executions = await fetchBinance(apiKey, apiSecret);
-  else if (exchange === "OX" || exchange === "OKX") executions = await fetchOkx(apiKey, apiSecret, passphrase);
+  else if (exchange === "OX" || exchange === "OKX") executions = await fetchOkx(apiKey, apiSecret, passphrase, fast);
   else throw new Error("Эта биржа пока не поддерживает безопасную синхронизацию журнала");
   const items = executions.map(normalizeExecution)
     .filter(item => item.id && item.symbol && item.price > 0 && item.qty > 0 && item.time > 0)

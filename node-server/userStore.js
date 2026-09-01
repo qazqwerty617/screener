@@ -14,8 +14,17 @@ const PASSWORD_ALGORITHM = "scrypt-v1";
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365-day (1 year) persistent session TTL
 
 // Atomic, crash-resistant file write. Callers can fail closed on false.
+let excelExportTimer = null;
+function scheduleExcelExport(data) {
+  if (excelExportTimer) return;
+  excelExportTimer = setTimeout(() => {
+    excelExportTimer = null;
+    try { excelExporter.generateUsersExcel(data || users); } catch (_) {}
+  }, 5 * 60 * 1000);
+}
+
 function saveJSON(filePath, data) {
-  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  const tempPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   let fd;
   try {
     fd = fs.openSync(tempPath, "wx", 0o600);
@@ -26,9 +35,7 @@ function saveJSON(filePath, data) {
     fs.renameSync(tempPath, filePath);
     try { fs.chmodSync(filePath, 0o600); } catch (_) {}
     if (filePath === USERS_FILE) {
-      setImmediate(() => {
-        try { excelExporter.generateUsersExcel(data); } catch (_) {}
-      });
+      scheduleExcelExport(data);
     }
     return true;
   } catch (err) {
@@ -665,6 +672,27 @@ function isTelegramAlertsEnabled(chatId) {
   return true;
 }
 
+// Persist a Telegram chat id entered manually in the web UI. Routes must call
+// this instead of assigning onto the object returned by getUserByToken, which is
+// a sanitized *copy* — writes to it are silently discarded and the user ends up
+// subscribed with no deliverable address.
+function setTelegramChatId(userId, chatId) {
+  if (!userId || !users[userId]) return false;
+  const strId = String(chatId || "").trim();
+  if (!strId) return false;
+  if (users[userId].telegramChatId === strId && users[userId].telegramId === strId) return true;
+  users[userId].telegramChatId = strId;
+  users[userId].telegramId = strId;
+  return saveJSON(USERS_FILE, users);
+}
+
+// Persist a user's price alert list on the real record.
+function setUserPriceAlerts(userId, alerts) {
+  if (!userId || !users[userId]) return false;
+  users[userId].priceAlerts = Array.isArray(alerts) ? alerts : [];
+  return saveJSON(USERS_FILE, users);
+}
+
 function getUserByTelegramId(tgId) {
   if (!tgId) return null;
   const strId = String(tgId);
@@ -1182,6 +1210,8 @@ module.exports = {
   linkTelegramBot,
   setTelegramAlertsEnabledByChatId,
   isTelegramAlertsEnabled,
+  setTelegramChatId,
+  setUserPriceAlerts,
   getUserStats,
   setUserPlan,
   grantPlanForPayment,
