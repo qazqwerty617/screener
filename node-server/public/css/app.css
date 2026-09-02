@@ -3637,13 +3637,15 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     background: var(--ac);
 }
 
+/* Match the screener's multi-chart grid exactly (see #chart-grid-container) so
+   the formation mini charts are visually identical, not merely similar. */
 #formations-grid {
     flex: 1;
     display: grid;
-    gap: 12px;
-    padding: 12px;
+    gap: 4px;
+    padding: 4px;
     overflow: hidden;
-    background: #090a0f;
+    background: #1a1c22;
     min-height: 0;
 }
 
@@ -3953,20 +3955,40 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 }
 
 /* ── Formations Fullscreen Expanded Chart ── */
-#formations-grid.has-expanded {
-    grid-template-columns: 1fr !important;
-    grid-template-rows: 1fr !important;
+/* When a formation is expanded the real screener chart (#chart-area) is moved
+   into #formations-fullchart, so the grid is hidden entirely rather than being
+   stretched. This is what makes the expanded view identical to the screener:
+   same canvas, same drawing toolbar, same timeframe bar. */
+#formations-fullchart {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
 }
 
-#formations-grid.has-expanded .grid-cell:not(.expanded) {
+#formations-view.fullchart-active #formations-fullchart {
+    display: flex;
+}
+
+#formations-view.fullchart-active #formations-grid,
+#formations-view.fullchart-active #formations-pagination {
     display: none !important;
 }
 
-#formations-grid.has-expanded .grid-cell.expanded {
-    grid-column: 1 / -1 !important;
-    grid-row: 1 / -1 !important;
-    height: 100% !important;
-    width: 100% !important;
+#formations-fullchart > #chart-area {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* The single/multi toggle and grid config belong to the screener layout; inside
+   the Formations tab the expanded chart is always the single chart. */
+#formations-fullchart #view-toggle,
+#formations-fullchart #grid-config {
+    display: none !important;
 }
 
 #formations-settings-btn:hover {
@@ -4274,10 +4296,12 @@ body {
   #formations-grid.fg-cols-4 {
     grid-template-columns: 1fr !important;
     grid-template-rows: repeat(2, 1fr) !important;
-    gap: 8px !important;
-    padding: 6px !important;
+    gap: 4px !important;
+    padding: 4px !important;
   }
-  #formations-grid > .formation-chart-card:nth-child(n+3) {
+  /* Cells are .grid-cell (shared with the screener grid), not the legacy
+     .formation-chart-card markup. */
+  #formations-grid > .grid-cell:nth-child(n+3) {
     display: none !important;
   }
 

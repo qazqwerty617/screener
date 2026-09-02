@@ -1074,6 +1074,10 @@
             <div id="formations-grid" class="fg-cols-2">
                 <!-- Mini chart cells populated dynamically -->
             </div>
+            <!-- Host for the real screener chart when a formation is expanded.
+                 #chart-area is physically moved in here so the expanded view is
+                 the actual main chart: same canvas, drawing tools, indicators. -->
+            <div id="formations-fullchart"></div>
             <!-- Pagination bar -->
             <div id="formations-pagination">
                 <button id="formations-page-prev" class="fg-page-btn" disabled>‹ Назад</button>

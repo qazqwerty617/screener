@@ -3453,6 +3453,13 @@ server.listen(PORT, () => {
           const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
           const coinKey = `${ex}:${sym}`;
 
+          // Signals from every timeframe are pooled and dispatched once per coin
+          // so the strongest formation wins. Dispatching inside the timeframe
+          // loop always let 1m (the noisiest) speak first and produced a burst.
+          const coinSignals = [];
+          const candlesByTf = Object.create(null);
+          let coinCurPrice = 0;
+
           for (const tf of activeTimeframes) {
             try {
               const candles = await getCachedCandlesForScanner(ex, sym, tf);
@@ -3508,8 +3515,17 @@ server.listen(PORT, () => {
                 const mapKey = `${coinKey}:${tf}`;
                 pMap.set(mapKey, signals);
                 newSignalsCount += signals.length;
-                checkAndDispatchServerFormationAlerts(signals, curPrice, candles);
+                for (const sig of signals) coinSignals.push(sig);
+                candlesByTf[tf] = candles;
+                if (curPrice > 0) coinCurPrice = curPrice;
               }
+            } catch (_) {}
+          }
+
+          // One dispatch per coin, across all timeframes.
+          if (coinSignals.length > 0) {
+            try {
+              checkAndDispatchServerFormationAlerts(coinSignals, coinCurPrice, candlesByTf);
             } catch (_) {}
           }
         }));
@@ -3549,6 +3565,21 @@ server.listen(PORT, () => {
 
   // 24/7 Autonomous Server-Side Formation Alert Dispatcher
   const serverFormationAlertCooldown = new Map();
+  // Second, coarser gate keyed by (user, coin) only. Without it a single scan of
+  // one coin emits an alert per (type x timeframe) — measured at 12-17 signals
+  // per coin across 5 timeframes — and they all leave at once, which is the
+  // "alerts arrive in batches" behaviour. With it, a coin produces one alert:
+  // the strongest formation found, then silence for this window.
+  const serverFormationCoinCooldown = new Map();
+  const FORMATION_COIN_COOLDOWN_MS = 15 * 60 * 1000;
+  // Pacing per subscriber. The per-coin gate alone is not enough: a full cycle
+  // scans 1500 tickers, and measurements on live data show 25-95% of them carry
+  // some formation, so even one alert per coin still queues 150-550 messages
+  // back to back — which is the batch the user sees. This spaces them out so an
+  // alert arrives on its own; the scanner re-runs every ~1.5s, so a formation
+  // skipped now is simply picked up by the next cycle.
+  const serverFormationLastSentAt = new Map();
+  const FORMATION_MIN_GAP_MS = 45 * 1000;
   const FORMATION_COOLDOWN_MAX = 40000;
   const FORMATION_COOLDOWN_TTL_MS = 2 * 60 * 60 * 1000;
   const FORMATION_FAILED_RETRY_MS = 60 * 1000;
@@ -3563,11 +3594,28 @@ server.listen(PORT, () => {
     for (const [key, ts] of serverFormationAlertCooldown) {
       if (now - ts > FORMATION_COOLDOWN_TTL_MS) serverFormationAlertCooldown.delete(key);
     }
+    for (const [key, ts] of serverFormationCoinCooldown) {
+      if (now - ts > FORMATION_COOLDOWN_TTL_MS) serverFormationCoinCooldown.delete(key);
+    }
+    for (const [key, ts] of serverFormationLastSentAt) {
+      if (now - ts > FORMATION_COOLDOWN_TTL_MS) serverFormationLastSentAt.delete(key);
+    }
     if (serverFormationAlertCooldown.size > FORMATION_COOLDOWN_MAX) {
       const entries = Array.from(serverFormationAlertCooldown.entries()).sort((a, b) => a[1] - b[1]);
       const excess = serverFormationAlertCooldown.size - FORMATION_COOLDOWN_MAX;
       for (let i = 0; i < excess; i++) serverFormationAlertCooldown.delete(entries[i][0]);
     }
+  }
+
+  // Rank formations so that, when several are found at once, the one that gets
+  // sent is the most meaningful: more touches first, then closest to price.
+  function scoreFormationSignal(signal) {
+    const meta = signal.meta || {};
+    const touches = Number(meta.touches) || (meta.p1Idx !== undefined ? 2 : 1);
+    const dist = meta.dist !== undefined ? Number(meta.dist) : 1.0;
+    // Structural formations outrank a bare retest at equal touch count.
+    const typeWeight = signal.type === "trendline" ? 2 : signal.type === "level" ? 2 : 0;
+    return touches * 100 + typeWeight * 10 - Math.min(dist, 5) * 8;
   }
 
   // ── In-Play Movers Cache (top active gainers + losers by |chg%| with 24h vol) ──
@@ -3614,10 +3662,19 @@ server.listen(PORT, () => {
     return !!(res && res.ok);
   }
 
-  function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice, rawCandles) {
+  // `candlesByTf` maps timeframe -> candle array. Each signal is rendered with
+  // the candles of its own timeframe, which is what makes the snapshot match
+  // the alert text. A bare array is still accepted for backward compatibility.
+  function checkAndDispatchServerFormationAlerts(signals, fallbackCurPrice, candlesByTf) {
     if (!Array.isArray(signals) || signals.length === 0) return;
     const now = Date.now();
     pruneFormationCooldowns(now);
+
+    const candlesFor = (tf) => {
+      if (Array.isArray(candlesByTf)) return candlesByTf;
+      if (candlesByTf && Array.isArray(candlesByTf[tf])) return candlesByTf[tf];
+      return null;
+    };
 
     // ── Validated Instant WebSocket Broadcast to Website Clients ──
     for (const signal of signals) {
@@ -3783,8 +3840,14 @@ server.listen(PORT, () => {
     // Refresh In-Play movers set before processing signals
     refreshInPlayMovers();
 
-    for (const signal of signals) {
-      if (!signal || !signal.type || !signal.sym) continue;
+    // One scan of a coin routinely yields a dozen formations across timeframes
+    // and types. Send the single strongest one instead of the whole batch: they
+    // describe the same price area, so the rest is noise.
+    const rankedSignals = signals
+      .filter(s => s && s.type && s.sym)
+      .sort((a, b) => scoreFormationSignal(b) - scoreFormationSignal(a));
+
+    for (const signal of rankedSignals) {
       const { ex, sym, base, tf, type, price, meta } = signal;
       const touches = meta?.touches || (meta?.p1Idx !== undefined ? 2 : 1);
       const dist = meta?.dist !== undefined ? Number(meta.dist) : 0.5;
@@ -3881,6 +3944,19 @@ server.listen(PORT, () => {
           continue;
         }
 
+        // Per-coin gate: at most one formation alert per coin per window, so a
+        // scan that finds a dozen formations on the same coin sends one message
+        // (the highest ranked, since `rankedSignals` is sorted) instead of a
+        // burst. The per-type/timeframe cooldown below still applies.
+        const coinKey = `${userId}:${ex}:${sym}`;
+        const lastCoinSent = serverFormationCoinCooldown.get(coinKey) || 0;
+        const coinWindowMs = Math.max(FORMATION_COIN_COOLDOWN_MS, (Number(s.cooldownSeconds) || 300) * 1000);
+        if (now - lastCoinSent < coinWindowMs) continue;
+
+        // Global pacing per subscriber: one alert at a time, not a queue of them.
+        const lastAnySent = serverFormationLastSentAt.get(userId) || 0;
+        if (now - lastAnySent < FORMATION_MIN_GAP_MS) continue;
+
         // Cooldown check per user + coin + pattern + tf
         const cooldownSec = Number(s.cooldownSeconds) || 300;
         const cdKey = `${userId}:${ex}:${sym}:${type}:${tf}`;
@@ -3892,7 +3968,18 @@ server.listen(PORT, () => {
         // a 429 or network error does not silently swallow the alert for the
         // whole cooldown period.
         serverFormationAlertCooldown.set(cdKey, now);
-        matchingSubsForSignal.push({ chatId, actualPrice, cdKey, cooldownMs: cooldownSec * 1000 });
+        serverFormationCoinCooldown.set(coinKey, now);
+        serverFormationLastSentAt.set(userId, now);
+        matchingSubsForSignal.push({
+          chatId,
+          userId,
+          actualPrice,
+          cdKey,
+          coinKey,
+          prevCoinSentAt: lastCoinSent,
+          prevAnySentAt: lastAnySent,
+          cooldownMs: cooldownSec * 1000
+        });
       }
 
       if (matchingSubsForSignal.length === 0) continue;
@@ -3971,10 +4058,12 @@ server.listen(PORT, () => {
         }
 
         let photoBuffer = null;
-        if (Array.isArray(rawCandles) && rawCandles.length > 5 && typeof renderServerChartSnapshot === "function") {
+        // Render with the candles of this signal's own timeframe.
+        const sigCandles = candlesFor(tf);
+        if (Array.isArray(sigCandles) && sigCandles.length > 5 && typeof renderServerChartSnapshot === "function") {
           try {
             const t = tickers ? tickers.get(`${ex}:${sym}`) : null;
-            photoBuffer = renderServerChartSnapshot(rawCandles, {
+            photoBuffer = renderServerChartSnapshot(sigCandles, {
               ex,
               sym,
               tf,
@@ -4004,6 +4093,14 @@ server.listen(PORT, () => {
             // the key entirely (which would hot-loop on a Telegram outage).
             const retryAt = Date.now() - target.cooldownMs + FORMATION_FAILED_RETRY_MS;
             serverFormationAlertCooldown.set(target.cdKey, retryAt);
+            // The per-coin gate must also be released, otherwise a failed send
+            // silences the whole coin for the full window.
+            if (target.prevCoinSentAt) serverFormationCoinCooldown.set(target.coinKey, target.prevCoinSentAt);
+            else serverFormationCoinCooldown.delete(target.coinKey);
+            // Same for the pacing slot: a failed send must not consume this
+            // subscriber's turn.
+            if (target.prevAnySentAt) serverFormationLastSentAt.set(target.userId, target.prevAnySentAt);
+            else serverFormationLastSentAt.delete(target.userId);
             console.warn(`[24/7 ALERT NOT DELIVERED] ${ex}:${sym} ${type} ${tf} -> ${target.chatId}; retry in ${Math.round(FORMATION_FAILED_RETRY_MS / 1000)}s`);
           });
         }

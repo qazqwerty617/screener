@@ -1,5 +1,71 @@
 const { createCanvas } = require("@napi-rs/canvas");
 
+// A snapshot must show the whole formation, not just the tail of the chart.
+// The window is widened backwards until the formation's first anchor is on
+// screen, then capped so candles stay wide enough to read.
+const DEFAULT_VISIBLE_CANDLES = 140;
+const MAX_VISIBLE_CANDLES = 320;
+// Keep a few bars of air to the left of the first touch.
+const ANCHOR_LEFT_PADDING = 6;
+
+/**
+ * Absolute candle indices the formation depends on (anchors + touch points).
+ * Signals carry indices relative to the full candle array they were detected
+ * on, which is the same array passed here.
+ */
+function collectFormationIndices(signal) {
+  const meta = signal && signal.meta ? signal.meta : {};
+  const raw = [
+    meta.swingIdx,
+    meta.p1Idx,
+    meta.p2Idx,
+    meta.touchIdx,
+    meta.breakIdx,
+    ...(Array.isArray(meta.touchIndices) ? meta.touchIndices : []),
+    ...(Array.isArray(meta.swingIndices) ? meta.swingIndices : [])
+  ];
+  return raw.filter(v => Number.isFinite(v) && v >= 0);
+}
+
+/** Prices the formation draws at, so the vertical scale can include them. */
+function collectFormationPrices(signal) {
+  const meta = signal && signal.meta ? signal.meta : {};
+  const raw = [
+    signal && signal.price,
+    meta.endPrice,
+    meta.p1Price,
+    meta.p2Price,
+    meta.targetPrice,
+    meta.pastPrice
+  ];
+  return raw.map(Number).filter(v => Number.isFinite(v) && v > 0);
+}
+
+/**
+ * How many trailing candles the snapshot should show so the formation fits.
+ * The result is always clamped to the number of candles actually available —
+ * asking for more would index past the end of the array while drawing.
+ */
+function resolveVisibleCount(candles, signal) {
+  const total = Array.isArray(candles) ? candles.length : 0;
+  if (total <= 0) return 0;
+
+  const hardCap = Math.min(total, MAX_VISIBLE_CANDLES);
+  let want = Math.min(total, DEFAULT_VISIBLE_CANDLES);
+
+  const indices = collectFormationIndices(signal);
+  if (indices.length > 0) {
+    const firstIdx = Math.min(...indices);
+    if (firstIdx < total) {
+      // +1 because the span is inclusive of both ends.
+      const needed = total - firstIdx + ANCHOR_LEFT_PADDING + 1;
+      if (needed > want) want = needed;
+    }
+  }
+
+  return Math.min(hardCap, Math.max(1, Math.ceil(want)));
+}
+
 /**
  * Server-Side Chart Snapshot Renderer using @napi-rs/canvas
  * Generates identical Ultra-HD 1200x680 PNG buffer matching the screener HUD aesthetic.
@@ -18,7 +84,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
     return canvas.toBuffer("image/png");
   }
 
-  const numCandles = Math.min(candles.length, 140);
+  const numCandles = resolveVisibleCount(candles, signal);
   const candleList = candles.slice(-numCandles);
   const lastCandle = candleList[candleList.length - 1];
   const firstCandle = candleList[0];
@@ -202,6 +268,21 @@ function renderServerChartSnapshot(candles, meta, signal) {
     if (c.h > maxP) maxP = c.h;
     if (c.v > maxVol) maxVol = c.v;
   }
+
+  // Include the formation's own prices, otherwise a level that sits outside the
+  // visible high/low range is clipped away and the alert shows a chart with no
+  // formation on it. Also cover the projected end of a trendline.
+  const sigPrices = collectFormationPrices(signal);
+  if (Number.isFinite(signal?.meta?.slope) && sigPrices.length > 0) {
+    const slope = Number(signal.meta.slope);
+    const base = Number(signal.price) || sigPrices[0];
+    sigPrices.push(base + slope * 3);
+  }
+  for (const p of sigPrices) {
+    if (p < minP) minP = p;
+    if (p > maxP) maxP = p;
+  }
+
   const priceMargin = (maxP - minP) * 0.06 || (minP * 0.01);
   minP -= priceMargin;
   maxP += priceMargin;
@@ -212,7 +293,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
 
   const effectiveNum = Math.max(numCandles, 55);
   const candleStepW = PW / effectiveNum;
-  const candleBodyW = Math.max(1.8, Math.min(13, candleStepW * 0.76));
+  const candleBodyW = Math.max(1.0, Math.min(13, candleStepW * 0.76));
   const xOffset = PW - (numCandles * candleStepW);
   const toX = (idx) => xOffset + idx * candleStepW + candleStepW / 2;
 
@@ -488,5 +569,12 @@ function renderServerChartSnapshot(candles, meta, signal) {
 }
 
 module.exports = {
-  renderServerChartSnapshot
+  renderServerChartSnapshot,
+  // Exported for tests: the framing decision is the part that determines whether
+  // a formation is actually visible in the snapshot.
+  resolveVisibleCount,
+  collectFormationIndices,
+  collectFormationPrices,
+  DEFAULT_VISIBLE_CANDLES,
+  MAX_VISIBLE_CANDLES
 };

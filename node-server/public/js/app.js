@@ -2618,8 +2618,23 @@ function drawDensityTimelineOnChart(ctx, options) {
 
 // Formations Overlay – renders formation levels on main chart
 // ════════════════════════════════════════════════════════════
-function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) {
-  if (!chartFormationsOnChart || !candles || candles.length < 40) return [];
+// `opts` lets a caller (the Formations tab) request a specific set of formation
+// types instead of the chart panel's global selection, so mini charts there are
+// drawn by this exact same code path — same colors, widths, dots and labels as
+// the screener — rather than by a private duplicate renderer.
+function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart, opts) {
+  const cfg = opts || null;
+  const enabled = cfg ? true : chartFormationsOnChart;
+  if (!enabled || !candles || candles.length < 40) return [];
+
+  const wantTypes = cfg && cfg.types ? cfg.types : null;
+  const hasType = (name) => wantTypes
+    ? wantTypes.has(name)
+    : (chartActiveFormations.has(name) || chartFovTypes.has(name));
+  const fovMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovCascadesMin;
+  const fovNearest = (cfg && typeof cfg.nearest === "boolean") ? cfg.nearest : chartFovNearest;
+  const fovShowTouches = (cfg && typeof cfg.showTouches === "boolean") ? cfg.showTouches : chartFovShowTouches;
+  const wantApproaching = !!(cfg && cfg.approaching);
 
   const N = candles.length;
   const lastPrice = candles[N - 1].c;
@@ -2653,15 +2668,15 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const getFmtDotColor = (hex, op = 75) => (typeof hexToRgba === "function") ? hexToRgba(hex, Math.min(100, (Number(op) || 75) + 15)) : hex;
 
   // ─── 1. CASCADES ───
-  const hasCascades = chartActiveFormations.has('cascades') || chartFovTypes.has('cascades');
+  const hasCascades = hasType('cascades');
   if (hasCascades) {
     let levels = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:cascades:${chartFovCascadesMin}`, () => window.FormationEngine.detectCascades(candles, chartFovCascadesMin))
+      ? getCachedFormationDetection(candles, `overlay:cascades:${fovMin}`, () => window.FormationEngine.detectCascades(candles, fovMin))
       : [];
 
     levels = levels.filter(lv => Math.abs(lv.price - lastPrice) / lastPrice <= 0.15);
 
-    if (chartFovNearest && levels.length > 0) {
+    if (fovNearest && levels.length > 0) {
       levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
       levels = levels.slice(0, 6);
     }
@@ -2700,7 +2715,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
 
       // Draw all touch dots if touches enabled (locked to exact timestamps)
-      if (chartFovShowTouches) {
+      if (fovShowTouches) {
         ctx.fillStyle = touchColor;
         const touchTimes = Array.isArray(lv.touchTimes) ? lv.touchTimes : [];
         const touchIndices = Array.isArray(lv.touchIndices) ? lv.touchIndices : [];
@@ -2725,16 +2740,16 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   }
 
   // ─── 2. HORIZONTAL LEVELS ───
-  const hasLevels = chartActiveFormations.has('levels') || chartFovTypes.has('levels');
+  const hasLevels = hasType('levels');
   if (hasLevels) {
     let levels = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:levels:${chartFovCascadesMin}`, () => window.FormationEngine.detectHorizontals(candles, chartFovCascadesMin))
+      ? getCachedFormationDetection(candles, `overlay:levels:${fovMin}`, () => window.FormationEngine.detectHorizontals(candles, fovMin))
       : [];
 
-    const minTouches = Math.max(1, chartFovCascadesMin || 1);
+    const minTouches = Math.max(1, fovMin || 1);
     levels = levels.filter(lv => (lv.touches || 1) >= minTouches && Math.abs(lv.price - lastPrice) / lastPrice <= 0.15);
 
-    if (chartFovNearest && levels.length > 0) {
+    if (fovNearest && levels.length > 0) {
       levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
       levels = levels.slice(0, 4);
     }
@@ -2774,7 +2789,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
 
       // Draw all touch dots if touches enabled (locked to exact timestamps)
-      if (chartFovShowTouches) {
+      if (fovShowTouches) {
         ctx.fillStyle = touchColor;
         const touchTimes = Array.isArray(lv.touchTimes) ? lv.touchTimes : [];
         const touchIndices = Array.isArray(lv.touchIndices) ? lv.touchIndices : [];
@@ -2799,15 +2814,15 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   }
 
   // ─── 3. TRENDLINES ───
-  const hasTrendlines = chartActiveFormations.has('trendlines') || chartFovTypes.has('trendlines');
+  const hasTrendlines = hasType('trendlines');
   if (hasTrendlines) {
     let trendlines = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:trendline:${chartFovCascadesMin}`, () => window.FormationEngine.detectTrendlines(candles, chartFovCascadesMin))
+      ? getCachedFormationDetection(candles, `overlay:trendline:${fovMin}`, () => window.FormationEngine.detectTrendlines(candles, fovMin))
       : [];
-    const minTouches = Math.max(1, chartFovCascadesMin || 2);
+    const minTouches = Math.max(1, fovMin || 2);
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= minTouches && Math.abs(tl.endPrice - lastPrice) / lastPrice <= 0.15);
 
-    if (chartFovNearest && trendlines.length > 0) {
+    if (fovNearest && trendlines.length > 0) {
       trendlines.sort((a, b) => Math.abs(a.endPrice - lastPrice) - Math.abs(b.endPrice - lastPrice));
       trendlines = trendlines.slice(0, 3);
     }
@@ -2855,7 +2870,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.stroke();
 
       // Draw all touch dots along the trendline (locked to exact timestamps)
-      if (chartFovShowTouches) {
+      if (fovShowTouches) {
         ctx.fillStyle = touchColor;
         const touchTimes = Array.isArray(tl.touchTimes) ? tl.touchTimes : [];
         const touchIndices = Array.isArray(tl.swingIndices) ? tl.swingIndices : [];
@@ -2882,16 +2897,18 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   }
 
   // ─── 4. RETESTS ───
-  const hasRetests = chartActiveFormations.has('retests') || chartFovTypes.has('retests');
+  const hasRetests = hasType('retests');
   if (hasRetests) {
     let retests = [];
     if (window.FormationEngine) {
-      retests = getCachedFormationDetection(candles, 'overlay:retest', () => window.FormationEngine.detectRetests(candles));
+      retests = wantApproaching
+        ? getCachedFormationDetection(candles, 'overlay:retest:approaching', () => window.FormationEngine.detectApproachingRetests(candles))
+        : getCachedFormationDetection(candles, 'overlay:retest', () => window.FormationEngine.detectRetests(candles));
     }
 
     retests = retests.filter(rt => Math.abs(rt.price - lastPrice) / lastPrice <= 0.15);
 
-    if (chartFovNearest && retests.length > 0) {
+    if (fovNearest && retests.length > 0) {
       retests.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
       retests = retests.slice(0, 2);
     }
@@ -2916,7 +2933,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.lineTo(PW, y);
       ctx.stroke();
 
-      if (chartFovShowTouches) {
+      if (fovShowTouches) {
         ctx.fillStyle = touchColor;
         if (startX >= 0 && startX <= PW) {
           ctx.beginPath();
@@ -3306,8 +3323,12 @@ function drawChart() {
     renderLiquidationHeatmap(ctx, candles, s, vis, candleW, futureGap, toY, PW, PH, TOP, viewStart);
   }
 
-  // Formations Overlay
-  const formationScaleBadges = renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart) || [];
+  // Formations Overlay. Inside the Formations tab the expanded chart honours
+  // that tab's toolbar selection; on the screener it uses the chart panel's.
+  const mainFormationOpts = (activeView === "formations" && window.isFormationFullChartOpen?.())
+    ? window.getFormationsOverlayOpts?.()
+    : null;
+  const formationScaleBadges = renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart, mainFormationOpts) || [];
 
   ctx.restore();
 
@@ -10084,43 +10105,8 @@ class ChartInstance {
       if (e.target.closest('.cell-fs-btn')) {
         if (this.sym) {
           if (activeView === "formations") {
-            const grid = document.getElementById("formations-grid");
-            if (grid) {
-              const isExpanded = this.el.classList.contains("expanded");
-              if (isExpanded) {
-                this.el.classList.remove("expanded");
-                grid.classList.remove("has-expanded");
-                this.fsBtn.title = "Развернуть";
-                this.fsBtn.innerHTML = `
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                `;
-                window.loadFormations();
-              } else {
-                grid.querySelectorAll(".grid-cell").forEach(cell => {
-                  cell.classList.remove("expanded");
-                  const btn = cell.querySelector(".cell-fs-btn");
-                  if (btn) {
-                    btn.title = "Развернуть";
-                    btn.innerHTML = `
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                        <path d="M10 2H14V6M14 2L9 7M6 14H2V10M2 14L7 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                      </svg>
-                    `;
-                  }
-                });
-                this.el.classList.add("expanded");
-                grid.classList.add("has-expanded");
-                this.fsBtn.title = "Свернуть";
-                this.fsBtn.innerHTML = `
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    <path d="M4 12H1V9M1 12L6 7M12 4H15V7M15 4L10 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                `;
-              }
-              this.draw(true);
-            }
+            // Hand the coin to the real screener chart and show it in-place.
+            window.openFormationFullChart?.(this.ex, this.sym, this.tf);
           } else {
             const c = coins.get(`${this.ex}:${this.sym}`);
             if (c) {
@@ -10530,10 +10516,9 @@ class ChartInstance {
   draw(force = false) {
     if (!this.candles.length || (activeView === "screener" && screenerView !== "multichart")) return;
 
-    const isFocused = (
-      (activeView === "screener" && screenerView === "single") ||
-      (activeView === "formations" && this.el.classList.contains("expanded"))
-    );
+    // Only the screener's single chart is "focused". In the Formations tab the
+    // expanded view is the real main chart (drawn by drawChart), never a cell.
+    const isFocused = (activeView === "screener" && screenerView === "single");
     if (isFocused) {
       window.__debugCandles = this.candles;
       window.__debugLevels = this.levels;
@@ -10802,167 +10787,54 @@ class ChartInstance {
     const up = lastPrice >= lastCandle.o;
     const ly = clamp(toY(lastPrice), 10, ch - 10);
 
-    // тФАтФА Unmitigated Levels overlay тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-    if (activeView === "formations" && this.levels && this.levels.length > 0) {
-      const getX = (idx) => (idx - viewStart) * candleWidth + candleWidth / 2;
-      const N = this.candles.length;
-
-      // Pre-calculate and adjust Y label coordinates for horizontal levels to prevent overlapping
-      this.levels.forEach(setup => {
-        if (!setup.isTrendline) {
-          setup.labelY = toY(setup.price);
-        }
-      });
-
-      const visibleLevels = this.levels.filter(setup => !setup.isTrendline && setup.labelY >= 2 && setup.labelY <= ch - 2);
-      visibleLevels.sort((a, b) => a.labelY - b.labelY);
-
-      const minSpacing = 16;
-      for (let i = 1; i < visibleLevels.length; i++) {
-        const prev = visibleLevels[i - 1];
-        const curr = visibleLevels[i];
-        if (curr.labelY - prev.labelY < minSpacing) {
-          curr.labelY = prev.labelY + minSpacing;
-        }
+    // ── Formation overlay ────────────────────────────────────────────────────
+    // Both the screener grid and the Formations tab go through the screener's
+    // own overlay renderer, so the mini charts are pixel-identical. The tab only
+    // supplies which formation type its toolbar has selected.
+    let cellFormationBadges = [];
+    if (activeView === "formations") {
+      const fmOpts = window.getFormationsOverlayOpts?.();
+      if (fmOpts) {
+        cellFormationBadges = renderFormationsOnChart(
+          ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart, fmOpts
+        ) || [];
       }
-      for (let i = visibleLevels.length - 2; i >= 0; i--) {
-        const curr = visibleLevels[i];
-        const next = visibleLevels[i + 1];
-        if (next.labelY - curr.labelY < minSpacing) {
-          curr.labelY = next.labelY - minSpacing;
-        }
-      }
-
-      this.levels.forEach(setup => {
-        const isUp = setup.direction === 'up';
-        // green = unmitigated HIGH above price (goes UP to cover)
-        // red   = unmitigated LOW  below price (goes DOWN to cover)
-        let lineColor = isUp ? '#26c97a' : '#ff4560';
-        if (setup.isRetest) {
-          lineColor = setup.outcome === 'confirmed' ? '#af52de' : '#ff9100';
-        }
-        if (setup.isApproachingRetest) {
-          lineColor = '#00baff'; // beautiful cyan color for approaching retest
-        }
-
-        if (setup.isTrendline) {
-          if (!setup.p1 || !setup.p2 || setup.p2.idx <= setup.p1.idx) return;
-          const slope = (setup.p2.price - setup.p1.price) / (setup.p2.idx - setup.p1.idx);
-          const isResistance = slope <= 0;
-
-          // Strictly verify that NO candle pierces this trendline from p1.idx to N - 1
-          let pierced = false;
-          for (let k = setup.p1.idx; k < N; k++) {
-            const line = setup.p1.price + slope * (k - setup.p1.idx);
-            const c = this.candles[k];
-            if (!c) continue;
-            if (isResistance) {
-              if (c.h > line || c.c > line || c.o > line) { pierced = true; break; }
-            } else {
-              if (c.l < line || c.c < line || c.o < line) { pierced = true; break; }
-            }
-          }
-          if (pierced) return;
-
-          // Draw Trendline
-          const x1 = getX(setup.p1.idx);
-          const y1 = toY(setup.p1.price);
-
-          // Project trendline to the current candle + 4 candles in length
-          const endIdx = N - 1 + 4;
-          const endPrice = setup.p1.price + (setup.p2.price - setup.p1.price) * (endIdx - setup.p1.idx) / (setup.p2.idx - setup.p1.idx);
-          const x2 = getX(endIdx);
-          const y2 = toY(endPrice);
-
-          ctx.strokeStyle = lineColor;
-          ctx.lineWidth = 1.5;
-          ctx.setLineDash([]);
-          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-
-          // Trendline has no price label on scale
-
-          // Draw touch circles for trendline
-          if (setup.swingIndices) {
-            setup.swingIndices.forEach(idx => {
-              const circleX = getX(idx);
-              const circleCandle = this.candles[idx];
-              if (circleCandle && circleX >= 0 && circleX <= PW) {
-                const circleY = toY(isUp ? circleCandle.h : circleCandle.l);
-                ctx.fillStyle = lineColor;
-                ctx.strokeStyle = '#fff';
-                ctx.lineWidth = 1.2;
-                ctx.beginPath(); ctx.arc(circleX, circleY, 4, 0, 2 * Math.PI);
-                ctx.fill(); ctx.stroke();
-              }
-            });
-          }
-
-        } else {
-          const originIdx = Number.isFinite(setup.swingIdx) ? setup.swingIdx : (Number.isFinite(setup.startIdx) ? setup.startIdx : 0);
-          const isResistance = isUp || setup.price >= lastPrice;
-
-          // Strictly verify that NO candle pierces this level from originIdx to N - 1
-          let pierced = false;
-          for (let k = originIdx; k < N; k++) {
-            const c = this.candles[k];
-            if (!c) continue;
-            if (isResistance) {
-              if (c.h > setup.price || c.c > setup.price || c.o > setup.price) { pierced = true; break; }
-            } else {
-              if (c.l < setup.price || c.c < setup.price || c.o < setup.price) { pierced = true; break; }
-            }
-          }
-          if (pierced) return;
-
-          const y = toY(setup.price);
-          if (y < 2 || y > ch - 2) return;
-
-          // ── Solid horizontal line: from first swing → right edge (PW) ──────────
-          const x0 = Math.max(0, getX(originIdx));
-          ctx.strokeStyle = lineColor;
-          ctx.lineWidth = 1.5;
-          ctx.setLineDash([]);
-          ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(PW, y); ctx.stroke();
-
-          // тФАтФА Price label on the right тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-          const labelH = 15, labelW = PR - 6;
-          roundRect(ctx, PW + 3, setup.labelY - labelH / 2, labelW, labelH, 3);
-          ctx.fillStyle = lineColor;
-          ctx.fill();
-          ctx.fillStyle = '#fff';
-          ctx.font = 'bold 8px Inter';
-          ctx.textAlign = 'center';
-          ctx.fillText(fP(setup.price), PW + PR / 2, setup.labelY + 3);
-
-          // тФАтФА Draw circles: strictly MAX 2 points (1. Level Origin, 2. Single Retest Touch) тФА
-          const renderIndices = [];
-          if (setup.swingIdx !== undefined) renderIndices.push(setup.swingIdx);
-          if (setup.touchIdx !== undefined) renderIndices.push(setup.touchIdx);
-
-          const uniqueIndices = [...new Set(renderIndices)];
-          uniqueIndices.forEach(tIdx => {
-            const tX = getX(tIdx);
-            const tCandle = this.candles[tIdx];
-            if (tCandle && tX >= 0 && tX <= PW) {
-              ctx.fillStyle = lineColor;
-              ctx.strokeStyle = '#fff';
-              ctx.lineWidth = 1.2;
-              ctx.beginPath(); ctx.arc(tX, y, 4, 0, 2 * Math.PI);
-              ctx.fill(); ctx.stroke();
-            }
-          });
-        }
-      });
-
-      ctx.setLineDash([]);
-      ctx.textAlign = 'left';
+    } else if (chartFormationsOnChart) {
+      cellFormationBadges = renderFormationsOnChart(
+        ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart
+      ) || [];
     }
 
-    // Keep formation overlays consistent between the single chart and the
-    // screener's multi-chart grid.
-    if (activeView !== "formations" && chartFormationsOnChart) {
-      renderFormationsOnChart(ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart);
+    // Price badges on the right scale for the formation levels, same look as the
+    // single chart but sized for the narrower grid scale.
+    if (cellFormationBadges.length > 0) {
+      const badgeH = 16;
+      const badgeW = PR - 6;
+      const badgeX = PW + 3;
+      const placed = [];
+      for (const badge of cellFormationBadges) {
+        const by = toY(badge.price);
+        if (by < 8 || by > ch - 8) continue;
+        if (placed.some(prevY => Math.abs(prevY - by) < 14)) continue;
+        placed.push(by);
+        ctx.save();
+        roundRect(ctx, badgeX, Math.round(by - badgeH / 2), badgeW, badgeH, 3);
+        ctx.fillStyle = "#131722";
+        ctx.fill();
+        ctx.strokeStyle = badge.color || "#38bdf8";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 9px Inter";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(fP(badge.price), badgeX + badgeW / 2, by);
+        ctx.restore();
+      }
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
     }
+
     if (chartActiveSmc && chartActiveSmc.size > 0) {
       renderSmartMoneyConcepts(ctx, this.candles, s, vis.length, candleWidth, futureGap, toY, PW, PH, 0, viewStart);
     }
@@ -11394,7 +11266,7 @@ class ChartInstance {
   }
 }
 
-function toggleScreenerView(view) {
+function toggleScreenerView(view, rebuildGrid = true) {
   screenerView = view;
   const gridContainer = $("chart-grid-container");
   const chartCanvas = $("chart-canvas");
@@ -11416,8 +11288,11 @@ function toggleScreenerView(view) {
     volCanvas.style.visibility = "hidden";
     drawTools.style.display = "none";
     if (backBtn) backBtn.style.display = "none";
-    // Keep current gridPage when switching back to multichart
-    initChartGrid();
+    // Keep current gridPage when switching back to multichart.
+    // `rebuildGrid` is false when only the DOM state is being restored (leaving
+    // the Formations tab's expanded chart), so we don't build screener cells
+    // that are about to be replaced by the formation grid.
+    if (rebuildGrid) initChartGrid();
   } else {
     gridContainer.style.display = "none";
     gridConfig.style.display = "none";
@@ -11425,14 +11300,27 @@ function toggleScreenerView(view) {
     volCanvas.style.visibility = "visible";
     drawTools.style.display = "flex";
     if (backBtn) backBtn.style.display = "flex";
-    requestAnimationFrame(drawChart);
+    if (rebuildGrid) requestAnimationFrame(drawChart);
   }
 }
+
+// Esc collapses the expanded formation chart back to the grid.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (activeView !== "formations") return;
+  if (window.isFormationFullChartOpen?.()) {
+    e.preventDefault();
+    window.closeFormationFullChart();
+  }
+});
 
 // Back button event listener
 const chartBackBtn = $("chart-back-btn");
 if (chartBackBtn) {
   chartBackBtn.onclick = () => {
+    // Inside the Formations tab the chart is borrowed from the screener, so the
+    // back arrow returns to the formation grid instead of the screener grid.
+    if (window.closeFormationFullChart?.()) return;
     toggleScreenerView("multichart");
   };
 }
@@ -11623,6 +11511,13 @@ window.switchView = function switchView(view) {
 
   activeView = view;
   densityHover = -1; // Reset hover index when switching views
+
+  // Leaving Formations while its expanded chart is open would strand #chart-area
+  // inside a hidden container, so hand it back to #main first.
+  if (view !== "formations" && window.isFormationFullChartOpen?.()) {
+    window.closeFormationFullChart();
+  }
+
   const mainEl = document.getElementById("main");
   const densityEl = document.getElementById("density-view");
   const formationsEl = document.getElementById("formations-view");
@@ -14097,7 +13992,106 @@ window.addEventListener("resize", () => {
     return getCachedFormationDetection(candles, 'view:cascades:default', () => window.detectChartLevelsAndTouches(candles));
   };
 
-  // ─── Formations View Logic v2 (Simplified Multi-Charts) ───────────────────
+  // Options for renderFormationsOnChart so the Formations tab draws through the
+  // screener's overlay renderer while still honouring its own toolbar (selected
+  // formation type, min touches, "nearest", "approaching retest").
+  window.getFormationsOverlayOpts = function () {
+    const typeMap = {
+      breakout: "levels",
+      trendline: "trendlines",
+      retest: "retests",
+      cascades: "cascades",
+      levels: "levels"
+    };
+    const name = typeMap[activeFormation] || "cascades";
+    return {
+      types: new Set([name]),
+      minTouches: formationsMinCascade,
+      nearest: !!$("formations-nearest-toggle")?.checked,
+      approaching: !!$("formations-approaching-toggle")?.checked,
+      showTouches: true
+    };
+  };
+
+  // ─── Expanded formation = the real screener chart, moved in place ──────────
+  // Rather than growing a mini cell, #chart-area is physically relocated into
+  // #formations-fullchart. That gives the expanded view the genuine main chart:
+  // drawing toolbar, timeframe bar, indicators, crosshair, pan/zoom — with zero
+  // duplicated rendering code.
+  let fullChartPrevScreenerView = null;
+  let fullChartOpen = false;
+
+  window.isFormationFullChartOpen = () => fullChartOpen;
+
+  window.openFormationFullChart = function (ex, sym, tf) {
+    const view = $("formations-view");
+    const host = $("formations-fullchart");
+    const chartArea = $("chart-area");
+    if (!view || !host || !chartArea) return;
+
+    const coin = coins.get(`${ex}:${sym}`);
+    if (!coin) return;
+
+    // The hidden mini charts would keep requesting animation frames against a
+    // zero-sized canvas, so drop them; loadFormations() rebuilds on close.
+    chartInstances.forEach(inst => inst?.dispose?.());
+    chartInstances = [];
+    const grid = $("formations-grid");
+    if (grid) grid.innerHTML = "";
+
+    if (!fullChartOpen) {
+      fullChartPrevScreenerView = screenerView;
+      fullChartOpen = true;
+    }
+
+    host.appendChild(chartArea);
+    view.classList.add("fullchart-active");
+
+    // Single-chart mode: canvases visible, drawing tools visible, grid hidden.
+    toggleScreenerView("single");
+
+    if (tf && tf !== activeTf) {
+      activeTf = tf;
+      document.querySelectorAll(".tfb").forEach(b => b.classList.toggle("on", b.dataset.tf === tf));
+    }
+
+    selectCoin(coin);
+
+    requestAnimationFrame(() => {
+      resizeChart();
+      requestAnimationFrame(drawChart);
+    });
+  };
+
+  window.closeFormationFullChart = function () {
+    if (!fullChartOpen) return false;
+    const view = $("formations-view");
+    const main = $("main");
+    const chartArea = $("chart-area");
+    if (!view || !main || !chartArea) return false;
+
+    fullChartOpen = false;
+    view.classList.remove("fullchart-active");
+
+    // Put the chart back as the first child of #main, ahead of the resizer and
+    // the coin list panel.
+    main.insertBefore(chartArea, main.firstChild);
+
+    // Restore the screener's own DOM state without building its grid: the
+    // formation grid is rebuilt right below and owns chartInstances.
+    if (fullChartPrevScreenerView) {
+      toggleScreenerView(fullChartPrevScreenerView, false);
+      fullChartPrevScreenerView = null;
+    }
+
+    // Rebuild the formation grid at the current page.
+    window.loadFormations();
+    requestAnimationFrame(() => {
+      chartInstances.forEach(inst => inst && inst.draw(true));
+    });
+    return true;
+  };
+
   let formationsCols = parseInt(localStorage.getItem("formations_cols") || "2", 10) || 2;
   let formationsTf = localStorage.getItem("formations_tf") || "4h";
   let activeFormation = localStorage.getItem("formations_active_tab") || 'cascades';
@@ -14859,11 +14853,11 @@ window.addEventListener("resize", () => {
   function renderCurrentPage() {
     const grid = $("formations-grid");
     if (!grid) return;
-    if (grid.classList.contains("has-expanded")) {
-      // Do not overwrite the grid or collapse the chart while user is viewing it
+    // The real chart is expanded over the grid: leave it alone.
+    if (fullChartOpen) {
+      updateFormationsPagination();
       return;
     }
-    grid.classList.remove("has-expanded"); // Reset fullscreen expanded state on page change
 
     const perPage = formationsCols;
     const start = formationsPage * perPage;
