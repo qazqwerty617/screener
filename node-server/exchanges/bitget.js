@@ -58,36 +58,48 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   function connectWs() {
     mkExWs("BG", "wss://ws.bitget.com/v2/ws/public", (raw) => {
       try {
-        const d = JSON.parse(raw.toString());
-        if ((d.action === "update" || d.action === "snapshot")) {
-          if (d.arg?.channel === "ticker") {
-            for (const tick of d.data) {
-              const t = tickers.get("BG:" + tick.instId);
-              if (!t) continue;
-              if (tick.lastPr) t.p = +tick.lastPr; // LTP Anchor
-              if (+tick.bidPr > 0) t.bid = +tick.bidPr;
-              if (+tick.askPr > 0) t.ask = +tick.askPr;
-              if (tick.lastPr || tick.bidPr || tick.askPr) t.quoteTs = Date.now();
-              if (tick.usdtVolume) t.v = +tick.usdtVolume; // USDT Turnover
-              if (tick.high24h) t.h = +tick.high24h;
-              if (tick.low24h) t.l = +tick.low24h;
-              if (tick.open24h) t.o = +tick.open24h;
-              if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
-              dirtyKeys.add(t.key);
-            }
-          } else if (d.arg?.channel === "books1") {
-            // books1 disabled — using LTP only from ticker channel
+        if (Buffer.isBuffer(raw)) {
+          if (raw[0] !== 123) return;
+        } else if (typeof raw === "string") {
+          if (raw.charCodeAt(0) !== 123) return;
+        }
+        const str = typeof raw === "string" ? raw : raw.toString();
+        const d = JSON.parse(str);
+        if ((d.action === "update" || d.action === "snapshot") && d.data && d.arg?.channel === "ticker") {
+          const now = Date.now();
+          for (let i = 0; i < d.data.length; i++) {
+            const tick = d.data[i];
+            const t = tickers.get("BG:" + tick.instId);
+            if (!t) continue;
+            if (tick.lastPr) t.p = +tick.lastPr; // LTP Anchor
+            if (+tick.bidPr > 0) t.bid = +tick.bidPr;
+            if (+tick.askPr > 0) t.ask = +tick.askPr;
+            if (tick.lastPr || tick.bidPr || tick.askPr) t.quoteTs = now;
+            if (tick.usdtVolume) t.v = +tick.usdtVolume; // USDT Turnover
+            if (tick.high24h) t.h = +tick.high24h;
+            if (tick.low24h) t.l = +tick.low24h;
+            if (tick.open24h) t.o = +tick.open24h;
+            if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+            dirtyKeys.add(t.key);
           }
         }
       } catch (_) {}
     }, (ws) => {
+      let batchIdx = 0;
       for (let i = 0; i < bgSyms.length; i += 50) {
         const chunk = bgSyms.slice(i, i + 50);
         const args = [];
         chunk.forEach(s => {
           args.push({ instType: "USDT-FUTURES", channel: "ticker", instId: s });
         });
-        ws.send(JSON.stringify({ op: "subscribe", args }));
+        const currentBatch = batchIdx++;
+        setTimeout(() => {
+          if (ws.readyState === 1) {
+            try {
+              ws.send(JSON.stringify({ op: "subscribe", args }));
+            } catch (_) {}
+          }
+        }, currentBatch * 50);
       }
       const ping = setInterval(() => { if (ws.readyState === 1) ws.send("ping"); else clearInterval(ping); }, 20000);
     });

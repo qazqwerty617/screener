@@ -9,9 +9,14 @@
  */
 const https = require("https");
 
-async function okxFetch(url) {
+async function okxFetch(url, apiFetch) {
+  if (typeof apiFetch === "function") {
+    try {
+      return await apiFetch(url, 20000, 2);
+    } catch (_) {}
+  }
   const res = await fetch(url, {
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(20000),
     headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" },
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -29,7 +34,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
 
     try {
       console.log("[OX] Fetching instruments...");
-      const data = await okxFetch("https://www.okx.com/api/v5/public/instruments?instType=SWAP");
+      const data = await okxFetch("https://www.okx.com/api/v5/public/instruments?instType=SWAP", apiFetch);
       const swp = (data.data || []).filter(s => s.ctType === "linear" && s.settleCcy === "USDT");
       okSyms = [];
       for (const s of swp) {
@@ -48,7 +53,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
 
       // Fetch initial 24h stats via REST to populate immediately
       try {
-        const tickerData = await okxFetch("https://www.okx.com/api/v5/market/tickers?instType=SWAP");
+        const tickerData = await okxFetch("https://www.okx.com/api/v5/market/tickers?instType=SWAP", apiFetch);
         for (const tick of (tickerData.data || [])) {
           const t = tickers.get("OX:" + tick.instId);
           if (!t) continue;
@@ -90,7 +95,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       idx = (idx + 5) % okSyms.length;
       try {
         const results = await Promise.allSettled(
-          batch.map(sym => okxFetch(`https://www.okx.com/api/v5/public/funding-rate?instId=${sym}`))
+          batch.map(sym => okxFetch(`https://www.okx.com/api/v5/public/funding-rate?instId=${sym}`, apiFetch))
         );
         for (const r of results) {
           if (r.status === "fulfilled" && r.value?.data?.[0]) {
@@ -115,9 +120,10 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
     for (let i = 0; i < okSyms.length; i += statsBatch) {
       const chunk = okSyms.slice(i, i + statsBatch);
       mkExWs(`OX-Stats-${i}`, "wss://ws.okx.com:8443/ws/v5/public", (raw) => {
-        if (raw.toString() === "pong") return;
         try {
-          const d = JSON.parse(raw.toString());
+          const str = typeof raw === "string" ? raw : raw.toString();
+          if (str.charCodeAt(0) !== 123) return;
+          const d = JSON.parse(str);
           if (!d.data || d.arg?.channel !== "tickers") return;
           for (const tick of d.data) {
             const instId = tick.instId || d.arg.instId;

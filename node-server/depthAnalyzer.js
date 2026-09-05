@@ -98,16 +98,46 @@ function analyzeBooks({ asks, bids, notional, feesPct = 0, fundingDailyPct = 0 }
 }
 
 function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
+  /**
+   * Order-book cache. `BOOK_TTL_MS` is a *freshness* check only; entries used to
+   * be inserted and never removed, so every `ex:sym` ever requested through
+   * `GET /api/arbitrage/depth` retained up to 500 normalized levels for the
+   * process lifetime — with a caller-influenced key space.
+   */
+  const BOOK_TTL_MS = 2500;
+  const CACHE_MAX_ENTRIES = 400;
   const cache = new Map();
 
+  function pruneCache(now) {
+    for (const [k, v] of cache) {
+      if (now - v.ts > BOOK_TTL_MS) cache.delete(k);
+    }
+    if (cache.size <= CACHE_MAX_ENTRIES) return;
+    // Everything left is fresh; drop the oldest until back within the cap.
+    // Map preserves insertion order, and entries are always re-`set` on refresh,
+    // so iteration order is effectively oldest-first.
+    const excess = cache.size - CACHE_MAX_ENTRIES;
+    let dropped = 0;
+    for (const k of cache.keys()) {
+      cache.delete(k);
+      if (++dropped >= excess) break;
+    }
+  }
+
+  /**
+   * `tickers` is keyed `ex:sym`, so the linear `[...tickers.values()].find(...)`
+   * fallback only ever ran for symbols that genuinely are not in the map — where
+   * it materialised an ~8.5k-element array and scanned it, per call, to return
+   * undefined. The direct lookup is authoritative.
+   */
   function findTicker(ex, sym) {
-    return tickers.get(`${ex}:${sym}`) || [...tickers.values()].find(t => t.ex === ex && t.sym === sym);
+    return tickers.get(`${ex}:${sym}`);
   }
 
   async function fetchBook(ex, sym) {
     const key = `${ex}:${sym}`;
     const cached = cache.get(key);
-    if (cached && Date.now() - cached.ts < 2500) return cached.book;
+    if (cached && Date.now() - cached.ts < BOOK_TTL_MS) return cached.book;
     const ticker = findTicker(ex, sym);
     const cs = positive(ticker?.cs) || 1;
     const s = encodeURIComponent(sym);
@@ -154,7 +184,9 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
       asks: normalizeLevels(asks, cs, false),
     };
     if (!book.bids.length || !book.asks.length) throw new Error(`${ex} returned an empty order book`);
-    cache.set(key, { ts: Date.now(), book });
+    const now = Date.now();
+    cache.set(key, { ts: now, book });
+    pruneCache(now);
     return book;
   }
 

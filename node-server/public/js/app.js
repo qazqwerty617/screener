@@ -907,6 +907,24 @@ function applyAccountPreferences(prefs) {
     localStorage.setItem("screener-volume-settings", JSON.stringify(prefs.volumeSettings));
   }
 
+  if (prefs.pumpAlerts || (prefs.notifications && (prefs.notifications.pumpDump || prefs.notifications.pumpAlerts))) {
+    const p = prefs.pumpAlerts || (prefs.notifications && (prefs.notifications.pumpDump || prefs.notifications.pumpAlerts));
+    if (p && typeof p === "object") {
+      const current = (typeof pdSettings !== "undefined" && pdSettings) ? pdSettings : (typeof DEFAULT_PD_SETTINGS !== "undefined" ? DEFAULT_PD_SETTINGS : {});
+      const merged = { ...current, ...p,
+        exchanges: Array.isArray(p.exchanges) && p.exchanges.length ? p.exchanges : (current.exchanges || ["all"]),
+        marketType: p.marketType || current.marketType || "both"
+      };
+      if (typeof pdSettings !== "undefined") pdSettings = merged;
+      window.pdSettings = merged;
+      const key = (typeof pdGetStorageKey === "function") ? pdGetStorageKey() : "obsidian_pump_alert_settings";
+      localStorage.setItem(key, JSON.stringify(merged));
+      localStorage.setItem("obsidian_pump_alert_settings", JSON.stringify(merged));
+      if (typeof pdSyncModalUI === "function") pdSyncModalUI();
+      if (typeof pdRestartScanner === "function") pdRestartScanner();
+    }
+  }
+
   if (typeof syncIndicatorButtonsUI === "function") {
     syncIndicatorButtonsUI();
   }
@@ -2935,17 +2953,35 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       if (fovShowTouches) {
         ctx.fillStyle = touchColor;
-        if (startX >= 0 && startX <= PW) {
-          ctx.beginPath();
-          ctx.arc(startX, y, 3, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        if (typeof rt.touchIdx === 'number') {
-          const rX = getCandleX(rt.touchIdx);
-          if (rX >= 0 && rX <= PW) {
+        const touchTimes = Array.isArray(rt.touchTimes) ? rt.touchTimes : [];
+        const touchIndices = Array.isArray(rt.touchIndices) ? rt.touchIndices : [startIdx, rt.touchIdx].filter(x => typeof x === 'number');
+        const count = Math.max(touchTimes.length, touchIndices.length);
+        if (count > 0) {
+          for (let ti = 0; ti < count; ti++) {
+            const tTime = touchTimes[ti];
+            const rawIdx = touchIndices[ti] !== undefined ? touchIndices[ti] : startIdx;
+            const tIdx = tTime ? getIdxFromTime(tTime, candles) : rawIdx;
+            if (typeof tIdx !== "number" || tIdx < 0 || tIdx >= N) continue;
+            const tX = getCandleX(tIdx);
+            if (tX >= 0 && tX <= PW) {
+              ctx.beginPath();
+              ctx.arc(tX, y, 3, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        } else {
+          if (startX >= 0 && startX <= PW) {
             ctx.beginPath();
-            ctx.arc(rX, y, 3, 0, Math.PI * 2);
+            ctx.arc(startX, y, 3, 0, Math.PI * 2);
             ctx.fill();
+          }
+          if (typeof rt.touchIdx === 'number') {
+            const rX = getCandleX(rt.touchIdx);
+            if (rX >= 0 && rX <= PW) {
+              ctx.beginPath();
+              ctx.arc(rX, y, 3, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
         }
       }
@@ -6013,12 +6049,25 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (authToken || localStorage.getItem("obsidian_auth_token")) {
         syncPreferencesToServer();
       }
+
+      if (typeof pdLoadFromServer === "function") {
+        pdLoadFromServer();
+      } else if (typeof pdLoad === "function") {
+        pdLoad();
+      }
     } else {
       const logoTierBadge = $("logo-tier-badge") || $("logo-pro-badge") || document.querySelector(".logo-rest");
       if (logoTierBadge) {
         logoTierBadge.textContent = "FREE";
         logoTierBadge.style.color = "rgba(255, 255, 255, 0.55)";
         logoTierBadge.style.display = "inline";
+      }
+
+      if (typeof DEFAULT_PD_SETTINGS !== "undefined" && typeof pdSettings !== "undefined") {
+        pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+        window.pdSettings = pdSettings;
+        if (typeof pdSyncModalUI === "function") pdSyncModalUI();
+        if (typeof pdRestartScanner === "function") pdRestartScanner();
       }
     }
   }
@@ -7034,6 +7083,72 @@ function sanitizeCandle(raw, prevClose = null) {
   return { t, o, h, l, c, v: Number.isFinite(v) && v >= 0 ? v : 0 };
 }
 
+function cleanPhantomWicksAndCandles(candles) {
+  if (!Array.isArray(candles) || candles.length < 3) return candles;
+  const n = candles.length;
+  const out = [];
+
+  for (let i = 0; i < n; i++) {
+    const c = { ...candles[i] };
+    const ref = (c.o + c.c) / 2;
+    if (!(ref > 0)) continue;
+
+    // Window around i (up to 5 before, 5 after)
+    const start = Math.max(0, i - 5);
+    const end = Math.min(n, i + 6);
+    const windowCandles = [];
+    for (let j = start; j < end; j++) {
+      if (j !== i && candles[j] && candles[j].c > 0) windowCandles.push(candles[j]);
+    }
+
+    if (windowCandles.length > 0) {
+      const neighborCloses = windowCandles.map(w => (w.o + w.c) / 2);
+      neighborCloses.sort((a, b) => a - b);
+      const medianRef = neighborCloses[Math.floor(neighborCloses.length / 2)];
+
+      // 1. Phantom candle check: whole candle price is wildly disconnected from neighbors (>50%)
+      if (Math.abs(ref - medianRef) / medianRef > 0.5) {
+        continue; // drop phantom alien candle entirely
+      }
+
+      const bodyTop = Math.max(c.o, c.c);
+      const bodyBottom = Math.min(c.o, c.c);
+      const neighborHighs = windowCandles.map(w => w.h);
+      const neighborLows = windowCandles.map(w => w.l);
+      const maxNeighborH = Math.max(...neighborHighs);
+      const minNeighborL = Math.min(...neighborLows);
+
+      // 2. Downward Phantom Wick check:
+      // Lower wick extends far into empty space (>8% drop from body and >2x further than any neighbor)
+      const lowerWickDist = bodyBottom - c.l;
+      if (lowerWickDist > ref * 0.08 && c.l < minNeighborL * 0.92) {
+        const prevConfirmed = i > 0 && candles[i - 1].l < minNeighborL * 0.95;
+        const nextConfirmed = i < n - 1 && candles[i + 1].l < minNeighborL * 0.95;
+        if (!prevConfirmed && !nextConfirmed) {
+          // Unconfirmed isolated spike: clamp to lowest neighbor low
+          c.l = Math.max(c.l, Math.min(bodyBottom, minNeighborL * 0.98));
+        }
+      }
+
+      // 3. Upward Phantom Wick check:
+      const upperWickDist = c.h - bodyTop;
+      if (upperWickDist > ref * 0.08 && c.h > maxNeighborH * 1.08) {
+        const prevConfirmed = i > 0 && candles[i - 1].h > maxNeighborH * 1.05;
+        const nextConfirmed = i < n - 1 && candles[i + 1].h > maxNeighborH * 1.05;
+        if (!prevConfirmed && !nextConfirmed) {
+          // Unconfirmed isolated spike: clamp to highest neighbor high
+          c.h = Math.min(c.h, Math.max(bodyTop, maxNeighborH * 1.02));
+        }
+      }
+    }
+
+    c.h = Math.max(c.h, c.o, c.c);
+    c.l = Math.min(c.l, c.o, c.c);
+    out.push(c);
+  }
+  return out;
+}
+
 function sanitizeCandles(list, maxLimit = 3000) {
   if (!Array.isArray(list)) return [];
   const sorted = list
@@ -7064,8 +7179,32 @@ function sanitizeCandles(list, maxLimit = 3000) {
     }
     out.push(clean);
   }
+
+  // Contiguity check: detect severed historical epochs.
+  // If there is an unbridgeable time void (> 50 bars and > 4 hours on intraday, or > 24 hours),
+  // retain only the active contiguous series leading to the latest candle.
+  if (out.length > 2) {
+    const tfMs = (typeof activeTf !== "undefined" && TF_MS[activeTf]) ? TF_MS[activeTf] : 60000;
+    const maxGapMs = Math.max(tfMs * 50, 4 * 3600000);
+    let contiguousStartIdx = 0;
+    for (let i = out.length - 1; i > 0; i--) {
+      const dt = out[i].t - out[i - 1].t;
+      if (dt > maxGapMs) {
+        const pxJump = Math.abs(out[i].o - out[i - 1].c) / out[i - 1].c;
+        if (dt > 24 * 3600000 || pxJump > 0.08) {
+          contiguousStartIdx = i;
+          break;
+        }
+      }
+    }
+    if (contiguousStartIdx > 0) {
+      out.splice(0, contiguousStartIdx);
+    }
+  }
+
+  const cleaned = cleanPhantomWicksAndCandles(out);
   const cap = Number.isFinite(maxLimit) && maxLimit > 0 ? maxLimit : 3000;
-  return out.slice(-cap);
+  return cleaned.slice(-cap);
 }
 
 let currentLoadedEx = null;
@@ -7074,28 +7213,48 @@ let currentLoadedTf = null;
 let isLoadingKlines = false;
 
 function mergeCandles(existingList, incomingList, maxLimit = 3000) {
-  if (!Array.isArray(incomingList) || incomingList.length === 0) return existingList || [];
+  if (!Array.isArray(incomingList) || incomingList.length === 0) return sanitizeCandles(existingList, maxLimit);
   if (!Array.isArray(existingList) || existingList.length === 0) return sanitizeCandles(incomingList, maxLimit);
 
+  const cleanIncoming = sanitizeCandles(incomingList, maxLimit);
+  if (!cleanIncoming.length) return sanitizeCandles(existingList, maxLimit);
+
+  const tfMs = (typeof activeTf !== "undefined" && TF_MS[activeTf]) ? TF_MS[activeTf] : 60000;
+  const maxGapMs = Math.max(tfMs * 50, 4 * 3600000);
+
+  const firstIn = cleanIncoming[0].t;
+  const lastIn = cleanIncoming[cleanIncoming.length - 1].t;
+
   const map = new Map();
-  // 1. Ingest incoming authoritative / history candles
-  for (const c of incomingList) {
+  // 1. Ingest incoming authoritative / fresh candles
+  for (const c of cleanIncoming) {
     if (c && Number.isFinite(c.t) && c.t > 0) {
       map.set(c.t, { ...c });
     }
   }
 
-  // 2. Overlay existing candles (preserving live intra-bar spikes)
+  // 2. Overlay existing candles only if contiguous with incoming data
   const lastExisting = existingList[existingList.length - 1];
   for (const c of existingList) {
     if (!c || !Number.isFinite(c.t) || c.t <= 0) continue;
     if (c !== lastExisting && c.h === c.l && (!c.v || c.v === 0)) continue;
+
+    // Discard any existing candle that is separated from incoming range by a giant gap
+    if (c.t < firstIn && (firstIn - c.t > maxGapMs)) {
+      continue; // drop disconnected historical remnants from old epochs
+    }
+    if (c.t > lastIn && (c.t - lastIn > maxGapMs)) {
+      continue;
+    }
+
     const incoming = map.get(c.t);
     if (incoming) {
       if (c === lastExisting) {
-        incoming.h = Math.max(incoming.h, c.h);
-        incoming.l = Math.min(incoming.l, c.l);
-        incoming.c = c.c;
+        if (c.c > 0 && Math.abs(c.c - incoming.c) / incoming.c < 0.15) {
+          incoming.c = c.c;
+          if (c.c > incoming.h) incoming.h = c.c;
+          if (c.c < incoming.l) incoming.l = c.c;
+        }
         if (c.v > incoming.v) incoming.v = c.v;
       }
     } else {
@@ -7255,7 +7414,7 @@ async function fetchServerKlines(ex, sym, tf, lite = 1) {
 
 async function fetchKlines(ex, sym, tf) {
   const fetchToken = ++klFetchToken;
-  if (klWs) { try { klWs.onclose = null; klWs.close(); } catch (_) { } klWs = null; }
+  if (klWs) { try { klWs.onmessage = null; klWs.onerror = null; klWs.onclose = null; klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
   // When switching coin, exchange OR timeframe, clear candles so old timeframe candles do not mix!
@@ -7296,14 +7455,20 @@ async function fetchKlines(ex, sym, tf) {
 
     // 1. Instant cache hit (0ms)
     if (cached && Date.now() - cached.ts < KLINES_CACHE_TTL_MS && Array.isArray(cached.data) && cached.data.length > 1) {
-      candles = sanitizeCandles(cached.data);
-      if (candles.length > 1) {
+      const sanitized = sanitizeCandles(cached.data);
+      const liveTicker = coins.get(`${ex}:${sym}`);
+      const lastCandle = sanitized[sanitized.length - 1];
+      const isOutlier = (liveTicker && liveTicker.p > 0 && lastCandle && lastCandle.c > 0 && Math.abs(lastCandle.c - liveTicker.p) / liveTicker.p > 0.15);
+      if (!isOutlier && sanitized.length > 1) {
+        candles = sanitized;
         isLoadingKlines = false;
         loadedSuccess = true;
         updateOHLC();
         if (!chartW || !chartH) resizeChart();
         chartNeedsDraw = true;
         drawChart();
+      } else {
+        KLINES_CACHE.delete(key);
       }
     }
 
@@ -7380,11 +7545,17 @@ async function loadOlderHistory(ex, sym, tf) {
     const endTime = oldestTs - 1;
 
     if (ex === "BN" || ex === "AD") {
-      const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
-      const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${endTime}`);
-      const data = await r.json();
-      if (Array.isArray(data)) {
-        olderCandles = data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] }));
+      try {
+        const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
+        const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${endTime}`);
+        const data = await r.json();
+        if (Array.isArray(data)) {
+          olderCandles = data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] }));
+        }
+      } catch (_) {
+        const r = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&before=${endTime}`);
+        const data = await r.json();
+        if (Array.isArray(data)) olderCandles = data;
       }
     } else if (ex === "BB") {
       const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${endTime}`);
@@ -7434,6 +7605,15 @@ async function loadOlderHistory(ex, sym, tf) {
       return;
     }
 
+    // Verify olderCandles connects contiguously to oldestTs
+    const newestOlderTs = sanitized[sanitized.length - 1].t;
+    const maxHistGap = Math.max(tfMs * 50, 4 * 3600000);
+    if (oldestTs - newestOlderTs > maxHistGap) {
+      console.warn("loadOlderHistory: gap detected between oldestTs and olderCandles, stopping scroll history");
+      hasReachedStartOfHistory = true;
+      return;
+    }
+
     const prevAnchorTime = (candles.length > 0)
       ? candles[Math.max(0, Math.min(candles.length - 1, Math.round(candles.length - 1 - Math.max(0, offsetX))))]?.t
       : null;
@@ -7468,16 +7648,30 @@ function appendCandle(k) {
 
   const last = candles[candles.length - 1];
   const tfMs = TF_MS[activeTf] || 60000;
+  const refP = (last.c > 0) ? last.c : (last.o > 0 ? last.o : 0);
+
+  // Reject alien phantom candle from another coin or corrupt payload (>50% jump)
+  if (refP > 0 && (clean.c > refP * 1.5 || clean.c < refP * 0.5)) return;
+
+  // Filter phantom wicks on incoming candle
+  if (refP > 0) {
+    const bodyTop = Math.max(clean.o, clean.c);
+    const bodyBottom = Math.min(clean.o, clean.c);
+    if (clean.h > bodyTop * 1.25) clean.h = bodyTop * 1.25;
+    if (clean.l < bodyBottom * 0.75) clean.l = bodyBottom * 0.75;
+  }
 
   if (clean.t === last.t) {
     // Authoritative exchange update for the current candle:
-    // Expand high and low so fast intra-bar spikes are never erased
     last.o = clean.o;
-    last.h = Math.max(last.h, clean.h);
-    last.l = Math.min(last.l, clean.l);
+    last.h = clean.h;
+    last.l = clean.l;
     // Only update close if no real-time trades have been received recently (prevents dragging candle backward)
     if (!lastMarketEventAt || Date.now() - lastMarketEventAt > 2500) {
       last.c = clean.c;
+    } else {
+      if (last.c > last.h) last.h = last.c;
+      if (last.c < last.l && last.c > 0) last.l = last.c;
     }
     if (clean.v > 0) last.v = Math.max(last.v, clean.v);
   } else if (clean.t > last.t) {
@@ -7494,16 +7688,14 @@ function appendCandle(k) {
     clearCandleCaches(candles);
   } else {
     // If clean.t < last.t:
-    // If a speculative/phantom tick candle was added ahead of authoritative candle clean.t,
-    // remove phantom candle(s) that shouldn't exist!
     while (candles.length > 1 && candles[candles.length - 1].t > clean.t) {
       candles.pop();
     }
     const currentLast = candles[candles.length - 1];
     if (currentLast && currentLast.t === clean.t) {
       currentLast.o = clean.o;
-      currentLast.h = Math.max(currentLast.h, clean.h);
-      currentLast.l = Math.min(currentLast.l, clean.l);
+      currentLast.h = clean.h;
+      currentLast.l = clean.l;
       if (!lastMarketEventAt || Date.now() - lastMarketEventAt > 2500) {
         currentLast.c = clean.c;
       }
@@ -7514,10 +7706,10 @@ function appendCandle(k) {
       const target = candles.slice(-15).find(c => c.t === clean.t);
       if (target) {
         target.o = clean.o;
-        target.h = Math.max(target.h, clean.h);
-        target.l = Math.min(target.l, clean.l);
+        target.h = clean.h;
+        target.l = clean.l;
         target.c = clean.c;
-        target.v = clean.v;
+        if (clean.v > 0) target.v = Math.max(target.v, clean.v);
       }
     }
   }
@@ -7535,9 +7727,26 @@ function applyMainMarketTick(data, isRelay = false) {
   if (!Array.isArray(data)) return;
   const eventTime = +data[0];
   const price = +data[1];
-  const eventHigh = +data[2] || price;
-  const eventLow = +data[3] || price;
+  let eventHigh = +data[2] || price;
+  let eventLow = +data[3] || price;
   if (!(price > 0)) return;
+
+  if (isLoadingKlines || !candles.length) {
+    return;
+  }
+
+  let last = candles[candles.length - 1];
+  const refPrice = (last.c > 0) ? last.c : (last.o > 0 ? last.o : 0);
+
+  // Outlier tick protection: drop ticks deviating > 15% from current candle
+  if (refPrice > 0) {
+    const maxDev = 0.15;
+    if (price > refPrice * (1 + maxDev) || price < refPrice * (1 - maxDev)) {
+      return;
+    }
+    eventHigh = Math.min(eventHigh, refPrice * (1 + maxDev));
+    eventLow = Math.max(eventLow, refPrice * (1 - maxDev));
+  }
 
   // Always update ticker price in memory and header
   const ticker = coins.get(`${activeEx}:${activeSym}`);
@@ -7560,12 +7769,6 @@ function applyMainMarketTick(data, isRelay = false) {
   const tfMs = TF_MS[activeTf] || 60000;
   const now = (eventTime > 1e11) ? eventTime : Date.now();
 
-  if (isLoadingKlines || !candles.length) {
-    return;
-  }
-
-
-  let last = candles[candles.length - 1];
   const candleEnd = last.t + tfMs;
 
   if (now >= last.t && now < candleEnd) {
@@ -7638,11 +7841,15 @@ function connectKlWs(ex, sym, tf) {
     mainMarketUnsubscribe = subscribeMarketData({
       ex, sym, tf,
       onKline: data => {
+        if (activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
         lastMarketEventAt = Date.now();
         appendCandle({ t: data[0], o: data[1], h: data[2], l: data[3], c: data[4], v: data[5] });
         checkPriceAlerts(ex, sym, data[4], data[2], data[3]);
       },
-      onTick: (data) => applyMainMarketTick(data, true),
+      onTick: (data) => {
+        if (activeEx !== ex || activeSym !== sym) return;
+        applyMainMarketTick(data, true);
+      },
       onStatus: applyMainMarketStatus,
     });
   }
@@ -10353,11 +10560,13 @@ class ChartInstance {
     if (!(p > 0)) return;
     const last = this.candles[this.candles.length - 1];
     if (last) {
+      const refP = last.c > 0 ? last.c : (last.o > 0 ? last.o : 0);
+      if (refP > 0 && (p > refP * 1.15 || p < refP * 0.85)) return;
       last.c = p;
       if (p > last.h) last.h = p;
-      if (hi > last.h) last.h = hi;
+      if (hi > last.h && (refP <= 0 || hi <= refP * 1.15)) last.h = hi;
       if (p < last.l) last.l = p;
-      if (lo < last.l) last.l = lo;
+      if (lo < last.l && (refP <= 0 || lo >= refP * 0.85)) last.l = lo;
     }
     this.headerPrice.textContent = fP(p);
     this.dirty = true;
@@ -17138,6 +17347,7 @@ function initNotificationsUI() {
   // Real-Time Server Push Handler for Formations (Zero-latency WebSocket delivery)
   window.handleServerFormationAlert = function (data) {
     if (!data || !data.sym) return;
+    if (/_SPOT$/i.test(String(data.sym))) return;
 
     // Strict rule: Formation alerts / toasts / sounds NEVER fire for unregistered or guest users
     const hasAuth = !!(localStorage.getItem("obsidian_auth_token") || (typeof getStoredAuthToken === "function" && getStoredAuthToken()) || window.currentUser);
@@ -17404,6 +17614,7 @@ function initNotificationsUI() {
               if (colonIdx <= 0) continue;
               const ex = key.substring(0, colonIdx);
               const sym = key.substring(colonIdx + 1);
+              if (/_SPOT$/i.test(sym)) continue;
 
               if (!isAllowedEx(ex)) continue;
               if (isFormationCoinBlacklisted(sym)) continue;
@@ -17484,6 +17695,7 @@ function initNotificationsUI() {
               if (colonIdx <= 0) continue;
               const ex = key.substring(0, colonIdx);
               const sym = key.substring(colonIdx + 1);
+              if (/_SPOT$/i.test(sym)) continue;
 
               if (!isAllowedEx(ex)) continue;
               if (isFormationCoinBlacklisted(sym)) continue;
@@ -17557,6 +17769,7 @@ function initNotificationsUI() {
               if (colonIdx <= 0) continue;
               const ex = key.substring(0, colonIdx);
               const sym = key.substring(colonIdx + 1);
+              if (/_SPOT$/i.test(sym)) continue;
 
               if (!isAllowedEx(ex)) continue;
               if (isFormationCoinBlacklisted(sym)) continue;
@@ -17669,9 +17882,18 @@ if (document.readyState === "loading") {
   const PD_KLINES_TTL = 28000;       // 28 s cache for 1m klines
 
   // ── Load / Save ─────────────────────────────────────────────────────────
+  function pdGetStorageKey() {
+    const userId = (window.currentUser && window.currentUser.id) ? window.currentUser.id : "guest";
+    return `obsidian_pump_alert_settings_${userId}`;
+  }
+
   function pdLoad() {
     try {
-      const raw = localStorage.getItem("obsidian_pump_alert_settings");
+      const key = pdGetStorageKey();
+      let raw = localStorage.getItem(key);
+      if (!raw && key !== "obsidian_pump_alert_settings_guest") {
+        raw = localStorage.getItem("obsidian_pump_alert_settings");
+      }
       const isConfigured = localStorage.getItem("obsidian_pump_alerts_user_configured") === "true";
       if (raw && isConfigured) {
         const parsed = JSON.parse(raw);
@@ -17692,6 +17914,8 @@ if (document.readyState === "loading") {
   function pdSave(s) {
     localStorage.setItem("obsidian_pump_alerts_user_configured", "true");
     pdSettings = s || pdSettings;
+    const key = pdGetStorageKey();
+    localStorage.setItem(key, JSON.stringify(pdSettings));
     localStorage.setItem("obsidian_pump_alert_settings", JSON.stringify(pdSettings));
     window.pdSettings = pdSettings;
     pdSyncToServer(pdSettings).catch(() => {});
@@ -17741,6 +17965,8 @@ if (document.readyState === "loading") {
             exchanges: Array.isArray(s.exchanges) && s.exchanges.length ? s.exchanges : [...DEFAULT_PD_SETTINGS.exchanges],
             marketType: s.marketType || "both"
           };
+          const key = pdGetStorageKey();
+          localStorage.setItem(key, JSON.stringify(pdSettings));
           localStorage.setItem("obsidian_pump_alert_settings", JSON.stringify(pdSettings));
           window.pdSettings = pdSettings;
           pdRestartScanner();
@@ -17749,6 +17975,10 @@ if (document.readyState === "loading") {
       }
     } catch (_) {}
   }
+
+  window.pdLoad = pdLoad;
+  window.pdLoadFromServer = pdLoadFromServer;
+  window.pdGetStorageKey = pdGetStorageKey;
 
 
   // ── High-Speed Real-Time Live Price Ring Buffer ────────────────────────
@@ -17785,10 +18015,9 @@ if (document.readyState === "loading") {
     if (pdSettings.exchanges && pdSettings.exchanges.length && !pdSettings.exchanges.includes("all") && !pdSettings.exchanges.includes(ex)) return;
 
     // Market Type filter (Spot / Futures)
-const c = window.coins ? window.coins.get(key) : null;
-    const isFutures = (c && ((c.funding && c.funding !== 0) || (c.oi && c.oi > 0))) || sym.includes("SWAP") || sym.includes("PERP") || sym.endsWith("USDTM") || (!sym.endsWith("_SPOT"));
-    if (pdSettings.marketType === "futures" && !isFutures) return;
-    if (pdSettings.marketType === "spot" && isFutures) return;
+    const isSpot = /_SPOT$/i.test(sym);
+    if (pdSettings.marketType === "futures" && isSpot) return;
+    if (pdSettings.marketType === "spot" && !isSpot) return;
 
     const cooldownMs = (pdSettings.cooldownSeconds || 300) * 1000;
     const lastFired = pdCooldownMap.get(key) || 0;
@@ -17839,6 +18068,26 @@ const c = window.coins ? window.coins.get(key) : null;
   // Real-Time Server Push Handler for Pump/Dump (Zero-latency WebSocket delivery)
   window.handleServerPumpDumpAlert = function (data) {
     if (!data || !pdSettings || !pdSettings.enabled || data.pct <= -75 || data.pct >= 250 || !Number.isFinite(data.pct)) return;
+
+    // Account isolation: if targeted to a specific user, reject if not matching current user
+    const curUserId = (window.currentUser && window.currentUser.id) ? window.currentUser.id : null;
+    if (data.targetUserId && data.targetUserId !== curUserId) return;
+
+    // Market filter check (spot vs futures)
+    const marketFilter = pdSettings.marketType || "both";
+    const rawKey = String(data.key || data.sym || "");
+    const market = (data.market === "spot" || data.market === "futures")
+      ? data.market
+      : (/_SPOT$/i.test(rawKey) ? "spot" : "futures");
+    if (marketFilter !== "both") {
+      if (market !== marketFilter) return;
+    }
+
+    // Timeframe / Observation period check: strictly enforce account's selected period
+    const userBars = Math.max(1, Math.round(pdSettings.periodMinutes || 5));
+    const alertBars = Math.max(1, Math.round(data.bars || 5));
+    if (alertBars !== userBars) return;
+
     const isPump = data.pct > 0;
     const isDump = data.pct < 0;
     const dir = pdSettings.direction || "both";
@@ -17867,7 +18116,7 @@ const c = window.coins ? window.coins.get(key) : null;
       pct: data.pct,
       price: data.price,
       vol: data.vol,
-      bars: data.bars || pdSettings.periodMinutes || 5
+      bars: alertBars
     });
   };
 

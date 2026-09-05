@@ -91,6 +91,29 @@ class PriceHistoryStore {
   }
 
   /**
+   * Logical index of the last sample whose second-stamp is <= targetSec,
+   * or -1 when every retained sample is newer. Binary search: samples are always
+   * stored in ascending time order, so the previous linear scans were doing up to
+   * `capacity` (480) comparisons per lookup. `/api/market/pump-alerts` calls this
+   * once per ticker, so at ~8.5k tickers that was ~4M comparisons per request.
+   */
+  _floorIndex(e, targetSec) {
+    let lo = 0;
+    let hi = e.len - 1;
+    let ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (e.sec[this._slot(e, mid)] <= targetSec) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return ans;
+  }
+
+  /**
    * Newest sample at or before `targetMs`. Falls back to the oldest retained
    * sample when the target predates the whole window, mirroring the previous
    * behaviour so young histories still produce alerts.
@@ -99,17 +122,9 @@ class PriceHistoryStore {
   findAtOrBefore(key, targetMs) {
     const e = this.map.get(key);
     if (!e || e.len === 0) return null;
-    const targetSec = Math.floor(targetMs / 1000);
-
-    // Samples are in ascending time order; walk back from the newest.
-    for (let i = e.len - 1; i >= 0; i--) {
-      const slot = this._slot(e, i);
-      if (e.sec[slot] <= targetSec) {
-        return { t: e.sec[slot] * 1000, p: e.px[slot] };
-      }
-    }
-    const first = this._slot(e, 0);
-    return { t: e.sec[first] * 1000, p: e.px[first] };
+    const idx = this._floorIndex(e, Math.floor(targetMs / 1000));
+    const slot = this._slot(e, idx < 0 ? 0 : idx);
+    return { t: e.sec[slot] * 1000, p: e.px[slot] };
   }
 
   /** Sample nearest to `targetMs` in either direction, with its time delta. */
@@ -117,16 +132,23 @@ class PriceHistoryStore {
     const e = this.map.get(key);
     if (!e || e.len === 0) return null;
     const targetSec = Math.floor(targetMs / 1000);
+
+    // The nearest sample is always the floor or its immediate successor.
+    const lo = this._floorIndex(e, targetSec);
     let best = -1;
     let bestDiff = Infinity;
-    for (let i = 0; i < e.len; i++) {
-      const slot = this._slot(e, i);
-      const diff = Math.abs(e.sec[slot] - targetSec);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        best = slot;
-      }
+
+    if (lo >= 0) {
+      const slot = this._slot(e, lo);
+      best = slot;
+      bestDiff = targetSec - e.sec[slot];
     }
+    if (lo + 1 < e.len) {
+      const slot = this._slot(e, lo + 1);
+      const diff = e.sec[slot] - targetSec;
+      if (diff < bestDiff) { bestDiff = diff; best = slot; }
+    }
+
     if (best < 0) return null;
     return { t: e.sec[best] * 1000, p: e.px[best], diffMs: bestDiff * 1000 };
   }

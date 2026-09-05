@@ -21,7 +21,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const https = require("https");
-const { execSync } = require("child_process");
+const { execSync, exec } = require("child_process");
 
 const BANNED_IPS_FILE = path.join(__dirname, "security_banned_ips.json");
 
@@ -73,7 +73,17 @@ function isPrivateOrLocalIp(ip) {
 }
 
 // ═══ Safe Execution Helper ════════════════════════════════════════════════════
+// `execSync` was previously called from `banIp`, i.e. **from inside the request
+// path** whenever a volumetric flood tripped the threshold. Spawning a child
+// process synchronously blocks the entire event loop — exactly the wrong thing to
+// do while under a flood. All firewall mutations are now fire-and-forget async.
 function runIptablesCmd(cmd) {
+  if (os.platform() !== "linux") return false;
+  exec(cmd, { encoding: "utf8", timeout: 4000 }, () => {});
+  return true;
+}
+
+function runIptablesCmdSync(cmd) {
   if (os.platform() !== "linux") return false;
   try {
     execSync(cmd, { encoding: "utf8", timeout: 4000, stdio: "pipe" });
@@ -92,6 +102,9 @@ function sendSecurityAlert(text, ip = "") {
   if (ip) {
     const lastAlert = lastTelegramAlertMap.get(ip) || 0;
     if (Date.now() - lastAlert < LIMITS.TELEGRAM_ALERT_THROTTLE_MS) return;
+    if (lastTelegramAlertMap.size >= MAX_TRACKED_IPS) {
+      evictOldestHalf(lastTelegramAlertMap, (ts) => ts);
+    }
     lastTelegramAlertMap.set(ip, Date.now());
   }
 
@@ -142,29 +155,61 @@ function loadBannedIpsFromDisk() {
 }
 
 function saveBannedIpsToDisk() {
-  try {
-    const obj = {};
-    for (const [ip, info] of bannedIpsMap.entries()) {
-      obj[ip] = info;
-    }
-    fs.writeFileSync(BANNED_IPS_FILE, JSON.stringify(obj, null, 2), "utf8");
-  } catch (_) {}
+  // Debounced + async: this used to be a blocking `writeFileSync` called from
+  // `banIp`, which itself runs on the request path during a flood.
+  if (savePending) { saveAgain = true; return; }
+  savePending = true;
+  if (saveTimer) return;
+  saveTimer = setTimeout(flushBannedIps, 250);
+  saveTimer.unref?.();
 }
 
+let savePending = false;
+let saveAgain = false;
+let saveTimer = null;
+
+function serializeBans() {
+  const obj = {};
+  for (const [ip, info] of bannedIpsMap.entries()) obj[ip] = info;
+  return JSON.stringify(obj, null, 2);
+}
+
+function flushBannedIps() {
+  saveTimer = null;
+  let json;
+  try { json = serializeBans(); } catch (_) { savePending = false; return; }
+  fs.writeFile(BANNED_IPS_FILE, json, "utf8", () => {
+    savePending = false;
+    if (saveAgain) {
+      saveAgain = false;
+      saveBannedIpsToDisk();
+    }
+  });
+}
+
+// A crash-time flush so a ban survives a restart even if it was issued <250 ms ago.
+process.once("exit", () => {
+  if (!savePending) return;
+  try { fs.writeFileSync(BANNED_IPS_FILE, serializeBans(), "utf8"); } catch (_) {}
+});
+
 // ═══ Kernel iptables Firewall Chain Setup ═════════════════════════════════════
+// Only this runs synchronously, and only once at module load, where blocking is
+// harmless (nothing is being served yet) and ordering matters: the chain has to
+// exist before rules are inserted into it.
 function initKernelFirewallChain() {
   if (os.platform() !== "linux") return;
   try {
-    runIptablesCmd("iptables -N OBSIDIAN_SHIELD 2>/dev/null || true");
-    const inputRules = execSync("iptables -L INPUT -n 2>/dev/null", { encoding: "utf8" });
+    runIptablesCmdSync("iptables -N OBSIDIAN_SHIELD 2>/dev/null || true");
+    const inputRules = execSync("iptables -L INPUT -n 2>/dev/null", { encoding: "utf8", timeout: 4000 });
     if (!inputRules.includes("OBSIDIAN_SHIELD")) {
-      runIptablesCmd("iptables -I INPUT 1 -j OBSIDIAN_SHIELD");
+      runIptablesCmdSync("iptables -I INPUT 1 -j OBSIDIAN_SHIELD");
     }
 
     // Sync only genuinely unexpired active bans
     for (const [ip, info] of bannedIpsMap.entries()) {
       if (info.expiresAt > Date.now()) {
-        runIptablesCmd(`iptables -I OBSIDIAN_SHIELD 1 -s ${ip} -j DROP 2>/dev/null || true`);
+        runIptablesCmdSync(`iptables -I OBSIDIAN_SHIELD 1 -s ${ip} -j DROP 2>/dev/null || true`);
       }
     }
   } catch (_) {}
@@ -183,6 +228,9 @@ function recordStrike(ip, reason) {
 
   entry.strikes += 1;
   entry.lastStrike = now;
+  if (!strikeCountMap.has(cleanIp) && strikeCountMap.size >= MAX_TRACKED_IPS) {
+    evictOldestHalf(strikeCountMap, (e) => e.lastStrike);
+  }
   strikeCountMap.set(cleanIp, entry);
 
   if (entry.strikes >= LIMITS.STRIKES_FOR_BAN) {
@@ -277,7 +325,42 @@ function isIpBanned(ip) {
   return true;
 }
 
-// Auto-unban background maintenance sweep (every 60s)
+// Auto-unban background maintenance sweep + eviction of dead per-IP state.
+//
+// `requestRateMap`, `strikeCountMap` and `lastTelegramAlertMap` are keyed by
+// source IP and were **never** pruned — one Map entry per distinct client IP,
+// retained for the whole process lifetime. That is the classic per-IP-map leak
+// and it is trivially amplified by a rotating-source-IP flood, which is exactly
+// the traffic this module exists to survive.
+const RATE_KEY_TTL_MS = 120000;          // 2x the 60s sliding window
+const STRIKE_KEY_TTL_MS = LIMITS.STRIKE_EXPIRY_MS * 4;
+const ALERT_KEY_TTL_MS = LIMITS.TELEGRAM_ALERT_THROTTLE_MS * 2;
+// Hard ceilings so a burst between sweeps cannot exhaust the heap either.
+const MAX_TRACKED_IPS = 50000;
+
+function pruneIpState(now) {
+  for (const [ip, timestamps] of requestRateMap) {
+    // The middleware always leaves the newest timestamp last.
+    if (!timestamps.length || now - timestamps[timestamps.length - 1] > RATE_KEY_TTL_MS) {
+      requestRateMap.delete(ip);
+    }
+  }
+  for (const [ip, entry] of strikeCountMap) {
+    if (now - entry.lastStrike > STRIKE_KEY_TTL_MS) strikeCountMap.delete(ip);
+  }
+  for (const [ip, ts] of lastTelegramAlertMap) {
+    if (now - ts > ALERT_KEY_TTL_MS) lastTelegramAlertMap.delete(ip);
+  }
+}
+
+/** Emergency eviction: drop the oldest half when a map blows past its ceiling. */
+function evictOldestHalf(map, tsOf) {
+  const entries = Array.from(map.entries());
+  entries.sort((a, b) => tsOf(a[1]) - tsOf(b[1]));
+  const drop = entries.length >> 1;
+  for (let i = 0; i < drop; i++) map.delete(entries[i][0]);
+}
+
 const cleanupTimer = setInterval(() => {
   const now = Date.now();
   for (const [ip, info] of bannedIpsMap.entries()) {
@@ -285,6 +368,7 @@ const cleanupTimer = setInterval(() => {
       unbanIp(ip);
     }
   }
+  pruneIpState(now);
 }, 60000);
 if (cleanupTimer && typeof cleanupTimer.unref === "function") {
   cleanupTimer.unref();
@@ -305,7 +389,16 @@ function securityShieldMiddleware(req, res, next) {
     return next();
   }
 
-  const rawUrl = decodeURIComponent(req.originalUrl || req.url || "");
+  // A malformed percent-sequence (`GET /%E0%A4%A`) makes decodeURIComponent
+  // throw URIError. Unguarded, that threw out of the *first* middleware on every
+  // request and surfaced as a 500 — trivially triggerable by any scanner.
+  const rawTarget = req.originalUrl || req.url || "";
+  let rawUrl;
+  try {
+    rawUrl = decodeURIComponent(rawTarget);
+  } catch (_) {
+    rawUrl = rawTarget;
+  }
 
   // 2. Strike-Based Scanner Defense (requires repeated bot attempts)
   for (const pattern of EXPLOIT_PATTERNS) {
@@ -317,13 +410,34 @@ function securityShieldMiddleware(req, res, next) {
   }
 
   // 3. Adaptive Rate Limiter (Soft 429 first, Kernel drop only on extreme volumetric DDoS)
+  //
+  // The old implementation rebuilt the whole timestamp array with `.filter()` on
+  // every request and then ran a *second* `.filter()` to count the 3s window —
+  // two O(n) passes plus a fresh array allocation per request, per IP, at up to
+  // 800 retained timestamps. Timestamps are monotonically increasing, so a single
+  // in-place trim from the front and a backwards count are enough.
   const now = Date.now();
-  let timestamps = requestRateMap.get(cleanIp) || [];
-  timestamps = timestamps.filter(t => now - t < 60000); // 1-minute sliding window
-  timestamps.push(now);
-  requestRateMap.set(cleanIp, timestamps);
+  let timestamps = requestRateMap.get(cleanIp);
+  if (!timestamps) {
+    if (requestRateMap.size >= MAX_TRACKED_IPS) {
+      pruneIpState(now);
+      if (requestRateMap.size >= MAX_TRACKED_IPS) {
+        evictOldestHalf(requestRateMap, (arr) => (arr.length ? arr[arr.length - 1] : 0));
+      }
+    }
+    timestamps = [];
+    requestRateMap.set(cleanIp, timestamps);
+  }
 
-  const reqsLast3s = timestamps.filter(t => now - t < 3000).length;
+  // Drop everything outside the 1-minute sliding window.
+  let firstFresh = 0;
+  while (firstFresh < timestamps.length && now - timestamps[firstFresh] >= 60000) firstFresh++;
+  if (firstFresh > 0) timestamps.splice(0, firstFresh);
+  timestamps.push(now);
+
+  // Count the last 3 seconds walking backwards from the newest entry.
+  let reqsLast3s = 0;
+  for (let i = timestamps.length - 1; i >= 0 && now - timestamps[i] < 3000; i--) reqsLast3s++;
 
   // Extreme Volumetric Flood -> Kernel Ban
   if (reqsLast3s > LIMITS.VOLUMETRIC_DDOS_THRESHOLD) {

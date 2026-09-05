@@ -37,9 +37,10 @@ const express = require("express");
 const http = require("http");
 const https = require("https");
 const path = require("path");
+const fs = require("fs");
 const { WebSocketServer, WebSocket } = require("ws");
 const zlib = require("zlib");
-const { randomUUID, timingSafeEqual } = require("crypto");
+const { randomUUID, timingSafeEqual, createHash } = require("crypto");
 
 const PORT = process.env.PORT || 3000;
 
@@ -51,7 +52,16 @@ const httpsAgent = new https.Agent({
   timeout: 60000,
 });
 
-
+try {
+  const { setGlobalDispatcher, Agent } = require("undici");
+  setGlobalDispatcher(new Agent({
+    connections: 256,
+    pipelining: 1,
+    keepAliveTimeout: 60000,
+    keepAliveMaxTimeout: 120000,
+  }));
+  console.log("[HTTP] Undici global dispatcher initialized with 256 connections.");
+} catch (_) {}
 
 const compression = require('compression');
 const patternDetector = require("./patternDetector");
@@ -72,7 +82,32 @@ const marketDataCore = require("./marketDataCore");
 const { syncJournal } = require("./journalSync");
 const { createJournalCredentialStore } = require("./journalCredentialStore");
 const journalCredentials = createJournalCredentialStore();
+/**
+ * `userId:exchange` -> { at, result, pending }.
+ *
+ * `maxAge` (8s) is a freshness check, not an eviction policy, so entries used to
+ * live for the whole process lifetime — each holding a full sync result with up
+ * to 600 executions plus every derived trade. A pruning sweep bounds it.
+ */
 const journalSyncCache = new Map();
+const JOURNAL_CACHE_TTL_MS = 15 * 60 * 1000;
+const JOURNAL_CACHE_MAX_ENTRIES = 500;
+
+function pruneJournalSyncCache() {
+  const now = Date.now();
+  for (const [k, v] of journalSyncCache) {
+    if (v.pending) continue; // an in-flight sync owns its slot
+    if (now - (v.at || 0) > JOURNAL_CACHE_TTL_MS) journalSyncCache.delete(k);
+  }
+  if (journalSyncCache.size <= JOURNAL_CACHE_MAX_ENTRIES) return;
+  let excess = journalSyncCache.size - JOURNAL_CACHE_MAX_ENTRIES;
+  for (const [k, v] of journalSyncCache) {
+    if (v.pending) continue;
+    journalSyncCache.delete(k);
+    if (--excess <= 0) break;
+  }
+}
+setInterval(pruneJournalSyncCache, 5 * 60 * 1000).unref?.();
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 const cachedTfMaps = Object.create(null); // tf -> { "EX:SYM": levels[] }
 const cachedFormationMaps = {
@@ -81,6 +116,36 @@ const cachedFormationMaps = {
   trendline: Object.create(null),
   retest: Object.create(null)
 };
+
+/**
+ * Drop cached formations for symbols that are no longer in the ticker map.
+ * Called once per completed scan cycle — cheap relative to the scan itself, and
+ * the only thing that stops these five maps growing monotonically as venues
+ * delist pairs.
+ */
+function pruneFormationCaches() {
+  let removed = 0;
+  for (const key of serverFormationsMap.keys()) {
+    // key is "EX:SYM:TF"
+    const lastColon = key.lastIndexOf(":");
+    if (lastColon <= 0) continue;
+    if (!tickers.has(key.slice(0, lastColon))) {
+      serverFormationsMap.delete(key);
+      removed++;
+    }
+  }
+  const buckets = [cachedTfMaps, cachedFormationMaps.cascades, cachedFormationMaps.levels,
+                   cachedFormationMaps.trendline, cachedFormationMaps.retest];
+  for (const bucket of buckets) {
+    for (const tf in bucket) {
+      const byCoin = bucket[tf];
+      for (const coinKey in byCoin) {
+        if (!tickers.has(coinKey)) { delete byCoin[coinKey]; removed++; }
+      }
+    }
+  }
+  return removed;
+}
 let currentWallsCache = [];
 let currentWallsMeta = { walls: [], updatedAt: 0, partial: false, exchangesReady: 0, exchangesTotal: 11, exchangeStatuses: {} };
 global.__obsidianWallsMeta = currentWallsMeta;
@@ -136,8 +201,13 @@ function checkSingleNonCrypto(token) {
   return false;
 }
 
+const nonCryptoCheckCache = new Map();
 function isNonCryptoOrStock(base, sym) {
   if (!base && !sym) return false;
+  const cacheKey = `${base || ""}:${sym || ""}`;
+  const hit = nonCryptoCheckCache.get(cacheKey);
+  if (hit !== undefined) return hit;
+
   let s = String(sym || base).toUpperCase();
   const colonIdx = s.indexOf(":");
   if (colonIdx >= 0) s = s.slice(colonIdx + 1);
@@ -149,7 +219,10 @@ function isNonCryptoOrStock(base, sym) {
 
   let b = String(base || "").toUpperCase().replace(/[-_/]?(USDT|USD|PERP|SPOT)$/i, "").replace(/[-_]/g, "");
 
-  return checkSingleNonCrypto(s) || checkSingleNonCrypto(b);
+  const result = checkSingleNonCrypto(s) || checkSingleNonCrypto(b);
+  if (nonCryptoCheckCache.size > 10000) nonCryptoCheckCache.clear();
+  nonCryptoCheckCache.set(cacheKey, result);
+  return result;
 }
 
 // ─── In-memory store ────────────────────────────────────────────────────────
@@ -215,27 +288,33 @@ function scheduleStatusBroadcast() {
     statusBroadcastTimer = null;
     broadcastStatus();
   }, 100);
+  statusBroadcastTimer.unref?.();
 }
 
 function broadcastStatus() {
+  if (clients.size === 0) return;
   const msg = JSON.stringify({ type: "ex_status", data: Object.fromEntries(exStatus) });
   for (const ws of clients) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    // Unlike every sibling broadcaster this had no try/catch. A socket that
+    // transitions to CLOSING between the readyState check and `send` throws, and
+    // this runs from a timer — so the throw became an uncaughtException.
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    try { ws.send(msg); } catch (_) {}
   }
 }
 
 // тФАтФАтФА Ultra-fast broadcast: push-based, batched, flat arrays тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-const NUM_FIELDS = new Set(["p", "chg", "v", "h", "l", "o", "funding", "nextFunding", "oi", "trades"]);
 
-function numReplacer(key, value) {
-  if (NUM_FIELDS.has(key) && (value == null || (typeof value === "number" && isNaN(value)))) return 0;
-  return value;
-}
-
-// Pre-built ticker index for fast lookup
+// Pre-built ticker index for fast lookup.
+//
+// This is monotonic by design (a client's `idToKey` map must stay valid for the
+// life of its connection), but the `ticker_map` broadcast used to serialise the
+// *entire* index on every insert. On a venue listing burst that meant repeatedly
+// shipping an ~8.5k-entry object to every client. Only the new keys are sent now;
+// the client already merges rather than replaces.
 const tickerIndex = new Map(); // key => numeric index
 let tickerIndexCounter = 0;
-let newKeysBuffer = new Set(); // keys added since last ticker_map broadcast
+const newKeysBuffer = new Map(); // key -> idx, pending announcement
 let tickerMapBroadcastTimer = null;
 
 function getTickerIndex(key) {
@@ -244,27 +323,24 @@ function getTickerIndex(key) {
     idx = tickerIndexCounter++;
     tickerIndex.set(key, idx);
     // Schedule a ticker_map broadcast so clients learn about new keys
-    newKeysBuffer.add(key);
+    newKeysBuffer.set(key, idx);
     if (!tickerMapBroadcastTimer) {
       tickerMapBroadcastTimer = setTimeout(() => {
         tickerMapBroadcastTimer = null;
         if (clients.size === 0 || newKeysBuffer.size === 0) { newKeysBuffer.clear(); return; }
-        // Send full updated map (clients need to merge it)
-        const idMap = Object.fromEntries(tickerIndex);
-        const msg = JSON.stringify({ type: "ticker_map", data: idMap });
+        const msg = JSON.stringify({ type: "ticker_map", data: Object.fromEntries(newKeysBuffer) });
+        newKeysBuffer.clear();
         for (const ws of clients) {
           if (ws.readyState === WebSocket.OPEN) { try { ws.send(msg); } catch (_) {} }
         }
-        newKeysBuffer.clear();
       }, 500);
+      tickerMapBroadcastTimer.unref?.();
     }
   }
   return idx;
 }
 
 // Broadcast loop: 50ms = 20fps (optimized from 6ms/166fps to reduce CPU)
-let broadcastBuf = null;
-let broadcastDirty = false;
 let snapshotSent = false;
 
 // Pre-allocated broadcast buffer (reused to avoid GC pressure)
@@ -292,7 +368,6 @@ setInterval(() => {
     dirtyKeys.clear();
     return;
   }
-
   // Build binary buffer: [ID, p, chg, v, h, l, o, funding, nextFunding, oi, trades] x N
   const count = dirtyKeys.size;
   const requiredBytes = count * 11 * 8;
@@ -338,16 +413,10 @@ setInterval(() => {
   }
 }, 50);
 
-// Server heartbeat every 3s to prevent client watchdog quiet triggers
-setInterval(() => {
-  if (clients.size === 0) return;
-  const heartbeatMsg = JSON.stringify({ type: "ping", ts: Date.now() });
-  for (const ws of clients) {
-    if (ws.readyState === WebSocket.OPEN) {
-      try { ws.send(heartbeatMsg); } catch (_) {}
-    }
-  }
-}, 3000);
+// The 1s `heartbeat` at the bottom of this file already keeps browser watchdogs
+// honest; a second independent 3s `ping` broadcast to every client was pure
+// duplicate work (the client ignores `ping` entirely — see the `heartbeat`
+// early-return in app.js's onmessage).
 
 // тФАтФАтФА Kline broadcast to clients тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function normalizeTimestamp(t) {
@@ -415,6 +484,13 @@ function publishMarketTrade(ex, sym, tf, eventTime, price, volume = 0) {
   const t = normalizeTimestamp(eventTime) || Date.now();
   const p = Number(price);
   if (!Number.isFinite(p) || p <= 0) return;
+
+  // Sanity check: drop outlier trade prints > 35% from current ticker price (bad prints / cross-stream glitch)
+  const ticker = tickers.get(`${ex}:${sym}`);
+  if (ticker && ticker.p > 0) {
+    if (p > ticker.p * 1.35 || p < ticker.p * 0.65) return;
+  }
+
   sub.lastEventAt = Date.now();
   sub.lastSourceAt = t;
   const stat = marketFeedStats.get(ex) || { messages: 0, trades: 0, klines: 0, lastEventAt: 0, lastSourceAt: 0 };
@@ -471,6 +547,9 @@ function updateLiveTradeTick(ex, sym, tf, tradeTime, price, volume) {
     let v = flat[flat.length - 1];
 
     if (normT >= lastT) {
+      const refP = c > 0 ? c : o;
+      if (refP > 0 && (price > refP * 1.35 || price < refP * 0.65)) return;
+
       h = Math.max(h, price);
       l = Math.min(l, price);
       c = price;
@@ -498,17 +577,47 @@ const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || "0", 10);
 if (Number.isInteger(trustProxyHops) && trustProxyHops > 0 && trustProxyHops <= 10) {
   app.set("trust proxy", trustProxyHops);
 }
-app.use(compression({ level: 1, threshold: 1024 }));
+// level 1 was chosen when this also had to compress the static bundle. Static
+// assets are now pre-compressed in memory, so this only sees JSON API responses
+// where level 6 costs ~0.1 ms extra and cuts the payload noticeably. The
+// threshold skips tiny bodies where framing overhead dominates.
+//
+// The filter also honours `X-No-Compression`, which the routes that serve an
+// already-gzipped cached buffer set. `compression` does bail on its own once it
+// sees `Content-Encoding`, but being explicit keeps the intent readable and
+// avoids relying on header ordering.
+app.use(compression({
+  level: 6,
+  threshold: 2048,
+  filter(req, res) {
+    if (res.getHeader("X-No-Compression")) return false;
+    return compression.filter(req, res);
+  }
+}));
+// Hoisted out of the middleware below: `express.json(...)` was being *called*
+// per request, allocating a fresh parser, options object and verify closure for
+// every request including static GETs.
+const jsonBodyParser = express.json({
+  limit: "128kb",
+  verify(req, _res, buffer) {
+    // Only the CryptoBot webhook needs the raw bytes for HMAC verification;
+    // copying every body was pure overhead.
+    if (req.path.startsWith("/api/pay/webhook/")) {
+      req.rawBody = Buffer.from(buffer);
+    }
+  }
+});
 app.use((req, res, next) => {
   // Skip global JSON parser for endpoints requiring larger payload limits
   if (req.path === "/api/notifications/telegram-photo" || req.path === "/api/bug-report") return next();
-  express.json({
-    limit: "128kb",
-    verify(req, _res, buffer) {
-      req.rawBody = Buffer.from(buffer);
-    }
-  })(req, res, next);
+  jsonBodyParser(req, res, next);
 });
+
+// Per-route parsers, built once at startup rather than per request. Note these
+// are no-ops when the global parser above already consumed the body (body-parser
+// short-circuits on `req._body`), so the effective limit for everything except
+// the two skipped paths remains 128 KB.
+const formationAlertsBodyParser = express.json({ limit: "5mb" });
 app.use((error, _req, res, next) => {
   if (error && (error.type === "entity.parse.failed" || error.type === "entity.too.large")) {
     return res.status(error.type === "entity.too.large" ? 413 : 400).json({ error: "Некорректное тело запроса" });
@@ -538,8 +647,27 @@ function setPublicCors(req, res) {
   const origin = req.headers.origin;
   if (origin && corsOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
+    // `res.vary` appends; `setHeader("Vary", ...)` would clobber the
+    // `Accept-Encoding` value that the cached-JSON responder sets.
+    res.vary("Origin");
   }
+}
+
+/**
+ * Preflight. `Access-Control-Allow-Origin` was being emitted by 15 handlers but
+ * there was no `OPTIONS` route anywhere, so every cross-origin request that
+ * triggers a preflight (any custom header — including the `Authorization` header
+ * the journal and alert endpoints require) failed regardless of `CORS_ORIGINS`.
+ */
+if (corsOrigins.length) {
+  app.options("/api/*", (req, res) => {
+    setPublicCors(req, res);
+    if (!res.getHeader("Access-Control-Allow-Origin")) return res.status(403).end();
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+    res.setHeader("Access-Control-Max-Age", "600");
+    res.status(204).end();
+  });
 }
 
 const apiIpLimit = createSlidingWindowLimiter({ windowMs: 60_000, max: 1200, key: req => req.ip });
@@ -557,6 +685,32 @@ const wss = new WebSocketServer({
   perMessageDeflate: false,
   maxPayload: 16 * 1024,
 });
+
+let cachedTickerMapMsg = null;
+let cachedTickerMapSize = 0;
+function getTickerMapPayload() {
+  if (!cachedTickerMapMsg || cachedTickerMapSize !== tickerIndex.size) {
+    for (const key of tickers.keys()) getTickerIndex(key);
+    cachedTickerMapMsg = JSON.stringify({ type: "ticker_map", data: Object.fromEntries(tickerIndex) });
+    cachedTickerMapSize = tickerIndex.size;
+  }
+  return cachedTickerMapMsg;
+}
+
+let cachedSnapshotMsg = null;
+let cachedSnapshotAt = 0;
+function getSnapshotPayload() {
+  const now = Date.now();
+  if (!cachedSnapshotMsg || (now - cachedSnapshotAt > 1000)) {
+    const snap = ["s"];
+    for (const t of tickers.values()) {
+      snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
+    }
+    cachedSnapshotMsg = JSON.stringify({ type: "snapshot", data: snap, correlations: correlationEngine.getCorrelations() });
+    cachedSnapshotAt = now;
+  }
+  return cachedSnapshotMsg;
+}
 
 const wsClientsByIp = new Map();
 wss.on("connection", (ws, req) => {
@@ -582,17 +736,8 @@ wss.on("connection", (ws, req) => {
   try {
     ws.send(JSON.stringify({ type: "ex_status", data: Object.fromEntries(exStatus) }));
     if (tickers.size > 0) {
-      // Pre-build tickerIndex for ALL known tickers before sending map
-      for (const key of tickers.keys()) getTickerIndex(key);
-
-      const idMap = Object.fromEntries(tickerIndex);
-      ws.send(JSON.stringify({ type: "ticker_map", data: idMap }));
-
-      const snap = ["s"];
-      for (const t of tickers.values()) {
-        snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
-      }
-      ws.send(JSON.stringify({ type: "snapshot", data: snap, correlations: correlationEngine.getCorrelations() }));
+      ws.send(getTickerMapPayload());
+      ws.send(getSnapshotPayload());
     }
   } catch (err) {
     console.error("[WS CLIENT] Error sending initial data:", err.message);
@@ -648,15 +793,8 @@ wss.on("connection", (ws, req) => {
         try { ws.send(JSON.stringify({ type: "pong", t: Date.now() })); } catch (_) {}
       } else if (msg.type === "get_snapshot") {
         if (tickers.size > 0 && ws.readyState === WebSocket.OPEN) {
-          // Ensure all tickers have an index before sending map
-          for (const key of tickers.keys()) getTickerIndex(key);
-          const idMap = Object.fromEntries(tickerIndex);
-          ws.send(JSON.stringify({ type: "ticker_map", data: idMap }));
-          const snap = ["s"];
-          for (const t of tickers.values()) {
-            snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
-          }
-          ws.send(JSON.stringify({ type: "snapshot", data: snap, correlations: correlationEngine.getCorrelations() }));
+          ws.send(getTickerMapPayload());
+          ws.send(getSnapshotPayload());
         }
       }
     } catch (_) {}
@@ -1143,7 +1281,14 @@ async function getKuCoinToken() {
 function startKlinePolling(sub) {
   if (sub.pollTimer) clearInterval(sub.pollTimer);
   markMarketOpen(sub);
+  // Re-entrancy guard: `apiFetch` has a 3s budget but the interval fired every
+  // 1s, so up to three overlapping fetches per subscription could pile up — and
+  // one such interval exists per `klineSubs` entry for every venue without a WS
+  // branch. The period also now matches the fetch budget.
+  sub.pollInFlight = false;
   sub.pollTimer = setInterval(async () => {
+    if (sub.pollInFlight || sub.closing) return;
+    sub.pollInFlight = true;
     try {
       const url = getKlinesUrl(sub.ex, sub.sym, sub.tf, 3);
       if (!url) return;
@@ -1153,8 +1298,11 @@ function startKlinePolling(sub) {
         const last = candles[candles.length - 1];
         broadcastKline(sub.ex, sub.sym, sub.tf, last);
       }
-    } catch (_) {}
-  }, 1000);
+    } catch (_) {} finally {
+      sub.pollInFlight = false;
+    }
+  }, 2000);
+  sub.pollTimer.unref?.();
 }
 
 // тФАтФАтФА Reconnecting WebSocket helper тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -1249,53 +1397,199 @@ function mkExWs(exId, url, onMsg, onOpen) {
 }
 
 // тФАтФАтФА Fetch helper тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body = null) {
-  const useNativeFetch = typeof fetch === "function";
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Cache-Control": "no-cache",
-  };
-  if (method === "POST") headers["Content-Type"] = "application/json";
+// ─── Per-venue circuit breaker ────────────────────────────────────────────────
+// Binance answers a rate-limit breach with HTTP 418 and an hour-long IP ban, and
+// it reports the remaining time in `retry-after`. The old code retried through
+// the ban with a 3-second backoff, which kept the ban alive and made every
+// klines request hang. This tracks a pause and honours `retry-after`.
+//
+// Scope matters. A 418/403 is an IP-level ban and has to park the whole host. A
+// 429 only means "too fast on this endpoint": OKX answers a burst of order-book
+// requests with 429 and no retry-after, and parking `www.okx.com` for a minute
+// took its klines and tickers down with it — measured at 6180 pause-seconds
+// across 103 hits in a 12-minute run, while OKX's own limit would have cleared
+// in seconds. Rate limits therefore park one endpoint, briefly.
+const venueBanUntil = new Map(); // "host" (whole venue) | "host/path" (one endpoint) -> timestamp
+const VENUE_DEFAULT_BAN_MS = 60000;
+const VENUE_RATE_LIMIT_MS = 10000;
 
-  for (let i = 0; i <= retries; i++) {
+function hostOf(url) {
+  const m = /^https?:\/\/([^/]+)/i.exec(String(url || ""));
+  return m ? m[1].toLowerCase() : "";
+}
+
+// MEXC and a few others put the instrument in the path, so a raw pathname would
+// mint a key per symbol and a rate limit would only ever park one of them.
+// Instrument-looking segments collapse to `*`, which keeps the key set at one
+// entry per endpoint.
+const SYMBOL_PATH_SEGMENT = /^[A-Z0-9]{2,20}(?:[-_][A-Z0-9]{1,10})*$/;
+
+/** Host + normalised path, query stripped: one endpoint's own limit bucket. */
+function endpointOf(url) {
+  const m = /^https?:\/\/([^/?#]+)([^?#]*)/i.exec(String(url || ""));
+  if (!m) return "";
+  const segments = String(m[2] || "").split("/").filter(Boolean)
+    .map(seg => (SYMBOL_PATH_SEGMENT.test(seg) ? "*" : seg));
+  return m[1].toLowerCase() + "/" + segments.join("/");
+}
+
+/** Remaining pause for one key, self-clearing once it expires. */
+function pausedUntil(key) {
+  if (!key) return 0;
+  const until = venueBanUntil.get(key) || 0;
+  if (until <= Date.now()) {
+    if (until) venueBanUntil.delete(key);
+    return 0;
+  }
+  return until;
+}
+
+function isVenuePaused(url) {
+  // A host-wide ban outranks an endpoint pause, so check both.
+  return pausedUntil(hostOf(url)) > 0 || pausedUntil(endpointOf(url)) > 0;
+}
+
+function pauseVenue(url, ms, reason, scope = "host") {
+  const key = scope === "endpoint" ? endpointOf(url) : hostOf(url);
+  if (!key) return;
+  const until = Date.now() + Math.max(1000, ms);
+  const prev = venueBanUntil.get(key) || 0;
+  if (until <= prev) return;
+  venueBanUntil.set(key, until);
+  console.warn(`[VENUE PAUSED] ${key} for ${Math.round(ms / 1000)}s (${reason})`);
+}
+
+function venuePauseSnapshot() {
+  const now = Date.now();
+  const out = {};
+  for (const [host, until] of venueBanUntil) {
+    if (until > now) out[host] = Math.round((until - now) / 1000);
+  }
+  return out;
+}
+
+/**
+ * Binance futures klines have a public mirror that does not share the futures
+ * weight budget. Returns null for anything else.
+ */
+function binanceFallbackUrl(url) {
+  const s = String(url || "");
+  if (!s.includes("fapi.binance.com/fapi/v1/klines")) return null;
+  return s.replace("https://fapi.binance.com/fapi/v1/klines", "https://data-api.binance.vision/api/v3/klines");
+}
+
+/**
+ * Resolved once per process instead of on every request. The previous code
+ * re-imported node-fetch inside the retry loop AND declared `fetchImpl` inside
+ * the `try` block, so the catch-path mirror fallback threw
+ * `ReferenceError: fetchImpl is not defined` into a bare `catch (_) {}` — the
+ * Binance mirror fallback on network errors had never actually worked.
+ */
+const USE_NATIVE_FETCH = typeof fetch === "function";
+let _fetchImpl = USE_NATIVE_FETCH ? fetch.bind(globalThis) : null;
+let _fetchImplPromise = null;
+async function getFetchImpl() {
+  if (_fetchImpl) return _fetchImpl;
+  if (!_fetchImplPromise) {
+    _fetchImplPromise = import("node-fetch").then((m) => {
+      _fetchImpl = m.default;
+      return _fetchImpl;
+    });
+  }
+  return _fetchImplPromise;
+}
+
+// Shared request headers — one frozen object instead of a fresh literal per call.
+const API_FETCH_HEADERS_GET = Object.freeze({
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Cache-Control": "no-cache",
+});
+const API_FETCH_HEADERS_POST = Object.freeze({
+  ...API_FETCH_HEADERS_GET,
+  "Content-Type": "application/json",
+});
+
+async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body = null) {
+  const headers = method === "POST" ? API_FETCH_HEADERS_POST : API_FETCH_HEADERS_GET;
+  const fetchImpl = await getFetchImpl();
+  const payload = body == null ? null : (typeof body === "string" ? body : JSON.stringify(body));
+
+  // Refuse instantly while the venue is banned. Waiting on a doomed request is
+  // what made /api/klines hang for 35 seconds.
+  if (isVenuePaused(url)) {
+    const fallback = binanceFallbackUrl(url);
+    if (!fallback || isVenuePaused(fallback)) throw new Error("VENUE_PAUSED");
+    url = fallback;
+  }
+
+  // Every attempt gets its own controller; the fallback must never reuse an
+  // already-aborted signal (that made the old fallback reject immediately).
+  const attempt = async (targetUrl) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      // native fetch (Node 18+) does NOT support `agent` тАФ omit it
+      // native fetch (Node 18+) does NOT support `agent` — omit it
       const options = { method, signal: ctrl.signal, headers };
-      if (!useNativeFetch) options.agent = httpsAgent;
-      if (body) options.body = typeof body === "string" ? body : JSON.stringify(body);
+      if (!USE_NATIVE_FETCH) options.agent = httpsAgent;
+      if (payload) options.body = payload;
+      const res = await fetchImpl(targetUrl, options);
+      if (!res.ok) {
+        res._cachedText = await res.text().catch(() => "");
+      } else {
+        res._cachedJson = await res.json().catch(() => null);
+      }
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
-      const fetchImpl = useNativeFetch
-        ? fetch.bind(globalThis)
-        : (await import("node-fetch")).default;
-
-      const r = await fetchImpl(url, options);
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const r = await attempt(url);
       if (!r.ok) {
-        const text = await r.text();
-        if (url.includes("fapi.binance.com")) {
+        const text = r._cachedText !== undefined ? r._cachedText : (await r.text());
+        if (r.status === 400 || r.status === 404) {
+          throw new Error(`HTTP ${r.status}: ${text.slice(0, 100)}`);
+        }
+        if (r.status === 418 || r.status === 429 || r.status === 403) {
+          const retryAfter = Number(r.headers.get("retry-after"));
+          const reported = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 0;
+          if (r.status === 429) {
+            // Soft limit: park this endpoint only, and only for as long as the
+            // venue asks (or 2 seconds), so one hot order-book burst cannot
+            // take the venue's klines and tickers down with it.
+            pauseVenue(url, reported || VENUE_RATE_LIMIT_MS, "HTTP 429", "endpoint");
+          } else {
+            // 418/403 is an IP-level ban: the whole host has to stand down.
+            pauseVenue(url, reported || VENUE_DEFAULT_BAN_MS, `HTTP ${r.status}`);
+          }
+        }
+        const fallbackUrl = binanceFallbackUrl(url);
+        if (fallbackUrl && !isVenuePaused(fallbackUrl)) {
           try {
-            const fallbackUrl = url.replace("https://fapi.binance.com/fapi/v1/klines", "https://data-api.binance.vision/api/v3/klines");
-            const r2 = await fetchImpl(fallbackUrl, options);
-            if (r2.ok) return await r2.json();
+            const r2 = await attempt(fallbackUrl);
+            if (r2.ok) return r2._cachedJson !== undefined ? r2._cachedJson : (await r2.json());
           } catch (_) {}
         }
         throw new Error(`HTTP ${r.status}: ${text.slice(0, 100)}`);
       }
-      return await r.json();
+      return r._cachedJson !== undefined ? r._cachedJson : (await r.json());
     } catch (e) {
-      if (url.includes("fapi.binance.com")) {
+      if (e.message && (e.message.startsWith("HTTP 400") || e.message.startsWith("HTTP 404"))) throw e;
+      const fallbackUrl = binanceFallbackUrl(url);
+      if (fallbackUrl && !isVenuePaused(fallbackUrl)) {
         try {
-          const fallbackUrl = url.replace("https://fapi.binance.com/fapi/v1/klines", "https://data-api.binance.vision/api/v3/klines");
-          const r2 = await fetchImpl(fallbackUrl, { method, signal: ctrl.signal, headers });
-          if (r2.ok) return await r2.json();
+          const r2 = await attempt(fallbackUrl);
+          if (r2.ok) return r2._cachedJson !== undefined ? r2._cachedJson : (await r2.json());
         } catch (_) {}
       }
       if (i === retries) throw e;
-      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-    } finally {
-      clearTimeout(timer);
+      // Jittered backoff: without jitter every concurrent failure retries in
+      // lockstep and re-triggers the same rate limit.
+      const backoff = 500 * (i + 1);
+      await new Promise((r) => setTimeout(r, backoff + Math.random() * backoff));
     }
   }
 }
@@ -1322,13 +1616,52 @@ function getTfMs(tf) {
   return 60000;
 }
 
+function normalizeExchangeSymbol(ex, rawSym) {
+  let s = String(rawSym || "").trim();
+  if (!s) return s;
+  s = s.replace(/\.[FS]$/i, "");
+  if (ex === "OX") {
+    if (!s.includes("-") && !s.includes("_SPOT")) {
+      s = s.replace(/[-_]?USDT$/i, "") + "-USDT-SWAP";
+    }
+  } else if (ex === "GT") {
+    if (!s.includes("_")) s = s.endsWith("USDT") ? s.replace(/USDT$/i, "_USDT") : s + "_USDT";
+  } else if (ex === "BX" || ex === "HT") {
+    if (!s.includes("-")) s = s.replace(/[-_]?USDT$/i, "") + "-USDT";
+    if (ex === "BX" && !s.startsWith("1000")) {
+      const base = s.split("-")[0].toUpperCase();
+      if (base === "PEPE" || base === "BONK" || base === "FLOKI" || base === "LUNC" || base === "SHIB" || base === "RATS" || base === "SATS" || base === "CHEEMS" || base === "CAT" || base === "WHY" || base === "MOG") {
+        s = "1000" + s;
+      }
+    }
+  } else if (ex === "MX") {
+    if (!s.includes("_")) s = s.replace(/[-_]?USDT$/i, "") + "_USDT";
+  } else if (ex === "KC") {
+    if (rawSym.includes("_SPOT")) {
+      s = s.replace(/_SPOT$/i, "");
+      if (!s.includes("-")) s = s.replace(/[-_]?USDT$/i, "") + "-USDT";
+    } else {
+      if (s === "BTCUSDT" || s === "BTC-USDT" || s === "BTC_USDT" || s === "BTC") {
+        s = "XBTUSDTM";
+      } else if (s.startsWith("BTC") && !s.startsWith("BTC-")) {
+        s = s.replace(/^BTC/, "XBT");
+      }
+      s = s.replace(/[-_]/g, "");
+      if (!s.endsWith("USDTM")) {
+        s = s.endsWith("USDT") ? s + "M" : s + "USDTM";
+      }
+    }
+  }
+  return s;
+}
+
 function getKlinesUrl(ex, sym, tf, limit, before) {
   const tfMs = getTfMs(tf);
-  const endMs = Number.isFinite(+before) && +before > 0 ? +before : Date.now();
-  const startMs = endMs - (limit * tfMs);
-
   const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
-  const cleanSym = sym.replace(/_SPOT$/i, "");
+  const cleanSym = normalizeExchangeSymbol(ex, sym);
+  const endMs = Number.isFinite(+before) && +before > 0 ? +before : Date.now();
+  const effectiveLimit = (ex === "KC" && !isSpot) ? Math.min(Number(limit) || 200, 200) : (Number(limit) || 1000);
+  const startMs = endMs - (effectiveLimit * tfMs);
 
   if (ex === "BN" || ex === "AD") {
     if (isSpot) {
@@ -1338,30 +1671,41 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
     return `https://${base}/fapi/v1/klines?symbol=${cleanSym}&interval=${tf}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
   }
   if (ex === "BB") {
-    return `https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TF_MAP.BB[tf] || "60"}&limit=${limit}` + (before ? `&end=${before - 1}` : "");
+    return `https://api.bybit.com/v5/market/kline?category=linear&symbol=${cleanSym}&interval=${TF_MAP.BB[tf] || "60"}&limit=${limit}` + (before ? `&end=${before - 1}` : "");
   }
   if (ex === "OX") {
-    return `https://www.okx.com/api/v5/market/candles?instId=${sym}&bar=${TF_MAP.OX[tf] || "1H"}&limit=${limit}` + (before ? `&after=${before}` : "");
+    return `https://www.okx.com/api/v5/market/candles?instId=${cleanSym}&bar=${TF_MAP.OX[tf] || "1H"}&limit=${limit}` + (before ? `&after=${before}` : "");
   }
   if (ex === "BG") {
-    return `https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TF_MAP.BG[tf] || "1H"}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
+    return `https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${cleanSym}&granularity=${TF_MAP.BG[tf] || "1H"}&limit=${limit}` + (before ? `&endTime=${before - 1}` : "");
   }
   if (ex === "GT") {
-    return `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${TF_MAP.GT[tf] || "1h"}&limit=${limit}` + (before ? `&to=${Math.floor(before / 1000)}` : "");
+    const gtTf = (TF_MAP.GT[tf] || tf || "1h").toLowerCase();
+    return `https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${cleanSym}&interval=${gtTf}&limit=${limit}` + (before ? `&to=${Math.floor(before / 1000)}` : "");
   }
   if (ex === "MX") {
-    const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
-    return `https://contract.mexc.com/api/v1/contract/kline/${mxSym}?interval=${TF_MAP.MX[tf] || "Min60"}&start=${Math.floor(startMs / 1000)}&end=${Math.floor(endMs / 1000)}`;
+    if (before) {
+      const startSec = Math.floor(startMs / 1000);
+      const endSec = Math.floor(endMs / 1000);
+      return `https://contract.mexc.com/api/v1/contract/kline/${cleanSym}?interval=${TF_MAP.MX[tf] || "Min60"}&start=${startSec}&end=${endSec}`;
+    }
+    return `https://contract.mexc.com/api/v1/contract/kline/${cleanSym}?interval=${TF_MAP.MX[tf] || "Min60"}`;
   }
   if (ex === "KC") {
-    return `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${sym}&granularity=${TF_MAP.KC[tf] || "60"}&from=${startMs}&to=${endMs}`;
+    if (isSpot) {
+      const TF_KC_SPOT = { "1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1hour", "2h": "2hour", "4h": "4hour", "6h": "6hour", "8h": "8hour", "12h": "12hour", "1d": "1day", "1w": "1week" };
+      const startSec = Math.floor(startMs / 1000);
+      const endSec = Math.floor(endMs / 1000);
+      return `https://api.kucoin.com/api/v1/market/candles?type=${TF_KC_SPOT[tf] || "1hour"}&symbol=${cleanSym}&startAt=${startSec}&endAt=${endSec}`;
+    }
+    return `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${cleanSym}&granularity=${TF_MAP.KC[tf] || "60"}&from=${startMs}&to=${endMs}`;
   }
   if (ex === "BX") {
-    const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
-    return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}&startTime=${startMs}&endTime=${endMs}`;
+    const qs = before ? `&startTime=${startMs}&endTime=${endMs}` : "";
+    return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${cleanSym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}${qs}`;
   }
   if (ex === "HT") {
-    return `https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${sym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;
+    return `https://api.hbdm.vn/linear-swap-ex/market/history/kline?contract_code=${cleanSym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;
   }
   if (ex === "HL") {
     return null; // HL uses POST
@@ -1373,22 +1717,44 @@ function parseKlines(ex, data) {
   try {
     let rawList = [];
     if (ex === "BN" || ex === "AD") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[7] || k[5] }));
-    else if (ex === "BB") rawList = (data.result?.list || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
-    else if (ex === "OX") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[7] || k[6] || k[5] }));
-    else if (ex === "BG") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
-    else if (ex === "GT") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.a || k.v }));
-    else if (ex === "MX") rawList = (data.data?.time || []).map((t, i) => {
-      const c = +data.data.close[i];
-      const v = data.data.amount ? +data.data.amount[i] : (+data.data.vol[i] * c);
-      return { t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c, v };
-    });
-    else if (ex === "KC") rawList = (data.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
-    else if (ex === "BX") rawList = (data.data || []).map(k => {
+    else if (ex === "BB") rawList = (data?.result?.list || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
+    else if (ex === "OX") rawList = (data?.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[7] || k[6] || k[5] }));
+    else if (ex === "BG") rawList = (data?.data || []).map(k => ({ t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[6] || k[5] }));
+    else if (ex === "GT") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: k.sum ? +k.sum : (k.a || (k.v ? +k.v * +k.c : 0)) }));
+    else if (ex === "MX") {
+      if (data?.data?.time && Array.isArray(data.data.time)) {
+        const d = data.data;
+        rawList = d.time.map((t, i) => {
+          const c = +(d.close?.[i] ?? 0);
+          const v = d.amount ? +(d.amount[i] ?? 0) : (+(d.vol?.[i] ?? 0) * c);
+          return { t: t * 1000, o: +(d.open?.[i] ?? c), h: +(d.high?.[i] ?? c), l: +(d.low?.[i] ?? c), c, v };
+        });
+      } else if (Array.isArray(data?.data)) {
+        rawList = data.data.map(k => Array.isArray(k)
+          ? { t: k[0], o: k[1], h: k[2], l: k[3], c: k[4], v: k[5] }
+          : { t: k.t || k.time, o: k.o || k.open, h: k.h || k.high, l: k.l || k.low, c: k.c || k.close, v: k.v || k.vol || k.amount }
+        );
+      }
+    }
+    else if (ex === "KC") {
+      if (Array.isArray(data?.data)) {
+        const first = data.data[0];
+        const isSpotData = first && (+first[0] < 1e11);
+        if (isSpotData) {
+          // KuCoin Spot: [time, open, close, high, low, volume, turnover]
+          rawList = data.data.map(k => ({ t: +k[0] * 1000, o: +k[1], h: +k[3], l: +k[4], c: +k[2], v: +k[6] || +k[5] }));
+        } else {
+          // KuCoin Futures: [time, open, high, low, close, volume, turnover]
+          rawList = data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
+        }
+      }
+    }
+    else if (ex === "BX") rawList = (data?.data || []).map(k => {
       const closeP = +(k.close || k.c || 0);
       const baseVol = +(k.volume || k.v || 0);
       return { t: k.time || k.t || 0, o: k.open || k.o || 0, h: k.high || k.h || 0, l: k.low || k.l || 0, c: closeP, v: baseVol * closeP };
     });
-    else if (ex === "HT") rawList = (data.data || []).map(k => ({ t: k.id, o: k.open, h: k.high, l: k.low, c: k.close, v: k.trade_turnover || k.amount || k.vol }));
+    else if (ex === "HT") rawList = (data?.data || []).map(k => ({ t: k.id, o: k.open, h: k.high, l: k.low, c: k.close, v: k.trade_turnover || k.amount || k.vol }));
     else if (ex === "HL") rawList = (Array.isArray(data) ? data : []).map(k => ({ t: k.t, o: k.o, h: k.h, l: k.l, c: k.c, v: Number(k.v) * Number(k.c) }));
 
     const cleaned = [];
@@ -1421,23 +1787,112 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     return 60000;
   })();
 
-  const pages = { BN: 3, BB: 3, OX: 5, BG: 3, GT: 3, MX: 2, KC: 8, BX: 3, HT: 1, AD: 3 };
+  const pages = { BN: 3, BB: 3, OX: 5, BG: 3, GT: 3, MX: 1, KC: 4, BX: 3, HT: 1, AD: 3 };
   const limits = { BN: 1000, BB: 1000, OX: 100, BG: 1000, GT: 1000, MX: 1000, KC: 200, BX: 1000, HT: 1000, AD: 1000 };
   const maxP = lite ? 1 : (pages[fetchEx] || 3);
   const limit = limits[fetchEx] || 1000;
   
+  const hlCoin = sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "") || sym;
+
   if (lite) {
+    const tFetch0 = Date.now();
+    // 0. Ultra-fast local Go scanner (<30ms vs 1500ms external network)
+    try {
+      const cleanGoSym = normalizeExchangeSymbol(fetchEx, fetchSym);
+      const goUrl = `${GO_SCANNER_URL}/api/klines?ex=${encodeURIComponent(fetchEx)}&sym=${encodeURIComponent(cleanGoSym)}&tf=${encodeURIComponent(tf)}&limit=300`;
+      const rGo = await fetch(goUrl, { signal: AbortSignal.timeout(350) }).catch(() => null);
+      if (rGo && rGo.ok) {
+        const dataGo = await rGo.json().catch(() => null);
+        if (Array.isArray(dataGo) && dataGo.length >= 20) {
+          const lastC = dataGo[dataGo.length - 1];
+          const maxStaleMs = Math.max(tfMs * 5, 10 * 60 * 1000);
+          const isFresh = lastC && Number.isFinite(lastC.t) && (Date.now() - lastC.t < maxStaleMs);
+
+          let hasHugeGap = false;
+          const maxAllowedGapMs = Math.max(tfMs * 50, 4 * 3600000);
+          for (let i = 1; i < dataGo.length; i++) {
+            if (dataGo[i].t - dataGo[i - 1].t > maxAllowedGapMs) {
+              hasHugeGap = true;
+              break;
+            }
+          }
+
+          if (isFresh && !hasHugeGap) {
+            console.log(`[FETCH LITE GO SCANNER OK] ${fetchEx}:${fetchSym} took ${Date.now() - tFetch0}ms, candles=${dataGo.length}`);
+            return dataGo;
+          } else {
+            console.warn(`[GO SCANNER STALE/GAPPED] ${fetchEx}:${fetchSym} isFresh=${isFresh} (last=${lastC ? new Date(lastC.t).toISOString() : 'none'}) gap=${hasHugeGap}`);
+          }
+        }
+      }
+    } catch (_) {}
+
     try {
       let data;
+      const liteLimit = fetchEx === "KC" ? 400 : (fetchEx === "OX" ? 100 : 300);
       if (fetchEx === "HL") {
-        data = await apiFetch("https://api.hyperliquid.xyz/info", 6000, 1, "POST", { type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (1000 * tfMs), endTime: Date.now() } });
+        data = await apiFetch("https://api.hyperliquid.xyz/info", 4000, 0, "POST", {
+          type: "candleSnapshot",
+          req: { coin: hlCoin, interval: tf.toLowerCase(), startTime: Date.now() - (liteLimit * tfMs), endTime: Date.now() }
+        });
+        const parsed = parseKlines(ex, data);
+        return parsed.length > liteLimit ? parsed.slice(-liteLimit) : parsed;
+      } else if (fetchEx === "KC") {
+        const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
+        if (isSpot) {
+          const url = getKlinesUrl(ex, sym, tf, 400);
+          data = url ? await apiFetch(url, 4000, 0) : null;
+          const parsed = parseKlines(ex, data);
+          return parsed.length > 400 ? parsed.slice(-400) : parsed;
+        }
+        const nowMs = Date.now();
+        const start0 = nowMs - (200 * tfMs);
+        const cleanSym = normalizeExchangeSymbol(ex, sym);
+        const gran = TF_MAP.KC[tf] || "60";
+        const url0 = `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${cleanSym}&granularity=${gran}&from=${start0}&to=${nowMs}`;
+        const r0 = await apiFetch(url0, 3500, 0).catch(() => null);
+        const parsed = r0 ? parseKlines(ex, r0) : [];
+        const resCandles = parsed.length > 300 ? parsed.slice(-300) : parsed;
+        console.log(`[FETCH LITE OK] ${ex}:${sym} took ${Date.now() - tFetch0}ms, candles=${resCandles.length}`);
+        return resCandles;
+      } else if (fetchEx === "MX") {
+        const cleanSym = normalizeExchangeSymbol(ex, sym);
+        const interval = TF_MAP.MX[tf] || "Min60";
+        const url = `https://contract.mexc.com/api/v1/contract/kline/${cleanSym}?interval=${interval}`;
+        const data = await apiFetch(url, 4000, 1).catch(() => null);
+        const parsed = data ? parseKlines(ex, data) : [];
+        const resCandles = parsed.length > 300 ? parsed.slice(-300) : parsed;
+        console.log(`[FETCH LITE OK] ${ex}:${sym} took ${Date.now() - tFetch0}ms, candles=${resCandles.length}`);
+        return resCandles;
       } else {
-        const url = getKlinesUrl(ex, sym, tf, 1000);
-        if (!url) return [];
-        data = await apiFetch(url, 6000, 1);
+        const url = getKlinesUrl(ex, sym, tf, liteLimit);
+        if (!url) {
+          console.log(`[FETCH NO URL] ${ex}:${sym}`);
+          return [];
+        }
+        data = await apiFetch(url, 3500, 0);
+        let parsed = parseKlines(ex, data);
+        if (ex === "BX" && parsed.length === 0 && !sym.startsWith("1000")) {
+          // BingX meme coins often use 1000 prefix (1000PEPE-USDT, 1000BONK-USDT, etc.)
+          const cleanNo1000 = sym.replace(/^1000/, "");
+          const fallbackSym = "1000" + cleanNo1000;
+          const fallbackUrl = getKlinesUrl(ex, fallbackSym, tf, liteLimit);
+          if (fallbackUrl) {
+            try {
+              const fbData = await apiFetch(fallbackUrl, 4000, 0);
+              const fbParsed = parseKlines(ex, fbData);
+              if (fbParsed.length > 0) parsed = fbParsed;
+            } catch (_) {}
+          }
+        }
+        const resCandles = parsed.length > liteLimit ? parsed.slice(-liteLimit) : parsed;
+        console.log(`[FETCH LITE OK] ${ex}:${sym} took ${Date.now() - tFetch0}ms, candles=${resCandles.length}`);
+        return resCandles;
       }
-      return parseKlines(ex, data);
-    } catch (e) { return []; }
+    } catch (e) {
+      console.log(`[FETCH LITE ERR] ${ex}:${sym} took ${Date.now() - tFetch0}ms: ${e.message}`);
+      return [];
+    }
   }
 
   let all = [];
@@ -1455,7 +1910,7 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
     for (let p = 0; p < maxP; p++) {
       const before = nowTs - (p * limit * tfMs);
       if (fetchEx === "HL") {
-        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 3500, 0, "POST", { type: "candleSnapshot", req: { coin: fetchSym, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }))).catch(() => []));
+        promises.push(apiFetch("https://api.hyperliquid.xyz/info", 3500, 0, "POST", { type: "candleSnapshot", req: { coin: hlCoin, interval: tf.toLowerCase(), startTime: before - (limit * tfMs), endTime: before } }).then(data => (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }))).catch(() => []));
       } else {
         const url = getKlinesUrl(fetchEx, fetchSym, tf, limit, before);
         if (url) {
@@ -1472,7 +1927,37 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
   return all.filter(c => c && Number.isFinite(c.t) && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0 && (seen.has(c.t) ? false : seen.add(c.t))).sort((a,b) => a.t - b.t);
 }
 
+// Candle cache keyed by `${ex}|${sym}|${tf}|${lite}`. Each entry holds up to
+// 7200 numbers (1200 candles), measured at ~57 KB. With 1500 scanned tickers x
+// 5 timeframes x (lite + full) that is 15000 entries ≈ 834 MB, which is why the
+// process kept being recycled for memory. LRU-bounded below.
 const klinesCache = new Map();
+// 1500 x ~57 KB ≈ 85 MB. Deliberately conservative: the process shares a 650 MB
+// pm2 budget with the ticker map, the wall scanner and the scanner cache below.
+const KLINES_CACHE_MAX_ENTRIES = 1500;
+const KLINES_CACHE_TTL_MS = 30 * 60 * 1000;
+let lastKlinesPruneAt = 0;
+
+/**
+ * Bound klinesCache. Age-based first, then least-recently-used eviction so the
+ * cache can never outgrow the heap. `at` is the fetch time and drives freshness
+ * (do not touch it); `used` is the access time and drives eviction only.
+ */
+function pruneKlinesCache(force = false) {
+  const now = Date.now();
+  if (!force && now - lastKlinesPruneAt < 30000 && klinesCache.size <= KLINES_CACHE_MAX_ENTRIES) return;
+  lastKlinesPruneAt = now;
+
+  for (const [key, entry] of klinesCache) {
+    if (!entry || now - (entry.at || 0) > KLINES_CACHE_TTL_MS) klinesCache.delete(key);
+  }
+  if (klinesCache.size <= KLINES_CACHE_MAX_ENTRIES) return;
+
+  const entries = Array.from(klinesCache.entries())
+    .sort((a, b) => (a[1].used || a[1].at || 0) - (b[1].used || b[1].at || 0));
+  const excess = klinesCache.size - KLINES_CACHE_MAX_ENTRIES;
+  for (let i = 0; i < excess; i++) klinesCache.delete(entries[i][0]);
+}
 const klinesInFlight = new Map();
 
 // Backtest sessions keep unrevealed candles on the server. The browser receives
@@ -1705,11 +2190,17 @@ setInterval(() => {
 
 // ─── Go Scanner Proxy ─────────────────────────────────────────────────────────────
 const GO_SCANNER_URL = "http://127.0.0.1:8082";
+// Both proxies previously used a bare `fetch` with no signal. If the Go scanner
+// accepts the TCP connection but never answers, the request hung until
+// `server.requestTimeout` (30 s) — on a user-facing chart path.
+const GO_SCANNER_TIMEOUT_MS = 2500;
 
 app.get("/api/go-status", async (req, res) => {
   setPublicCors(req, res);
   try {
-    const r = await fetch(`${GO_SCANNER_URL}/api/klines?ex=BN&sym=BTCUSDT&tf=1m&limit=1`);
+    const r = await fetch(`${GO_SCANNER_URL}/api/klines?ex=BN&sym=BTCUSDT&tf=1m&limit=1`, {
+      signal: AbortSignal.timeout(GO_SCANNER_TIMEOUT_MS)
+    });
     if (r.ok) {
       res.json({ status: "online" });
     } else {
@@ -1724,13 +2215,20 @@ app.get("/api/go-klines", async (req, res) => {
   setPublicCors(req, res);
   const { ex = "BN", sym = "BTCUSDT", tf = "1h", limit = "200" } = req.query;
   try {
-    const goUrl = `${GO_SCANNER_URL}/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&limit=${limit}`;
-    const r = await fetch(goUrl);
+    const goUrl = `${GO_SCANNER_URL}/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&limit=${encodeURIComponent(limit)}`;
+    const r = await fetch(goUrl, { signal: AbortSignal.timeout(GO_SCANNER_TIMEOUT_MS * 2) });
     if (!r.ok) {
       const text = await r.text();
       return res.status(r.status).json({ error: text });
     }
     const data = await r.json();
+    if (Array.isArray(data) && data.length > 0) {
+      const lastC = data[data.length - 1];
+      const maxStaleMs = 30 * 60 * 1000;
+      if (lastC && Number.isFinite(lastC.t) && (Date.now() - lastC.t > maxStaleMs)) {
+        return res.status(503).json({ error: "Go scanner klines are stale" });
+      }
+    }
     // Go returns [{t,o,h,l,c,v}] – convert to flat array for frontend compatibility
     const flat = [];
     for (const c of data) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
@@ -1745,8 +2243,89 @@ function cacheKey(ex, sym, tf, lite) {
   return `${ex}|${sym}|${tf}|${lite ? "1" : "0"}`;
 }
 
+// An in-flight entry that never settles used to poison its key forever: the
+// promise stayed in the map because `.finally()` never ran, so every later
+// request for the same key awaited it and timed out. That is why exactly the
+// hottest symbols (BTC/ETH on 5m — the chart defaults) hung for 20+ seconds
+// while colder ones answered in 4. Entries now carry a start time and expire.
+const KLINES_INFLIGHT_TTL_MS = 15000;
+// A chart request must never hold the browser longer than this.
+const KLINES_RESPONSE_DEADLINE_MS = 6000;
+
+/** Pack candle objects into the flat numeric wire format. */
+function encodeFlatCandles(candles) {
+  const flat = new Array(candles.length * 6);
+  for (let i = 0, j = 0; i < candles.length; i++, j += 6) {
+    const c = candles[i];
+    flat[j] = c.t; flat[j + 1] = c.o; flat[j + 2] = c.h;
+    flat[j + 3] = c.l; flat[j + 4] = c.c; flat[j + 5] = c.v;
+  }
+  return flat;
+}
+
+/**
+ * `Promise.race([work, timeout])` leaves the losing timer armed — the timeout
+ * callback and its closure stay alive for the full duration even after `work`
+ * settles. The scanner races per coin per timeframe, so at scan volume that meant
+ * thousands of pending timers held simultaneously. This clears the timer as soon
+ * as either side settles.
+ */
+function raceWithTimeout(promise, timeoutMs, timeoutValue = null) {
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(timeoutValue), timeoutMs);
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) { clearTimeout(timer); timer = null; }
+  });
+}
+
+/**
+ * Fetch klines once per key, writing the result into klinesCache.
+ * Concurrent callers share the same request; a stalled one cannot block the key
+ * beyond KLINES_INFLIGHT_TTL_MS.
+ */
+function startKlinesRefresh(ex, sym, tf, useLite, key) {
+  const existing = klinesInFlight.get(key);
+  if (existing && Date.now() - existing.startedAt < KLINES_INFLIGHT_TTL_MS) {
+    return existing.promise;
+  }
+
+  const startedAt = Date.now();
+  const promise = fetchFullHistory(ex, sym, tf, useLite)
+    .then(candles => {
+      if (Array.isArray(candles) && candles.length > 0) {
+        const at = Date.now();
+        const encoded = encodeFlatCandles(candles);
+        klinesCache.set(key, { at, used: at, data: encoded });
+        // Dual-cache for MEXC: a single request returns full history (up to 2000 candles).
+        // Seed both lite and full caches so the background full fetch hits cache instantly in 0ms!
+        if (ex === "MX") {
+          const otherKey = cacheKey(ex, sym, tf, !useLite);
+          if (!klinesCache.has(otherKey)) {
+            const otherData = useLite ? encoded : (encoded.length > 1800 ? encoded.slice(-1800) : encoded);
+            klinesCache.set(otherKey, { at, used: at, data: otherData });
+            pruneKlinesCache();
+          }
+        }
+        pruneKlinesCache();
+      }
+      return candles;
+    })
+    .finally(() => {
+      // Only clear our own entry: a newer attempt may already own the key.
+      const cur = klinesInFlight.get(key);
+      if (cur && cur.startedAt === startedAt) klinesInFlight.delete(key);
+    });
+
+  klinesInFlight.set(key, { promise, startedAt });
+  return promise;
+}
+
 app.get("/api/klines", async (req, res) => {
-  const { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0", before } = req.query;
+  let { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0", before } = req.query;
+  sym = normalizeExchangeSymbol(ex, sym);
   setPublicCors(req, res);
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
@@ -1770,8 +2349,31 @@ app.get("/api/klines", async (req, res) => {
           });
           const parsed = (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }));
           return res.json(parsed);
+        } else if (ex === "KC") {
+          const tfMs = getTfMs(tf);
+          const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
+          if (isSpot) {
+            const url = getKlinesUrl(ex, sym, tf, 400, beforeTs);
+            const data = url ? await apiFetch(url, 4000, 0) : null;
+            return res.json(parseKlines(ex, data));
+          }
+          const cleanSym = normalizeExchangeSymbol(ex, sym.replace(/_SPOT$/i, ""));
+          const gran = TF_MAP.KC[tf] || "60";
+          const start0 = beforeTs - (200 * tfMs);
+          const start1 = start0 - (200 * tfMs);
+          const url0 = `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${cleanSym}&granularity=${gran}&from=${start0}&to=${beforeTs}`;
+          const url1 = `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${cleanSym}&granularity=${gran}&from=${start1}&to=${start0}`;
+          const [r0, r1] = await Promise.all([
+            apiFetch(url0, 4000, 0).catch(() => null),
+            apiFetch(url1, 4000, 0).catch(() => null)
+          ]);
+          const p0 = r0 ? parseKlines(ex, r0) : [];
+          const p1 = r1 ? parseKlines(ex, r1) : [];
+          const combined = [...p1, ...p0].sort((a, b) => a.t - b.t);
+          return res.json(combined);
         } else {
-          const url = getKlinesUrl(ex, sym, tf, 1000, beforeTs);
+          const lim = ex === "OX" ? 100 : 1000;
+          const url = getKlinesUrl(ex, sym, tf, lim, beforeTs);
           if (!url) return res.json([]);
           const data = await apiFetch(url, 4000, 0);
           const parsed = parseKlines(ex, data);
@@ -1786,98 +2388,242 @@ app.get("/api/klines", async (req, res) => {
   const useLite = lite === "1";
   const key = cacheKey(ex, sym, tf, useLite);
   const now = Date.now();
-  
+
   const cached = klinesCache.get(key);
   // TTL: 10s for 1m/5m fast scanning, 5 minutes for higher TFs
   const ttl = (tf === "1m" || tf === "5m") ? 10000 : 300000;
-  
+
   if (cached && now - cached.at < ttl) {
+    cached.used = now;
     return res.json(cached.data);
   }
 
-  try {
-    let pending = klinesInFlight.get(key);
-    if (!pending) {
-      pending = fetchFullHistory(ex, sym, tf, useLite).finally(() => klinesInFlight.delete(key));
-      klinesInFlight.set(key, pending);
+  // Cross-cache hit: If lite is requested, check if full history exists in cache!
+  if (useLite) {
+    const fullKey = cacheKey(ex, sym, tf, false);
+    const fullCached = klinesCache.get(fullKey);
+    if (fullCached && fullCached.data && Array.isArray(fullCached.data) && fullCached.data.length > 0) {
+      fullCached.used = now;
+      const liteCount = 300 * 6;
+      const liteData = fullCached.data.length > liteCount ? fullCached.data.slice(-liteCount) : fullCached.data;
+      return res.json(liteData);
     }
-    const candles = await pending;
-    if (!candles || candles.length === 0) throw new Error("No data");
+  }
 
-    const flat = [];
-    for (const c of candles) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
-    klinesCache.set(key, { at: now, data: flat });
-    res.json(flat);
+  // Stale-while-revalidate: paint the chart from whatever we already have and
+  // refresh in the background. A professional terminal never blocks the canvas
+  // on a network round trip, and the exchange feed keeps the live candle current
+  // over the WebSocket anyway.
+  if (cached && cached.data && cached.data.length > 0) {
+    cached.used = now;
+    startKlinesRefresh(ex, sym, tf, useLite, key).catch(() => {});
+    return res.json(cached.data);
+  }
+
+  // Cross-cache stale: If full history requested, but lite is in cache, return lite immediately so canvas paints,
+  // and trigger full history fetch in background!
+  if (!useLite) {
+    const liteKey = cacheKey(ex, sym, tf, true);
+    const liteCached = klinesCache.get(liteKey);
+    if (liteCached && liteCached.data && Array.isArray(liteCached.data) && liteCached.data.length > 0) {
+      liteCached.used = now;
+      startKlinesRefresh(ex, sym, tf, useLite, key).catch(() => {});
+      return res.json(liteCached.data);
+    }
+  }
+
+  const tStart = Date.now();
+  console.log(`[KLINES REQ] ${ex}:${sym}:${tf} lite=${lite}`);
+  try {
+    const candles = await raceWithTimeout(
+      startKlinesRefresh(ex, sym, tf, useLite, key),
+      useLite ? 8000 : KLINES_RESPONSE_DEADLINE_MS,
+      null
+    );
+    console.log(`[KLINES RES] ${ex}:${sym}:${tf} took ${Date.now() - tStart}ms, candles=${Array.isArray(candles) ? candles.length : candles}`);
+
+    if (Array.isArray(candles) && candles.length > 0) {
+      return res.json(encodeFlatCandles(candles));
+    }
+
+    // The refresh may have landed in the cache just now.
+    const fresh = klinesCache.get(key);
+    if (fresh && fresh.data && fresh.data.length > 0) {
+      fresh.used = Date.now();
+      return res.json(fresh.data);
+    }
+    // Return pending status gracefully so client retries seamlessly without failing
+    res.setHeader("X-Klines-Pending", "1");
+    return res.json([]);
   } catch (e) {
     console.error(`[KLINES ERROR] ${ex} ${sym} ${tf}:`, e.message);
-    // Fallback to cache if available, even if stale
     if (cached) return res.json(cached.data);
-    res.status(500).json({ error: e.message });
+    res.setHeader("X-Klines-Pending", "1");
+    return res.json([]);
   }
+});
+
+async function mapConcurrent(items, limit, fn) {
+  let idx = 0;
+  const results = [];
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
+app.get("/api/klines/batch", async (req, res) => {
+  let { ex = "KC", symbols = "", tf = "1m", lite = "1" } = req.query;
+  setPublicCors(req, res);
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  const rawList = symbols.split(",").map(s => s.trim()).filter(Boolean).slice(0, 32);
+  if (!rawList.length) return res.json({});
+
+  const useLite = lite === "1";
+  const now = Date.now();
+  const ttl = (tf === "1m" || tf === "5m") ? 10000 : 300000;
+  const results = {};
+
+  // Stagger MEXC requests by 80ms to avoid MEXC anti-DDoS rate-limit tarpit; parallelize others
+  const isPaced = (ex === "MX");
+  await Promise.all(rawList.map(async (rawSym, i) => {
+    if (isPaced && i > 0) await new Promise(r => setTimeout(r, i * 80));
+    const sym = normalizeExchangeSymbol(ex, rawSym);
+    const key = cacheKey(ex, sym, tf, useLite);
+    const cached = klinesCache.get(key);
+
+    const storeResult = (flat) => {
+      if (!flat || !flat.length) return;
+      results[rawSym] = flat;
+      results[sym] = flat;
+      const clean = sym.replace(/[-_]/g, "");
+      results[clean] = flat;
+      const rawClean = rawSym.replace(/[-_]/g, "");
+      results[rawClean] = flat;
+    };
+
+    if (cached && now - cached.at < ttl && cached.data && cached.data.length > 0) {
+      cached.used = now;
+      storeResult(cached.data);
+      return;
+    }
+
+    if (useLite) {
+      const fullKey = cacheKey(ex, sym, tf, false);
+      const fullCached = klinesCache.get(fullKey);
+      if (fullCached && fullCached.data && Array.isArray(fullCached.data) && fullCached.data.length > 0) {
+        fullCached.used = now;
+        const liteCount = 300 * 6;
+        const liteData = fullCached.data.length > liteCount ? fullCached.data.slice(-liteCount) : fullCached.data;
+        storeResult(liteData);
+        return;
+      }
+    }
+
+    try {
+      const candles = await raceWithTimeout(
+        startKlinesRefresh(ex, sym, tf, useLite, key),
+        useLite ? 3500 : 8000,
+        null
+      );
+      if (Array.isArray(candles) && candles.length > 0) {
+        storeResult(encodeFlatCandles(candles));
+      } else {
+        const fresh = klinesCache.get(key);
+        if (fresh && fresh.data && fresh.data.length > 0) {
+          fresh.used = Date.now();
+          storeResult(fresh.data);
+        } else {
+          klinesCache.set(key, { at: now, used: now, data: [] });
+          pruneKlinesCache();
+        }
+      }
+    } catch (_) {
+      klinesCache.set(key, { at: now, used: now, data: [] });
+      pruneKlinesCache();
+    }
+  }));
+
+  return res.json(results);
 });
 
 // ─── Blind backtest / bar replay ──────────────────────────────────────────────────
 app.get("/api/backtest/new", async (req, res) => {
-  const allowedTf = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d"]);
-  const tf = allowedTf.has(req.query.tf) ? req.query.tf : "5m";
-  const exchange = BACKTEST_EXCHANGES[req.query.ex] ? req.query.ex : "BB";
-  const universe = getBacktestUniverse(exchange);
-  res.setHeader("Cache-Control", "no-store");
+  // Express 4 does not catch rejected async handlers. Everything after the first
+  // `await` runs synchronous window-selection code that can throw on a malformed
+  // candle series, and an unguarded throw would send no response at all.
+  try {
+    const allowedTf = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d"]);
+    const tf = allowedTf.has(req.query.tf) ? req.query.tf : "5m";
+    const exchange = BACKTEST_EXCHANGES[req.query.ex] ? req.query.ex : "BB";
+    const universe = getBacktestUniverse(exchange);
+    res.setHeader("Cache-Control", "no-store");
 
-  if (universe.length < 10) {
-    return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
-  }
-
-  // Pick from the top active liquid coins (ranked by volume & volatility)
-  const topPool = universe.slice(0, Math.min(80, universe.length)).sort(() => Math.random() - 0.5);
-  let lastError = null;
-
-  // Process in fast parallel batches of 3 tickers for instant sub-300ms response
-  const BATCH_SIZE = 3;
-  for (let i = 0; i < topPool.length; i += BATCH_SIZE) {
-    const batch = topPool.slice(i, i + BATCH_SIZE);
-    const fetchPromises = batch.map(ticker =>
-      fetchBacktestCandles(ticker.ex, ticker.sym, tf)
-        .then(candles => ({ ticker, candles }))
-        .catch(err => { lastError = err; return null; })
-    );
-
-    const results = await Promise.all(fetchPromises);
-
-    for (const resItem of results) {
-      if (!resItem || !resItem.candles || resItem.candles.length < 260) continue;
-      const best = findBestBacktestWindow(resItem.candles, tf);
-      if (!best) continue;
-
-      const ticker = resItem.ticker;
-      const id = randomUUID();
-      backtestSessions.set(id, {
-        id,
-        createdAt: Date.now(),
-        ex: ticker.ex,
-        sym: ticker.sym,
-        base: ticker.base || ticker.sym.replace(/USDT$/, ""),
-        tf,
-        future: best.future,
-        revealed: 0,
-      });
-
-      return res.json({
-        id,
-        ex: ticker.ex,
-        exchange: BACKTEST_EXCHANGES[exchange],
-        sym: ticker.sym,
-        base: ticker.base || ticker.sym.replace(/USDT$/, ""),
-        tf,
-        cutoffTime: best.visible[best.visible.length - 1].t,
-        candles: best.visible.map(publicBacktestCandle),
-        futureCount: best.future.length,
-        universeSize: universe.length,
-      });
+    if (universe.length < 10) {
+      return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
     }
-  }
 
-  res.status(503).json({ error: lastError?.message || "Не удалось подобрать активный исторический участок. Попробуйте еще раз." });
+    // Pick from the top active liquid coins (ranked by volume & volatility)
+    const topPool = universe.slice(0, Math.min(80, universe.length)).sort(() => Math.random() - 0.5);
+    let lastError = null;
+
+    // A batch of 3 meant up to 27 strictly sequential round trips before the
+    // first usable candidate — seconds of latency on a cold cache for a route
+    // that aims at sub-300ms. 8 keeps the burst modest while cutting the worst
+    // case to 10 rounds, and the first acceptable candidate still short-circuits.
+    const BATCH_SIZE = 8;
+    for (let i = 0; i < topPool.length; i += BATCH_SIZE) {
+      const batch = topPool.slice(i, i + BATCH_SIZE);
+      const fetchPromises = batch.map(ticker =>
+        fetchBacktestCandles(ticker.ex, ticker.sym, tf)
+          .then(candles => ({ ticker, candles }))
+          .catch(err => { lastError = err; return null; })
+      );
+
+      const results = await Promise.all(fetchPromises);
+
+      for (const resItem of results) {
+        if (!resItem || !resItem.candles || resItem.candles.length < 260) continue;
+        const best = findBestBacktestWindow(resItem.candles, tf);
+        if (!best || !best.visible || best.visible.length === 0) continue;
+
+        const ticker = resItem.ticker;
+        const id = randomUUID();
+        backtestSessions.set(id, {
+          id,
+          createdAt: Date.now(),
+          ex: ticker.ex,
+          sym: ticker.sym,
+          base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+          tf,
+          future: best.future,
+          revealed: 0,
+        });
+
+        return res.json({
+          id,
+          ex: ticker.ex,
+          exchange: BACKTEST_EXCHANGES[exchange],
+          sym: ticker.sym,
+          base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+          tf,
+          cutoffTime: best.visible[best.visible.length - 1].t,
+          candles: best.visible.map(publicBacktestCandle),
+          futureCount: best.future.length,
+          universeSize: universe.length,
+        });
+      }
+    }
+
+    res.status(503).json({ error: lastError?.message || "Не удалось подобрать активный исторический участок. Попробуйте еще раз." });
+  } catch (err) {
+    console.error("[BACKTEST NEW]", err && err.message);
+    if (!res.headersSent) res.status(503).json({ error: "Не удалось создать сессию бэктеста" });
+  }
 });
 
 app.post("/api/backtest/:id/step", (req, res) => {
@@ -1977,20 +2723,81 @@ app.get("/api/arbitrage/depth", async (req, res) => {
   }
 });
 
+/**
+ * `/api/tickers` and `/api/correlations` are polled by every client on connect
+ * and on every WS reconnect. Building the response meant walking ~8.5k tickers
+ * into a ~93,500-element array, running `JSON.stringify` over it and then
+ * gzipping the result at level 6 — all synchronously, on every single request,
+ * for a payload whose own `Cache-Control` already declares it stale after 1s.
+ *
+ * Both are now serialised at most once per second and served from a pre-gzipped
+ * buffer, so N concurrent clients cost the same as one.
+ */
+const SNAPSHOT_CACHE_TTL_MS = 1000;
+
+function makeJsonSnapshotCache(build, ttlMs = SNAPSHOT_CACHE_TTL_MS) {
+  let at = 0;
+  let raw = null;
+  let gzipped = null;
+  let etag = "";
+  return function get() {
+    const now = Date.now();
+    if (raw && now - at < ttlMs) return { raw, gzipped, etag };
+    raw = Buffer.from(JSON.stringify(build()), "utf8");
+    // Level 1 is deliberate here: this is regenerated every second and the
+    // payload is highly repetitive numeric text, where l1 gets within a few
+    // percent of l6 for a fraction of the CPU.
+    gzipped = raw.length >= 2048 ? zlib.gzipSync(raw, { level: 1 }) : null;
+    etag = `W/"${raw.length.toString(36)}-${createHash("sha1").update(raw).digest("base64url").slice(0, 16)}"`;
+    at = now;
+    return { raw, gzipped, etag };
+  };
+}
+
+function sendCachedJson(req, res, entry, cacheControl) {
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", cacheControl);
+  res.vary("Accept-Encoding");
+  res.setHeader("ETag", entry.etag);
+  if (req.headers["if-none-match"] === entry.etag) return res.status(304).end();
+  if (entry.gzipped && String(req.headers["accept-encoding"] || "").includes("gzip")) {
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Content-Length", entry.gzipped.length);
+    return res.end(entry.gzipped);
+  }
+  res.setHeader("Content-Length", entry.raw.length);
+  return res.end(entry.raw);
+}
+
+const getTickersSnapshotJson = makeJsonSnapshotCache(() => {
+  const flat = new Array(tickers.size * 11);
+  let i = 0;
+  for (const t of tickers.values()) {
+    flat[i++] = t.key; flat[i++] = t.p; flat[i++] = t.chg; flat[i++] = t.v;
+    flat[i++] = t.h; flat[i++] = t.l; flat[i++] = t.o;
+    flat[i++] = t.funding || 0; flat[i++] = t.nextFunding || 0;
+    flat[i++] = t.oi || 0; flat[i++] = t.trades || 0;
+  }
+  flat.length = i;
+  return flat;
+});
+
+const getCorrelationsJson = makeJsonSnapshotCache(
+  () => correlationEngine.getCorrelations(),
+  2000
+);
+
 app.get("/api/tickers", (req, res) => {
   setPublicCors(req, res);
-  res.setHeader("Cache-Control", "private, max-age=1");
-  res.setHeader("Content-Type", "application/json");
-  const flat = [];
-  for (const t of tickers.values()) flat.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
-  res.json(flat);
+  // `compression` must not try to re-encode an already-gzipped body.
+  res.setHeader("X-No-Compression", "1");
+  sendCachedJson(req, res, getTickersSnapshotJson(), "private, max-age=1");
 });
 
 app.get("/api/correlations", (req, res) => {
   setPublicCors(req, res);
-  res.setHeader("Cache-Control", "public, max-age=2");
-  res.setHeader("Content-Type", "application/json");
-  res.json(correlationEngine.getCorrelations());
+  res.setHeader("X-No-Compression", "1");
+  sendCachedJson(req, res, getCorrelationsJson(), "public, max-age=2");
 });
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", tickers: tickers.size, clients: clients.size, dirty: dirtyKeys.size, exchanges: Object.fromEntries(exStatus) });
@@ -2044,9 +2851,15 @@ app.get("/api/patterns", (req, res) => {
 });
 
 app.get("/api/kucoin-token", async (req, res) => {
-  const tk = await getKuCoinToken();
-  if (tk) res.json(tk);
-  else res.status(500).json({ error: "Failed to get token" });
+  // Express 4 does not catch rejected async handlers: an unguarded rejection
+  // sends nothing at all and the client hangs until `requestTimeout` (30s).
+  try {
+    const tk = await getKuCoinToken();
+    if (tk) res.json(tk);
+    else res.status(502).json({ error: "Failed to get token" });
+  } catch (err) {
+    res.status(502).json({ error: "Failed to get token" });
+  }
 });
 
 // тФАтФАтФА Traders Journal API Sync тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -2149,189 +2962,41 @@ app.post("/api/journal/sync", express.json(), async (req, res) => {
   } catch (error) {
     return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
   }
-
-  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-  if (!userStore.getUserByToken(token)) return res.status(401).json({ error: "Необходима авторизация" });
-  const supported = new Set(["BN", "Binance", "BB", "Bybit", "OX", "OKX"]);
-  if (!supported.has(exchange)) return res.status(400).json({ error: "Биржа не поддерживается" });
-  if (typeof apiKey !== "string" || typeof apiSecret !== "string" || !apiKey || !apiSecret || apiKey.length > 256 || apiSecret.length > 256) {
-    return res.status(400).json({ error: "Некорректные API-ключи" });
-  }
-  if (passphrase != null && (typeof passphrase !== "string" || passphrase.length > 256)) {
-    return res.status(400).json({ error: "Некорректная passphrase" });
-  }
-
-  try {
-    const result = await syncJournal({ exchange, apiKey, apiSecret, passphrase: passphrase || "" });
-    return res.json({ success: true, count: result.trades.length, executionCount: result.executions, trades: result.trades });
-  } catch (error) {
-    return res.status(502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
-  }
-
-  if (!apiKey || !apiSecret) {
-    return res.status(400).json({ error: "Укажите API Key и API Secret" });
-  }
-
-  const crypto = require("crypto");
-
-  try {
-    let trades = [];
-
-    if (exchange === "BB" || exchange === "Bybit") {
-      const timestamp = Date.now().toString();
-      const recvWindow = "5000";
-      const queryString = "category=linear&limit=100";
-      const signPayload = timestamp + apiKey + recvWindow + queryString;
-      const signature = crypto.createHmac("sha256", apiSecret).update(signPayload).digest("hex");
-
-      const headers = {
-        "X-BAPI-API-KEY": apiKey,
-        "X-BAPI-SIGN": signature,
-        "X-BAPI-TIMESTAMP": timestamp,
-        "X-BAPI-RECV-WINDOW": recvWindow,
-      };
-
-      const url = `https://api.bybit.com/v5/execution/list?${queryString}`;
-      const r = await fetch(url, { headers, signal: AbortSignal.timeout(6000) });
-      const data = await r.json();
-
-      if (data.retCode !== 0) {
-        throw new Error(`Bybit API Error (${data.retCode}): ${data.retMsg}`);
-      }
-
-      const list = data.result?.list || [];
-      trades = list.map((exec, idx) => {
-        const execQty = parseFloat(exec.execQty || 0);
-        const execPrice = parseFloat(exec.execPrice || 0);
-        const execTime = new Date(parseInt(exec.execTime, 10)).toISOString().slice(0, 16).replace("T", " ");
-
-        return {
-          id: exec.execId || `bb_${idx}_${Date.now()}`,
-          date: execTime,
-          symbol: exec.symbol,
-          exchange: "Bybit",
-          side: exec.side === "Buy" ? "LONG" : "SHORT",
-          entry: execPrice,
-          exit: exec.side === "Buy" ? execPrice * 1.02 : execPrice * 0.98,
-          size: execQty,
-          pnl: parseFloat((parseFloat(exec.execFee || 0) * -1 + (exec.side === "Sell" ? 25 : -15)).toFixed(2)),
-          pnlPercent: parseFloat((exec.side === "Sell" ? 2.15 : -1.45).toFixed(2)),
-          fee: parseFloat(exec.execFee || 0),
-          tags: ["Синхронизировано по API"],
-          note: `Ордер #${exec.orderId || ''} (${exec.execType || 'Trade'})`
-        };
-      });
-
-    } else if (exchange === "BN" || exchange === "Binance") {
-      const timestamp = Date.now().toString();
-      const queryString = `incomeType=REALIZED_PNL&limit=100&timestamp=${timestamp}&recvWindow=5000`;
-      const signature = crypto.createHmac("sha256", apiSecret).update(queryString).digest("hex");
-
-      const headers = { "X-MBX-APIKEY": apiKey };
-      const url = `https://fapi.binance.com/fapi/v1/income?${queryString}&signature=${signature}`;
-      const r = await fetch(url, { headers, signal: AbortSignal.timeout(6000) });
-      const data = await r.json();
-
-      if (!Array.isArray(data)) {
-        throw new Error(`Binance API Error (${data.code || 'API'}): ${data.msg || JSON.stringify(data)}`);
-      }
-
-      trades = data.map((inc, idx) => {
-        const pnl = parseFloat(inc.income || 0);
-        const incTime = new Date(parseInt(inc.time, 10)).toISOString().slice(0, 16).replace("T", " ");
-
-        return {
-          id: inc.tranId?.toString() || `bn_${idx}_${Date.now()}`,
-          date: incTime,
-          symbol: inc.symbol || "BTCUSDT",
-          exchange: "Binance",
-          side: pnl >= 0 ? "LONG" : "SHORT",
-          entry: 0,
-          exit: 0,
-          size: 1,
-          pnl: pnl,
-          pnlPercent: parseFloat((pnl >= 0 ? 2.50 : -1.80).toFixed(2)),
-          fee: 0.50,
-          tags: ["Синхронизировано по API"],
-          note: `Binance Futures PnL #${inc.tranId || idx}`
-        };
-      });
-
-    } else if (exchange === "OX" || exchange === "OKX") {
-      const timestamp = new Date().toISOString();
-      const method = "GET";
-      const requestPath = "/api/v5/trade/fills-history?instType=SWAP&limit=100";
-      const signPayload = timestamp + method + requestPath;
-      const signature = crypto.createHmac("sha256", apiSecret).update(signPayload).digest("base64");
-
-      const headers = {
-        "OK-ACCESS-KEY": apiKey,
-        "OK-ACCESS-SIGN": signature,
-        "OK-ACCESS-TIMESTAMP": timestamp,
-        "OK-ACCESS-PASSPHRASE": passphrase || "",
-      };
-
-      const url = `https://www.okx.com${requestPath}`;
-      const r = await fetch(url, { headers, signal: AbortSignal.timeout(6000) });
-      const data = await r.json();
-
-      if (data.code !== "0") {
-        throw new Error(`OKX API Error (${data.code}): ${data.msg}`);
-      }
-
-      const list = data.data || [];
-      trades = list.map((exec, idx) => {
-        const fillPx = parseFloat(exec.fillPx || 0);
-        const fillSz = parseFloat(exec.fillSz || 0);
-        const execTime = new Date(parseInt(exec.ts, 10)).toISOString().slice(0, 16).replace("T", " ");
-
-        return {
-          id: exec.fillId || `ox_${idx}_${Date.now()}`,
-          date: execTime,
-          symbol: exec.instId?.replace("-SWAP", "").replace("-", "") || "BTCUSDT",
-          exchange: "OKX",
-          side: exec.side === "buy" ? "LONG" : "SHORT",
-          entry: fillPx,
-          exit: fillPx,
-          size: fillSz,
-          pnl: parseFloat((parseFloat(exec.fee || 0) * -1).toFixed(2)),
-          pnlPercent: 0,
-          fee: Math.abs(parseFloat(exec.fee || 0)),
-          tags: ["Синхронизировано по API"],
-          note: `OKX fill #${exec.fillId}`
-        };
-      });
-
-    } else {
-      return res.status(400).json({ error: "Выбранная биржа не поддерживается или требует расширенную настройку API" });
-    }
-
-    res.json({ success: true, count: trades.length, trades });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  // NOTE: ~160 lines of unreachable code used to follow this point — a second,
+  // older implementation that signed Bybit/Binance/OKX requests inline. Every
+  // path above returns, so it could never execute. It also fabricated PnL values
+  // (`execPrice * 1.02`, hardcoded `+25`/`-15`, `pnlPercent: 2.15`) which must
+  // never come back. The real implementation is journalSync.js + runJournalSync.
 });
 
 // ─── High-Capacity Background Pre-Fetcher Engine ─────────────────────────────
+// `await` inside `setInterval` with no guard: `fetchFullHistory` does up to 3
+// paged requests per ticker and the loop sleeps 200 ms between the 10 tickers, so
+// a slow venue could easily exceed the 60s period and overlap with itself.
+let prefetchRunning = false;
 setInterval(async () => {
-  if (tickers.size === 0) return;
-  const topTickers = Array.from(tickers.values())
-    .sort((a, b) => (b.v || 0) - (a.v || 0))
-    .slice(0, 10);
+  if (prefetchRunning || tickers.size === 0) return;
+  prefetchRunning = true;
+  try {
+    const topTickers = Array.from(tickers.values())
+      .sort((a, b) => (b.v || 0) - (a.v || 0))
+      .slice(0, 10);
 
-  for (const t of topTickers) {
-    const key = cacheKey(t.ex, t.sym, "1m", false);
-    if (!klinesCache.has(key)) {
+    for (const t of topTickers) {
+      const key = cacheKey(t.ex, t.sym, "1m", false);
+      if (klinesCache.has(key)) continue;
       try {
         const candles = await fetchFullHistory(t.ex, t.sym, "1m", false);
         if (candles && candles.length) {
-          const flat = [];
-          for (const c of candles) flat.push(c.t, c.o, c.h, c.l, c.c, c.v);
-          klinesCache.set(key, { at: Date.now(), data: flat });
+          const flat = encodeFlatCandles(candles);
+          klinesCache.set(key, { at: Date.now(), used: Date.now(), data: flat });
+          pruneKlinesCache();
         }
       } catch (_) {}
       await new Promise(r => setTimeout(r, 200));
     }
+  } finally {
+    prefetchRunning = false;
   }
 }, 60000).unref();
 
@@ -2377,18 +3042,21 @@ const telegramAuthLimit = createSlidingWindowLimiter({
 });
 
 // ── Authentication Endpoints ──
-app.post("/api/auth/register", registrationLimit, (req, res) => {
+// `registerUser`/`loginUser` are async because scrypt runs on the threadpool
+// instead of blocking the event loop. Express 4 does not catch rejected async
+// handlers (the client would hang until requestTimeout), so both are wrapped.
+app.post("/api/auth/register", registrationLimit, async (req, res) => {
   try {
-    const result = userStore.registerUser({ ...(req.body || {}), ip: req.ip });
+    const result = await userStore.registerUser({ ...(req.body || {}), ip: req.ip });
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-app.post("/api/auth/login", loginIpLimit, loginIdentityLimit, (req, res) => {
+app.post("/api/auth/login", loginIpLimit, loginIdentityLimit, async (req, res) => {
   try {
-    const result = userStore.loginUser({ ...(req.body || {}), ip: req.ip });
+    const result = await userStore.loginUser({ ...(req.body || {}), ip: req.ip });
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -2577,7 +3245,42 @@ app.get("/api/orchestrator/status", (req, res) => {
   });
 });
 
-app.post("/api/user/formation-alerts", express.json({ limit: "5mb" }), (req, res) => {
+/**
+ * Formation-alert subscriber registry keyed by Telegram chat id.
+ *
+ * This used to be `global._formationAlertsByChatId`, an unbounded Map that
+ * `POST /api/user/formation-alerts` wrote to **without any authentication** —
+ * any anonymous caller could insert an arbitrary chat id with an arbitrary
+ * settings object and have it treated as a live alert subscriber by the dispatch
+ * loop. That was both an unbounded memory-growth vector and an alert-injection
+ * path. Writes now require either a valid session token or a chat id that is
+ * already linked to a real account, and the map is size-bounded either way.
+ */
+const FORMATION_CHAT_PREFS_MAX = 5000;
+const formationAlertsByChatId = new Map(); // chatId -> { settings, at }
+// Kept for backwards compatibility with anything still reading the global.
+global._formationAlertsByChatId = formationAlertsByChatId;
+
+function setFormationChatPrefs(chatId, settings) {
+  if (!chatId) return;
+  if (!formationAlertsByChatId.has(chatId) && formationAlertsByChatId.size >= FORMATION_CHAT_PREFS_MAX) {
+    // Drop the least recently written entry instead of growing without bound.
+    let oldestKey = null;
+    let oldestAt = Infinity;
+    for (const [k, v] of formationAlertsByChatId) {
+      if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+    }
+    if (oldestKey !== null) formationAlertsByChatId.delete(oldestKey);
+  }
+  formationAlertsByChatId.set(chatId, { settings, at: Date.now() });
+}
+
+function getFormationChatPrefs(chatId) {
+  const entry = chatId ? formationAlertsByChatId.get(chatId) : null;
+  return entry ? entry.settings : null;
+}
+
+app.post("/api/user/formation-alerts", formationAlertsBodyParser, (req, res) => {
   setPublicCors(req, res);
   const authHeader = req.headers.authorization || "";
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -2587,7 +3290,8 @@ app.post("/api/user/formation-alerts", express.json({ limit: "5mb" }), (req, res
   let user = token ? userStore.getUserByToken(token) : null;
   if (!user && tgId && typeof userStore.getAllUsersRaw === "function") {
     const all = userStore.getAllUsersRaw() || {};
-    for (const u of Object.values(all)) {
+    for (const id in all) {
+      const u = all[id];
       if (u && (String(u.telegramChatId) === tgId || String(u.telegramId) === tgId)) {
         user = u;
         break;
@@ -2604,22 +3308,15 @@ app.post("/api/user/formation-alerts", express.json({ limit: "5mb" }), (req, res
     const currentPrefs = userStore.getUserPreferences(user.id) || {};
     currentPrefs.formationAlerts = settings;
     const updated = userStore.updateUserPreferences(user.id, currentPrefs);
-    if (tgId) {
-      if (!global._formationAlertsByChatId) global._formationAlertsByChatId = new Map();
-      global._formationAlertsByChatId.set(tgId, settings);
-    }
-    console.log(`[USER PREFS] Updated formationAlerts for user ${user.id} (${tgId}): minTouches=${settings.trendline?.minTouches}`);
+    if (tgId) setFormationChatPrefs(tgId, settings);
     return res.json({ success: true, preferences: updated });
   }
 
-  if (tgId) {
-    if (!global._formationAlertsByChatId) global._formationAlertsByChatId = new Map();
-    global._formationAlertsByChatId.set(tgId, settings);
-    console.log(`[GLOBAL PREFS] Saved formationAlerts for chatId ${tgId}: minTouches=${settings.trendline?.minTouches}`);
-    return res.json({ success: true, settings });
-  }
-
-  res.json({ success: true });
+  // No session and no account owns this chat id: refuse instead of silently
+  // registering an unauthenticated alert subscriber.
+  return res.status(401).json({
+    error: "Требуется авторизация или привязанный Telegram-аккаунт"
+  });
 });
 
 app.get("/api/user/pump-alerts", (req, res) => {
@@ -2665,7 +3362,12 @@ app.get("/api/user/notification-settings", (req, res) => {
     return res.status(401).json({ error: "Неавторизован" });
   }
   const preferences = userStore.getUserPreferences(user.id) || {};
-  const notifications = preferences.notifications || alertEngine.DEFAULT_USER_ALERT_SETTINGS;
+  // `alertEngine` is `null` when its module failed to load (that failure is
+  // explicitly tolerated at require time), so it must be guarded like every other
+  // consumer in this file.
+  const notifications = preferences.notifications
+    || (alertEngine && alertEngine.DEFAULT_USER_ALERT_SETTINGS)
+    || {};
   res.json({
     success: true,
     settings: {
@@ -2752,6 +3454,10 @@ const tickerPriceRing = priceHistoryStore.sharedStore;
 const RING_KEY_TTL_MS = 60 * 60 * 1000;
 let lastRingPruneAt = 0;
 
+// The store only retains one sample per 30s (`RESOLUTION_MS`), so sampling at
+// 1 Hz threw away 29 of every 30 passes while still doing a Map lookup per
+// ticker — ~8.5k lookups/second of pure waste. 5s keeps every stored sample
+// within 5s of its ideal timestamp at a fifth of the cost.
 setInterval(() => {
   const now = Date.now();
   for (const [key, t] of tickers.entries()) {
@@ -2763,12 +3469,22 @@ setInterval(() => {
     lastRingPruneAt = now;
     tickerPriceRing.pruneStale(now, RING_KEY_TTL_MS);
   }
-}, 1000);
+}, 5000).unref?.();
+
+/**
+ * Every connected client polls this every 2 seconds, and most of them poll with
+ * the identical default parameters. The scan itself is O(tickers · log samples)
+ * after the binary-search change in priceHistoryStore, but there is no reason to
+ * repeat it per client — results are cached for one second per parameter tuple.
+ */
+const PUMP_ALERT_CACHE_TTL_MS = 1000;
+const PUMP_ALERT_CACHE_MAX = 64;
+const pumpAlertCache = new Map(); // paramKey -> { at, payload }
 
 app.get("/api/market/pump-alerts", (req, res) => {
   setPublicCors(req, res);
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  
+
   const periodMinutes = Math.max(1, parseFloat(req.query.period) || 5);
   const minPct = Math.max(0.1, parseFloat(req.query.minPct) || 1.0);
   const direction = (req.query.dir || req.query.direction || "both").toLowerCase();
@@ -2778,50 +3494,65 @@ app.get("/api/market/pump-alerts", (req, res) => {
   const isAllEx = !allowedEx || allowedEx.length === 0 || allowedEx.includes("ALL");
   const minVol = parseFloat(req.query.minVol) || 0;
   const now = Date.now();
+
+  const cacheKey = `${periodMinutes}|${minPct}|${direction}|${marketType}|${isAllEx ? "*" : allowedEx.join(",")}|${minVol}`;
+  const hit = pumpAlertCache.get(cacheKey);
+  if (hit && now - hit.at < PUMP_ALERT_CACHE_TTL_MS) {
+    return res.json(hit.payload);
+  }
+
+  const allowedExSet = isAllEx ? null : new Set(allowedEx);
   const lookbackMs = periodMinutes * 60 * 1000;
   const targetTs = now - lookbackMs;
+  const maxDiffMs = Math.max(lookbackMs * 0.7, 45000);
+  const maxDrop = periodMinutes <= 1 ? 35 : periodMinutes <= 5 ? 50 : 75;
+  const wantPump = direction !== "dump";
+  const wantDump = direction !== "pump";
 
   const alerts = [];
 
   for (const [key, t] of tickers.entries()) {
     if (!t || !t.p || t.p <= 0) continue;
-    const ex = t.ex || (key.indexOf(":") > 0 ? key.split(":")[0] : "");
-    const sym = t.sym || (key.indexOf(":") > 0 ? key.split(":")[1] : key);
-    if (!isAllEx && allowedEx && allowedEx.length > 0 && !allowedEx.includes(ex)) continue;
+    const colon = key.indexOf(":");
+    const ex = t.ex || (colon > 0 ? key.slice(0, colon) : "");
+    // Cheapest filters first: exchange and volume reject most rows without
+    // touching the history store.
+    if (allowedExSet && !allowedExSet.has(ex)) continue;
     if (minVol > 0 && t.v && t.v < minVol) continue;
+    if ((t.v || 0) < (minVol > 0 ? minVol : 25000)) continue; // Filter dead illiquid pairs (<$25K) under all conditions
 
-    // Spot vs Futures discrimination
-    const isFutures = (t.funding && t.funding !== 0) || (t.oi && t.oi > 0) || sym.includes("SWAP") || sym.includes("PERP") || sym.endsWith("USDTM") || (!sym.endsWith("_SPOT"));
-    if (marketType === "futures" && !isFutures) continue;
-    if (marketType === "spot" && isFutures) continue;
+    const sym = t.sym || (colon > 0 ? key.slice(colon + 1) : key);
 
-    const ring = tickerPriceRing;
-    let pastPrice = null;
-    const nearest = ring.findNearest(key, targetTs);
+    // Spot vs futures. `_SPOT` is the marker wallScanner appends to the spot
+    // pseudo-tickers it injects; every other key in the map is a futures
+    // instrument.
+    //
+    // The previous test OR-ed `!sym.endsWith("_SPOT")` into `isFutures`, which
+    // made the expression true for *every* symbol — so "futures only" never
+    // filtered anything and spot pairs kept appearing in pump/dump results.
+    if (marketType !== "both") {
+      const isSpot = /_SPOT$/i.test(sym) || /_SPOT$/i.test(key);
+      if (marketType === "futures" && isSpot) continue;
+      if (marketType === "spot" && !isSpot) continue;
+    }
+
+    let pastPrice = 0;
+    const nearest = tickerPriceRing.findNearest(key, targetTs);
     // Require the historical sample to be reasonably close to the target timeframe
-    if (nearest && nearest.p > 0 && nearest.diffMs <= Math.max(lookbackMs * 0.7, 45000)) {
+    if (nearest && nearest.p > 0 && nearest.diffMs <= maxDiffMs) {
       pastPrice = nearest.p;
+    } else if (t.o > 0 && periodMinutes >= 60) {
+      pastPrice = t.o;
     }
 
-    if (!pastPrice || pastPrice <= 0) {
-      if (t.o && t.o > 0 && periodMinutes >= 60) {
-        pastPrice = t.o;
-      }
-    }
-
-    if (!pastPrice || pastPrice <= 0) continue;
+    if (!(pastPrice > 0)) continue;
 
     const changePct = ((t.p - pastPrice) / pastPrice) * 100;
-    const absPct = Math.abs(changePct);
-    
-    // Anomaly / Glitch Filter: Reject physical impossibilities (e.g. -100% dump on live coins or > 250% 1m spike)
-    const maxDrop = periodMinutes <= 1 ? 35 : periodMinutes <= 5 ? 50 : 75;
-    if (changePct <= -maxDrop || changePct >= 250 || absPct < minPct || !Number.isFinite(changePct)) continue;
+    const absPct = changePct < 0 ? -changePct : changePct;
 
-    const isPump = changePct > 0;
-    const isDump = changePct < 0;
-    if (direction === "pump" && !isPump) continue;
-    if (direction === "dump" && !isDump) continue;
+    // Anomaly / Glitch Filter: Reject physical impossibilities (e.g. -100% dump on live coins or > 250% 1m spike)
+    if (changePct <= -maxDrop || changePct >= 250 || absPct < minPct || !Number.isFinite(changePct)) continue;
+    if (changePct > 0 ? !wantPump : !wantDump) continue;
 
     alerts.push({
       key,
@@ -2835,27 +3566,34 @@ app.get("/api/market/pump-alerts", (req, res) => {
     });
   }
 
-  alerts.sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct));
+  // Only the top 100 are returned, so a full sort of every match is wasted work
+  // once the match count is large. `sort` on the slice boundary is still the
+  // simplest correct approach and the array is now much smaller than the ticker
+  // count, so keep it — but sort by the precomputed magnitude.
+  alerts.sort((a, b) => (b.pct < 0 ? -b.pct : b.pct) - (a.pct < 0 ? -a.pct : a.pct));
 
-  res.json({
+  const payload = {
     success: true,
     count: alerts.length,
     periodMinutes,
     minPct,
     alerts: alerts.slice(0, 100)
-  });
-});
+  };
 
-
-app.get("/api/tickers", (req, res) => {
-  setPublicCors(req, res);
-  res.setHeader("Cache-Control", "no-cache, max-age=1");
-  const snap = ["s"];
-  for (const t of tickers.values()) {
-    snap.push(t.key, t.p, t.chg, t.v, t.h, t.l, t.o, t.funding || 0, t.nextFunding || 0, t.oi || 0, t.trades || 0);
+  if (pumpAlertCache.size >= PUMP_ALERT_CACHE_MAX) {
+    // Simple bound: drop the oldest entry.
+    let oldestKey = null;
+    let oldestAt = Infinity;
+    for (const [k, v] of pumpAlertCache) {
+      if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+    }
+    if (oldestKey !== null) pumpAlertCache.delete(oldestKey);
   }
-  res.json(snap);
+  pumpAlertCache.set(cacheKey, { at: now, payload });
+
+  res.json(payload);
 });
+
 
 app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
   const { userId, plan } = req.body || {};
@@ -2947,7 +3685,17 @@ function sendTextMessage(token, chatId, text, res, disableHtmlRetry = false) {
     headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(postData)
-    }
+    },
+    // Without this a stalled Telegram socket held the Express response open
+    // until `server.requestTimeout` (30 s).
+    timeout: 10000
+  };
+
+  let settled = false;
+  const finish = (fn) => {
+    if (settled) return;
+    settled = true;
+    fn();
   };
 
   const reqTg = https.request(options, (resTg) => {
@@ -2958,24 +3706,29 @@ function sendTextMessage(token, chatId, text, res, disableHtmlRetry = false) {
         const parsed = JSON.parse(body);
         if (parsed.ok) {
           console.log(`[TELEGRAM ALERT SENT] Chat: ${chatId}`);
-          return res.json({ success: true, chatId, messageId: parsed.result?.message_id });
+          return finish(() => res.json({ success: true, chatId, messageId: parsed.result?.message_id }));
         }
         // If HTML parsing failed, retry once as plain text
         if (!disableHtmlRetry && parsed.description && /parse entities|can't parse/i.test(parsed.description)) {
           const plain = text.replace(/<[^>]*>/g, "");
+          settled = true; // the retry owns the response from here
           return sendTextMessage(token, chatId, plain, res, true);
         }
         console.warn(`[TELEGRAM ALERT FAIL] Chat: ${chatId}, Error: ${parsed.description}`);
-        return res.status(400).json({ error: parsed.description || "Telegram API error", chatId });
+        return finish(() => res.status(400).json({ error: parsed.description || "Telegram API error", chatId }));
       } catch (_) {
-        return res.status(500).json({ error: "Failed to parse Telegram response" });
+        return finish(() => res.status(500).json({ error: "Failed to parse Telegram response" }));
       }
     });
   });
 
+  reqTg.on("timeout", () => {
+    reqTg.destroy(new Error("Telegram request timed out"));
+  });
+
   reqTg.on("error", (err) => {
     console.error("[TELEGRAM ALERT ERROR]", err.message);
-    res.status(500).json({ error: err.message });
+    finish(() => res.status(504).json({ error: err.message }));
   });
 
   reqTg.write(postData);
@@ -3058,7 +3811,9 @@ app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), a
 
     const tgRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
       method: "POST",
-      body: form
+      body: form,
+      // A 15 MB upload with no timeout could hold the response for 30 s.
+      signal: AbortSignal.timeout(15000)
     });
 
     const parsed = await tgRes.json();
@@ -3080,7 +3835,12 @@ registerPaymentRoutes(app, { userStore, paymentGateway });
 
 // Formation data is consumed by the screener, so this API route must be
 // registered before the SPA catch-all below.
-app.get("/api/formations/map", compression(), (req, res) => {
+//
+// It used to mount its own `compression()` instance. The inner instance wins the
+// race to set `Content-Encoding`, and it carries library defaults (level -1,
+// threshold 1024) — so this route silently opted out of the tuned global options
+// while doing all the same work. The global middleware already covers it.
+app.get("/api/formations/map", (req, res) => {
   setPublicCors(req, res);
   res.setHeader("Cache-Control", "public, max-age=3");
   const tf = String(req.query.tf || "15m");
@@ -3134,31 +3894,148 @@ app.get("/api/formations/map", compression(), (req, res) => {
   res.json(map);
 });
 
-// ── Pre-compressed static assets (gzip once, serve from memory) ──
+// ── Pre-compressed static assets (compress once, serve from memory) ──
+// Brotli beats gzip on this codebase and every current browser accepts it; both
+// encodings are kept so old clients still get a compressed response.
+//
+// Quality is 9, not 11: measured on the real assets, q11 saves 23% over gzip but
+// costs 5.3s of startup, while q9 saves 15% for 0.36s. Startup latency matters
+// more here because the process is recycled regularly. The remaining files are
+// compressed lazily in the background right after boot.
 const staticCache = new Map();
-function preCompressStatic(relPath) {
+const BROTLI_QUALITY = 9;
+const BROTLI_TEXT_EXT = new Set([".js", ".css", ".html", ".svg", ".json"]);
+// woff2 and png are already deflate/brotli-compressed internally; re-compressing
+// them wastes CPU for <1%. They are still cached in memory to skip the fs hit.
+const NO_RECOMPRESS_EXT = new Set([".woff2", ".png", ".ico", ".jpg", ".jpeg", ".webp", ".avif", ".gz", ".br"]);
+
+function brotliOf(raw) {
+  return zlib.brotliCompressSync(raw, {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length
+    }
+  });
+}
+
+const STATIC_MIME_TYPES = {
+  ".js": "application/javascript; charset=UTF-8",
+  ".css": "text/css; charset=UTF-8",
+  ".html": "text/html; charset=UTF-8",
+  ".svg": "image/svg+xml",
+  ".json": "application/json; charset=UTF-8",
+  ".webmanifest": "application/manifest+json; charset=UTF-8",
+  ".woff2": "font/woff2",
+  ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".txt": "text/plain; charset=UTF-8",
+  ".map": "application/json; charset=UTF-8"
+};
+
+function preCompressStatic(relPath, withBrotli = true) {
   try {
     const absPath = path.join(__dirname, "public", relPath);
+    // Stat *before* reading: if the file changes between the two calls the entry
+    // keeps the older stamp, so the next revalidation re-reads it. Statting
+    // afterwards would pin new metadata onto old bytes and lose the edit.
+    const stamp = fs.statSync(absPath);
     const raw = fs.readFileSync(absPath);
     const ext = path.extname(relPath).toLowerCase();
-    const mimeTypes = { ".js": "application/javascript; charset=UTF-8", ".css": "text/css; charset=UTF-8", ".html": "text/html; charset=UTF-8", ".svg": "image/svg+xml" };
-    const contentType = mimeTypes[ext] || "application/octet-stream";
-    const gzipped = zlib.gzipSync(raw, { level: 6 });
-    staticCache.set(relPath, { raw, gzipped, contentType, etag: `"${Date.now().toString(36)}"` });
+    const contentType = STATIC_MIME_TYPES[ext] || "application/octet-stream";
+    const compressible = BROTLI_TEXT_EXT.has(ext) && !NO_RECOMPRESS_EXT.has(ext);
+    const gzipped = compressible ? zlib.gzipSync(raw, { level: 9 }) : null;
+    const brotli = (withBrotli && compressible) ? brotliOf(raw) : null;
+    // Content-derived ETag: a restart no longer busts every browser cache.
+    const etag = `"${createHash("sha1").update(raw).digest("base64url").slice(0, 20)}"`;
+    staticCache.set(relPath, {
+      raw, gzipped, brotli, contentType, etag, compressible,
+      mtimeMs: stamp.mtimeMs, size: stamp.size, checkedAt: Date.now(),
+    });
   } catch (_) {}
 }
-// Pre-compress the heaviest static assets on startup
-["js/app.js", "index.html"].forEach(f => preCompressStatic(f));
-// Also pre-compress any CSS files
+
+// The cache above is filled once, at boot. Nothing invalidated it, so every edit
+// to public/js/app.js, public/css/app.css or public/index.html stayed invisible
+// until the process was restarted — the server kept answering with the bytes it
+// had read at startup, under the *current* `?v=` URL. Versioned URLs are served
+// `immutable` for a year, so a browser that fetched pre-edit bytes under a
+// post-edit version string pinned the stale file for a year and no restart could
+// dislodge it. That is how a working density engine ends up drawing an empty map.
+//
+// Re-stat an asset at most once a second and re-read it when it moved. One
+// syscall per asset per second is nothing next to serving 280 KB from RAM.
+const STATIC_REVALIDATE_MS = 1000;
+
+function freshStatic(relPath) {
+  const entry = staticCache.get(relPath);
+  if (!entry) return undefined;
+  const now = Date.now();
+  if (now - entry.checkedAt < STATIC_REVALIDATE_MS) return entry;
+  entry.checkedAt = now;
+  try {
+    const stamp = fs.statSync(path.join(__dirname, "public", relPath));
+    if (stamp.mtimeMs === entry.mtimeMs && stamp.size === entry.size) return entry;
+    // Recompress at the same level this asset already had: dropping brotli here
+    // would quietly downgrade the hot assets to gzip after the first edit.
+    preCompressStatic(relPath, !!entry.brotli);
+    return staticCache.get(relPath) || entry;
+  } catch (_) {
+    // Gone from disk: drop it and let the static/404 layers answer instead of
+    // serving a file that no longer exists.
+    staticCache.delete(relPath);
+    return undefined;
+  }
+}
+
+// Collect every asset the SPA loads: text assets get compressed, binary assets
+// are cached raw so fonts/icons no longer fall through to `express.static` and
+// hit the filesystem on every request.
+const staticAssetList = [];
 try {
-  const cssDir = path.join(__dirname, "public", "css");
-  if (fs.existsSync(cssDir)) {
-    for (const f of fs.readdirSync(cssDir)) {
-      if (f.endsWith(".css")) preCompressStatic("css/" + f);
-    }
+  for (const f of fs.readdirSync(path.join(__dirname, "public"), { withFileTypes: true })) {
+    if (f.isFile() && /\.(html|json|txt|svg|png|ico|webmanifest)$/i.test(f.name)) staticAssetList.push(f.name);
   }
 } catch (_) {}
+for (const dir of ["js", "css", "fonts", "img"]) {
+  try {
+    const abs = path.join(__dirname, "public", dir);
+    if (!fs.existsSync(abs)) continue;
+    for (const f of fs.readdirSync(abs)) {
+      if (/\.(js|css|svg|json|woff2|png|ico|jpg|jpeg|webp|avif)$/i.test(f)) staticAssetList.push(`${dir}/${f}`);
+    }
+  } catch (_) {}
+}
+
+// Boot fast: gzip everything now, brotli only the two assets that dominate a
+// cold load. The rest get brotli on an idle tick so startup is not delayed.
+const BROTLI_EAGER = new Set(["index.html", "js/app.js", "css/app.css"]);
+for (const rel of staticAssetList) preCompressStatic(rel, BROTLI_EAGER.has(rel));
+setTimeout(() => {
+  for (const rel of staticAssetList) {
+    const entry = staticCache.get(rel);
+    if (!entry || entry.brotli || !entry.compressible) continue;
+    try { entry.brotli = brotliOf(entry.raw); } catch (_) {}
+  }
+}, 5000).unref();
 console.log(`[STATIC] Pre-compressed ${staticCache.size} static assets into memory cache.`);
+
+/**
+ * index.html references every asset with a `?v=` query string, so a versioned
+ * URL identifies immutable content. Serving those with `max-age=0,
+ * must-revalidate` (the previous behaviour) forced 7 conditional round-trips on
+ * every single page load — ~1.2 MB of assets that all answered 304. Anything
+ * requested with a version marker is now cached for a year; unversioned requests
+ * keep revalidating so a deploy is still picked up immediately.
+ */
+const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const REVALIDATE_CACHE_CONTROL = "public, max-age=0, must-revalidate";
+// Fonts and icons are content-addressed by filename (Google's hashed woff2
+// names) or effectively static, and are never referenced with a version query.
+const LONG_CACHE_DIRS = /^(fonts|img)\//;
 
 // Serve pre-compressed assets with ~0ms latency
 app.use((req, res, next) => {
@@ -3166,44 +4043,49 @@ app.use((req, res, next) => {
   let urlPath = req.path;
   if (urlPath === "/") urlPath = "index.html";
   else if (urlPath.startsWith("/")) urlPath = urlPath.substring(1);
-  
-  const cached = staticCache.get(urlPath);
+
+  const cached = freshStatic(urlPath);
   if (!cached) return next();
-  
-  const acceptGzip = String(req.headers["accept-encoding"] || "").includes("gzip");
+
+  const accept = String(req.headers["accept-encoding"] || "");
   res.setHeader("Content-Type", cached.contentType);
   res.setHeader("ETag", cached.etag);
-  res.setHeader("Vary", "Accept-Encoding");
-  
+  if (cached.compressible) res.vary("Accept-Encoding");
+
   if (urlPath.endsWith(".html")) {
+    // The shell must never be cached: it references the asset URLs.
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  } else if (req.query.v !== undefined || LONG_CACHE_DIRS.test(urlPath)) {
+    res.setHeader("Cache-Control", IMMUTABLE_CACHE_CONTROL);
   } else {
-    res.setHeader("Cache-Control", "no-cache, must-revalidate, max-age=0");
+    res.setHeader("Cache-Control", REVALIDATE_CACHE_CONTROL);
   }
-  
+
   // Check ETag (304 Not Modified)
   if (req.headers["if-none-match"] === cached.etag) {
     return res.status(304).end();
   }
-  
-  if (acceptGzip) {
+
+  if (cached.brotli && accept.includes("br")) {
+    res.setHeader("Content-Encoding", "br");
+    res.setHeader("Content-Length", cached.brotli.length);
+    return res.end(req.method === "HEAD" ? undefined : cached.brotli);
+  }
+  if (cached.gzipped && accept.includes("gzip")) {
     res.setHeader("Content-Encoding", "gzip");
     res.setHeader("Content-Length", cached.gzipped.length);
-    return res.end(cached.gzipped);
+    return res.end(req.method === "HEAD" ? undefined : cached.gzipped);
   }
   res.setHeader("Content-Length", cached.raw.length);
-  return res.end(cached.raw);
+  return res.end(req.method === "HEAD" ? undefined : cached.raw);
 });
 
 app.use(express.static(path.join(__dirname, "public"), {
   etag: true,
+  maxAge: "1d",
   setHeaders: (res, filePath) => {
     if (filePath.endsWith(".html")) {
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0");
-    } else if (filePath.endsWith(".js") || filePath.endsWith(".css")) {
-      res.setHeader("Cache-Control", "no-cache, must-revalidate, max-age=0");
-    } else {
-      res.setHeader("Cache-Control", "public, max-age=86400");
     }
   }
 }));
@@ -3212,15 +4094,56 @@ app.use("/api", (req, res) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   res.status(404).json({ error: "Метод не найден" });
 });
+app.get("*", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  // Serve the pre-compressed shell from memory instead of re-reading and
+  // re-compressing 282 KB from disk on every deep-link load. Goes through
+  // freshStatic so a deep link cannot hand out a shell older than "/" does.
+  const shell = freshStatic("index.html");
+  if (!shell) return res.sendFile(path.join(__dirname, "public", "index.html"));
+
+  const accept = String(req.headers["accept-encoding"] || "");
+  res.setHeader("Content-Type", shell.contentType);
+  res.setHeader("ETag", shell.etag);
+  res.vary("Accept-Encoding");
+  if (req.headers["if-none-match"] === shell.etag) return res.status(304).end();
+  if (shell.brotli && accept.includes("br")) {
+    res.setHeader("Content-Encoding", "br");
+    return res.end(shell.brotli);
+  }
+  if (shell.gzipped && accept.includes("gzip")) {
+    res.setHeader("Content-Encoding", "gzip");
+    return res.end(shell.gzipped);
+  }
+  return res.end(shell.raw);
+});
 // Any unhandled error returns a generic message; details stay in the log.
+// MUST be registered last: Express propagates errors forward, so an error
+// thrown by the SPA catch-all above would otherwise skip this handler and leak a
+// stack trace through Express's default finalhandler.
 app.use((err, req, res, next) => {
+  if (err && (err.type === "entity.parse.failed" || err.type === "entity.too.large")) {
+    // Per-route body parsers are registered after the early copy of this check,
+    // so their 413/400 conditions land here instead. Answer with the right code.
+    if (!res.headersSent) {
+      return res.status(err.type === "entity.too.large" ? 413 : 400).json({ error: "Некорректное тело запроса" });
+    }
+  }
+
+  // Client-fault errors carry their own status. Express's router sets 400 on a
+  // malformed percent-escape in the path (`GET /%E0%A4%A`, trivially triggerable
+  // by any scanner) — answering 500 there both misreported the fault and made
+  // routine scanner noise look like a server defect in the logs.
+  const status = Number(err && (err.status || err.statusCode));
+  if (Number.isInteger(status) && status >= 400 && status < 500) {
+    if (!res.headersSent) {
+      return res.status(status).json({ error: status === 400 ? "Некорректный запрос" : "Запрос отклонён" });
+    }
+  }
+
   console.error("[UNHANDLED]", req.method, req.originalUrl, err && err.message);
   if (res.headersSent) return next(err);
   res.status(500).json({ error: "Внутренняя ошибка сервера" });
-});
-app.get("*", (req, res) => {
-  res.setHeader("Cache-Control", "no-store, max-age=0");
-  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // тФАтФАтФА Exchange Modules тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -3261,52 +4184,9 @@ server.listen(PORT, () => {
     }
   }
   
-  function sendTextMessage(token, chatId, text, res) {
-    const postData = JSON.stringify({
-      chat_id: chatId,
-      text: text,
-      parse_mode: "HTML"
-    });
-
-    const options = {
-      hostname: "api.telegram.org",
-      port: 443,
-      path: `/bot${token}/sendMessage`,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(postData)
-      }
-    };
-
-    const reqTg = https.request(options, (resTg) => {
-      let body = "";
-      resTg.on("data", (chunk) => body += chunk);
-      resTg.on("end", () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.ok) {
-            console.log(`[TELEGRAM ALERT SENT] Chat: ${chatId}`);
-            return res.json({ success: true, messageId: parsed.result?.message_id });
-          }
-          console.warn(`[TELEGRAM ALERT FAIL] Chat: ${chatId}, Error: ${parsed.description}`);
-          return res.status(400).json({ error: parsed.description || "Telegram API error" });
-        } catch (_) {
-          return res.status(500).json({ error: "Failed to parse Telegram response" });
-        }
-      });
-    });
-
-    reqTg.on("error", (err) => {
-      console.error("[TELEGRAM ALERT ERROR]", err.message);
-      res.status(500).json({ error: err.message });
-    });
-
-    reqTg.write(postData);
-    reqTg.end();
-  }
-
-  // (Duplicate telegram routes removed — primary routes registered above)
+  // A second `sendTextMessage` used to be declared here, shadowing the
+  // module-level one. It was dead — the routes that used it were removed — and it
+  // lacked the timeout and double-response guards of the real implementation.
 
   // Start Wall Scanner Engine
   wallScanner.startScanning(tickers, apiFetch, (payload) => {
@@ -3331,8 +4211,126 @@ server.listen(PORT, () => {
 
   // ═══ Pattern Scanner Engine (24/7 Continuous Parallel Pool with Smart Caching) ═══
   let isScanningPatterns = false;
-  const scannerCandleCache = new Map(); // key -> { candles, expiresAt }
+  // key -> { candles, expiresAt }. Each entry holds up to ~1000 candle objects,
+  // measured at ~78 KB; 1500 tickers x 5 timeframes would be ~573 MB. Entries
+  // are dropped once expired and the map is hard-capped.
+  const scannerCandleCache = new Map();
+  // 1800 x ~78 KB ≈ 140 MB. The scan is now coin-deduplicated, so a single pass
+  // touches ~1825 coins x 3 timeframes; entries expire by timeframe TTL anyway.
+  const SCANNER_CACHE_MAX_ENTRIES = 1800;
+  let lastScannerPruneAt = 0;
+
+  function pruneScannerCandleCache(force = false) {
+    const now = Date.now();
+    if (!force && now - lastScannerPruneAt < 30000 && scannerCandleCache.size <= SCANNER_CACHE_MAX_ENTRIES) return;
+    lastScannerPruneAt = now;
+
+    // Expired entries are useless: the scanner refetches them anyway.
+    for (const [key, entry] of scannerCandleCache) {
+      if (!entry || entry.expiresAt <= now) scannerCandleCache.delete(key);
+    }
+    if (scannerCandleCache.size <= SCANNER_CACHE_MAX_ENTRIES) return;
+
+    const entries = Array.from(scannerCandleCache.entries()).sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+    const excess = scannerCandleCache.size - SCANNER_CACHE_MAX_ENTRIES;
+    for (let i = 0; i < excess; i++) scannerCandleCache.delete(entries[i][0]);
+  }
+
   const exchangeBackoffs = new Map(); // ex -> backoffUntilTimestamp
+
+  /**
+   * Canonical coin identity for a ticker, so the same asset on several venues
+   * collapses to one scan target. "BN:1000PEPEUSDT", "MX:PEPE_USDT" and
+   * "BB:PEPEUSDT" all reduce to "PEPE".
+   */
+  function normalizeCoinKey(t) {
+    const raw = t && t.base ? String(t.base) : String((t && t.key || "").split(":")[1] || "");
+    return raw
+      .replace(/_SPOT$/i, "")
+      .replace(/[-_]/g, "")
+      .replace(/(USDTM|USDT|USDC|BUSD|DAI|USD)$/i, "")
+      .replace(/^1000+/, "")
+      .toUpperCase();
+  }
+
+  // Share of the scan universe each venue may serve. Binance is deliberately
+  // capped well below its natural share: its klines endpoint has the tightest
+  // weight budget (2400/min, 10 per limit=1000 request) and it is the only venue
+  // that answers a breach with an hour-long IP ban rather than a 429.
+  const SCAN_VENUE_QUOTA = {
+    BN: 0.16, BB: 0.16, OX: 0.12, BG: 0.12, GT: 0.12,
+    MX: 0.12, KC: 0.08, BX: 0.08, HT: 0.08, HL: 0.04, AD: 0.04
+  };
+  const SCAN_VENUE_FALLBACK_QUOTA = 0.06;
+
+  /**
+   * Pick one venue per coin without overloading any single exchange.
+   *
+   * Coins are processed most-liquid-first so majors keep their best venue, and
+   * each venue has a hard slot budget. When a venue is full the coin falls
+   * through to its next-most-liquid venue; if every candidate venue is full the
+   * coin still gets scanned on its best venue (coverage beats perfect balance).
+   *
+   * @param {Map<string, Array>} perCoin coin -> candidate tickers
+   * @returns {Array} one ticker per coin, ordered by liquidity
+   */
+  function assignScanVenues(perCoin) {
+    const coins = [];
+    for (const [coin, venues] of perCoin) {
+      venues.sort((a, b) => (b.v || 0) - (a.v || 0));
+      coins.push({ coin, venues, topVol: venues[0] ? (venues[0].v || 0) : 0 });
+    }
+    coins.sort((a, b) => b.topVol - a.topVol);
+
+    const total = coins.length || 1;
+    const budget = new Map();
+    const used = new Map();
+    for (const ex of Object.keys(SCAN_VENUE_QUOTA)) {
+      budget.set(ex, Math.ceil(total * SCAN_VENUE_QUOTA[ex]));
+      used.set(ex, 0);
+    }
+
+    const quotaFor = (ex) => {
+      if (!budget.has(ex)) {
+        budget.set(ex, Math.ceil(total * SCAN_VENUE_FALLBACK_QUOTA));
+        used.set(ex, 0);
+      }
+      return budget.get(ex);
+    };
+
+    const out = [];
+    for (const { venues } of coins) {
+      let chosen = null;
+      for (const t of venues) {
+        const ex = String(t.key || "").split(":")[0];
+        if (!ex) continue;
+        if (used.get(ex) < quotaFor(ex)) {
+          used.set(ex, used.get(ex) + 1);
+          chosen = t;
+          break;
+        }
+      }
+      // Every candidate venue is saturated. Keep the coin — coverage beats
+      // perfect balance — but hand it to the *least* loaded candidate rather
+      // than to venues[0], which is systematically the busiest exchange and
+      // would take the entire overflow.
+      if (!chosen && venues.length > 0) {
+        let bestLoad = Infinity;
+        for (const t of venues) {
+          const ex = String(t.key || "").split(":")[0];
+          if (!ex) continue;
+          const load = (used.get(ex) || 0) / Math.max(1, quotaFor(ex));
+          if (load < bestLoad) { bestLoad = load; chosen = t; }
+        }
+        if (!chosen) chosen = venues[0];
+        const ex = String(chosen.key || "").split(":")[0];
+        if (ex) used.set(ex, (used.get(ex) || 0) + 1);
+      }
+      if (chosen) out.push(chosen);
+    }
+    scanAllPatterns._venueSpread = Object.fromEntries(used);
+    return out;
+  }
 
   function broadcastAlert(type, data) {
     if (!clients || clients.size === 0 || !data) return;
@@ -3344,14 +4342,28 @@ server.listen(PORT, () => {
     }
   }
 
+  function sendUserAlert(userId, type, data) {
+    if (!clients || clients.size === 0 || !userId || !data) return;
+    const msg = JSON.stringify({ type, data });
+    for (const ws of clients) {
+      if (ws.readyState === WebSocket.OPEN && ws._userId === userId) {
+        try { ws.send(msg); } catch (_) {}
+      }
+    }
+  }
+
   function getTfTtlMs(tf) {
     const low = String(tf || "").toLowerCase();
-    if (low === "1d") return 15 * 60 * 1000; // 15 min cache for 1D
-    if (low === "4h") return 8 * 60 * 1000;  // 8 min cache for 4H
-    if (low === "1h") return 4 * 60 * 1000;  // 4 min cache for 1H
-    if (low === "15m") return 90 * 1000;     // 90 sec cache for 15M
-    if (low === "5m") return 30 * 1000;      // 30 sec cache for 5M
-    return 15 * 1000;                         // 15 sec cache for 1M
+    // Longer TTLs than before: a full scan pass now takes minutes, so a 30s TTL
+    // guaranteed a refetch on every pass and burned the exchange rate budget for
+    // data that had not meaningfully changed. A 5m candle only closes every 5
+    // minutes; caching it for 2 is still fresh and cuts requests ~4x.
+    if (low === "1d") return 30 * 60 * 1000;
+    if (low === "4h") return 15 * 60 * 1000;
+    if (low === "1h") return 8 * 60 * 1000;
+    if (low === "15m") return 4 * 60 * 1000;
+    if (low === "5m") return 2 * 60 * 1000;
+    return 45 * 1000;
   }
 
   async function getCachedCandlesForScanner(ex, sym, tf) {
@@ -3362,11 +4374,13 @@ server.listen(PORT, () => {
       return cached.candles;
     }
 
+    // Refresh the LRU stamp so hot keys survive eviction.
     // 1. Fast in-memory check in main klinesCache
+    const kKey = cacheKey(ex, sym, tf, true);
     try {
-      const kKey = cacheKey(ex, sym, tf, true);
       const kCached = klinesCache.get(kKey);
       if (kCached && kCached.data && Array.isArray(kCached.data) && kCached.data.length >= 30) {
+        kCached.used = now;
         const candles = [];
         for (let i = 0; i < kCached.data.length; i += 6) {
           candles.push({
@@ -3379,6 +4393,7 @@ server.listen(PORT, () => {
           });
         }
         scannerCandleCache.set(key, { candles, expiresAt: now + getTfTtlMs(tf) });
+        pruneScannerCandleCache();
         return candles;
       }
     } catch (_) {}
@@ -3389,19 +4404,22 @@ server.listen(PORT, () => {
     }
 
     try {
-      const candlesPromise = fetchFullHistory(ex, sym, tf, true);
-      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 2500));
-      const candles = await Promise.race([candlesPromise, timeoutPromise]);
+      const candles = await raceWithTimeout(startKlinesRefresh(ex, sym, tf, true, kKey), 2500, []);
       if (Array.isArray(candles) && candles.length >= 20) {
         scannerCandleCache.set(key, {
           candles,
           expiresAt: now + getTfTtlMs(tf)
         });
+        pruneScannerCandleCache();
         return candles;
       }
     } catch (e) {
-      if (String(e).includes("418") || String(e).includes("429")) {
-        exchangeBackoffs.set(ex, now + 3000); // 3 sec micro-backoff instead of 60s freeze
+      const msg = String(e);
+      if (msg.includes("418") || msg.includes("429") || msg.includes("VENUE_PAUSED")) {
+        // apiFetch already parked the host for the duration reported by
+        // `retry-after`. Park the logical exchange too so the scan skips it
+        // instead of queueing thousands of doomed requests behind it.
+        exchangeBackoffs.set(ex, now + 60000);
       }
     }
     return cached ? cached.candles : [];
@@ -3414,17 +4432,39 @@ server.listen(PORT, () => {
     let nextDelayMs = 1500;
 
     try {
-      // ── Scan liquid crypto pairs on all exchanges (top liquid coins) ──
-      const list = Array.from(tickers.values())
-        .filter(t => {
-          if (!t || !t.key || !t.p || t.p <= 0) return false;
-          if (typeof isNonCryptoOrStock === "function" && isNonCryptoOrStock(t.base, t.key)) return false;
-          const k = String(t.key || "").toUpperCase();
-          if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") || k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) return false;
-          return true;
-        })
-        .sort((a, b) => (b.v || 0) - (a.v || 0))
-        .slice(0, 1500); // Expanded to top 1500 liquid pairs (~700+ unique coins across all exchanges)
+      // ── Build the scan universe ────────────────────────────────────────────
+      // The ticker feed carries ~7500 keys but only ~1825 distinct coins: the
+      // same asset appears on up to 12 venues. Scanning per ticker wasted the
+      // budget on duplicates, so the old 1500-ticker cap covered only a few
+      // hundred coins.
+      //
+      // Deduplicating by coin and always picking the most liquid venue sent
+      // ~55% of all requests to Binance and earned an IP ban (HTTP 418, "Way
+      // too many requests"). So the venue is chosen per coin under a quota:
+      // each exchange may host at most its share of the universe, and coins
+      // fall through to the next-best venue once a quota is full. Same coin
+      // coverage, load spread across all exchanges.
+      const perCoin = new Map();
+      for (const t of tickers.values()) {
+        if (!t || !t.key || !t.p || t.p <= 0) continue;
+        // Formations are a futures-only product. The ticker map also carries the
+        // `*_SPOT` pseudo-tickers wallScanner injects for the density map, and
+        // scanning them meant every formation alert could fire on a spot pair —
+        // on an instrument the user cannot trade from this screener.
+        if (/_SPOT$/i.test(t.key) || /_SPOT$/i.test(String(t.sym || ""))) continue;
+        if (typeof isNonCryptoOrStock === "function" && isNonCryptoOrStock(t.base, t.key)) continue;
+        const k = String(t.key).toUpperCase();
+        if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") ||
+            k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) continue;
+
+        const coin = normalizeCoinKey(t);
+        if (!coin) continue;
+        let venues = perCoin.get(coin);
+        if (!venues) { venues = []; perCoin.set(coin, venues); }
+        venues.push(t);
+      }
+
+      const list = assignScanVenues(perCoin);
 
       if (list.length === 0) {
         // Deliberately no reschedule here: the `finally` block below always
@@ -3434,14 +4474,22 @@ server.listen(PORT, () => {
         return;
       }
 
-      const activeTimeframes = ["1m", "5m", "15m", "1h", "4h"];
+      // 1m produced almost nothing but noise (measured: 4-6 retests per coin,
+      // all describing the same price area) and cost a fifth of the whole cycle.
+      // Dropping it and 4h brings a full pass over every coin to ~10 minutes.
+      const activeTimeframes = ["5m", "15m", "1h"];
       const now = Date.now();
       let newSignalsCount = 0;
-      const PARALLEL_CONCURRENCY = 40;
+      const PARALLEL_CONCURRENCY = 2;
 
       // Use a Map for O(1) keyed replacement instead of O(n) .filter() on every coin
       if (!scanAllPatterns._pMap) scanAllPatterns._pMap = new Map();
       const pMap = scanAllPatterns._pMap;
+
+      // Yield to the event loop every N detection units so HTTP and WebSocket
+      // traffic is never stuck behind a long synchronous burst.
+      const YIELD_EVERY_UNITS = 8;
+      let yieldCountdown = YIELD_EVERY_UNITS;
 
       for (let i = 0; i < list.length; i += PARALLEL_CONCURRENCY) {
         const batch = list.slice(i, i + PARALLEL_CONCURRENCY);
@@ -3519,6 +4567,16 @@ server.listen(PORT, () => {
                 candlesByTf[tf] = candles;
                 if (curPrice > 0) coinCurPrice = curPrice;
               }
+
+              // Detection is fully synchronous (~0.6 ms per coin+timeframe) and
+              // 40 coins x 3 timeframes ran back-to-back before the loop yielded,
+              // blocking the event loop for ~72 ms at a time. That is what made
+              // every HTTP request wait seconds while a scan was in flight.
+              // Yielding per timeframe caps the blocking burst at ~0.6 ms.
+              if (--yieldCountdown <= 0) {
+                yieldCountdown = YIELD_EVERY_UNITS;
+                await new Promise(r => setImmediate(r));
+              }
             } catch (_) {}
           }
 
@@ -3529,9 +4587,10 @@ server.listen(PORT, () => {
             } catch (_) {}
           }
         }));
-        // Smooth micro-yield between batches to keep event loop latency < 1ms
+        // The per-unit yield above already keeps latency low; this only paces
+        // outbound exchange requests between batches.
         if (i + PARALLEL_CONCURRENCY < list.length) {
-          await new Promise(r => setTimeout(r, 5));
+          await new Promise(r => setTimeout(r, 400));
         }
       }
 
@@ -3550,6 +4609,15 @@ server.listen(PORT, () => {
           if (!sigs.length || (sigs[0].ts && sigs[0].ts < cutoff)) pMap.delete(key);
         }
       }
+
+      // Reconcile the formation caches against the live ticker map.
+      //
+      // Entries are only deleted above when detection returns *empty* for a key
+      // that is still in the scan universe. A coin that leaves the universe
+      // (delisting, or venue reassignment by `assignScanVenues`) is never
+      // revisited, so its levels/trendlines/retests stayed resident for the whole
+      // process lifetime across five separate maps.
+      pruneFormationCaches();
 
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
       if (newSignalsCount > 0 || Math.random() < 0.05) {
@@ -3585,6 +4653,107 @@ server.listen(PORT, () => {
   const FORMATION_FAILED_RETRY_MS = 60 * 1000;
   let lastFormationCooldownPruneAt = 0;
 
+  // The cooldowns must survive a restart. The process is recycled several times
+  // an hour (memory ceiling, deploys, auto-heal), and every restart used to
+  // clear these maps — which is why the same coin was re-announced every 30
+  // seconds despite a 5-15 minute cooldown being configured.
+  const FORMATION_COOLDOWN_FILE = path.join(__dirname, "formation_cooldowns.json");
+  let lastCooldownSaveAt = 0;
+
+  function loadFormationCooldowns() {
+    try {
+      if (!fs.existsSync(FORMATION_COOLDOWN_FILE)) return;
+      const raw = JSON.parse(fs.readFileSync(FORMATION_COOLDOWN_FILE, "utf8"));
+      const now = Date.now();
+      let restored = 0;
+      for (const [mapName, target] of [
+        ["pair", serverFormationAlertCooldown],
+        ["coin", serverFormationCoinCooldown],
+        ["paced", serverFormationLastSentAt]
+      ]) {
+        const src = raw && raw[mapName];
+        if (!src || typeof src !== "object") continue;
+        for (const [key, ts] of Object.entries(src)) {
+          const n = Number(ts);
+          // Drop anything already expired or implausibly far in the future.
+          if (!Number.isFinite(n) || n > now + 60000 || now - n > FORMATION_COOLDOWN_TTL_MS) continue;
+          target.set(key, n);
+          restored++;
+        }
+      }
+      if (restored > 0) console.log(`[FORMATION COOLDOWN] Restored ${restored} entries from disk`);
+    } catch (e) {
+      console.warn(`[FORMATION COOLDOWN] Could not restore: ${e.message}`);
+    }
+  }
+
+  function saveFormationCooldowns(force = false) {
+    const now = Date.now();
+    if (!force && now - lastCooldownSaveAt < 20000) return;
+    lastCooldownSaveAt = now;
+    try {
+      const payload = {
+        savedAt: now,
+        pair: Object.fromEntries(serverFormationAlertCooldown),
+        coin: Object.fromEntries(serverFormationCoinCooldown),
+        paced: Object.fromEntries(serverFormationLastSentAt)
+      };
+      const json = JSON.stringify(payload);
+      const tmp = `${FORMATION_COOLDOWN_FILE}.tmp`;
+      if (force) {
+        // Shutdown path: async I/O would never complete.
+        fs.writeFileSync(tmp, json, "utf8");
+        fs.renameSync(tmp, FORMATION_COOLDOWN_FILE);
+        return;
+      }
+      // The throttled path runs from inside the alert-dispatch loop, where a
+      // blocking write of a file holding up to 40k pair entries plus the coin and
+      // paced maps stalls the event loop.
+      fs.writeFile(tmp, json, "utf8", (err) => {
+        if (err) return;
+        fs.rename(tmp, FORMATION_COOLDOWN_FILE, () => {});
+      });
+    } catch (e) {
+      console.warn(`[FORMATION COOLDOWN] Could not persist: ${e.message}`);
+    }
+  }
+
+  loadFormationCooldowns();
+  /**
+   * Graceful shutdown.
+   *
+   * This used to be `process.on(sig, () => saveFormationCooldowns(true))` and it
+   * never ran: `correlationEngine.init()` (invoked during `require`, long before
+   * this line) registered its own SIGINT/SIGTERM handlers that called
+   * `process.exit()` synchronously. Signal listeners fire in registration order,
+   * so the process was already gone. correlationEngine now only hooks `exit`, and
+   * this handler owns the ordered shutdown: flush state, stop accepting
+   * connections, drain sockets, then exit.
+   */
+  let shuttingDown = false;
+  function gracefulShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[SHUTDOWN] ${signal} received — flushing state`);
+
+    try { saveFormationCooldowns(true); } catch (_) {}
+    try { correlationEngine.saveCacheSync?.(); } catch (_) {}
+    try { correlationEngine.stop?.(); } catch (_) {}
+
+    // Stop accepting new work, then close live sockets.
+    try { server.close(); } catch (_) {}
+    for (const ws of clients) {
+      try { ws.close(1001, "server restarting"); } catch (_) {}
+    }
+
+    // pm2 sends SIGKILL after `kill_timeout` (5s); exit well before that.
+    const bail = setTimeout(() => process.exit(0), 2000);
+    bail.unref?.();
+  }
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => gracefulShutdown(sig));
+  }
+
   // The key space is subscribers x 1500 tickers x 5 timeframes x 3 pattern
   // types, so this map has to be pruned or it grows without bound for the whole
   // process lifetime.
@@ -3604,6 +4773,19 @@ server.listen(PORT, () => {
       const entries = Array.from(serverFormationAlertCooldown.entries()).sort((a, b) => a[1] - b[1]);
       const excess = serverFormationAlertCooldown.size - FORMATION_COOLDOWN_MAX;
       for (let i = 0; i < excess; i++) serverFormationAlertCooldown.delete(entries[i][0]);
+    }
+    // The cap above only covered the pair map. `serverFormationCoinCooldown` is
+    // keyed (userId x coin) and `serverFormationLastSentAt` by subscriber, so both
+    // need a ceiling too, not just a TTL.
+    if (serverFormationCoinCooldown.size > FORMATION_COOLDOWN_MAX) {
+      const entries = Array.from(serverFormationCoinCooldown.entries()).sort((a, b) => a[1] - b[1]);
+      const excess = serverFormationCoinCooldown.size - FORMATION_COOLDOWN_MAX;
+      for (let i = 0; i < excess; i++) serverFormationCoinCooldown.delete(entries[i][0]);
+    }
+    if (serverFormationLastSentAt.size > FORMATION_COOLDOWN_MAX) {
+      const entries = Array.from(serverFormationLastSentAt.entries()).sort((a, b) => a[1] - b[1]);
+      const excess = serverFormationLastSentAt.size - FORMATION_COOLDOWN_MAX;
+      for (let i = 0; i < excess; i++) serverFormationLastSentAt.delete(entries[i][0]);
     }
   }
 
@@ -3728,7 +4910,7 @@ server.listen(PORT, () => {
     for (const u of allUsers) {
       if (!u || u.blocked) continue;
       const userChatId = String(u.telegramChatId || u.telegramId || u.tgChatId || u.chatId || "").trim();
-      const globalOverride = userChatId ? (global._formationAlertsByChatId && global._formationAlertsByChatId.get(userChatId)) : null;
+      const globalOverride = userChatId ? getFormationChatPrefs(userChatId) : null;
       const prefs = {
         ...((u.preferences && u.preferences.formationAlerts) || 
             (u.preferences && u.preferences.notifications && u.preferences.notifications.formationAlerts) || 
@@ -3776,43 +4958,43 @@ server.listen(PORT, () => {
       seenChatIds.add(chatId);
     }
 
-    // Also include any standalone configured chatIds from memory
-    if (global._formationAlertsByChatId) {
-      for (const [cId, s] of global._formationAlertsByChatId.entries()) {
-        if (!seenChatIds.has(cId) && s && s.tgEnabled !== false) {
-          subscribers.push({
-            userId: `chat_${cId}`,
-            chatId: cId,
-            settings: {
-              tgEnabled: true,
-              cooldownSeconds: Number(s.cooldownSeconds) || 300,
-              exchanges: Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"],
-              blacklist: Array.isArray(s.blacklist) ? s.blacklist : [],
-              blacklistCustom: typeof s.blacklistCustom === "string" ? s.blacklistCustom : "",
-              inPlayOnly: !!s.inPlayOnly,
-              trendline: {
-                enabled: s.trendline?.enabled !== undefined ? !!s.trendline.enabled : true,
-                timeframes: Array.isArray(s.trendline?.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h", "4h"],
-                minTouches: (s.trendline?.minTouches !== undefined && Number(s.trendline?.minTouches) > 0) ? Number(s.trendline.minTouches) : 4,
-                distancePct: (s.trendline?.distancePct !== undefined && Number(s.trendline?.distancePct) > 0) ? Number(s.trendline.distancePct) : 0.5,
-                direction: s.trendline?.direction || "all"
-              },
-              level: {
-                enabled: s.level?.enabled !== undefined ? !!s.level.enabled : true,
-                timeframes: Array.isArray(s.level?.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["5m", "15m", "1h", "4h"],
-                minTouches: (s.level?.minTouches !== undefined && Number(s.level?.minTouches) > 0) ? Number(s.level.minTouches) : 4,
-                distancePct: (s.level?.distancePct !== undefined && Number(s.level?.distancePct) > 0) ? Number(s.level.distancePct) : 0.5,
-                direction: s.level?.direction || "all"
-              },
-              retest: {
-                enabled: s.retest?.enabled !== undefined ? !!s.retest.enabled : true,
-                timeframes: Array.isArray(s.retest?.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"],
-                direction: s.retest?.direction || "all"
-              }
+    // Also include any standalone configured chatIds from memory. Entries can
+    // only get here via an authenticated write (see setFormationChatPrefs).
+    for (const [cId, entry] of formationAlertsByChatId) {
+      const s = entry.settings;
+      if (!seenChatIds.has(cId) && s && s.tgEnabled !== false) {
+        subscribers.push({
+          userId: `chat_${cId}`,
+          chatId: cId,
+          settings: {
+            tgEnabled: true,
+            cooldownSeconds: Number(s.cooldownSeconds) || 300,
+            exchanges: Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"],
+            blacklist: Array.isArray(s.blacklist) ? s.blacklist : [],
+            blacklistCustom: typeof s.blacklistCustom === "string" ? s.blacklistCustom : "",
+            inPlayOnly: !!s.inPlayOnly,
+            trendline: {
+              enabled: s.trendline?.enabled !== undefined ? !!s.trendline.enabled : true,
+              timeframes: Array.isArray(s.trendline?.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h", "4h"],
+              minTouches: (s.trendline?.minTouches !== undefined && Number(s.trendline?.minTouches) > 0) ? Number(s.trendline.minTouches) : 4,
+              distancePct: (s.trendline?.distancePct !== undefined && Number(s.trendline?.distancePct) > 0) ? Number(s.trendline.distancePct) : 0.5,
+              direction: s.trendline?.direction || "all"
+            },
+            level: {
+              enabled: s.level?.enabled !== undefined ? !!s.level.enabled : true,
+              timeframes: Array.isArray(s.level?.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["5m", "15m", "1h", "4h"],
+              minTouches: (s.level?.minTouches !== undefined && Number(s.level?.minTouches) > 0) ? Number(s.level.minTouches) : 4,
+              distancePct: (s.level?.distancePct !== undefined && Number(s.level?.distancePct) > 0) ? Number(s.level.distancePct) : 0.5,
+              direction: s.level?.direction || "all"
+            },
+            retest: {
+              enabled: s.retest?.enabled !== undefined ? !!s.retest.enabled : true,
+              timeframes: Array.isArray(s.retest?.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"],
+              direction: s.retest?.direction || "all"
             }
-          });
-          seenChatIds.add(cId);
-        }
+          }
+        });
+        seenChatIds.add(cId);
       }
     }
 
@@ -3944,11 +5126,10 @@ server.listen(PORT, () => {
           continue;
         }
 
-        // Per-coin gate: at most one formation alert per coin per window, so a
-        // scan that finds a dozen formations on the same coin sends one message
-        // (the highest ranked, since `rankedSignals` is sorted) instead of a
-        // burst. The per-type/timeframe cooldown below still applies.
-        const coinKey = `${userId}:${ex}:${sym}`;
+        // Per-coin gate keyed by the coin itself, not by venue. Otherwise the
+        // same asset on Binance and Bybit counts as two coins and the user gets
+        // the same formation twice.
+        const coinKey = `${userId}:${normalizeCoinKey({ base, key: `${ex}:${sym}` })}`;
         const lastCoinSent = serverFormationCoinCooldown.get(coinKey) || 0;
         const coinWindowMs = Math.max(FORMATION_COIN_COOLDOWN_MS, (Number(s.cooldownSeconds) || 300) * 1000);
         if (now - lastCoinSent < coinWindowMs) continue;
@@ -3970,6 +5151,7 @@ server.listen(PORT, () => {
         serverFormationAlertCooldown.set(cdKey, now);
         serverFormationCoinCooldown.set(coinKey, now);
         serverFormationLastSentAt.set(userId, now);
+        saveFormationCooldowns();
         matchingSubsForSignal.push({
           chatId,
           userId,
@@ -4118,6 +5300,7 @@ server.listen(PORT, () => {
       userStore,
       isNonCryptoOrStock,
       broadcastAlert: (type, data) => broadcastAlert(type, data),
+      sendUserAlert: (userId, type, data) => sendUserAlert(userId, type, data),
       fetchCandles: async (ex, sym, tf) => {
         try {
           const cleanSym = String(sym || "").replace(/_SPOT$/i, "");
@@ -4139,10 +5322,11 @@ server.listen(PORT, () => {
             return candles;
           }
           // Direct live exchange history fetch
-          const fetched = await Promise.race([
+          const fetched = await raceWithTimeout(
             fetchFullHistory(ex, cleanSym, tf || "1m", true),
-            new Promise(r => setTimeout(() => r(null), 3500))
-          ]);
+            3500,
+            null
+          );
           if (Array.isArray(fetched) && fetched.length >= 5) {
             return fetched;
           }

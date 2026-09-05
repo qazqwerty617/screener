@@ -12,6 +12,7 @@ const LOGS_FILE = path.join(__dirname, "auth_logs.json");
 
 const PASSWORD_ALGORITHM = "scrypt-v1";
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365-day (1 year) persistent session TTL
+const AUTH_LOG_LIMIT = 5000;
 
 // Atomic, crash-resistant file write. Callers can fail closed on false.
 let excelExportTimer = null;
@@ -48,6 +49,86 @@ function saveJSON(filePath, data) {
   }
 }
 
+/**
+ * Coalescing async writer for the two files that are touched from request
+ * handlers on nearly every authenticated call.
+ *
+ * `saveJSON` does openSync + writeFileSync + **fsyncSync** + renameSync. Calling
+ * it from `getUserByToken` (session renewal), `logAuthEvent` (every new visit)
+ * and a dozen mutators meant a blocking fsync — of a file that reached ~12 MB in
+ * the case of auth_logs.json — inside the request path, stalling the 20 Hz
+ * broadcast loop and every other in-flight request.
+ *
+ * Writes are now debounced and non-blocking. Durability is unchanged in
+ * practice: the temp-file + rename dance still makes each write atomic, and the
+ * `exit` hook below flushes anything still pending. Callers that must fail
+ * closed on a persistence error (payments) keep using `saveJSON` directly.
+ */
+const DIRTY_FLUSH_MS = 400;
+const pendingWrites = new Map(); // filePath -> { data, timer, inFlight, again }
+
+function saveJSONDebounced(filePath, data) {
+  const entry = pendingWrites.get(filePath);
+  if (entry) {
+    entry.data = data;
+    if (entry.inFlight) entry.again = true;
+    return true;
+  }
+  const next = { data, timer: null, inFlight: false, again: false };
+  pendingWrites.set(filePath, next);
+  next.timer = setTimeout(() => flushWrite(filePath), DIRTY_FLUSH_MS);
+  next.timer.unref?.();
+  return true;
+}
+
+function flushWrite(filePath) {
+  const entry = pendingWrites.get(filePath);
+  if (!entry || entry.inFlight) return;
+  entry.timer = null;
+  entry.inFlight = true;
+
+  const tempPath = `${filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  let json;
+  try {
+    json = JSON.stringify(entry.data, null, 2);
+  } catch (err) {
+    pendingWrites.delete(filePath);
+    console.error(`[userStore] Error serialising ${filePath}:`, err.message);
+    return;
+  }
+
+  const done = (err) => {
+    if (err) console.error(`[userStore] Error saving ${filePath}:`, err.message);
+    entry.inFlight = false;
+    if (entry.again) {
+      entry.again = false;
+      entry.timer = setTimeout(() => flushWrite(filePath), DIRTY_FLUSH_MS);
+      entry.timer.unref?.();
+    } else {
+      pendingWrites.delete(filePath);
+      if (!err && filePath === USERS_FILE) scheduleExcelExport(entry.data);
+    }
+  };
+
+  fs.writeFile(tempPath, json, { mode: 0o600 }, (err) => {
+    if (err) { fs.unlink(tempPath, () => {}); return done(err); }
+    fs.rename(tempPath, filePath, (renameErr) => {
+      if (renameErr) { fs.unlink(tempPath, () => {}); return done(renameErr); }
+      done(null);
+    });
+  });
+}
+
+/** Flush every pending write synchronously. Used from the process `exit` hook. */
+function flushPendingWritesSync() {
+  for (const [filePath, entry] of pendingWrites) {
+    if (entry.timer) clearTimeout(entry.timer);
+    try { saveJSON(filePath, entry.data); } catch (_) {}
+  }
+  pendingWrites.clear();
+}
+process.once("exit", flushPendingWritesSync);
+
 function loadJSON(filePath, fallback = {}) {
   try {
     if (fs.existsSync(filePath)) {
@@ -63,7 +144,17 @@ function loadJSON(filePath, fallback = {}) {
 // In-memory cache loaded from disk
 let users = loadJSON(USERS_FILE, {}); // userId -> userObject
 let sessions = loadJSON(SESSIONS_FILE, {}); // token -> { userId, createdAt }
-let authLogs = loadJSON(LOGS_FILE, []); // Array of log objects
+let authLogs = loadJSON(LOGS_FILE, []); // Array of log objects, oldest first
+
+// Older builds stored auth logs newest-first (they used `unshift`). Storage order
+// is now ascending so appends are O(1); normalise a legacy file once on load.
+if (Array.isArray(authLogs) && authLogs.length > 1) {
+  const firstTs = Date.parse(authLogs[0]?.timestamp || "") || 0;
+  const lastTs = Date.parse(authLogs[authLogs.length - 1]?.timestamp || "") || 0;
+  if (firstTs > lastTs) authLogs.reverse();
+} else if (!Array.isArray(authLogs)) {
+  authLogs = [];
+}
 
 // Migrate legacy plaintext session-token keys to SHA-256 keys and attach a
 // finite lifetime. This keeps a leaked sessions file from being directly usable.
@@ -166,7 +257,7 @@ function scheduleUsersSave() {
     userSaveTimer = setTimeout(() => {
       pendingUserSave = false;
       userSaveTimer = null;
-      saveJSON(USERS_FILE, users);
+      saveJSONDebounced(USERS_FILE, users);
     }, 5000);
     if (userSaveTimer && typeof userSaveTimer.unref === "function") {
       userSaveTimer.unref();
@@ -180,9 +271,14 @@ function logAuthEvent(eventData) {
     timestamp: new Date().toISOString(),
     ...eventData
   };
-  authLogs.unshift(logEntry); // new logs at top
-  if (authLogs.length > 5000) authLogs = authLogs.slice(0, 5000); // keep last 5000 logs
-  saveJSON(LOGS_FILE, authLogs);
+  // `unshift` is O(n) on a 5000-element array and ran on every new visit. `push`
+  // + a reversed read in `getAuditLogs`/`getUserAuthLogs` is O(1).
+  authLogs.push(logEntry);
+  if (authLogs.length > AUTH_LOG_LIMIT * 2) {
+    // Amortised trim: splice once every 5000 entries instead of on every write.
+    authLogs.splice(0, authLogs.length - AUTH_LOG_LIMIT);
+  }
+  saveJSONDebounced(LOGS_FILE, authLogs);
 }
 
 // Generate unique 6-digit User ID (format: USR-849201)
@@ -197,16 +293,30 @@ function generateUserId() {
 
 // Memory-hard password hashing for new passwords. Legacy PBKDF2 hashes are
 // verified once and transparently upgraded after a successful login.
+//
+// scrypt with N=32768,r=8 is ~32 MB and ~100 ms of pure CPU. `scryptSync` blocks
+// the event loop for that whole time, which stalls the 20 Hz market broadcast and
+// every other in-flight request on each login/registration attempt — a
+// distributed credential-stuffing attempt could keep the process permanently
+// stalled. The async form runs on the libuv threadpool instead.
+const SCRYPT_PARAMS = Object.freeze({ N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
+
 function hashPassword(password, salt) {
   const passwordText = String(password);
   const saltBuffer = salt ? Buffer.from(salt, "hex") : crypto.randomBytes(16);
-  const hash = crypto.scryptSync(passwordText, saltBuffer, 64, {
-    N: 32768,
-    r: 8,
-    p: 1,
-    maxmem: 128 * 1024 * 1024
-  }).toString("hex");
+  const hash = crypto.scryptSync(passwordText, saltBuffer, 64, SCRYPT_PARAMS).toString("hex");
   return { hash, salt: saltBuffer.toString("hex"), algorithm: PASSWORD_ALGORITHM };
+}
+
+function hashPasswordAsync(password, salt) {
+  const passwordText = String(password);
+  const saltBuffer = salt ? Buffer.from(salt, "hex") : crypto.randomBytes(16);
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(passwordText, saltBuffer, 64, SCRYPT_PARAMS, (err, derived) => {
+      if (err) return reject(err);
+      resolve({ hash: derived.toString("hex"), salt: saltBuffer.toString("hex"), algorithm: PASSWORD_ALGORITHM });
+    });
+  });
 }
 
 function timingSafeHexEqual(left, right) {
@@ -225,6 +335,21 @@ function verifyPassword(password, user) {
     return timingSafeHexEqual(hash, user.passwordHash);
   }
   const legacyHash = crypto.pbkdf2Sync(String(password), user.salt, 10000, 64, "sha512").toString("hex");
+  return timingSafeHexEqual(legacyHash, user.passwordHash);
+}
+
+async function verifyPasswordAsync(password, user) {
+  if (!user || !user.salt || !user.passwordHash) return false;
+  if (user.passwordAlgorithm === PASSWORD_ALGORITHM) {
+    const { hash } = await hashPasswordAsync(password, user.salt);
+    return timingSafeHexEqual(hash, user.passwordHash);
+  }
+  const legacyHash = await new Promise((resolve, reject) => {
+    crypto.pbkdf2(String(password), user.salt, 10000, 64, "sha512", (err, derived) => {
+      if (err) return reject(err);
+      resolve(derived.toString("hex"));
+    });
+  });
   return timingSafeHexEqual(legacyHash, user.passwordHash);
 }
 
@@ -360,8 +485,9 @@ function validatePassword(password) {
   return { valid: true };
 }
 
-// Register user with email/username & password
-function registerUser({ username, email, password, ip = "" }) {
+// Register user with email/username & password.
+// Async because scrypt (32 MB / ~100 ms) must not block the event loop.
+async function registerUser({ username, email, password, ip = "" }) {
   if (!username || !email || !password) {
     throw new Error("Заполните все обязательные поля");
   }
@@ -382,15 +508,25 @@ function registerUser({ username, email, password, ip = "" }) {
     throw new Error(emailCheck.error);
   }
 
-  // Check uniqueness
-  for (const u of Object.values(users)) {
-    if (u.email && u.email.toLowerCase() === cleanEmail) {
+  // Check uniqueness (`for..in` avoids materialising an array of every user)
+  for (const id in users) {
+    const u = users[id];
+    if (u && u.email && u.email.toLowerCase() === cleanEmail) {
       throw new Error("Пользователь с таким Email уже зарегистрирован");
     }
   }
 
   const userId = generateUserId();
-  const { hash, salt, algorithm } = hashPassword(passwordText);
+  const { hash, salt, algorithm } = await hashPasswordAsync(passwordText);
+
+  // Re-check after the await: a concurrent registration could have taken the
+  // same address while scrypt was running on the threadpool.
+  for (const id in users) {
+    const u = users[id];
+    if (u && u.email && u.email.toLowerCase() === cleanEmail) {
+      throw new Error("Пользователь с таким Email уже зарегистрирован");
+    }
+  }
 
   const nowIso = new Date().toISOString();
   const newUser = {
@@ -411,6 +547,7 @@ function registerUser({ username, email, password, ip = "" }) {
   };
 
   users[userId] = newUser;
+  // Registration is rare and must be durable before the token is handed out.
   saveJSON(USERS_FILE, users);
 
   logAuthEvent({
@@ -432,7 +569,7 @@ function registerUser({ username, email, password, ip = "" }) {
 }
 
 // Login user
-function loginUser({ emailOrUsername, password, ip = "" }) {
+async function loginUser({ emailOrUsername, password, ip = "" }) {
   if (!emailOrUsername || !password) {
     throw new Error("Укажите логин/email и пароль");
   }
@@ -440,7 +577,9 @@ function loginUser({ emailOrUsername, password, ip = "" }) {
   const query = emailOrUsername.trim().toLowerCase();
   let foundUser = null;
 
-  for (const u of Object.values(users)) {
+  for (const id in users) {
+    const u = users[id];
+    if (!u) continue;
     if (
       (u.email && u.email.toLowerCase() === query) ||
       (u.username && u.username.toLowerCase() === query)
@@ -461,14 +600,14 @@ function loginUser({ emailOrUsername, password, ip = "" }) {
 
   const passwordText = cleanPassword(password);
   if (passwordText.length > 1024) throw new Error("Неверный логин или пароль");
-  const isValid = verifyPassword(passwordText, foundUser);
+  const isValid = await verifyPasswordAsync(passwordText, foundUser);
   if (!isValid) {
     logAuthEvent({ event: "LOGIN_FAILED", userId: foundUser.id, query, ip, reason: "Invalid password" });
     throw new Error("Неверный логин или пароль");
   }
 
   if (foundUser.passwordAlgorithm !== PASSWORD_ALGORITHM) {
-    const upgraded = hashPassword(passwordText);
+    const upgraded = await hashPasswordAsync(passwordText);
     foundUser.passwordHash = upgraded.hash;
     foundUser.salt = upgraded.salt;
     foundUser.passwordAlgorithm = upgraded.algorithm;
@@ -478,7 +617,7 @@ function loginUser({ emailOrUsername, password, ip = "" }) {
   foundUser.lastLogin = nowIso;
   foundUser.lastActive = nowIso;
   if (ip) foundUser.lastIp = ip;
-  saveJSON(USERS_FILE, users);
+  saveJSONDebounced(USERS_FILE, users);
 
   logAuthEvent({ event: "LOGIN_SUCCESS", userId: foundUser.id, username: foundUser.username, ip });
 
@@ -589,7 +728,8 @@ function getUserByToken(token, { ip = "" } = {}) {
     delete sessions[token];
     sessions[tokenHash] = session;
     sessionKey = tokenHash;
-    saveJSON(SESSIONS_FILE, sessions);
+    // Debounced: this runs on the request path, once per authenticated call.
+    saveJSONDebounced(SESSIONS_FILE, sessions);
   }
   if (!session) return null;
   const now = Date.now();
@@ -597,7 +737,7 @@ function getUserByToken(token, { ip = "" } = {}) {
   const expiresAt = Number(session.expiresAt) || (createdAt + SESSION_TTL_MS);
   if (!Number.isFinite(expiresAt) || expiresAt <= now) {
     delete sessions[sessionKey];
-    saveJSON(SESSIONS_FILE, sessions);
+    saveJSONDebounced(SESSIONS_FILE, sessions);
     return null;
   }
 
@@ -605,7 +745,7 @@ function getUserByToken(token, { ip = "" } = {}) {
   if (now - (session.lastRenewedAt || 0) > 6 * 60 * 60 * 1000) {
     session.expiresAt = now + SESSION_TTL_MS;
     session.lastRenewedAt = now;
-    saveJSON(SESSIONS_FILE, sessions);
+    saveJSONDebounced(SESSIONS_FILE, sessions);
   }
 
   const user = users[session.userId];
@@ -628,7 +768,8 @@ function updateProfile(userId, { username }) {
   }
 
   users[userId].username = username.trim();
-  saveJSON(USERS_FILE, users);
+  // Request path (POST /api/auth/update-profile) — debounced.
+  saveJSONDebounced(USERS_FILE, users);
 
   logAuthEvent({ event: "UPDATE_PROFILE", userId, newUsername: username.trim() });
 
@@ -683,14 +824,16 @@ function setTelegramChatId(userId, chatId) {
   if (users[userId].telegramChatId === strId && users[userId].telegramId === strId) return true;
   users[userId].telegramChatId = strId;
   users[userId].telegramId = strId;
-  return saveJSON(USERS_FILE, users);
+  // Request path (settings save) — debounced.
+  return saveJSONDebounced(USERS_FILE, users);
 }
 
 // Persist a user's price alert list on the real record.
 function setUserPriceAlerts(userId, alerts) {
   if (!userId || !users[userId]) return false;
   users[userId].priceAlerts = Array.isArray(alerts) ? alerts : [];
-  return saveJSON(USERS_FILE, users);
+  // Request path (POST /api/user/price-alerts) — debounced.
+  return saveJSONDebounced(USERS_FILE, users);
 }
 
 function getUserByTelegramId(tgId) {
@@ -1086,9 +1229,13 @@ function getUserAuthLogs(userId, limit = 5) {
   if (!Array.isArray(authLogs) || !userId) return [];
   const u = users[userId];
   const uname = u ? u.username : "";
-  return authLogs
-    .filter(e => e && (e.userId === userId || (uname && e.username === uname)))
-    .slice(0, limit);
+  // Storage is oldest-first; walk backwards so callers still get newest-first.
+  const out = [];
+  for (let i = authLogs.length - 1; i >= 0 && out.length < limit; i--) {
+    const e = authLogs[i];
+    if (e && (e.userId === userId || (uname && e.username === uname))) out.push(e);
+  }
+  return out;
 }
 
 function touchUserActivity(userId, { isLogin = false, ip = "", forceSave = false } = {}) {
@@ -1123,7 +1270,9 @@ function touchUserActivity(userId, { isLogin = false, ip = "", forceSave = false
   }
 
   if (forceSave || isLogin) {
-    saveJSON(USERS_FILE, users);
+    // Still debounced — this is called from `getUserByToken`, i.e. on every
+    // authenticated request. A blocking fsync here stalled the whole process.
+    saveJSONDebounced(USERS_FILE, users);
   } else {
     scheduleUsersSave();
   }
@@ -1133,8 +1282,12 @@ function getAllUsersRaw() {
   return users;
 }
 
-function getAuditLogs() {
-  return authLogs;
+function getAuditLogs(limit = AUTH_LOG_LIMIT) {
+  // Newest-first for the admin UI, capped so the response cannot balloon.
+  const n = Math.min(Array.isArray(authLogs) ? authLogs.length : 0, Math.max(1, limit));
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) out[i] = authLogs[authLogs.length - 1 - i];
+  return out;
 }
 
 function exportUsersExcel() {
@@ -1171,7 +1324,8 @@ function markNotificationRead(userIdOrQuery, notifId) {
   const notif = target.notifications.find(n => n.id === notifId);
   if (notif) {
     notif.read = true;
-    saveJSON(USERS_FILE, users);
+    // Request path (POST /api/notifications/mark-read) — debounced.
+    saveJSONDebounced(USERS_FILE, users);
     return true;
   }
   return false;
@@ -1195,7 +1349,8 @@ function updateUserPreferences(userIdOrQuery, prefs) {
       ...prefs,
       updatedAt: new Date().toISOString()
     };
-    saveJSON(USERS_FILE, users);
+    // Request path (POST /api/user/preferences) — debounced.
+    saveJSONDebounced(USERS_FILE, users);
   }
   return target.preferences;
 }

@@ -52,8 +52,10 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       mkExWs(connId, "wss://open-api-swap.bingx.com/swap-market", (raw, ws) => {
         try {
           let d;
-          try { d = JSON.parse(raw.toString()); } catch (_) {
-            try { d = JSON.parse(zlib.gunzipSync(raw).toString()); } catch (__) { return; }
+          if (Buffer.isBuffer(raw) && raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b) {
+            try { d = JSON.parse(zlib.gunzipSync(raw)); } catch (__) { return; }
+          } else {
+            try { d = JSON.parse(raw.toString()); } catch (_) { return; }
           }
           if (d.ping) { ws.send(JSON.stringify({ pong: d.ping })); return; }
           if (!d.data || !d.dataType) return;
@@ -84,10 +86,18 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           }
         } catch (_) {}
       }, (ws) => {
-        chunk.forEach(s => {
-          ws.send(JSON.stringify({ id: `${s}-b`, reqType: "sub", dataType: `${s}@bookTicker` }));
-          ws.send(JSON.stringify({ id: `${s}-t`, reqType: "sub", dataType: `${s}@ticker` }));
-        });
+        let i = 0;
+        for (const s of chunk) {
+          setTimeout(() => {
+            if (ws.readyState === 1) {
+              try {
+                ws.send(JSON.stringify({ id: `${s}-b`, reqType: "sub", dataType: `${s}@bookTicker` }));
+                ws.send(JSON.stringify({ id: `${s}-t`, reqType: "sub", dataType: `${s}@ticker` }));
+              } catch (_) {}
+            }
+          }, i * 15);
+          i++;
+        }
       });
     }
   }

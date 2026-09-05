@@ -11,7 +11,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
     try {
       if (updateExStatus) updateExStatus("KC", "connecting");
       const data = await apiFetch("https://api-futures.kucoin.com/api/v1/contracts/active", 15000, 2);
-      if (data.code !== "200000" || !Array.isArray(data.data)) throw new Error(`KuCoin API error: ${data.msg || "Invalid response"}`);
+      if (!data || data.code !== "200000" || !Array.isArray(data.data)) throw new Error(`KuCoin API error: ${data?.msg || "Invalid response"}`);
 
       kcSyms = [];
       let added = 0;
@@ -65,7 +65,9 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
 
         mkExWs(connId, url, (raw) => {
           try {
-            const d = JSON.parse(raw.toString());
+            const str = typeof raw === "string" ? raw : raw.toString();
+            if (str.charCodeAt(0) !== 123) return;
+            const d = JSON.parse(str);
             if (d.type === "welcome" || d.type === "ack" || d.type === "error" || d.type === "pong") return;
 
             // tickerV2 — has bestBidPrice/bestAskPrice for mid-price

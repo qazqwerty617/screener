@@ -58,8 +58,14 @@ scratch_digest.py
 # Backups, snapshots, and security runtime files
 node-server/backups/
 node-server/security_banned_ips.json
+node-server/formation_cooldowns.json
 *.heapsnapshot
 go-scanner/scanner
+__pycache__/
+*.pyc
+
+# Source artwork the shipped icons are generated from (not served)
+node-server/assets-src/
 
 # Deployment scripts & temp auth helpers
 deploy.ps1

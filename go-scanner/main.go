@@ -250,9 +250,22 @@ func klinesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"History not loaded yet, loading initiated"}`, 202)
 			return
 		}
+		// If disk data is stale (> 2 hours old), do not serve it as fresh!
+		if time.Since(time.UnixMilli(list[len(list)-1].T)) > 2*time.Hour {
+			enqueueBackfill(ex, sym)
+			http.Error(w, `{"error":"History is stale, backfill queued"}`, 202)
+			return
+		}
 		candlesMu.Lock()
 		candlesDB[key] = list
 		candlesMu.Unlock()
+	}
+
+	// Double check memory data freshness
+	if len(list) > 0 && time.Since(time.UnixMilli(list[len(list)-1].T)) > 2*time.Hour {
+		enqueueBackfill(ex, sym)
+		http.Error(w, `{"error":"History is stale, backfill queued"}`, 202)
+		return
 	}
 
 	tfMins := parseTimeframe(tf)
@@ -461,6 +474,15 @@ func startBinanceWS(symbols []string) {
 				list := candlesDB[key]
 				if len(list) > 0 && list[len(list)-1].T == newCandle.T {
 					list[len(list)-1] = newCandle
+				} else if len(list) > 0 && newCandle.T-list[len(list)-1].T > 2*60*60*1000 {
+					// Time gap > 2 hours between disk cache and live stream!
+					// Discard disconnected historical remnants and start fresh series.
+					log.Printf("[GAP DETECTED] %s: gap of %v between old history and live candle. Discarding stale history.", key, time.Duration(newCandle.T-list[len(list)-1].T)*time.Millisecond)
+					list = []Candle{newCandle}
+					parts := strings.Split(key, ":")
+					if len(parts) == 2 {
+						enqueueBackfill(parts[0], parts[1])
+					}
 				} else {
 					list = append(list, newCandle)
 				}
@@ -549,10 +571,16 @@ func main() {
 		key := "BN:" + s
 		list, err := loadCandlesFromDisk(key)
 		if err == nil && len(list) > 0 {
-			candlesMu.Lock()
-			candlesDB[key] = list
-			candlesMu.Unlock()
-			log.Printf("[INIT] Pre-loaded %d candles for %s", len(list), key)
+			lastC := list[len(list)-1]
+			if time.Since(time.UnixMilli(lastC.T)) > 2*time.Hour {
+				log.Printf("[INIT] Disk cache for %s is stale (%v old), queuing fresh backfill", key, time.Since(time.UnixMilli(lastC.T)))
+				enqueueBackfill("BN", s)
+			} else {
+				candlesMu.Lock()
+				candlesDB[key] = list
+				candlesMu.Unlock()
+				log.Printf("[INIT] Pre-loaded %d candles for %s", len(list), key)
+			}
 		} else {
 			enqueueBackfill("BN", s)
 		}

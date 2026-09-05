@@ -99,45 +99,65 @@ test("percentileRank is monotonic and bounded", () => {
 });
 
 // ── Cluster extraction ───────────────────────────────────────────────────────
+//
+// `extractClusters(levels, tick, side, bandSpan)` — the geometry is tick-relative
+// as of engine v5. These tests cover the invariants that survive from the
+// fixed-bin era; the full scale-invariance suite is in wallDetection.test.js.
 
-test("a wall straddling a bin edge is still found as one cluster", () => {
-  // The old fixed-bin engine split this level in two. Sliding windows must not.
-  const levels = [
-    { price: 99.949, qty: 1, usd: 400_000 },
-    { price: 99.950, qty: 1, usd: 400_000 },
-  ];
+test("adjacent large levels are one cluster, never split in two", () => {
+  // The original fixed-bin engine halved a wall that straddled a bin boundary.
+  // Seed-and-grow has no boundaries, so two adjacent large levels must merge.
+  const levels = [];
   for (let i = 0; i < 40; i++) {
-    levels.push({ price: +(99.5 + i * 0.01).toFixed(3), qty: 1, usd: 4000 });
+    levels.push({ price: +(99.5 + i * 0.01).toFixed(4), qty: 1, usd: 4000 });
   }
-  levels.sort((a, b) => a.price - b.price);
+  // Two neighbouring ticks in the middle of the ladder, each holding 100x the
+  // local normal.
+  levels[20].usd += 400_000;
+  levels[21].usd += 400_000;
 
-  const clusters = extractClusters(levels, 100, "bid", 0.06);
+  const clusters = extractClusters(levels, 0.01, "bid", 0.4);
+  assert.ok(clusters.length >= 1, "the wall must be found");
   const biggest = clusters.reduce((best, c) => (c.usd > best.usd ? c : best), clusters[0]);
   assert.ok(biggest.usd >= 800_000, `expected merged wall, got ${biggest.usd}`);
-  assert.equal(biggest.orders >= 2, true);
+  assert.ok(biggest.orders >= 2, `expected a multi-level shelf, got ${biggest.orders}`);
 });
 
-test("clusters never double count the same price level", () => {
-  const levels = Array.from({ length: 50 }, (_, i) => ({
-    price: +(100 + i * 0.01).toFixed(4), qty: 1, usd: 10_000,
-  }));
-  const clusters = extractClusters(levels, 100, "ask", 0.06);
-  const total = clusters.reduce((sum, c) => sum + c.usd, 0);
-  const expected = levels.reduce((sum, l) => sum + l.usd, 0);
-  assert.ok(Math.abs(total - expected) < 1, `${total} vs ${expected}`);
+test("clusters never claim the same price level twice", () => {
+  const levels = [];
+  for (let i = 0; i < 60; i++) {
+    levels.push({ price: +(100 + i * 0.01).toFixed(4), qty: 1, usd: 10_000 });
+  }
+  // Two separate walls, far enough apart to stay separate.
+  levels[10].usd = 500_000;
+  levels[45].usd = 700_000;
+
+  const clusters = extractClusters(levels, 0.01, "ask", 0.6);
+  const claimed = clusters.reduce((sum, c) => sum + c.usd, 0);
+  const bookTotal = levels.reduce((sum, l) => sum + l.usd, 0);
+  assert.ok(claimed <= bookTotal + 1,
+    `clusters claim ${claimed} of a ${bookTotal} book — a level was counted twice`);
+  assert.equal(clusters.length, 2, `expected 2 distinct walls, got ${clusters.length}`);
 });
 
 test("extractClusters returns an empty array for an empty side", () => {
-  assert.deepEqual(extractClusters([], 100, "bid", 0.06), []);
+  assert.deepEqual(extractClusters([], 0.01, "bid", 1), []);
 });
 
 test("cluster price is volume weighted toward the biggest order", () => {
-  const levels = [
-    { price: 100.00, qty: 1, usd: 10_000 },
-    { price: 100.01, qty: 1, usd: 990_000 },
-  ];
-  const [cluster] = extractClusters(levels, 100, "ask", 0.1);
-  assert.ok(cluster.price > 100.009, `expected weighting to 100.01, got ${cluster.price}`);
+  const levels = [];
+  for (let i = 0; i < 30; i++) {
+    levels.push({ price: +(100 + i * 0.01).toFixed(4), qty: 1, usd: 5_000 });
+  }
+  // A shelf whose mass sits overwhelmingly on the upper of two adjacent ticks.
+  levels[15].usd = 60_000;
+  levels[16].usd = 940_000;
+
+  const clusters = extractClusters(levels, 0.01, "ask", 0.3);
+  const cluster = clusters.reduce((best, c) => (c.usd > best.usd ? c : best), clusters[0]);
+  const heavyPrice = levels[16].price;
+  assert.ok(Math.abs(cluster.price - heavyPrice) < 0.004,
+    `expected weighting toward ${heavyPrice}, got ${cluster.price}`);
 });
 
 // ── analyzeBook ──────────────────────────────────────────────────────────────

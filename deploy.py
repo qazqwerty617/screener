@@ -26,7 +26,7 @@ remote_bases = ["/root/nother", "/root/cryptoscreen"]
 local_base = os.path.abspath(".")
 local_env_path = os.path.join(local_base, "node-server", ".env")
 
-ignore_dirs = {".git", ".vscode", "node_modules", "scratch", "knowledge", "__pycache__"}
+ignore_dirs = {".git", ".vscode", "node_modules", "scratch", "knowledge", "__pycache__", "snapshots", "backups"}
 ignore_files = {
     ".env",  # never upload credentials to server
     "remote_inspect.py", "deploy.py", "check_remote.py", "check_remote2.py",
@@ -77,7 +77,7 @@ def deploy():
             sftp_mkdir_p(sftp, remote_dir)
 
             for file_name in files:
-                if file_name in ignore_files or file_name.endswith(".pyc"):
+                if file_name in ignore_files or file_name.endswith(".pyc") or file_name.endswith(".heapsnapshot"):
                     continue
 
                 local_file = os.path.join(root, file_name)
@@ -95,7 +95,17 @@ def deploy():
                     pass
 
                 print(f"Uploading {os.path.relpath(local_file, local_base)} -> {remote_file}...")
-                sftp.put(local_file, remote_file)
+                try:
+                    sftp.put(local_file, remote_file)
+                except Exception as put_err:
+                    tmp_remote = f"{remote_file}.deploy_tmp"
+                    try:
+                        sftp.put(local_file, tmp_remote)
+                        _in, _out, _err = ssh.exec_command(f"mv -f '{tmp_remote}' '{remote_file}'")
+                        _out.read()
+                    except Exception as e2:
+                        print(f"  Warning: failed to upload {remote_file}: {e2}")
+                        continue
                 try:
                     sftp.utime(remote_file, (local_mtime, local_mtime))
                 except Exception:

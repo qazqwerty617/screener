@@ -101,8 +101,8 @@ const CONFIG = {
   HTTP_TIMEOUT_MS: 8000,               // Max HTTP probe timeout (adjusted for 13k+ pairs)
   WS_TIMEOUT_MS: 7000,                 // Max WebSocket handshake timeout (adjusted for heavy event loop)
   MAX_FAILURES_BEFORE_RESTART: 4,      // Consec failures before auto-heal (40s buffer against tick bursts)
-  MIN_NODE_MEMORY_FLOOR_MB: 450,       // Minimum floor before adaptive RAM trigger
-  MAX_NODE_MEMORY_CEILING_MB: 950,     // Absolute hard ceiling before emergency recycle
+  MIN_NODE_MEMORY_FLOOR_MB: 750,       // Minimum floor before adaptive RAM trigger
+  MAX_NODE_MEMORY_CEILING_MB: 1150,    // Absolute hard ceiling before emergency recycle
   MAX_LOG_SIZE_MB: 40,                 // Max PM2 logs size before flush
   MAX_AUTH_LOGS_ENTRIES: 2000,         // Retain latest N auth log records
   MAX_AUTH_LOG_AGE_DAYS: 30,           // Retain auth logs younger than 30 days
@@ -1355,13 +1355,13 @@ async function performHealthCheck() {
   }
 
   // 7. Offline PM2 status check
-  if (serverProc && serverStatus !== "online" && serverStatus !== "launching") {
+  if (serverProc && serverStatus !== "online" && serverStatus !== "launching" && serverStatus !== "stopping" && serverStatus !== "waiting restart") {
     log("error", `Server process is in '${serverStatus}' state. Initiating auto-recovery...`);
     await healServer(`process_status_${serverStatus}`);
     return;
   }
 
-  if (goProc && (goStatus !== "online" && goStatus !== "launching")) {
+  if (goProc && (goStatus !== "online" && goStatus !== "launching" && goStatus !== "stopping" && goStatus !== "waiting restart")) {
     log("warn", `Go Scanner is in '${goStatus}' state. Initiating auto-recovery...`);
     await healGoScanner(`process_status_${goStatus}`);
   }

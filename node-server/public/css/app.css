@@ -1,4 +1,5 @@
-@import url('/css/fonts.css');
+/* fonts.css is linked directly from index.html — an @import here would serialise
+   the request behind this file and hide it from the preload scanner. */
 
 *,
 *::before,
@@ -141,7 +142,7 @@ button {
     color: var(--t2);
     cursor: pointer;
     border-radius: 4px;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
     user-select: none;
 }
 
@@ -221,7 +222,7 @@ button {
     border-radius: var(--radius);
     color: var(--t2);
     cursor: pointer;
-    transition: all 0.12s;
+    transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 
 .settings-btn:hover {
@@ -266,7 +267,7 @@ button {
     cursor: pointer;
     border-radius: 4px;
     font-size: 12px;
-    transition: all 0.12s;
+    transition: background-color 0.12s, color 0.12s;
 }
 
 .dtb:hover {
@@ -359,7 +360,7 @@ button {
     border: none;
     background: transparent;
     font-family: var(--font);
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
     user-select: none;
     min-width: 22px;
     text-align: center;
@@ -468,7 +469,7 @@ button {
     font-weight: 600;
     color: var(--t1);
     user-select: none;
-    transition: all 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, outline-color 0.12s ease;
     min-width: 0;
     max-width: none;
     overflow: visible;
@@ -586,7 +587,7 @@ body.view-is-multichart #ctbar .grid-config {
     font-weight: 500;
     color: var(--t1);
     cursor: pointer;
-    transition: all 0.1s;
+    transition: background-color 0.1s, border-bottom-color 0.1s, color 0.1s, opacity 0.1s;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
@@ -647,7 +648,7 @@ body.view-is-multichart #ctbar .grid-config {
     border: 1px solid rgba(251, 191, 36, 0.35);
     box-shadow: 0 0 8px rgba(251, 191, 36, 0.12);
     letter-spacing: 0.5px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
     user-select: none;
 }
 
@@ -703,7 +704,7 @@ body.user-is-pro .exc-free-tag {
     border-radius: 4px;
     border: none;
     background: transparent;
-    transition: all 0.1s;
+    transition: background-color 0.1s, color 0.1s;
 }
 
 .vt-btn:hover {
@@ -729,7 +730,7 @@ body.user-is-pro .exc-free-tag {
     color: var(--t2);
     font-size: 12px;
     font-weight: 600;
-    transition: all 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, color 0.14s ease;
     flex-shrink: 0;
 }
 
@@ -776,7 +777,7 @@ body.user-is-pro .exc-free-tag {
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.1);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
     padding: 0;
     outline: none;
 }
@@ -790,7 +791,7 @@ body.user-is-pro .exc-free-tag {
     height: 12px;
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.45);
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), left 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .chart-density-switch:hover {
@@ -821,7 +822,7 @@ body.user-is-pro .exc-free-tag {
         linear-gradient(180deg, rgba(36, 39, 57, 0.96) 0%, rgba(18, 20, 30, 0.98) 100%);
     color: var(--t2);
     cursor: pointer;
-    transition: all 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, color 0.14s ease;
     flex-shrink: 0;
 }
 
@@ -869,7 +870,7 @@ body.user-is-pro .exc-free-tag {
     font-size: 12px;
     font-weight: 600;
     color: var(--t1);
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
     height: 24px;
     min-width: 105px;
     box-sizing: border-box;
@@ -935,7 +936,7 @@ body.user-is-pro .exc-free-tag {
     font-weight: 500;
     color: var(--t1);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-bottom-color 0.15s ease, color 0.15s ease, padding-left 0.15s ease;
     border-bottom: 1px solid var(--bd);
     box-sizing: border-box;
 }
@@ -1312,7 +1313,7 @@ body.user-is-pro .exc-free-tag {
     font-weight: 500;
     color: var(--t1);
     user-select: none;
-    transition: all 0.12s;
+    transition: background-color 0.12s, border-color 0.12s, box-shadow 0.12s;
     min-width: 140px;
     justify-content: space-between;
 }
@@ -1392,7 +1393,7 @@ body.user-is-pro .exc-free-tag {
     display: grid;
     place-content: center;
     cursor: pointer;
-    transition: all 0.1s;
+    transition: background-color 0.1s, border-color 0.1s;
     flex-shrink: 0;
 }
 
@@ -1509,7 +1510,7 @@ body.user-is-pro .exc-free-tag {
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.02);
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .indicator-card:hover {
@@ -1554,7 +1555,7 @@ body.user-is-pro .exc-free-tag {
     font-weight: 700;
     letter-spacing: 0.08em;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
 .indicator-toggle:hover {
@@ -1610,7 +1611,7 @@ body.user-is-pro .exc-free-tag {
     background: rgba(255, 255, 255, 0.03);
     color: var(--t2);
     font-size: 15px;
-    transition: all 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
     flex-shrink: 0;
 }
 
@@ -1649,7 +1650,7 @@ body.user-is-pro .exc-free-tag {
     color: var(--t2);
     font-size: 12px;
     font-weight: 600;
-    transition: all 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, color 0.12s ease;
 }
 
 .chart-density-filter-btn:hover {
@@ -1680,7 +1681,7 @@ body.user-is-pro .exc-free-tag {
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
-    transition: all 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, color 0.12s ease;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;
@@ -1711,7 +1712,7 @@ body.user-is-pro .exc-free-tag {
     line-height: 1.4;
     color: rgba(209, 212, 220, 0.45);
     min-height: 48px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .chart-density-exc-wrap {
@@ -1731,7 +1732,7 @@ body.user-is-pro .exc-free-tag {
     font-size: 12px;
     font-weight: 600;
     color: var(--t1);
-    transition: all 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .chart-density-exc-btn:hover {
@@ -1804,7 +1805,7 @@ body.user-is-pro .exc-free-tag {
     display: grid;
     place-content: center;
     cursor: pointer;
-    transition: all 0.1s;
+    transition: background-color 0.1s, border-color 0.1s;
     flex-shrink: 0;
 }
 
@@ -1924,7 +1925,7 @@ body.user-is-pro .exc-free-tag {
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
 }
 
 .settings-tab:hover {
@@ -2036,7 +2037,7 @@ body.user-is-pro .exc-free-tag {
     font-size: 12px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.12s;
+    transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 
 .theme-opt:hover {
@@ -2206,7 +2207,7 @@ body.user-is-pro .exc-free-tag {
     border-radius: 5px;
     cursor: pointer;
     position: relative;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     flex-shrink: 0;
     margin: 0; /* Important for alignment */
 }
@@ -2288,7 +2289,7 @@ body.user-is-pro .exc-free-tag {
     cursor: pointer;
     top: 0; left: 0; right: 0; bottom: 0;
     background-color: var(--bg3);
-    transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color .3s cubic-bezier(0.4, 0, 0.2, 1), border-color .3s cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: 20px;
     border: 1px solid var(--bd2);
 }
@@ -2299,7 +2300,7 @@ body.user-is-pro .exc-free-tag {
     height: 14px; width: 14px;
     left: 2px; bottom: 2px;
     background-color: var(--t2);
-    transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color .3s cubic-bezier(0.4, 0, 0.2, 1), transform .3s cubic-bezier(0.4, 0, 0.2, 1);
     border-radius: 50%;
     box-shadow: 0 1px 3px rgba(0,0,0,0.3);
 }
@@ -2319,7 +2320,7 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s, transform 0.2s;
     flex-shrink: 0;
     margin-right: 4px;
 }
@@ -2344,7 +2345,7 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     border: 1px solid var(--bd2);
     border-radius: var(--radius);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
     margin-right: auto;
 }
 
@@ -2503,7 +2504,7 @@ input:checked + .slider:before { transform: translateX(16px); background-color: 
     font-size: 8px;
     padding: 0;
     z-index: 120;
-    transition: all 0.15s;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, transform 0.15s;
     opacity: 0;
 }
 
@@ -2893,7 +2894,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     background: #555;
     outline: none;
     opacity: 0.7;
-    -webkit-transition: .2s;
+    -webkit-transition: opacity .2s;
     transition: opacity .2s;
     border-radius: 2px;
 }
@@ -3279,6 +3280,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 
 /* ── Connection status dot ── */
 .conn-dot {
+    position: relative;
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -3290,7 +3292,22 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 .conn-dot.ok {
     background: var(--gr);
     box-shadow: 0 0 5px var(--gr);
+}
+
+/* The pulse used to animate `box-shadow` on `.conn-dot.ok` directly — a
+   paint-triggering property, animated forever, for the entire session, because
+   the dot keeps `.ok` for as long as the socket is connected. Animating
+   `transform` + `opacity` on a pseudo-element instead keeps it on the compositor,
+   and `will-change` gives it its own layer. */
+.conn-dot.ok::after {
+    content: "";
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    background: var(--grglow);
     animation: conn-pulse 2s ease-in-out infinite;
+    will-change: transform, opacity;
+    pointer-events: none;
 }
 
 .conn-dot.err {
@@ -3301,10 +3318,12 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 @keyframes conn-pulse {
     0%,
     100% {
-        box-shadow: 0 0 3px var(--gr);
+        transform: scale(0.9);
+        opacity: 0.35;
     }
     50% {
-        box-shadow: 0 0 8px var(--grglow);
+        transform: scale(1.6);
+        opacity: 0;
     }
 }
 
@@ -3433,7 +3452,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     border: 1px solid var(--bd);
     border-radius: 4px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
     white-space: nowrap;
 }
 
@@ -3579,7 +3598,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     padding: 4px 10px;
     border-radius: 15px;
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .fp-pill:hover {
@@ -3624,7 +3643,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
 }
 
 .fg-btn:hover {
@@ -3678,7 +3697,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     padding: 5px 14px;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
 
 .fg-page-btn:hover:not(:disabled) {
@@ -3907,7 +3926,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     border: none;
     background: transparent;
     font-family: var(--font);
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
     user-select: none;
     min-width: 24px;
     text-align: center;
@@ -3932,7 +3951,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     align-items: center;
     justify-content: center;
     background: transparent;
-    transition: all 0.1s ease;
+    transition: background-color 0.1s ease, border-color 0.1s ease;
     flex-shrink: 0;
 }
 
@@ -4037,14 +4056,14 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 .bt-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ac); box-shadow: 0 0 7px var(--acglow); }
 .bt-muted { color: var(--t2); font-size: 10px; }
 .bt-tfs, .bt-speeds { display: flex; align-items: center; padding: 2px; border: 1px solid var(--bd); border-radius: 5px; background: rgba(0,0,0,.12); }
-.bt-tf, .bt-chip, .bt-speeds button { height: 24px; padding: 0 9px; border-radius: 4px; color: var(--t2); font-size: 10px; font-weight: 600; transition: .15s ease; }
+.bt-tf, .bt-chip, .bt-speeds button { height: 24px; padding: 0 9px; border-radius: 4px; color: var(--t2); font-size: 10px; font-weight: 600; transition: background-color .15s ease, border-color .15s ease, border-radius .15s ease, box-shadow .15s ease, color .15s ease, font-size .15s ease, height .15s ease, min-height .15s ease, outline-color .15s ease, padding .15s ease, width .15s ease; }
 .bt-tf:hover, .bt-chip:hover, .bt-speeds button:hover { color: var(--t1); background: var(--bgh); }
 .bt-tf.on, .bt-chip.on, .bt-speeds button.on { color: #fff; background: var(--ac); box-shadow: 0 2px 8px rgba(124,58,237,.2); }
 .bt-chip { border: 1px solid var(--bd); }
 .bt-sep { width: 1px; height: 22px; background: var(--bd2); margin: 0 2px; }
 .bt-toolbar-spacer { flex: 1; }
 .bt-pool { white-space: nowrap; color: var(--t2); font-size: 10px; font-weight: 500; }
-.bt-primary, .bt-reveal { height: 28px; padding: 0 13px; border-radius: 5px; color: #fff; background: var(--ac); border: 1px solid rgba(167,139,250,.25); font-size: 10px; font-weight: 700; transition: .15s; }
+.bt-primary, .bt-reveal { height: 28px; padding: 0 13px; border-radius: 5px; color: #fff; background: var(--ac); border: 1px solid rgba(167,139,250,.25); font-size: 10px; font-weight: 700; transition: box-shadow .15s, filter .15s, opacity .15s; }
 .bt-primary:hover, .bt-reveal:hover { filter: brightness(1.12); box-shadow: 0 0 12px var(--acglow); }
 .bt-indicator-settings { position: relative; }
 .bt-indicators-btn { height: 26px; padding: 0 9px; color: var(--t2); background: var(--bg3); border: 1px solid var(--bd); border-radius: 5px; font-size: 9px; font-weight: 600; }
@@ -4736,7 +4755,7 @@ body {
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 .shortcuts-btn:hover {
     color: var(--t1);
@@ -4759,9 +4778,13 @@ body {
     animation: modalOverlayFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* Only `opacity` is animated here. The previous keyframes animated
+   `backdrop-filter` from blur(0) to blur(16px), which re-runs a full-viewport
+   blur+saturate on every frame for the whole 200 ms — by far the most expensive
+   rule in this file. Fading the already-blurred layer in looks the same. */
 @keyframes modalOverlayFadeIn {
-    from { opacity: 0; backdrop-filter: blur(0px); }
-    to { opacity: 1; backdrop-filter: blur(16px); }
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .shortcuts-modal-content {
@@ -4785,7 +4808,7 @@ body {
     border-radius: var(--radius);
     color: var(--t2);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
 .profile-btn:hover {
@@ -4833,7 +4856,7 @@ body {
     cursor: pointer;
     padding: 2px 6px;
     border-radius: 4px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .modal-close:hover {
@@ -4983,7 +5006,7 @@ body {
     font-weight: 500;
     color: var(--t1);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
 }
 
 .profile-act-btn:hover {
@@ -5060,7 +5083,7 @@ body {
     width: fit-content;
     box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .profile-id-badge:hover {
@@ -5117,7 +5140,7 @@ body {
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
     box-shadow: 0 2px 8px rgba(34, 158, 217, 0.3);
 }
 
@@ -5145,7 +5168,7 @@ body {
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .profile-logout-btn:hover {
@@ -5194,7 +5217,7 @@ body {
     color: var(--t2);
     border-radius: 6px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
     text-align: center;
 }
 
@@ -5258,7 +5281,7 @@ body {
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
     box-shadow: 0 4px 14px rgba(124, 58, 237, 0.4);
 }
 
@@ -5301,7 +5324,7 @@ body {
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
     box-shadow: 0 4px 12px rgba(34, 158, 217, 0.35);
 }
 
@@ -5406,7 +5429,7 @@ body {
     color: var(--t2);
     border-radius: 6px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
     user-select: none;
 }
 
@@ -5440,7 +5463,7 @@ body {
     background: var(--bg3);
     color: var(--t1);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .j-btn:hover {
@@ -5678,7 +5701,7 @@ body {
     color: var(--t1);
     cursor: pointer;
     margin-left: 4px;
-    transition: all 0.12s;
+    transition: background-color 0.12s, color 0.12s;
 }
 
 .j-act-btn:hover {
@@ -5760,75 +5783,6 @@ body {
     margin-top: 10px;
 }
 
-.j-chart-box canvas {
-    width: 100% !important;
-    height: 100% !important;
-}
-
-/* ── API Keys Settings Grid ── */
-.j-api-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 16px;
-}
-
-.j-api-card {
-    background: var(--bg2);
-    border: 1px solid var(--bd2);
-    border-radius: 10px;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.j-api-card-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.j-api-logo {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background-size: contain;
-    background-repeat: no-repeat;
-    background-position: center;
-}
-
-.j-api-name {
-    font-size: 14px;
-    font-weight: 700;
-    color: #fff;
-}
-
-.j-api-status {
-    margin-left: auto;
-    font-size: 10px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 4px;
-}
-
-.j-api-status.connected { background: rgba(38, 201, 122, 0.2); color: #26c97a; }
-.j-api-status.disconnected { background: rgba(255, 255, 255, 0.05); color: var(--t2); }
-
-.j-api-input {
-    background: var(--bg3);
-    border: 1px solid var(--bd);
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 11px;
-    color: #fff;
-    outline: none;
-    width: 100%;
-}
-
-.j-api-input:focus {
-    border-color: var(--ac);
-}
-
 /* ── Exchange API Settings & Toggles ── */
 .j-api-head-actions {
     margin-left: auto;
@@ -5848,7 +5802,7 @@ body {
     background: rgba(255, 255, 255, 0.05);
     color: var(--t2);
     cursor: pointer;
-    transition: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.22s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1), color 0.22s cubic-bezier(0.4, 0, 0.2, 1), transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
     padding: 0;
 }
 
@@ -5941,7 +5895,7 @@ body {
     top: 0; left: 0; right: 0; bottom: 0;
     background-color: rgba(255, 255, 255, 0.14);
     border-radius: 20px;
-    transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.22s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.22s cubic-bezier(0.4, 0, 0.2, 1);
     border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -5954,7 +5908,7 @@ body {
     bottom: 2px;
     background-color: #ffffff;
     border-radius: 50%;
-    transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
 }
 
@@ -5965,134 +5919,6 @@ body {
 
 .j-toggle-switch input:checked + .j-toggle-slider:before {
     transform: translateX(16px);
-}
-
-/* ── Modals ── */
-.j-modal-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.75);
-    backdrop-filter: blur(4px);
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-}
-
-.j-modal-content {
-    background: var(--bg2);
-    border: 1px solid var(--bd2);
-    border-radius: 12px;
-    width: 100%;
-    max-width: 600px;
-    max-height: 90vh;
-    overflow-y: auto;
-    padding: 20px;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.j-modal-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid var(--bd);
-    padding-bottom: 10px;
-}
-
-.j-modal-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: #fff;
-}
-
-.j-modal-close {
-    background: transparent;
-    border: none;
-    color: var(--t2);
-    font-size: 20px;
-    cursor: pointer;
-}
-
-.j-modal-close:hover { color: #fff; }
-
-.j-form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-
-.j-form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.j-form-group.full {
-    grid-column: 1 / -1;
-}
-
-.j-form-group label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--t2);
-}
-
-.j-form-group input, .j-form-group select, .j-form-group textarea {
-    background: var(--bg3);
-    border: 1px solid var(--bd2);
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 12px;
-    color: #fff;
-    outline: none;
-}
-
-.j-form-group textarea {
-    resize: vertical;
-    min-height: 70px;
-}
-
-.j-modal-tag-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--bd);
-    border-radius: 6px;
-    padding: 4px 8px;
-    cursor: pointer;
-    user-select: none;
-}
-
-/* ── PnL Card Generator ── */
-.j-pnl-card-preview {
-    background: linear-gradient(135deg, #13151e 0%, #1a1d2d 100%);
-    border: 1px solid var(--bd2);
-    border-radius: 16px;
-    padding: 24px;
-    color: #fff;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-}
-
-.j-pnl-card-preview::before {
-    content: "";
-    position: absolute;
-    top: -50px; right: -50px;
-    width: 150px; height: 150px;
-    background: var(--acglow);
-    filter: blur(50px);
-    border-radius: 50%;
-}
-
-.j-pnl-card-header {
-    display: flex;
 }
 
 .j-chart-box canvas {
@@ -6315,7 +6141,7 @@ body {
     border-radius: var(--radius, 6px);
     color: var(--t3, #64748b);
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
     user-select: none;
     flex-shrink: 0;
     outline: none;
@@ -6451,7 +6277,7 @@ body {
     box-shadow: 0 4px 18px rgba(139, 92, 246, 0.5) !important;
     cursor: pointer !important;
     flex-shrink: 0 !important;
-    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important, border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important, box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
     text-decoration: none !important;
 }
 
@@ -6541,7 +6367,7 @@ body {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    transition: all 0.15s ease !important;
+    transition: background-color 0.15s ease !important, border-color 0.15s ease !important, color 0.15s ease !important;
     padding: 0 !important;
 }
 
@@ -6701,7 +6527,7 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.2);
     cursor: pointer;
     box-shadow: 0 4px 20px rgba(124, 58, 237, 0.55), 0 0 15px rgba(168, 85, 247, 0.35);
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
     text-decoration: none;
 }
 
@@ -6719,7 +6545,7 @@ body {
     font-weight: 600;
     cursor: pointer;
     padding: 6px 14px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
     text-decoration: none;
     border-radius: 6px;
     text-shadow: 0 0 10px rgba(168, 85, 247, 0.4);
@@ -6872,7 +6698,7 @@ body {
     padding: 10px 16px;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .pro-compare-back-btn:hover {
@@ -6895,7 +6721,7 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.15);
     cursor: pointer;
     box-shadow: 0 4px 14px rgba(124, 58, 237, 0.4);
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .pro-compare-buy-btn:hover {
@@ -6959,7 +6785,7 @@ body {
     border-radius: 14px;
     padding: 14px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .pay-tariff-card:hover {
@@ -7046,7 +6872,7 @@ body {
     padding: 12px 14px;
     cursor: pointer;
     text-align: left;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
     width: 100%;
 }
 
@@ -7084,7 +6910,7 @@ body {
     font-size: 15px;
     font-weight: 700;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
     box-shadow: 0 4px 20px rgba(217, 70, 239, 0.3);
 }
 
@@ -7151,7 +6977,7 @@ body {
     padding: 6px 12px;
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease;
 }
 
 .pay-copy-icon-btn:hover {
@@ -7238,7 +7064,7 @@ body {
     font-size: 11px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .density-reset-btn:hover {
@@ -7347,7 +7173,11 @@ body {
     height: 3px;
     background: var(--ac);
     width: 100%;
+    /* `transform` instead of `width`: animating width invalidates layout on every
+       frame for the whole 8 s default toast lifetime. */
+    transform-origin: left center;
     animation: toastProgress 5s linear forwards;
+    will-change: transform;
 }
 
 .toast-card.toast-success .toast-progress {
@@ -7410,8 +7240,8 @@ body {
 }
 
 @keyframes toastProgress {
-    from { width: 100%; }
-    to { width: 0%; }
+    from { transform: scaleX(1); }
+    to { transform: scaleX(0); }
 }
 
 /* ══ Price Alerts Settings List ══ */
@@ -7456,7 +7286,7 @@ body {
     padding: 10px 14px;
     margin: 12px 0 16px 0;
     cursor: pointer;
-    transition: all 0.15s ease-in-out;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, transform 0.15s ease-in-out;
 }
 .profile-bug-card:hover {
     border-color: rgba(244, 63, 94, 0.6);
@@ -7508,7 +7338,7 @@ body {
     cursor: pointer;
     white-space: nowrap;
     flex-shrink: 0;
-    transition: all 0.15s;
+    transition: box-shadow 0.15s;
 }
 .bug-card-action-btn:hover {
     box-shadow: 0 0 12px rgba(225, 29, 72, 0.5);
@@ -7631,7 +7461,7 @@ body {
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
 }
 .bug-modal-cancel:hover {
     background: rgba(255, 255, 255, 0.12);
@@ -7647,7 +7477,7 @@ body {
     font-weight: 700;
     cursor: pointer;
     box-shadow: 0 4px 14px rgba(139, 92, 246, 0.4);
-    transition: all 0.15s;
+    transition: box-shadow 0.15s;
 }
 .bug-modal-submit:hover {
     box-shadow: 0 4px 20px rgba(168, 85, 247, 0.6);
@@ -7660,7 +7490,7 @@ body {
     border: 1.5px dashed rgba(168, 85, 247, 0.4);
     border-radius: 8px;
     padding: 10px;
-    transition: all 0.15s ease-in-out;
+    transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
 }
 .bug-screenshot-dropzone:hover, .bug-screenshot-dropzone.dragover {
     border-color: #a855f7;
@@ -7735,7 +7565,7 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .density-blacklist-btn:hover {
     background: rgba(51, 65, 85, 0.85);
@@ -7813,7 +7643,7 @@ body {
     cursor: pointer;
     padding: 4px;
     border-radius: 4px;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
 }
 .density-bl-close:hover {
     color: #f87171;
@@ -7887,7 +7717,7 @@ body {
     border-radius: 6px;
     letter-spacing: 0.3px;
     user-select: none;
-    transition: all 0.15s;
+    transition: background-color 0.15s, border-color 0.15s;
 }
 .density-bl-tag:hover {
     border-color: rgba(255, 255, 255, 0.22);
@@ -7936,7 +7766,7 @@ body {
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
 }
 .density-bl-btn-sec:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -8003,7 +7833,7 @@ body {
     line-height: 1;
     padding: 4px 8px;
     border-radius: 5px;
-    transition: all 0.15s;
+    transition: background-color 0.15s, color 0.15s;
 }
 
 .fmt-modal-close:hover {
@@ -8136,7 +7966,7 @@ body {
     font-size: 11px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.12s ease;
+    transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, color 0.12s ease;
     user-select: none;
     white-space: nowrap;
 }
@@ -8259,7 +8089,7 @@ body {
     font-size: 11px;
     color: #64748b;
     font-weight: 500;
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
 .pd-status-pill.active {
@@ -8334,7 +8164,7 @@ body {
     border-radius: 6px;
     cursor: pointer;
     text-align: center;
-    transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.15s cubic-bezier(0.4, 0, 0.2, 1), color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
     user-select: none;
 }
 
@@ -8371,7 +8201,7 @@ body {
     align-items: center;
     justify-content: center;
     gap: 6px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
     user-select: none;
 }
 
@@ -8451,7 +8281,7 @@ body {
     padding: 0 8px;
     height: 30px;
     width: 100px;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .pd-custom-input-box:focus-within {
@@ -8515,7 +8345,7 @@ body {
     justify-content: space-between;
     gap: 6px;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .pd-channel-card:hover {
@@ -8553,7 +8383,7 @@ body {
     border: 1px solid #22c55e;
     cursor: pointer;
     box-shadow: 0 2px 10px rgba(34, 197, 94, 0.2);
-    transition: all 0.2s ease;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -8575,7 +8405,7 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.1);
     color: #94a3b8;
     cursor: pointer;
-    transition: all 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -8645,14 +8475,14 @@ body {
     padding: 4px 10px; font-size: 11px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    color: #6b7280; border-radius: 5px; cursor: pointer; transition: all 0.15s;
+    color: #6b7280; border-radius: 5px; cursor: pointer; transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 .pd-clear-btn:hover { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.3); color: #f87171; }
 .pd-close-btn {
     width: 26px; height: 26px; border-radius: 5px;
     background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08);
     color: #6b7280; font-size: 16px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center; transition: background-color 0.15s, color 0.15s;
 }
 .pd-close-btn:hover { background: rgba(239,68,68,.1); color: #f87171; }
 .pd-alerts-list {
@@ -8664,7 +8494,7 @@ body {
 .pd-alert-card {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 14px; border-radius: 8px; cursor: pointer;
-    transition: all 0.15s ease; border: 1px solid transparent;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease; border: 1px solid transparent;
     animation: pdCardSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 @keyframes pdCardSlideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }

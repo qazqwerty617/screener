@@ -237,3 +237,121 @@ test("horizontal support is still detected when swing highs are present", () => 
     "support must survive the presence of an unrelated swing high"
   );
 });
+
+test("converging trendlines clamp extension at apex and do not cross each other", () => {
+  const candles = baseCandles(85);
+  for (const [idx, high] of [[10, 106], [35, 104], [60, 102]]) {
+    candles[idx] = { ...candles[idx], h: high, c: 99, o: 99 };
+    candles[idx - 1].h = 99;
+    candles[idx + 1].h = 99;
+  }
+  for (const [idx, low] of [[15, 94], [40, 95.5], [65, 97]]) {
+    candles[idx] = { ...candles[idx], l: low, c: 99, o: 99 };
+    candles[idx - 1].l = 98.5;
+    candles[idx + 1].l = 98.5;
+  }
+  for (let i = 66; i < candles.length; i++) {
+    candles[i] = { ...candles[i], o: 99, h: 99.5, l: 98.5, c: 99 };
+  }
+  candles[candles.length - 1].c = 99;
+  const tls = engine.detectTrendlines(candles, 2);
+  const res = tls.find(t => t.direction === "up" || t.isHigh);
+  const sup = tls.find(t => t.direction === "down" || !t.isHigh);
+  assert.ok(res, "Resistance must be detected");
+  assert.ok(sup, "Support must be detected");
+  assert.ok(typeof res.maxExtX === "number", "Resistance must have maxExtX apex clamp");
+  assert.ok(typeof sup.maxExtX === "number", "Support must have maxExtX apex clamp");
+  assert.equal(res.maxExtX, sup.maxExtX, "Both lines must stop at the exact same apex index");
+});
+
+test("trendlines that crossed each other in past visible candles are rejected", () => {
+  const candles = baseCandles(90);
+  // Highs start at 100 and drop sharply to 94 at idx 50
+  candles[10] = { ...candles[10], h: 100, c: 96, o: 96 };
+  candles[30] = { ...candles[30], h: 97, c: 95, o: 95 };
+  candles[50] = { ...candles[50], h: 94, c: 92, o: 92 };
+
+  // Lows start at 90 and rise sharply to 96 at idx 50 -> they cross in the middle!
+  candles[10] = { ...candles[10], l: 90 };
+  candles[30] = { ...candles[30], l: 93 };
+  candles[50] = { ...candles[50], l: 96 };
+
+  candles[candles.length - 1].c = 95;
+  const tls = engine.detectTrendlines(candles, 2);
+  // They crossed in the middle, so they cannot both be valid active bounding trendlines
+  const res = tls.filter(t => t.direction === "up" || t.isHigh);
+  const sup = tls.filter(t => t.direction === "down" || !t.isHigh);
+  assert.ok(res.length === 0 || sup.length === 0, "Conflicting crossed trendlines must not both be present");
+});
+
+test("horizontal touches clustered within 3-4 bars without deep pullback count as 1 touch, not 2", () => {
+  const candles = baseCandles(80);
+  // Candle 15 touches 105, candle 17 also touches 105 (only 2 bars away, no deep pullback)
+  candles[15] = { ...candles[15], h: 105, c: 103, o: 103 };
+  candles[16] = { ...candles[16], h: 104.2, c: 103, o: 103 };
+  candles[17] = { ...candles[17], h: 105, c: 103, o: 103 };
+  candles[candles.length - 1].c = 101;
+
+  // With minTouches = 2, candles 15 & 17 alone must NOT form a 2-touch level!
+  const levelsClustered = engine.detectHorizontals(candles, 2);
+  const resClustered = levelsClustered.find(l => l.direction === "up" && Math.abs(l.price - 105) < 0.5);
+  assert.equal(resClustered, undefined, "Adjacent touches without pullback must not be counted as 2 touches");
+
+  // Now add a genuine second touch at candle 40 after a deep pullback
+  candles[40] = { ...candles[40], h: 105, c: 103, o: 103 };
+  candles[39].h = 101;
+  candles[41].h = 101;
+  const levelsSeparated = engine.detectHorizontals(candles, 2);
+  const resSeparated = levelsSeparated.find(l => l.direction === "up" && Math.abs(l.price - 105) < 0.5);
+  assert.ok(resSeparated, "Properly separated touches with deep pullback must form a valid level");
+  assert.equal(resSeparated.touches, 2, "Should have exactly 2 distinct touches");
+});
+
+test("retest requires confirmed 2+ touches before breakout and rejects single-swing breakouts", () => {
+  // Case A: Only 1 swing high before breakout -> must NOT be detected as a retest
+  const candlesA = baseCandles(75);
+  // Only index 15 touches 105
+  candlesA[15] = { ...candlesA[15], h: 105, c: 103.8 };
+  candlesA[14].h = 103;
+  candlesA[16].h = 103;
+  // Breakout at 40
+  candlesA[40] = { ...candlesA[40], o: 104.8, c: 106, h: 106.2, l: 104.7 };
+  // Departure at 43
+  candlesA[43] = { ...candlesA[43], h: 108, c: 107 };
+  // Retest at 65
+  candlesA[65] = { ...candlesA[65], o: 106, h: 106.3, l: 104.95, c: 105.7 };
+  for (let i = 40; i < candlesA.length; i++) {
+    if (i !== 40 && i !== 43 && i !== 65) {
+      candlesA[i] = { ...candlesA[i], o: 106, h: 106.5, l: 105.6, c: 106 };
+    }
+  }
+  const retestsA = engine.detectRetests(candlesA);
+  assert.equal(
+    retestsA.filter(r => Math.abs(r.price - 105) < 0.5).length,
+    0,
+    "Retest on single swing without prior level confirmation must be rejected"
+  );
+
+  // Case B: 2 distinct touches before breakout (idx 12 and 30) -> MUST be detected as a confirmed retest
+  const candlesB = baseCandles(75);
+  for (const idx of [12, 30]) {
+    candlesB[idx] = { ...candlesB[idx], h: 105, c: 103.8 };
+    candlesB[idx - 1].h = 103;
+    candlesB[idx + 1].h = 103;
+  }
+  candlesB[40] = { ...candlesB[40], o: 104.8, c: 106, h: 106.2, l: 104.7 };
+  candlesB[43] = { ...candlesB[43], h: 108, c: 107 };
+  candlesB[65] = { ...candlesB[65], o: 106, h: 106.3, l: 104.95, c: 105.7 };
+  for (let i = 40; i < candlesB.length; i++) {
+    if (i !== 40 && i !== 43 && i !== 65) {
+      candlesB[i] = { ...candlesB[i], o: 106, h: 106.5, l: 105.6, c: 106 };
+    }
+  }
+  const retestsB = engine.detectRetests(candlesB);
+  const foundB = retestsB.find(r => Math.abs(r.price - 105) < 0.5);
+  assert.ok(foundB, "Confirmed level with 2+ touches before breakout must produce valid retest");
+  assert.equal(foundB.touchIdx, 65);
+  assert.equal(foundB.outcome, "confirmed");
+});
+
+

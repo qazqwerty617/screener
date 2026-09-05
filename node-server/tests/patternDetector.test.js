@@ -12,8 +12,9 @@ test("scanCandles handles a recent confirmed retest and returns finite signals",
   const candles = [];
   for (let i = 0; i < 40; i++) candles.push(candle(i, 99, 99.4, 98.7, 99));
 
-  // Establish a clean resistance, break it, depart, and retest from above.
+  // Establish a clean confirmed resistance (2 touches), break it, depart, and retest from above.
   candles[15] = candle(15, 99.1, 100, 98.9, 99.2, 1500);
+  candles[23] = candle(23, 99.1, 100, 98.9, 99.2, 1500);
   candles[30] = candle(30, 99.2, 101.2, 99.1, 101, 5000);
   candles[31] = candle(31, 101, 101.4, 100.8, 101.2, 1800);
   candles[32] = candle(32, 101.2, 101.3, 100.6, 100.8, 1600);
