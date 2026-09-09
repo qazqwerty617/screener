@@ -148,14 +148,14 @@ test("preCompressStatic stamps the file identity it read", () => {
 
 // ── the serving paths must go through the revalidating lookup ────────────────
 
-test("both asset response paths revalidate instead of trusting the boot snapshot", () => {
+test("the static response path revalidates and unknown paths return a real 404", () => {
   const mw = SRC.slice(SRC.indexOf("// Serve pre-compressed assets"), SRC.indexOf("app.use(express.static("));
   assert.match(mw, /const cached = freshStatic\(urlPath\);/);
   assert.ok(!/staticCache\.get\(/.test(mw), "the hot asset path must not read the raw cache");
 
   const shell = SRC.slice(SRC.indexOf('app.get("*"'), SRC.indexOf("// Any unhandled error returns"));
-  assert.match(shell, /const shell = freshStatic\("index\.html"\);/);
-  assert.ok(!/staticCache\.get\(/.test(shell), "deep links must not serve a shell older than / does");
+  assert.match(shell, /res\.status\(404\)\.send\(renderNotFoundPage\(\)\)/);
+  assert.ok(!/freshStatic|staticCache\.get/.test(shell), "unknown URLs must not receive the SPA shell");
 });
 
 test("versioned assets stay immutable and the shell stays uncacheable", () => {

@@ -414,13 +414,14 @@ test("fonts and images are cached in memory, not re-read per request", () => {
   assert.match(SRC, /const gzipped = compressible \? zlib\.gzipSync\(raw, \{ level: 9 \}\) : null;/);
 });
 
-test("the SPA shell is served from the pre-compressed cache", () => {
-  const start = SRC.indexOf('app.get("*"');
-  const body = SRC.slice(start, SRC.indexOf("\n});", start));
-  // freshStatic() is the cache lookup; it re-reads only when the file on disk
-  // moved, so the shell is still served from memory on every normal request.
-  assert.match(body, /const shell = freshStatic\("index\.html"\);/);
-  assert.match(body, /if \(shell\.brotli && accept\.includes\("br"\)\)/);
+test("the root SPA shell is served from the pre-compressed cache", () => {
+  const start = SRC.indexOf("// Serve pre-compressed assets");
+  const body = SRC.slice(start, SRC.indexOf("app.use(express.static(", start));
+  // The root is mapped to index.html before freshStatic(), while unknown paths
+  // fall through to a real 404 instead of creating search-engine soft 404s.
+  assert.match(body, /if \(urlPath === "\/"\) urlPath = "index\.html";/);
+  assert.match(body, /const cached = freshStatic\(urlPath\);/);
+  assert.match(SRC, /res\.status\(404\)\.send\(renderNotFoundPage\(\)\)/);
 });
 
 test("compression is not applied twice to one body", () => {

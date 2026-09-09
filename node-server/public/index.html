@@ -7,24 +7,27 @@
     <meta name="theme-color" content="#12141a" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <title>Obsidian Screener</title>
+    <title>Криптоскринер и графики криптовалют — Obsidian Screener</title>
     <meta name="description"
-        content="Профессиональный скринер криптовалютных фьючерсов в реальном времени. Мгновенные данные с Binance, Bybit и OKX. Свечные графики, изменения за 24ч, объёмы." />
-    <meta name="keywords"
-        content="криптоскринер, фьючерсы, binance futures, bybit futures, okx futures, скринер криптовалют, торговый скринер" />
-    <meta name="robots" content="index, follow" />
-    <meta property="og:title" content="Obsidian Screener — Фьючерсный скринер" />
+        content="Криптоскринер, быстрые графики, карта плотностей, межбиржевой арбитраж и сигналы пампов и дампов с 11 бирж в реальном времени." />
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+    <meta property="og:title" content="Криптоскринер и графики криптовалют — Obsidian Screener" />
     <meta property="og:description"
-        content="Мгновенные данные с Binance, Bybit, OKX. Более 1000 фьючерсных инструментов." />
+        content="Скринер, мультиграфики, карта плотностей, арбитраж и торговые сигналы с 11 криптобирж." />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Obsidian Screener" />
     <meta property="og:locale" content="ru_RU" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Obsidian Screener — Фьючерсный скринер" />
+    <meta property="og:url" content="https://obsidianscreener.com/" />
+    <meta property="og:image" content="https://obsidianscreener.com/favicon.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Криптоскринер и графики криптовалют — Obsidian Screener" />
+    <meta name="twitter:description" content="Скринер, мультиграфики, карта плотностей, арбитраж и сигналы с 11 криптобирж." />
+    <meta name="twitter:image" content="https://obsidianscreener.com/favicon.png" />
     <link rel="icon" href="/favicon.ico" sizes="32x32 48x48" />
     <link rel="icon" type="image/png" href="/favicon.png" sizes="512x512" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.json" />
-    <link rel="canonical" href="https://cryptoscreen.pro/" />
+    <link rel="canonical" href="https://obsidianscreener.com/" />
     <!-- Latin + Cyrillic are the only subsets this UI actually renders on first
          paint; preloading them removes the FOUT that `font-display: swap` would
          otherwise show while fonts.css is still being parsed. -->
@@ -42,11 +45,31 @@
     <script type="application/ld+json">
             {
                 "@context": "https://schema.org",
-                "@type": "WebApplication",
-                "name": "Obsidian Screener",
-                "applicationCategory": "FinanceApplication",
-                "description": "Профессиональный скринер криптовалютных фьючерсов",
-                "operatingSystem": "Web"
+                "@graph": [
+                    {
+                        "@type": "WebSite",
+                        "@id": "https://obsidianscreener.com/#website",
+                        "url": "https://obsidianscreener.com/",
+                        "name": "Obsidian Screener",
+                        "description": "Криптоскринер и аналитическая платформа для активных трейдеров",
+                        "inLanguage": "ru-RU"
+                    },
+                    {
+                        "@type": "WebApplication",
+                        "@id": "https://obsidianscreener.com/#app",
+                        "name": "Obsidian Screener",
+                        "url": "https://obsidianscreener.com/",
+                        "applicationCategory": "FinanceApplication",
+                        "description": "Скринер криптовалют, быстрые графики, карта плотностей, арбитраж и торговые сигналы",
+                        "operatingSystem": "Web",
+                        "browserRequirements": "Requires JavaScript and a modern web browser",
+                        "offers": {
+                            "@type": "Offer",
+                            "price": "0",
+                            "priceCurrency": "RUB"
+                        }
+                    }
+                ]
             }
         </script>
 </head>

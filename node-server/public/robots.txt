@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+Disallow: /ws
+
+Sitemap: https://obsidianscreener.com/sitemap.xml

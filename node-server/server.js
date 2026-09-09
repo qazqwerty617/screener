@@ -649,6 +649,7 @@ const { renderServerChartSnapshot } = require("./serverChartRenderer");
 const telegramQueue = require("./telegramQueue");
 const priceHistoryStore = require("./priceHistoryStore");
 const securityShield = require("./securityShield");
+const { PAGES, renderSeoPage, renderNotFoundPage, renderSitemap } = require("./seoPages");
 
 // ── HTTP + WebSocket server ──
 const app = express();
@@ -715,6 +716,12 @@ app.use((_req, res, next) => {
   res.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob: https:; connect-src 'self' wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'");
   if (process.env.NODE_ENV === "production") {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  next();
+});
+app.use((req, res, next) => {
+  if (req.path === "/ws" || req.path.startsWith("/api/") || req.path.startsWith("/admin/")) {
+    res.setHeader("X-Robots-Tag", "noindex, nofollow");
   }
   next();
 });
@@ -4285,6 +4292,21 @@ setTimeout(() => {
 }, 5000).unref();
 console.log(`[STATIC] Pre-compressed ${staticCache.size} static assets into memory cache.`);
 
+// Search landing pages are server-rendered and useful without JavaScript.
+// This gives every major product intent its own canonical URL and real content
+// while the high-frequency trading workspace at / stays untouched.
+app.get("/sitemap.xml", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.type("application/xml").send(renderSitemap());
+});
+app.get(PAGES.map(page => page.path), (req, res) => {
+  const html = renderSeoPage(req.path);
+  if (!html) return res.status(404).send(renderNotFoundPage());
+  res.setHeader("Content-Language", "ru");
+  res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=3600");
+  res.type("html").send(html);
+});
+
 /**
  * index.html references every asset with a `?v=` query string, so a versioned
  * URL identifies immutable content. Serving those with `max-age=0,
@@ -4358,26 +4380,8 @@ app.use("/api", (req, res) => {
 });
 app.get("*", (req, res) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");
-  // Serve the pre-compressed shell from memory instead of re-reading and
-  // re-compressing 282 KB from disk on every deep-link load. Goes through
-  // freshStatic so a deep link cannot hand out a shell older than "/" does.
-  const shell = freshStatic("index.html");
-  if (!shell) return res.sendFile(path.join(__dirname, "public", "index.html"));
-
-  const accept = String(req.headers["accept-encoding"] || "");
-  res.setHeader("Content-Type", shell.contentType);
-  res.setHeader("ETag", shell.etag);
-  res.vary("Accept-Encoding");
-  if (req.headers["if-none-match"] === shell.etag) return res.status(304).end();
-  if (shell.brotli && accept.includes("br")) {
-    res.setHeader("Content-Encoding", "br");
-    return res.end(shell.brotli);
-  }
-  if (shell.gzipped && accept.includes("gzip")) {
-    res.setHeader("Content-Encoding", "gzip");
-    return res.end(shell.gzipped);
-  }
-  return res.end(shell.raw);
+  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  return res.status(404).send(renderNotFoundPage());
 });
 // Any unhandled error returns a generic message; details stay in the log.
 // MUST be registered last: Express propagates errors forward, so an error

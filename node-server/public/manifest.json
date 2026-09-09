@@ -1,7 +1,7 @@
 {
   "name": "Obsidian Screener",
   "short_name": "Obsidian Screener",
-  "description": "Профессиональный скринер криптовалютных фьючерсов в реальном времени",
+  "description": "Скринер криптовалют, быстрые графики, карта плотностей, арбитраж и торговые сигналы в реальном времени",
   "start_url": "/",
   "display": "standalone",
   "orientation": "any",
