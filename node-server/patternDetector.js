@@ -565,15 +565,22 @@ function scanCandles(meta, candles, cfgOverride = {}) {
     if (fmAll.retests) {
       for (const rt of fmAll.retests) {
         const dist = Math.abs(priceNow - rt.price) / priceNow;
+        const retestAge = Number(rt.lastTouchAge);
+        // A retest is an entry event, not a historical decoration. Once price
+        // has already travelled >1% from the level, or the reaction is older
+        // than 20 candles, sending it as a fresh Telegram signal is misleading.
+        if (dist > 0.01 || !Number.isFinite(retestAge) || retestAge > 20) continue;
         signals.push({
           type: 'retest', ex, sym, base, tf,
-          price: +rt.price.toFixed(4),
+          price: Number(rt.price),
           direction: rt.direction === 'up' ? 'long' : 'short',
           confidence: 5, ts: rt.touchTime || now,
           meta: {
             status: 'confirmed', touches: rt.touches || 2,
             dist: +(dist * 100).toFixed(2),
-            touchIdx: rt.touchIdx, swingIdx: rt.swingIdx
+            touchIdx: rt.touchIdx, swingIdx: rt.swingIdx,
+            breakIdx: rt.breakIdx, lastTouchAge: retestAge,
+            sourceType: 'level'
           }
         });
       }

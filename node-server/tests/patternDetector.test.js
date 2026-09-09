@@ -34,3 +34,30 @@ test("scanCandles handles a recent confirmed retest and returns finite signals",
   }
   assert.ok(signals.some(signal => signal.type === "retest"));
 });
+
+test("scanCandles does not alert a retest after price already ran far from the level", () => {
+  const candles = [];
+  for (let i = 0; i < 90; i++) candles.push(candle(i, 103, 103.4, 102.6, 103));
+
+  for (const idx of [12, 30]) {
+    candles[idx] = candle(idx, 103.5, 105, 103.2, 103.8, 1500);
+    candles[idx - 1].h = 103;
+    candles[idx + 1].h = 103;
+  }
+  candles[40] = candle(40, 104.8, 106.2, 104.7, 106, 5000);
+  for (let i = 41; i < 90; i++) candles[i] = candle(i, 106, 107.4, 105.6, 107, 1600);
+  candles[43] = candle(43, 106, 108, 105.8, 107, 2000);
+  candles[65] = candle(65, 106, 106.3, 104.95, 105.7, 1800);
+
+  const signals = scanCandles(
+    { ex: "HL", sym: "KBONK", base: "KBONK", tf: "5m" },
+    candles,
+    { swingWindow: 1, minTouches: 1, levelTolerance: 0.003, breakoutVolMult: 1 }
+  );
+
+  assert.equal(
+    signals.some(signal => signal.type === "retest" && Math.abs(signal.price - 105) < 0.5),
+    false,
+    "a completed move 1%+ away from the retest is no longer an actionable retest"
+  );
+});

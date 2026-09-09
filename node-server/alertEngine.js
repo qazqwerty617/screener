@@ -444,73 +444,92 @@ function buildCandlesFromHistory(ex, sym, tf = "1m") {
 
   let candles = Array.from(buckets.values()).sort((a, b) => a.t - b.t);
   if (candles.length === 0) return null;
-
-  // Pad back up to 25 candles if history is young, so chart renderer always has a rich baseline
-  if (candles.length < 20) {
-    const first = candles[0];
-    const padded = [];
-    const padCount = 20 - candles.length;
-    for (let i = padCount; i > 0; i--) {
-      padded.push({
-        t: first.t - (i * tfMs),
-        o: first.o,
-        h: first.o * 1.0002,
-        l: first.o * 0.9998,
-        c: first.o,
-        v: 800
-      });
-    }
-    candles = [...padded, ...candles];
-  }
-
+  // Never invent a flat past for a young instrument. Fake padding made a real
+  // MEXC impulse look like one absurd candle after twenty identical bars.
+  candles.sourceTf = tf;
   return candles;
+}
+
+function alertTimeframeMs(tf) {
+  return tf === "15m" ? 900000 : tf === "5m" ? 300000 : tf === "1h" ? 3600000 : 60000;
+}
+
+function normalizeAlertCandles(input) {
+  if (!Array.isArray(input)) return null;
+  const byTime = new Map();
+  for (const raw of input) {
+    let t = Number(raw?.t);
+    if (t > 0 && t < 1e11) t *= 1000;
+    const candle = {
+      t,
+      o: Number(raw?.o),
+      h: Number(raw?.h),
+      l: Number(raw?.l),
+      c: Number(raw?.c),
+      v: Number.isFinite(Number(raw?.v)) && Number(raw.v) >= 0 ? Number(raw.v) : 0,
+    };
+    if (!(candle.t > 0 && candle.o > 0 && candle.h > 0 && candle.l > 0 && candle.c > 0)) continue;
+    if (candle.h < Math.max(candle.o, candle.c) || candle.l > Math.min(candle.o, candle.c) || candle.h < candle.l) continue;
+    byTime.set(candle.t, candle);
+  }
+  const candles = [...byTime.values()].sort((a, b) => a.t - b.t);
+  return candles.length ? candles : null;
+}
+
+function hasCurrentTail(candles, tf, now) {
+  if (!Array.isArray(candles) || !candles.length) return false;
+  const lastT = Number(candles[candles.length - 1]?.t) || 0;
+  return lastT > 0 && now - lastT <= alertTimeframeMs(tf) + 90000;
 }
 
 // Helper to fetch chart candles fast (cached first, non-blocking fallback)
 async function getCandlesForAlert(ex, sym, targetTf) {
   try {
     let candles = null;
+    let sourceTf = targetTf;
     const now = Date.now();
 
     // 1. Instant check: is it in server klinesCache and fresh (< 2 mins)? (0ms)
     if (typeof fetchCandlesFn === "function") {
       const cached = await fetchCandlesFn(ex, sym, targetTf);
-      if (Array.isArray(cached) && cached.length >= 10) {
-        const lastT = cached[cached.length - 1]?.t || 0;
-        if (now - lastT < 600000) { // must be within last 10 minutes
-          candles = cached;
-        }
+      const normalized = normalizeAlertCandles(cached);
+      if (normalized && normalized.length >= 10 && hasCurrentTail(normalized, targetTf, now)) {
+        candles = normalized;
       }
     }
 
     // 2. Direct exchange REST API (Binance Futures/Spot, Bybit, OKX, Bitget, Gate, etc.)
     if (!Array.isArray(candles) || candles.length < 10) {
-      candles = await fetchDirectExchangeCandles(ex, sym, targetTf);
+      const direct = normalizeAlertCandles(await fetchDirectExchangeCandles(ex, sym, targetTf));
+      if (direct && hasCurrentTail(direct, targetTf, now)) candles = direct;
     }
 
     // 3. If coin is newly listed or few candles (< 30) and timeframe is > 1m, try 1m candles for better resolution
     if ((!Array.isArray(candles) || candles.length < 30) && targetTf !== "1m") {
-      const candles1m = await fetchDirectExchangeCandles(ex, sym, "1m");
+      const candles1m = normalizeAlertCandles(await fetchDirectExchangeCandles(ex, sym, "1m"));
       if (Array.isArray(candles1m) && candles1m.length > (candles ? candles.length : 0)) {
         candles = candles1m;
+        sourceTf = "1m";
       }
     }
 
-    // 4. In-memory recorded live price history fallback
+    // 4. In-memory history fallback. For a young 5m/15m instrument, use real
+    // 1m buckets instead of fabricating older candles at the requested period.
     if (!Array.isArray(candles) || candles.length < 5) {
-      candles = buildCandlesFromHistory(ex, sym, targetTf);
+      const fallbackTf = "1m";
+      const historyCandles = buildCandlesFromHistory(ex, sym, fallbackTf);
+      if (Array.isArray(historyCandles) && historyCandles.length >= 5) {
+        candles = historyCandles;
+        sourceTf = fallbackTf;
+      } else {
+        candles = null;
+      }
     }
 
     // Ensure all numeric fields are proper Numbers and synced with live ticker price
     if (Array.isArray(candles) && candles.length >= 3) {
-      const mapped = candles.map(c => ({
-        t: +c.t,
-        o: +c.o,
-        h: +c.h,
-        l: +c.l,
-        c: +c.c,
-        v: Number.isFinite(+c.v) ? +c.v : 1000
-      }));
+      const mapped = normalizeAlertCandles(candles);
+      if (!mapped || mapped.length < 5 || !hasCurrentTail(mapped, sourceTf, now)) return null;
       // Sync last candle close with live ticker price
       const t = tickersMap ? tickersMap.get(`${ex}:${sym}`) : null;
       if (t && t.p > 0 && mapped.length > 0) {
@@ -519,6 +538,7 @@ async function getCandlesForAlert(ex, sym, targetTf) {
         if (t.p > last.h) last.h = t.p;
         if (t.p < last.l) last.l = t.p;
       }
+      mapped.sourceTf = sourceTf;
       return mapped;
     }
     return null;
@@ -768,7 +788,7 @@ function processTicker(t, now, activeSubscribers) {
             const meta = {
               ex: exCode,
               sym: cleanSym,
-              tf: tfStr,
+              tf: candles.sourceTf ? candles.sourceTf.toUpperCase() : tfStr,
               vol: t.v || 0,
               chg: t.chg !== undefined ? t.chg : (primary ? primary.pctChange : 0),
               funding: t.funding,
@@ -914,7 +934,7 @@ async function scanPriceAlerts() {
                   const meta = {
                     ex,
                     sym,
-                    tf: "15M",
+                    tf: candles.sourceTf ? candles.sourceTf.toUpperCase() : "15M",
                     vol: t.v || 0,
                     chg: t.chg || 0,
                     funding: t.funding,

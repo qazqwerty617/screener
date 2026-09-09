@@ -217,3 +217,8 @@ test("the pacing gate exists in server.js with a sane interval", () => {
 test("the per-coin cooldown map is pruned like the per-pair one", () => {
   assert.match(SERVER_SRC, /for \(const \[key, ts\] of serverFormationCoinCooldown\) \{/);
 });
+
+test("Telegram retest gate honours live distance and configured candle age", () => {
+  assert.match(SERVER_SRC, /maxAgeCandles:\s*Math\.max\(/);
+  assert.match(SERVER_SRC, /if \(liveDist > 1\.0 \|\| retestAge > maxAgeCandles\) continue;/);
+});

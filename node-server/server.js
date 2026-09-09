@@ -5208,6 +5208,11 @@ server.listen(PORT, () => {
         if (!isSupport && actualPrice >= signal.price) continue;
         if (isSupport && actualPrice <= signal.price) continue;
       } else if (signal.type === "retest") {
+        const liveDist = actualPrice > 0
+          ? (Math.abs(actualPrice - signal.price) / actualPrice) * 100
+          : Infinity;
+        const retestAge = Number(signal.meta?.lastTouchAge);
+        if (liveDist > 1.0 || !Number.isFinite(retestAge) || retestAge > 20) continue;
         typeName = "Подтвержденный ретест (Ретест)";
       } else {
         continue;
@@ -5279,7 +5284,8 @@ server.listen(PORT, () => {
           retest: {
             enabled: prefs.retest?.enabled !== undefined ? !!prefs.retest.enabled : true,
             timeframes: Array.isArray(prefs.retest?.timeframes) && prefs.retest.timeframes.length > 0 ? prefs.retest.timeframes : ["5m", "15m", "1h", "4h"],
-            direction: prefs.retest?.direction || "all"
+            direction: prefs.retest?.direction || "all",
+            maxAgeCandles: Math.max(1, Math.min(35, Number(prefs.retest?.maxAgeCandles) || 20))
           }
         }
       });
@@ -5318,7 +5324,8 @@ server.listen(PORT, () => {
             retest: {
               enabled: s.retest?.enabled !== undefined ? !!s.retest.enabled : true,
               timeframes: Array.isArray(s.retest?.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"],
-              direction: s.retest?.direction || "all"
+              direction: s.retest?.direction || "all",
+              maxAgeCandles: Math.max(1, Math.min(35, Number(s.retest?.maxAgeCandles) || 20))
             }
           }
         });
@@ -5339,7 +5346,7 @@ server.listen(PORT, () => {
           blacklistCustom: "",
           trendline: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], minTouches: 4, distancePct: 0.5, direction: "all" },
           level: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], minTouches: 4, distancePct: 0.5, direction: "all" },
-          retest: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], direction: "all" }
+          retest: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], direction: "all", maxAgeCandles: 20 }
         }
       });
       seenChatIds.add(adminChatId);
@@ -5444,6 +5451,10 @@ server.listen(PORT, () => {
           if (!s.retest?.enabled) continue;
           const allowedTfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"];
           if (!allowedTfs.includes(tf)) continue;
+          const liveDist = actualPrice > 0 ? (Math.abs(actualPrice - price) / actualPrice) * 100 : Infinity;
+          const retestAge = Number.isFinite(Number(meta?.lastTouchAge)) ? Number(meta.lastTouchAge) : Infinity;
+          const maxAgeCandles = Math.max(1, Math.min(35, Number(s.retest.maxAgeCandles) || 20));
+          if (liveDist > 1.0 || retestAge > maxAgeCandles) continue;
           const targetDir = s.retest.direction || "all";
           if (targetDir !== "all") {
             const sigDir = signal.direction === "long" ? "up" : "down";
