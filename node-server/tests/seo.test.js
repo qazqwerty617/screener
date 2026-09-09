@@ -7,6 +7,14 @@ const path = require("node:path");
 const { SITE_ORIGIN, PAGES, renderSeoPage, renderNotFoundPage, renderSitemap } = require("../seoPages");
 const { INDEXNOW_KEY, createIndexNowPayload, submitIndexNow } = require("../submitIndexNow");
 
+test("Google Search Console verification file remains publicly deployable", () => {
+  const verification = fs
+    .readFileSync(path.join(__dirname, "../public/google7a6742ba1122d8b6.html"), "utf8")
+    .trim();
+
+  assert.equal(verification, "google-site-verification: google7a6742ba1122d8b6.html");
+});
+
 test("every SEO landing page has unique crawlable metadata and visible content", () => {
   assert.ok(PAGES.length >= 6);
   const titles = new Set();
