@@ -12,6 +12,10 @@ const securityShield = require("../securityShield");
 
 process.env.NODE_ENV = "test";
 
+test("orchestrator - direct HTTP NAT fallback is disabled behind the TLS proxy", () => {
+  assert.equal(orchestrator.CONFIG.IPTABLES_REDIRECT, false);
+});
+
 test("securityShield - whitelist protects localhost and private IPs", () => {
   assert.equal(securityShield.isPrivateOrLocalIp("127.0.0.1"), true);
   assert.equal(securityShield.isPrivateOrLocalIp("::1"), true);

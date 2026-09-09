@@ -112,7 +112,9 @@ const CONFIG = {
   CONTROL_SERVER_PORT: parseInt(process.env.ORCHESTRATOR_PORT || "3001", 10),
   ENABLE_CONTROL_SERVER: false,        // Optional internal REST API on port 3001
   GO_SCANNER_PORT: 8082,
-  IPTABLES_REDIRECT: true,
+  // Direct port 80 -> Node forwarding bypasses the TLS reverse proxy.
+  // Keep it available only as an explicit emergency fallback.
+  IPTABLES_REDIRECT: /^(1|true)$/i.test(process.env.IPTABLES_REDIRECT || ""),
   CIRCUIT_BREAKER_MAX_RESTARTS: 5,     // Max auto-heals within window (5 per service)
   CIRCUIT_BREAKER_WINDOW_MS: 10 * 60 * 1000,  // 10 min sliding window
   CIRCUIT_BREAKER_COOLDOWN_MS: 5 * 60 * 1000, // 5 min freeze for manual review
@@ -573,7 +575,7 @@ function optimizeSystemKernel() {
   }
 }
 
-// ═══ Iptables Port 80 -> 3000 NAT Forwarding Guard ═══════════════════════════
+// ═══ Optional emergency Port 80 -> 3000 NAT Forwarding Guard ════════════════
 function ensurePortForwarding() {
   if (os.platform() !== "linux" || !CONFIG.IPTABLES_REDIRECT) return false;
   try {
@@ -2418,4 +2420,3 @@ if (require.main === module) {
     startDaemon();
   }
 }
-
