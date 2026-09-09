@@ -64,7 +64,7 @@ test("walls below the publication score floor are dropped", () => {
 
 test("the publication score floor is configurable per call", () => {
   const input = [
-    wall({ base: "LOW", sym: "LOWUSDT", score: 3, rtwi: 3 }),
+    wall({ base: "WEAK", sym: "WEAKUSDT", score: 3, rtwi: 3 }),
     wall({ base: "HIGH", sym: "HIGHUSDT", score: 9, rtwi: 9 }),
   ];
   assert.deepEqual(
@@ -73,7 +73,7 @@ test("the publication score floor is configurable per call", () => {
   );
   assert.deepEqual(
     new Set(buildWallSnapshot(input, { minScore: 1 }).map(w => w.base)),
-    new Set(["LOW", "HIGH"])
+    new Set(["WEAK", "HIGH"])
   );
 });
 
@@ -169,8 +169,8 @@ test("every exchange keeps output slots when a loud venue dominates", () => {
         base: `Q${ex}${i}`,
         sym: `Q${ex}${i}USDT`,
         price: 500 + i,
-        score: 6.0,
-        rtwi: 6.0,
+        score: 7.0,
+        rtwi: 7.0,
       }));
     }
   }

@@ -263,7 +263,7 @@ test("a level survives a slow poll cadence without losing its identity", () => {
         `gap ${gapMinutes} min, poll ${k + 1}: identity forked`);
       t += gapMinutes * 60000;
     }
-    assert.equal(publishedAt, 1,
-      `gap ${gapMinutes} min: expected the density on the 2nd poll, got poll ${publishedAt + 1}`);
+    assert.equal(publishedAt, 2,
+      `gap ${gapMinutes} min: expected the density on the 3rd poll, got poll ${publishedAt + 1}`);
   }
 });

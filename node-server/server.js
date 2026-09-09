@@ -68,6 +68,8 @@ const patternDetector = require("./patternDetector");
 const serverLevels = require("./serverLevels");
 const wallScanner = require("./wallScanner");
 const { createArbitrageEngine } = require("./arbitrageEngine");
+const { createTransferStatusService } = require("./arbitrageTransferStatus");
+const { normalizeExchanges, analyzeMove } = require("./public/js/pumpLogic");
 let alertEngine = null;
 try {
   alertEngine = require("./alertEngine");
@@ -316,7 +318,10 @@ let marketSequence = 0;
 
 // тФАтФАтФА Monitoring тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const exStatus = new Map();
-const arbitrageEngine = createArbitrageEngine(tickers, exStatus);
+const arbitrageEngine = createArbitrageEngine(tickers, exStatus, {
+  assetAllowed: (base, ticker) => wallScanner.isTradableBase(base, ticker?.sym, ticker),
+});
+const arbitrageTransfers = createTransferStatusService(apiFetch);
 const correlationEngine = require("./correlationEngine");
 correlationEngine.init(tickers, (type, data) => {
   if (clients.size > 0) {
@@ -2926,6 +2931,25 @@ app.get("/api/arbitrage/history", (req, res) => {
   res.json({ key, points: arbitrageEngine.getHistory(key) });
 });
 
+app.get("/api/arbitrage/transfers", async (req, res) => {
+  const keys = String(req.query.routes || "")
+    .split(",")
+    .map(key => key.trim())
+    .filter(key => /^(?:spread|funding):[A-Z0-9_.-]{1,40}:[A-Z0-9]{2}:[A-Z0-9]{2}$/i.test(key))
+    .slice(0, 80);
+  const routes = keys.map(key => {
+    const [, base, buyEx, sellEx] = key.split(":");
+    return { key, base, buyEx, sellEx };
+  });
+  try {
+    const statuses = await arbitrageTransfers.getRoutes(routes);
+    res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+    res.json({ generatedAt: Date.now(), publicExchanges: ["BG", "GT", "KC", "HT"], routes: statuses });
+  } catch (error) {
+    res.status(502).json({ error: "Transfer status unavailable", detail: String(error?.message || error).slice(0, 160) });
+  }
+});
+
 app.get("/api/arbitrage/depth", async (req, res) => {
   const key = String(req.query.key || "").slice(0, 160);
   if (!/^spread:[A-Z0-9_.-]{1,40}:[A-Z0-9]{2}:[A-Z0-9]{2}$/i.test(key)) {
@@ -3718,9 +3742,10 @@ app.get("/api/market/pump-alerts", (req, res) => {
   const minPct = Math.max(0.1, parseFloat(req.query.minPct) || 1.0);
   const direction = (req.query.dir || req.query.direction || "both").toLowerCase();
   const marketType = (req.query.marketType || req.query.mt || "both").toLowerCase();
-  const rawExchanges = req.query.ex || req.query.exchanges || "";
-  const allowedEx = rawExchanges ? rawExchanges.split(",").map(e => e.trim().toUpperCase()).filter(Boolean) : null;
-  const isAllEx = !allowedEx || allowedEx.length === 0 || allowedEx.includes("ALL");
+  const hasExchangeFilter = Object.prototype.hasOwnProperty.call(req.query, "ex") || Object.prototype.hasOwnProperty.call(req.query, "exchanges");
+  const rawExchanges = req.query.ex ?? req.query.exchanges ?? "";
+  const allowedEx = hasExchangeFilter ? normalizeExchanges(String(rawExchanges).split(",")) : ["all"];
+  const isAllEx = allowedEx.includes("all");
   const minVol = parseFloat(req.query.minVol) || 0;
   const now = Date.now();
 
@@ -3733,8 +3758,6 @@ app.get("/api/market/pump-alerts", (req, res) => {
   const allowedExSet = isAllEx ? null : new Set(allowedEx);
   const lookbackMs = periodMinutes * 60 * 1000;
   const targetTs = now - lookbackMs;
-  const maxDiffMs = Math.max(lookbackMs * 0.7, 45000);
-  const maxDrop = periodMinutes <= 1 ? 35 : periodMinutes <= 5 ? 50 : 75;
   const wantPump = direction !== "dump";
   const wantDump = direction !== "pump";
 
@@ -3765,22 +3788,26 @@ app.get("/api/market/pump-alerts", (req, res) => {
       if (marketType === "spot" && !isSpot) continue;
     }
 
-    let pastPrice = 0;
     const nearest = tickerPriceRing.findNearest(key, targetTs);
-    // Require the historical sample to be reasonably close to the target timeframe
-    if (nearest && nearest.p > 0 && nearest.diffMs <= maxDiffMs) {
-      pastPrice = nearest.p;
-    } else if (t.o > 0 && periodMinutes >= 60) {
-      pastPrice = t.o;
-    }
+    // Cheap prefilter keeps the hot path logarithmic. Only genuine threshold
+    // candidates materialize their small typed-array history for path analysis.
+    if (!nearest || nearest.p <= 0) continue;
+    const quickPct = ((t.p - nearest.p) / nearest.p) * 100;
+    if (!Number.isFinite(quickPct) || Math.abs(quickPct) < minPct * 0.8) continue;
 
-    if (!(pastPrice > 0)) continue;
-
-    const changePct = ((t.p - pastPrice) / pastPrice) * 100;
-    const absPct = changePct < 0 ? -changePct : changePct;
-
-    // Anomaly / Glitch Filter: Reject physical impossibilities (e.g. -100% dump on live coins or > 250% 1m spike)
-    if (changePct <= -maxDrop || changePct >= 250 || absPct < minPct || !Number.isFinite(changePct)) continue;
+    const movementSamples = tickerPriceRing.toSeries(key);
+    const last = movementSamples[movementSamples.length - 1];
+    if (last && Math.abs(now - last.t) <= 2_000) movementSamples[movementSamples.length - 1] = { t: now, p: t.p };
+    else movementSamples.push({ t: now, p: t.p });
+    const analysis = analyzeMove(movementSamples, {
+      now,
+      periodMs: lookbackMs,
+      minPct,
+      volume: t.v || 0,
+      direction
+    });
+    if (!analysis.accepted) continue;
+    const changePct = analysis.pct;
     if (changePct > 0 ? !wantPump : !wantDump) continue;
 
     alerts.push({
@@ -3791,6 +3818,9 @@ app.get("/api/market/pump-alerts", (req, res) => {
       price: t.p,
       vol: t.v || 0,
       bars: periodMinutes,
+      quality: Math.round(analysis.quality * 1000) / 1000,
+      efficiency: Math.round(analysis.efficiency * 1000) / 1000,
+      pastPrice: analysis.referencePrice,
       ts: now
     });
   }

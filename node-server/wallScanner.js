@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Density Engine v5 — professional order-book density detection.
+ * Density Engine v6 — professional order-book density detection.
  *
  * WHY v5 REPLACED v4
  * ------------------
@@ -56,9 +56,9 @@
  * 7. CROSS-EXCHANGE CONFLUENCE. The same price defended on several venues cannot
  *    be one trader spoofing, and is scored as the strongest signal on the board.
  *
- * 8. FAIR PUBLICATION. Output slots are reserved per exchange before the global
- *    score fill, so all 11 venues stay visible instead of the loudest two
- *    flooding the map.
+ * 8. VENUE-CALIBRATED QUALITY. Every venue has its own evidence bar derived
+ *    from the depth and aggregation of the book it exposes. There is no target
+ *    count and no production output cap: every published wall passed on merit.
  */
 
 // ═══ Config ══════════════════════════════════════════════════════════════════
@@ -160,7 +160,7 @@ const MIN_SYMBOL_VOLUME_USD_OVERRIDE = process.env.WALL_MIN_SYMBOL_VOLUME_USD !=
  * Adapts to the coin's market cap, liquidity, and trading flow.
  * Eliminates trivial noise like $1.8M on BTC or $220k on SOL.
  */
-function getTierThresholds(base, vol24h = 0) {
+function getTierThresholds(base, vol24h = 0, ex = "") {
   if (process.env.WALL_MIN_ABS_USD !== undefined) {
     const override = Number(process.env.WALL_MIN_ABS_USD);
     if (Number.isFinite(override) && override >= 0) {
@@ -171,35 +171,40 @@ function getTierThresholds(base, vol24h = 0) {
   const b = String(base || "").toUpperCase();
   const vol = Number(vol24h) || 0;
 
+  let thresholds;
   if (b === "BTC") {
     if (vol >= 300_000_000) {
-      return { minFloor: 3_000_000, small: 3_000_000, medium: 7_000_000, large: 15_000_000 };
+      thresholds = { minFloor: 3_000_000, small: 3_000_000, medium: 7_000_000, large: 15_000_000 };
+    } else {
+      thresholds = { minFloor: 1_000_000, small: 1_000_000, medium: 3_000_000, large: 7_000_000 };
     }
-    return { minFloor: 1_000_000, small: 1_000_000, medium: 3_000_000, large: 7_000_000 };
-  }
-  if (b === "ETH") {
+  } else if (b === "ETH") {
     if (vol >= 150_000_000) {
-      return { minFloor: 1_500_000, small: 1_500_000, medium: 3_500_000, large: 8_000_000 };
+      thresholds = { minFloor: 1_500_000, small: 1_500_000, medium: 3_500_000, large: 8_000_000 };
+    } else {
+      thresholds = { minFloor: 500_000, small: 500_000, medium: 1_500_000, large: 4_000_000 };
     }
-    return { minFloor: 500_000, small: 500_000, medium: 1_500_000, large: 4_000_000 };
-  }
-  if (b === "SOL") {
+  } else if (b === "SOL") {
     if (vol >= 80_000_000) {
-      return { minFloor: 800_000, small: 800_000, medium: 2_000_000, large: 5_000_000 };
+      thresholds = { minFloor: 800_000, small: 800_000, medium: 2_000_000, large: 5_000_000 };
+    } else {
+      thresholds = { minFloor: 300_000, small: 300_000, medium: 800_000, large: 2_000_000 };
     }
-    return { minFloor: 300_000, small: 300_000, medium: 800_000, large: 2_000_000 };
+  } else if (vol >= 100_000_000 || ["BNB", "XRP", "DOGE", "SUI", "ADA", "AVAX", "LINK", "NEAR"].includes(b)) {
+    thresholds = { minFloor: 350_000, small: 350_000, medium: 900_000, large: 2_500_000 };
+  } else if (vol >= 10_000_000) {
+    thresholds = { minFloor: 100_000, small: 100_000, medium: 300_000, large: 800_000 };
+  } else {
+    thresholds = { minFloor: 30_000, small: 30_000, medium: 80_000, large: 200_000 };
   }
-  if (vol >= 100_000_000 || ["BNB", "XRP", "DOGE", "SUI", "ADA", "AVAX", "LINK", "NEAR"].includes(b)) {
-    return { minFloor: 350_000, small: 350_000, medium: 900_000, large: 2_500_000 };
-  }
-  if (vol >= 10_000_000) {
-    return { minFloor: 100_000, small: 100_000, medium: 300_000, large: 800_000 };
-  }
-  return { minFloor: 30_000, small: 30_000, medium: 80_000, large: 200_000 };
+
+  const scale = qualityProfileFor(ex).floorScale;
+  if (!ex || scale === 1) return thresholds;
+  return Object.fromEntries(Object.entries(thresholds).map(([key, value]) => [key, Math.round(value * scale)]));
 }
 
-function classifyWallTier(usd, base, vol24h = 0) {
-  const t = getTierThresholds(base, vol24h);
+function classifyWallTier(usd, base, vol24h = 0, ex = "") {
+  const t = getTierThresholds(base, vol24h, ex);
   if (usd >= t.large) return "large";
   if (usd >= t.medium) return "medium";
   return "small";
@@ -233,16 +238,20 @@ const MIN_CONFIRMATIONS = envInt("WALL_MIN_CONFIRMATIONS", 2, 1, 10);
 const MIN_QUALITY = envNum("WALL_MIN_QUALITY", 0.26, 0.02, 0.95);
 const KEEP_QUALITY_RATIO = envNum("WALL_KEEP_QUALITY_RATIO", 0.72, 0.2, 1.0);
 
-// Snapshot shaping. 350 strong densities is a full board; beyond that the map is
-// unreadable and the snapshot itself becomes the bottleneck on the wire.
-const MAX_OUTPUT = envInt("WALL_MAX_RESULTS", 350, 50, 20000);
+// There is deliberately no default output cap. The number on the map must be an
+// outcome of the evidence gates, never a quota. WALL_MAX_RESULTS remains an
+// emergency-only transport fuse and is inactive unless explicitly configured.
+const MAX_OUTPUT = process.env.WALL_MAX_RESULTS !== undefined
+  ? envInt("WALL_MAX_RESULTS", 20000, 50, 20000)
+  : Infinity;
 const MAX_PER_COIN = envInt("WALL_MAX_PER_COIN", 3, 1, 40);
 const CLUSTER_PCT = envNum("WALL_SNAPSHOT_CLUSTER_PCT", 0.1, 0.01, 1);
 const EX_RESERVE_RATIO = envNum("WALL_EX_RESERVE_RATIO", 0.45, 0, 0.9);
-// Publication floor on the 0..15 score scale. Must stay consistent with
-// MIN_QUALITY (score = quality * 15) or levels are marked published and then
-// silently dropped, which is what made the per-venue counters overstate the map.
-const PUBLISH_MIN_SCORE = envNum("WALL_PUBLISH_MIN_SCORE", MIN_QUALITY * 15, 0, 20);
+// Optional global override on the 0..15 publication scale. Unset by default so
+// the venue-calibrated bars remain authoritative.
+const PUBLISH_MIN_SCORE_OVERRIDE = process.env.WALL_PUBLISH_MIN_SCORE !== undefined
+  ? envNum("WALL_PUBLISH_MIN_SCORE", MIN_QUALITY * 15, 0, 20)
+  : null;
 
 // Scheduling / transport.
 const REQUEST_TIMEOUT_MS = envInt("WALL_REQUEST_TIMEOUT_MS", 7000, 1000, 30000);
@@ -322,6 +331,49 @@ const EX_PROFILE = {
   AD: { budget: 2, costTail: 1, costHot: 1, depthTail: 100, depthHot: 500, inflight: 2, aggregated: false, hasSpot: false, minVolumeUsd: 25_000 },
 };
 
+/**
+ * Evidence policy per venue.
+ *
+ * These are not quotas. A venue can publish zero or a hundred walls if that is
+ * what its current books prove. The policy only translates different exchange
+ * microstructure into comparable evidence:
+ *   - deep, raw books must show a very exceptional shelf;
+ *   - pre-merged books need stronger dominance because one level is a bucket;
+ *   - Hyperliquid is the exception: its official API exposes at most 20 levels
+ *     per side, so a 10x outlier and a major-venue dollar floor are structurally
+ *     inappropriate there. It still needs three independent observations.
+ */
+const VENUE_QUALITY_PROFILE = Object.freeze({
+  BN: Object.freeze({ minDominance: 13, minSignificance: 0.40, minQuality: 0.38, minConfirmations: 3, floorScale: 1.00 }),
+  BB: Object.freeze({ minDominance: 16, minSignificance: 0.43, minQuality: 0.42, minConfirmations: 3, floorScale: 1.00 }),
+  OX: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.39, minConfirmations: 3, floorScale: 0.85 }),
+  BG: Object.freeze({ minDominance: 14, minSignificance: 0.42, minQuality: 0.39, minConfirmations: 3, floorScale: 0.75 }),
+  GT: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.39, minConfirmations: 3, floorScale: 0.75 }),
+  MX: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.39, minConfirmations: 3, floorScale: 0.70 }),
+  KC: Object.freeze({ minDominance: 13, minSignificance: 0.40, minQuality: 0.38, minConfirmations: 3, floorScale: 0.75 }),
+  BX: Object.freeze({ minDominance: 16, minSignificance: 0.43, minQuality: 0.41, minConfirmations: 3, floorScale: 0.80 }),
+  HT: Object.freeze({ minDominance: 15, minSignificance: 0.42, minQuality: 0.40, minConfirmations: 3, floorScale: 0.65 }),
+  HL: Object.freeze({ minDominance: 6, minSignificance: 0.29, minQuality: 0.30, minConfirmations: 3, floorScale: 0.10 }),
+  AD: Object.freeze({ minDominance: 13, minSignificance: 0.40, minQuality: 0.38, minConfirmations: 3, floorScale: 0.70 }),
+});
+
+const DEFAULT_VENUE_QUALITY_PROFILE = VENUE_QUALITY_PROFILE.BN;
+
+function qualityProfileFor(ex) {
+  const profile = VENUE_QUALITY_PROFILE[ex] || DEFAULT_VENUE_QUALITY_PROFILE;
+  if (process.env.WALL_MIN_DOMINANCE === undefined &&
+      process.env.WALL_MIN_SIGNIFICANCE === undefined &&
+      process.env.WALL_MIN_QUALITY === undefined &&
+      process.env.WALL_MIN_CONFIRMATIONS === undefined) return profile;
+  return {
+    ...profile,
+    minDominance: process.env.WALL_MIN_DOMINANCE !== undefined ? MIN_DOMINANCE : profile.minDominance,
+    minSignificance: process.env.WALL_MIN_SIGNIFICANCE !== undefined ? MIN_SIGNIFICANCE : profile.minSignificance,
+    minQuality: process.env.WALL_MIN_QUALITY !== undefined ? MIN_QUALITY : profile.minQuality,
+    minConfirmations: process.env.WALL_MIN_CONFIRMATIONS !== undefined ? MIN_CONFIRMATIONS : profile.minConfirmations,
+  };
+}
+
 /** 24h volume floor for one venue. `WALL_MIN_SYMBOL_VOLUME_USD` overrides all. */
 function minVolumeFor(ex) {
   if (MIN_SYMBOL_VOLUME_USD_OVERRIDE !== null) return MIN_SYMBOL_VOLUME_USD_OVERRIDE;
@@ -343,6 +395,52 @@ const EXCLUDED_BASES = new Set([
   "EUR", "GBP", "JPY", "AUD", "USD", "CHF", "TRY", "RUB", "BRL",
 ]);
 
+// Runtime RWA catalogue, sourced from venue metadata. Curated names below are a
+// fallback for venues that expose no asset-class field; this set is what keeps
+// new stock listings out without requiring a code deploy for every ticker.
+const DYNAMIC_NON_CRYPTO_BASES = new Set();
+
+function registerVenueAssetMetadata(items) {
+  let added = 0;
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== "object") continue;
+    const isRwa = item.isRwa === true || String(item.isRwa).toUpperCase() === "YES" ||
+      String(item.isReality).toLowerCase() === "yes" || item.assetClass === "equity";
+    if (!isRwa) continue;
+    const values = [item.baseCoin, item.baseCcy, item.ctValCcy, item.base, item.symbol, item.instId];
+    for (let value of values) {
+      value = String(value || "").toUpperCase().trim();
+      if (!value) continue;
+      value = value.replace(/_SPOT$/i, "")
+        .replace(/[-_]?(SWAP|PERP)$/i, "")
+        .replace(/[-_]?(USDTM|USDT|USDC|BUSD|DAI|USD)$/i, "")
+        .replace(/[-_]/g, "");
+      if (!value || DYNAMIC_NON_CRYPTO_BASES.has(value)) continue;
+      DYNAMIC_NON_CRYPTO_BASES.add(value);
+      added++;
+    }
+  }
+  return added;
+}
+
+async function refreshVenueAssetExclusions(fetchImpl = fetch) {
+  const sources = [
+    "https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES",
+    "https://api.bitget.com/api/v3/market/instruments?category=SPOT",
+  ];
+  const results = await Promise.allSettled(sources.map(async url => {
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(4500) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    return Array.isArray(payload && payload.data) ? payload.data : [];
+  }));
+  let added = 0;
+  for (const result of results) {
+    if (result.status === "fulfilled") added += registerVenueAssetMetadata(result.value);
+  }
+  return added;
+}
+
 const KNOWN_STOCK_BASES = new Set([
   "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "COIN",
   "MSTR", "BAC", "AMD", "INTC", "PLTR", "BABA", "DIS", "PYPL", "UBER", "SPY",
@@ -355,6 +453,12 @@ const KNOWN_STOCK_BASES = new Set([
   "OXY", "SQ", "SHOP", "SE", "SNOW", "AFRM", "COINBASE", "MICROSTRATEGY",
   "SPOT", "TWTR", "PFE", "MRNA", "ZM", "DOCU", "ROKU", "SNAP", "BIDU", "JD", "PDD",
   "NIO", "XPEV", "LI", "BILI", "TME", "F", "GM", "RIVN", "LCID", "NKLA", "PLUG",
+  // Tokenized public/private companies and Asian equities currently listed by
+  // derivatives venues. Long names matter: unlike AAPL-style tickers they are
+  // impossible to identify from a generic suffix.
+  "SAMSUNG", "ANTHROPIC", "OPENAI", "SPACEX", "SPCX", "UNITREE", "FIGMA", "STRIPE",
+  "SKHYNIX", "SKHY", "SNDK", "DELL", "RKLB", "AAOI", "MRVL", "NBIS", "CXMT",
+  "XIAOMI", "TENCENT", "ALIBABA", "SONY", "TOYOTA", "TESLA", "NIULAI",
   "AVGOX", "AAPLX", "TSLAX", "NVDAX", "MSFTX", "AMZNX", "GOOGX", "GOOGLX", "METAX",
   "NFLXX", "COINX", "MSTRX", "BACX", "AMDX", "INTCX", "PLTRX", "BABAX", "DISX",
   "PYPLX", "UBERX", "SPYX", "QQQX", "ARMX", "SMCX", "HOODX",
@@ -368,12 +472,16 @@ const KNOWN_STOCK_BASES = new Set([
 function checkSingleStock(token) {
   if (!token) return false;
   if (token.endsWith("STOCK")) return true;
-  if (KNOWN_STOCK_BASES.has(token)) return true;
+  if (KNOWN_STOCK_BASES.has(token) || DYNAMIC_NON_CRYPTO_BASES.has(token)) return true;
 
   let inner = token;
   if ((token.startsWith("R") || token.startsWith("X")) && token.length >= 4) {
     inner = token.slice(1);
-    if (KNOWN_STOCK_BASES.has(inner)) return true;
+    if (KNOWN_STOCK_BASES.has(inner) || DYNAMIC_NON_CRYPTO_BASES.has(inner)) return true;
+  }
+
+  for (const suffix of ["STOCK", "ON", "X", "B", "G", "M", "I"]) {
+    if (inner.endsWith(suffix) && DYNAMIC_NON_CRYPTO_BASES.has(inner.slice(0, -suffix.length))) return true;
   }
 
   for (const root of KNOWN_STOCK_BASES) {
@@ -410,10 +518,13 @@ function isLeveragedOrSyntheticBase(base) {
   return /(?:UP|DOWN|BULL|BEAR|HALF|HEDGE|[235]L|[235]S)$/i.test(String(base || ""));
 }
 
-function isTradableBase(base, sym) {
+function isTradableBase(base, sym, metadata) {
   if (!base) return false;
+  if (metadata && (metadata.isRwa === true || String(metadata.isRwa).toUpperCase() === "YES" ||
+      String(metadata.isReality).toLowerCase() === "yes" || metadata.assetClass === "equity")) return false;
   const upper = String(base).toUpperCase();
   if (EXCLUDED_BASES.has(upper)) return false;
+  if (DYNAMIC_NON_CRYPTO_BASES.has(upper)) return false;
   if (isLeveragedOrSyntheticBase(upper)) return false;
   if (isStockOrEquityBase(upper, sym)) return false;
   return true;
@@ -853,11 +964,14 @@ function extractClusters(levels, tick, side, bandSpan) {
  * resting order from an ordinary one within each liquidity class.
  */
 function significanceOf(parts) {
+  const dominanceFloor = Number.isFinite(Number(parts.minDominance))
+    ? Number(parts.minDominance)
+    : MIN_DOMINANCE;
   // Dominance now uses the exclusive baseline, so it is unbounded in principle;
   // live books put the strongest wall per instrument between 12x and 43x. The
   // ceiling is set well above that so a genuinely exceptional wall can still
   // separate itself, and log2 makes each doubling a constant step.
-  const dominance = norm(Math.log2(Math.max(1, parts.dominance)), Math.log2(MIN_DOMINANCE), Math.log2(64));
+  const dominance = norm(Math.log2(Math.max(1, parts.dominance)), Math.log2(dominanceFloor), Math.log2(64));
   const volMinutes = norm(Math.log1p(parts.volMinutes), Math.log1p(0.05), Math.log1p(20));
   const depthShare = norm(parts.depthShare, 0.02, 0.35);
 
@@ -1035,6 +1149,7 @@ function pullRateOf(st) {
 function analyzeBook(input) {
   const { ex, coin, bids, asks } = input;
   const profile = profileFor(ex);
+  const qualityProfile = qualityProfileFor(ex);
   const aggregated = input.aggregated !== undefined ? input.aggregated : profile.aggregated;
 
   const rawBids = Array.isArray(bids) ? bids : [];
@@ -1044,7 +1159,7 @@ function analyzeBook(input) {
   const base = String(coin && coin.base || "").toUpperCase();
   const sym = String(coin && coin.sym || "");
   if (!base || !sym) return null;
-  if (!isTradableBase(base, sym)) return null;
+  if (!isTradableBase(base, sym, coin)) return null;
 
   const cleanBids = rawBids
     .map(l => ({ price: Number(l.price), qty: Number(l.qty) || 0, usd: Number(l.usd) }))
@@ -1122,7 +1237,7 @@ function analyzeBook(input) {
       // `volMinutes` is deliberately *not* a structural gate — see MIN_VOL_MINUTES.
       // It contributes to the score and rejects only liquidity that is irrelevant
       // even for its own instrument.
-      if (dominance < MIN_DOMINANCE) continue;
+      if (dominance < qualityProfile.minDominance) continue;
       if (vpm > 0 && volMinutes < MIN_VOL_MINUTES) continue;
 
       const significance = significanceOf({
@@ -1132,11 +1247,12 @@ function analyzeBook(input) {
         peakShare,
         distPct,
         aggregated,
+        minDominance: qualityProfile.minDominance,
       });
-      if (significance < MIN_SIGNIFICANCE) continue;
+      if (significance < qualityProfile.minSignificance) continue;
 
       const percentile = percentileRank(clusterUsd, cluster.usd);
-      const wallTier = classifyWallTier(cluster.usd, base, coinVol);
+      const wallTier = classifyWallTier(cluster.usd, base, coinVol, ex);
 
       candidates.push({
         base,
@@ -1407,6 +1523,7 @@ function scoreSymbolWalls(state, analysis, tracked, now) {
 
   const walls = [];
   for (const { candidate, level } of tracked) {
+    const qualityProfile = qualityProfileFor(candidate.ex);
     const persistence = persistenceOf(level, now);
     const eatenPct = level.peakUsd > 0
       ? clamp(1 - candidate.S / level.peakUsd, 0, 1)
@@ -1427,16 +1544,18 @@ function scoreSymbolWalls(state, analysis, tracked, now) {
     level.smoothedQuality = quality;
 
     // Confirmation gate: never publish a level seen only once.
-    if (level.observations < MIN_CONFIRMATIONS) continue;
+    if (level.observations < qualityProfile.minConfirmations) continue;
 
     // Hysteresis: entering the map needs full quality, staying needs less.
-    const bar = level.published ? MIN_QUALITY * KEEP_QUALITY_RATIO : MIN_QUALITY;
+    const bar = level.published
+      ? qualityProfile.minQuality * KEEP_QUALITY_RATIO
+      : qualityProfile.minQuality;
     if (quality < bar) {
       level.published = false;
       continue;
     }
     const coinVol = Number(state.coin && state.coin.v) || 0;
-    const tierInfo = getTierThresholds(candidate.base, coinVol);
+    const tierInfo = getTierThresholds(candidate.base, coinVol, candidate.ex);
     if (candidate.S < tierInfo.minFloor) {
       level.published = false;
       continue;
@@ -1446,7 +1565,7 @@ function scoreSymbolWalls(state, analysis, tracked, now) {
       ? (analysis.bidDepth - analysis.askDepth) / imbalanceRef
       : 0;
 
-    const wallTier = candidate.tier || classifyWallTier(candidate.S, candidate.base, coinVol);
+    const wallTier = candidate.tier || classifyWallTier(candidate.S, candidate.base, coinVol, candidate.ex);
 
     walls.push({
       base: candidate.base,
@@ -1493,6 +1612,9 @@ function scoreSymbolWalls(state, analysis, tracked, now) {
       lifeMs: Math.max(0, level.lastSeenAt - level.firstSeenAt),
       age: Math.round(Math.max(0, level.lastSeenAt - level.firstSeenAt) / 1000),
       qualityScore: +(quality * 100).toFixed(1),
+      // The snapshot may honour the lifecycle hysteresis only for a wall that
+      // previously cleared the strict entry bar.
+      qualityAdmitted: true,
       active: true,
       updatedAt: now,
       levelKey: level.key,
@@ -1623,7 +1745,7 @@ function clusterWalls(walls) {
       cur.pct = +(totalS > 0 ? (cur.pct * cur.S + w.pct * w.S) / totalS : cur.pct).toFixed(4);
       cur.S = totalS;
       cur.wallK = Math.round(totalS / 1000);
-      cur.tier = classifyWallTier(totalS, cur.base, cur.v || 0);
+      cur.tier = classifyWallTier(totalS, cur.base, cur.v || 0, cur.ex);
       cur.sizeType = cur.tier;
       cur.count = (cur.count || 1) + (w.count || 1);
       cur.rtwi = Math.max(cur.rtwi || 0, w.rtwi || 0);
@@ -1749,20 +1871,18 @@ function applyConfluence(walls) {
 }
 
 /**
- * Deterministic snapshot builder.
- *
- * Fairness matters as much as ranking: with a single global "strongest first"
- * cut, two chatty venues fill the entire board and the user loses eight
- * exchanges. Each exchange therefore gets a reserved slice of the output
- * (round-robin by its own best walls) before the remainder is filled purely by
- * score.
+ * Deterministic snapshot builder. Production has no count target: admission is
+ * exclusively evidence-based. The optional maxOutput argument and environment
+ * fuse exist for deterministic tests and operational emergencies only.
  */
 function buildWallSnapshot(allWalls, options = {}) {
   if (!Array.isArray(allWalls) || allWalls.length === 0) return [];
 
   const maxOutput = Number.isInteger(options.maxOutput) && options.maxOutput > 0 ? options.maxOutput : MAX_OUTPUT;
   const maxPerCoin = Number.isInteger(options.maxPerCoin) && options.maxPerCoin > 0 ? options.maxPerCoin : MAX_PER_COIN;
-  const minScore = Number.isFinite(options.minScore) ? options.minScore : PUBLISH_MIN_SCORE;
+  const minScore = Number.isFinite(options.minScore)
+    ? options.minScore
+    : PUBLISH_MIN_SCORE_OVERRIDE;
   const reserveRatio = Number.isFinite(options.reserveRatio) ? options.reserveRatio : EX_RESERVE_RATIO;
 
   const validWalls = [];
@@ -1778,17 +1898,21 @@ function buildWallSnapshot(allWalls, options = {}) {
     if (!w.ex || typeof w.ex !== "string") continue;
     if (!w.sym || typeof w.sym !== "string") continue;
     if (w.side !== "bid" && w.side !== "ask") continue;
+    if (!isTradableBase(w.base, w.sym, w)) continue;
 
     const score = Number.isFinite(Number(w.score)) ? Number(w.score) : Number(w.rtwi);
     if (!Number.isFinite(score)) continue;
-    if (score < minScore) continue;
+    const venueScoreFloor = minScore === null
+      ? qualityProfileFor(w.ex).minQuality * 15 * (w.qualityAdmitted ? KEEP_QUALITY_RATIO : 1)
+      : minScore;
+    if (score < venueScoreFloor) continue;
 
     const rank = Number(w.rank);
     if (Number.isFinite(rank) && rank > 0 && rank < 2) continue;
 
-    const tierInfo = getTierThresholds(w.base, w.v || 0);
+    const tierInfo = getTierThresholds(w.base, w.v || 0, w.ex);
     if (S < tierInfo.minFloor) continue;
-    const wallTier = w.tier || classifyWallTier(S, w.base, w.v || 0);
+    const wallTier = w.tier || classifyWallTier(S, w.base, w.v || 0, w.ex);
 
     validWalls.push({
       ...w,
@@ -2141,7 +2265,7 @@ function refreshUniverse(tickers) {
     if (!(Number(t.p) > 0)) continue;
     const vol = Number(t.v) || 0;
     if (vol < floors.get(t.ex)) continue;
-    if (!isTradableBase(t.base, t.sym)) continue;
+    if (!isTradableBase(t.base, t.sym, t)) continue;
     if (t.ex === "BX" && t.sym.endsWith("_SPOT")) continue;
     // A ticker map can hold alias keys (e.g. MEXC with and without "_").
     list.push(t);
@@ -2499,6 +2623,22 @@ async function updateSpotTickers(tickers) {
       const r = await fetch(url, { headers, signal: AbortSignal.timeout(3500) });
       if (!r.ok) return;
       const data = await r.json();
+      let venueExcludedSymbols = null;
+      if (ex === "BG") {
+        try {
+          const metadataResponse = await fetch(
+            "https://api.bitget.com/api/v3/market/instruments?category=SPOT",
+            { headers, signal: AbortSignal.timeout(3500) }
+          );
+          if (metadataResponse.ok) {
+            const metadata = await metadataResponse.json();
+            registerVenueAssetMetadata(metadata.data || []);
+            venueExcludedSymbols = new Set((metadata.data || [])
+              .filter(item => String(item.isRwa).toUpperCase() === "YES" || String(item.isReality).toLowerCase() === "yes")
+              .map(item => item.symbol));
+          }
+        } catch (_) {}
+      }
 
       let items = [];
       if (ex === "BN" || ex === "MX") {
@@ -2514,7 +2654,8 @@ async function updateSpotTickers(tickers) {
           sym: d.instId.replace("-", "") + "_SPOT", base: d.instId.split("-")[0], p: +d.last, v: +d.volCcy24h,
         }));
       } else if (ex === "BG") {
-        items = (data.data || []).filter(d => d.symbol && d.symbol.endsWith("USDT")).map(d => ({
+        items = (data.data || []).filter(d => d.symbol && d.symbol.endsWith("USDT") &&
+          !(venueExcludedSymbols && venueExcludedSymbols.has(d.symbol))).map(d => ({
           sym: d.symbol + "_SPOT", base: d.symbol.replace(/USDT$/, ""), p: +d.lastPr, v: +d.usdtVolume,
         }));
       } else if (ex === "GT") {
@@ -2552,16 +2693,21 @@ function startScanning(tickers, apiFetch, onUpdate) {
   engineStarted = true;
   onUpdateCb = onUpdate || null;
 
-  console.log("[WALL] Density Engine v5 — tick-relative geometry, locally expected liquidity");
-  console.log(`[WALL] band=${MIN_DIST_PCT}%-${MAX_DIST_PCT}%, seed=${SEED_MULT}x grow=${GROW_MULT}x gap<=${MAX_TICK_GAP} ticks, minDominance=${MIN_DOMINANCE}x, maxOutput=${MAX_OUTPUT}, tiers=${TIERS.map(t => t.intervalMs).join("/")}ms`);
+  console.log("[WALL] Density Engine v6 — venue-calibrated evidence, no result quota");
+  console.log(`[WALL] band=${MIN_DIST_PCT}%-${MAX_DIST_PCT}%, seed=${SEED_MULT}x grow=${GROW_MULT}x gap<=${MAX_TICK_GAP} ticks, output=${Number.isFinite(MAX_OUTPUT) ? MAX_OUTPUT : "unlimited"}, tiers=${TIERS.map(t => t.intervalMs).join("/")}ms`);
   console.log(`[WALL] volume floors: ${EXCHANGES.map(ex => `${ex} $${(minVolumeFor(ex) / 1000).toFixed(0)}K`).join(", ")}`);
 
+  const assetMetadataReady = refreshVenueAssetExclusions()
+    .catch(e => console.warn("[WALL] RWA metadata refresh failed; curated fallback active:", e.message));
   updateSpotTickers(tickers).catch(e => console.error("[SPOT] Initial load error:", e.message));
   setInterval(() => {
     updateSpotTickers(tickers).catch(e => console.error("[SPOT] Poll update error:", e.message));
+    refreshVenueAssetExclusions().catch(() => {});
   }, SPOT_REFRESH_MS);
 
-  startUniverseLoop(tickers);
+  // The first universe must not race the asset-class catalogue; otherwise a
+  // fresh deploy spends its first sweep and confirmation budget on RWA books.
+  assetMetadataReady.finally(() => startUniverseLoop(tickers));
   startPublishLoop();
 
   // Let the ticker WS feeds populate before the first book requests.
@@ -2587,6 +2733,8 @@ module.exports = {
   clusterDominance,
   canonicalAsset,
   canonicalBase,
+  qualityProfileFor,
+  registerVenueAssetMetadata,
   minVolumeFor,
   getTierThresholds,
   classifyWallTier,

@@ -9,8 +9,21 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   async function init() {
     try {
       if (updateExStatus) updateExStatus("BG", "connecting");
-      const data = await apiFetch("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", 15000, 2);
+      const [data, contracts] = await Promise.all([
+        apiFetch("https://api.bitget.com/api/v2/mix/market/tickers?productType=USDT-FUTURES", 15000, 2),
+        apiFetch("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES", 15000, 2),
+      ]);
       if (data.code !== "00000" || !data.data) throw new Error(`Bitget API error: ${data.msg || "No data"}`);
+
+      // Bitget exposes the authoritative RWA classification on contract
+      // metadata. Preserve it on the ticker instead of guessing from an
+      // ever-growing list of company names; the density scanner excludes it
+      // while the rest of the terminal can continue displaying the market.
+      const rwaSymbols = new Set(
+        (contracts && contracts.code === "00000" && Array.isArray(contracts.data) ? contracts.data : [])
+          .filter(item => String(item.isRwa).toUpperCase() === "YES")
+          .map(item => item.symbol)
+      );
 
       bgSyms = [];
       let added = 0;
@@ -24,6 +37,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           v: +d.usdtVolume, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
           oi: +d.openInterest * p || 0,
           bid: +d.bidPr || 0, ask: +d.askPr || 0, quoteTs: Date.now(), fundingInterval: 8,
+          isRwa: rwaSymbols.has(d.symbol),
         });
         added++;
       }

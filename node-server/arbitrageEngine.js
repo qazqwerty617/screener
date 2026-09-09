@@ -25,7 +25,10 @@ const STOCK_ROOTS_ARBITRAGE = [
   "HON", "UNP", "LIN", "BMY", "AMGN", "LOW", "IBM", "SBUX", "GE", "CAT",
   "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
   "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
-  "TQQQ", "SQQQ", "SPXL", "SPXS", "SOXL", "SOXS"
+  "TQQQ", "SQQQ", "SPXL", "SPXS", "SOXL", "SOXS",
+  "SAMSUNG", "ANTHROPIC", "OPENAI", "SPACEX", "SPCX", "UNITREE", "FIGMA", "STRIPE",
+  "SKHYNIX", "SKHY", "SNDK", "DELL", "RKLB", "AAOI", "MRVL", "NBIS", "CXMT",
+  "XIAOMI", "TENCENT", "ALIBABA", "SONY", "TOYOTA", "NIO"
 ];
 
 const MULTIPLIER_PREFIXES = [
@@ -137,9 +140,10 @@ function round(value, digits = 6) {
   return Math.round(value * factor) / factor;
 }
 
-function quoteFor(ticker, now) {
+function quoteFor(ticker, now, excludedBases = null) {
   const { base, multiplier, rawBase } = extractBaseAndMultiplier(ticker);
   if (!base) return null;
+  if (ticker?.isRwa === true || String(ticker?.isRwa || "").toUpperCase() === "YES" || STOCK_ROOTS_ARBITRAGE.includes(base) || excludedBases?.has(base)) return null;
 
   const rawMid = finitePositive(ticker.p);
   const rawBid = finitePositive(ticker.bid) || rawMid;
@@ -204,26 +208,52 @@ function tradeUrl(ex, sym) {
   return urls[ex] || "#";
 }
 
+function spreadSample(base, buy, sell) {
+  if (!buy?.ask || !buy?.bid || !sell?.ask || !sell?.bid) return null;
+  const gross = ((sell.bid - buy.ask) / buy.ask) * 100;
+  const exitGross = ((buy.bid - sell.ask) / sell.ask) * 100;
+  const fees = (EXCHANGES[buy.ex]?.fee || 0.055) + (EXCHANGES[sell.ex]?.fee || 0.055);
+  return {
+    key: routeKey("spread", base, buy.ex, sell.ex),
+    base,
+    buy,
+    sell,
+    gross,
+    net: gross - fees,
+    exitGross,
+    exitNet: exitGross - fees,
+    fees,
+  };
+}
+
 // Check if ratio between two prices represents an unhandled power-of-10 contract multiplier
 function detectDynamicMultiplier(pA, pB) {
   if (pA <= 0 || pB <= 0) return 1;
   const rawRatio = pA / pB;
   const candidatePowers = [10, 100, 1000, 10000, 100000, 1000000, 1000000000];
   for (const pow of candidatePowers) {
-    if (Math.abs(rawRatio - pow) / pow < 0.08) return pow;
-    if (Math.abs(rawRatio - (1 / pow)) / (1 / pow) < 0.08) return 1 / pow;
+    if (Math.abs(rawRatio - pow) / pow < 0.015) return pow;
+    if (Math.abs(rawRatio - (1 / pow)) / (1 / pow) < 0.015) return 1 / pow;
   }
   return 1;
 }
 
-function buildRows(tickers, now = Date.now(), history = null) {
+function buildRows(tickers, now = Date.now(), history = null, onRouteSample = null, assetAllowed = null) {
   const groups = new Map();
   const seenObjects = new Set();
+  const excludedBases = new Set(STOCK_ROOTS_ARBITRAGE);
+  for (const ticker of tickers.values()) {
+    if (ticker?.isRwa === true || String(ticker?.isRwa || "").toUpperCase() === "YES") {
+      const { base } = extractBaseAndMultiplier(ticker);
+      if (base) excludedBases.add(base);
+    }
+  }
   for (const ticker of tickers.values()) {
     if (!ticker || seenObjects.has(ticker) || !EXCHANGES[ticker.ex]) continue;
     seenObjects.add(ticker);
-    const quote = quoteFor(ticker, now);
+    const quote = quoteFor(ticker, now, excludedBases);
     if (!quote?.base) continue;
+    if (typeof assetAllowed === "function" && !assetAllowed(quote.base, ticker)) continue;
     if (!groups.has(quote.base)) groups.set(quote.base, new Map());
     const byExchange = groups.get(quote.base);
     const current = byExchange.get(quote.ex);
@@ -260,16 +290,18 @@ function buildRows(tickers, now = Date.now(), history = null) {
         // In crypto arbitrage, genuine price ratio between venues for the same asset is tightly bounded
         if (ratio < 0.70 || ratio > 1.45) continue;
 
-        const buy = a.ask <= b.ask ? a : b;
-        const sell = a.ask <= b.ask ? b : a;
-        if (sell.bid <= 0 || buy.ask <= 0) continue;
+        const routeAB = spreadSample(base, a, b);
+        const routeBA = spreadSample(base, b, a);
+        if (!routeAB || !routeBA) continue;
+        if (typeof onRouteSample === "function") {
+          onRouteSample(routeAB);
+          onRouteSample(routeBA);
+        }
+        const selected = routeAB.net >= routeBA.net ? routeAB : routeBA;
+        const { buy, sell, gross, net, exitGross, exitNet, fees: fee } = selected;
 
-        const gross = ((sell.bid - buy.ask) / buy.ask) * 100;
         // Plausible gross spread range: -0.5% to +30% (spreads > 30% are ticker collisions on unverified tokens)
         if (gross < -0.5 || gross > 30) continue;
-
-        const fee = (EXCHANGES[buy.ex]?.fee || 0.055) + (EXCHANGES[sell.ex]?.fee || 0.055);
-        const net = gross - fee;
         const liquidity = Math.min(buy.volume || 0, sell.volume || 0);
 
         // Require minimum tradable liquidity ($5,000) to eliminate phantom zero-volume rows
@@ -295,10 +327,11 @@ function buildRows(tickers, now = Date.now(), history = null) {
         spreads.push({
           key: rKey, base, symbol: `${base}/USDT`,
           buyEx: buy.ex, buyName: EXCHANGES[buy.ex].name, buySymbol: buy.sym,
-          buyAsk: round(buy.rawAsk, 8), buyMultiplier: buy.multiplier,
+          buyAsk: round(buy.rawAsk, 8), buyBid: round(buy.rawBid, 8), buyMultiplier: buy.multiplier,
           sellEx: sell.ex, sellName: EXCHANGES[sell.ex].name, sellSymbol: sell.sym,
-          sellBid: round(sell.rawBid, 8), sellMultiplier: sell.multiplier,
+          sellBid: round(sell.rawBid, 8), sellAsk: round(sell.rawAsk, 8), sellMultiplier: sell.multiplier,
           gross: round(gross, 4), fees: round(fee, 4), net: round(net, 4),
+          exitGross: round(exitGross, 4), exitNet: round(exitNet, 4),
           liquidity: round(liquidity, 2), openInterest: round(Math.min(buy.oi || 0, sell.oi || 0), 2),
           buyFunding: round(buy.funding, 6), sellFunding: round(sell.funding, 6),
           buyInterval: buy.interval, sellInterval: sell.interval,
@@ -366,34 +399,55 @@ function buildRows(tickers, now = Date.now(), history = null) {
   return { spreads, funding, groups: groups.size };
 }
 
-function createArbitrageEngine(tickers, exStatus) {
+function createArbitrageEngine(tickers, exStatus, options = {}) {
   let snapshot = { generatedAt: 0, spreads: [], funding: [], groups: 0 };
   const history = new Map();
+  const watchedRoutes = new Map();
+  const clock = typeof options.now === "function" ? options.now : Date.now;
+  const rankedHistoryLimit = Math.max(0, Number.isFinite(options.rankedHistoryLimit) ? options.rankedHistoryLimit : 200);
+  const historyLimit = Math.max(90, Number.isFinite(options.historyLimit) ? options.historyLimit : 2160);
   let timer = null;
 
-  function record(key, ts, value, buyPrice = 0, sellPrice = 0, gross = 0) {
+  function record(key, ts, value, buyPrice = 0, sellPrice = 0, gross = 0, exit = 0, buyExit = 0, sellExit = 0) {
     const points = history.get(key) || [];
-    points.push([ts, value, buyPrice, sellPrice, gross]);
-    if (points.length > 60) points.splice(0, points.length - 60);
+    const previous = points[points.length - 1];
+    if (previous?.[0] === ts) return;
+    points.push([ts, value, buyPrice, sellPrice, gross, exit, buyExit, sellExit]);
+    if (points.length > historyLimit) points.splice(0, points.length - historyLimit);
     history.set(key, points);
   }
 
   function refresh() {
-    const generatedAt = Date.now();
-    snapshot = { generatedAt, ...buildRows(tickers, generatedAt, history) };
-    for (const row of snapshot.spreads.slice(0, 150)) {
-      record(row.key, generatedAt, row.net, row.buyAsk, row.sellBid, row.gross);
-      // Bi-directional key for history query stability
-      const altKey = `spread:${row.base}:${row.sellEx}:${row.buyEx}`;
-      record(altKey, generatedAt, row.net, row.buyAsk, row.sellBid, row.gross);
+    const generatedAt = clock();
+    const watchedSamples = new Map();
+    const rows = buildRows(tickers, generatedAt, history, sample => {
+      if (watchedRoutes.has(sample.key)) watchedSamples.set(sample.key, sample);
+    }, options.assetAllowed);
+    snapshot = { generatedAt, ...rows };
+    for (const row of snapshot.spreads.slice(0, rankedHistoryLimit)) {
+      record(row.key, generatedAt, row.net, row.buyAsk, row.sellBid, row.gross, row.exitNet, row.buyBid, row.sellAsk);
     }
-    for (const row of snapshot.funding.slice(0, 150)) {
+    for (const sample of watchedSamples.values()) {
+      record(
+        sample.key,
+        generatedAt,
+        round(sample.net, 4),
+        round(sample.buy.rawAsk, 8),
+        round(sample.sell.rawBid, 8),
+        round(sample.gross, 4),
+        round(sample.exitNet, 4),
+        round(sample.buy.rawBid, 8),
+        round(sample.sell.rawAsk, 8),
+      );
+    }
+    for (const row of snapshot.funding.slice(0, rankedHistoryLimit)) {
       record(row.key, generatedAt, row.daily, row.longPrice, row.shortPrice, row.basis);
-      const altKey = `funding:${row.base}:${row.shortEx}:${row.longEx}`;
-      record(altKey, generatedAt, row.daily, row.longPrice, row.shortPrice, row.basis);
     }
     for (const [key, points] of history) {
-      if (!points.length || generatedAt - points[points.length - 1][0] > 3600000) history.delete(key);
+      if (!points.length || generatedAt - points[points.length - 1][0] > 12 * 3600000) history.delete(key);
+    }
+    for (const [key, touchedAt] of watchedRoutes) {
+      if (generatedAt - touchedAt > 15 * 60000) watchedRoutes.delete(key);
     }
   }
 
@@ -420,14 +474,9 @@ function createArbitrageEngine(tickers, exStatus) {
   }
 
   function getHistory(key) {
-    const direct = history.get(String(key || ""));
-    if (direct && direct.length) return direct;
-    const parts = String(key || "").split(":");
-    if (parts.length === 4) {
-      const altKey = `${parts[0]}:${parts[1]}:${parts[3]}:${parts[2]}`;
-      return history.get(altKey) || [];
-    }
-    return [];
+    const wanted = String(key || "");
+    watchedRoutes.set(wanted, clock());
+    return history.get(wanted) || [];
   }
 
   return { start, refresh, getSnapshot, getOpportunity, getHistory };

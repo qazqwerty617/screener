@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { canonicalBase, buildRows } = require("../arbitrageEngine");
+const { canonicalBase, buildRows, createArbitrageEngine } = require("../arbitrageEngine");
 
 test("normalizes exchange-specific perpetual symbols", () => {
   assert.equal(canonicalBase({ sym: "BTC-USDT-SWAP" }), "BTC");
@@ -72,3 +72,57 @@ test("auto-normalizes power-of-10 contract multiplier discrepancy", () => {
   assert.equal(row.gross > 0, true);
 });
 
+test("chooses the best executable direction instead of the lowest ask", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["BN:EDGEUSDT", { ex: "BN", sym: "EDGEUSDT", base: "EDGE", p: 100, bid: 99.99, ask: 100, v: 2e6, quoteTs: now }],
+    ["BB:EDGEUSDT", { ex: "BB", sym: "EDGEUSDT", base: "EDGE", p: 95, bid: 90, ask: 100.01, v: 2e6, quoteTs: now }],
+  ]);
+
+  const row = buildRows(map, now).spreads[0];
+  assert.equal(row.buyEx, "BB");
+  assert.equal(row.sellEx, "BN");
+  assert.ok(row.net > -0.2, `expected the tighter reverse route, got ${row.net}%`);
+});
+
+test("spread rows expose executable entry and exit prices", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, bid: 99.9, ask: 100, v: 10e6, quoteTs: now }],
+    ["BB:BTCUSDT", { ex: "BB", sym: "BTCUSDT", base: "BTC", p: 101, bid: 101, ask: 101.1, v: 20e6, quoteTs: now }],
+  ]);
+
+  const row = buildRows(map, now).spreads[0];
+  assert.equal(row.buyBid, 99.9);
+  assert.equal(row.sellAsk, 101.1);
+  assert.ok(Number.isFinite(row.exitNet));
+});
+
+test("watching a route keeps collecting it outside the ranked history window", () => {
+  let now = Date.now();
+  const map = new Map([
+    ["BN:TESTUSDT", { ex: "BN", sym: "TESTUSDT", base: "TEST", p: 100, bid: 99.9, ask: 100, v: 1e6, quoteTs: now }],
+    ["BB:TESTUSDT", { ex: "BB", sym: "TESTUSDT", base: "TEST", p: 101, bid: 101, ask: 101.1, v: 1e6, quoteTs: now }],
+  ]);
+  const engine = createArbitrageEngine(map, new Map(), { now: () => now, rankedHistoryLimit: 0 });
+  engine.refresh();
+  const key = engine.getSnapshot().spreads[0].key;
+  engine.getHistory(key);
+
+  for (let i = 0; i < 90; i++) {
+    now += 5_000;
+    for (const ticker of map.values()) ticker.quoteTs = now;
+    engine.refresh();
+  }
+
+  assert.ok(engine.getHistory(key).length >= 90, "selected route history must exceed the old 60-point cap");
+});
+
+test("tokenized stocks and exchange RWA instruments never become arbitrage routes", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["OX:ANTHROPIC-USDT-SWAP", { ex: "OX", sym: "ANTHROPIC-USDT-SWAP", base: "ANTHROPIC", p: 200, bid: 200, ask: 201, v: 2e6, quoteTs: now }],
+    ["BG:ANTHROPICUSDT", { ex: "BG", sym: "ANTHROPICUSDT", base: "ANTHROPIC", p: 2000, bid: 1999, ask: 2000, v: 2e6, quoteTs: now, isRwa: true }],
+  ]);
+  assert.equal(buildRows(map, now).spreads.length, 0);
+});

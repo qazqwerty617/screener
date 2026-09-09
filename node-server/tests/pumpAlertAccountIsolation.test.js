@@ -21,7 +21,7 @@ test("alertEngine isolates subscribers and prevents cross-subscriber pollution",
   assert.doesNotMatch(ENGINE_SRC, /let minPeriodMins = 5;\s*let detectedPctChange = 0;/);
   
   // Matching subscriber entries store their own parameters
-  assert.match(ENGINE_SRC, /matchingSubs\.push\(\{\s*sub,\s*pctChange,\s*pastPrice:\s*pastPoint\.p,\s*isPump,\s*periodMins,\s*cooldownKey,\s*cooldownMs\s*\}\)/);
+  assert.match(ENGINE_SRC, /matchingSubs\.push\(\{[\s\S]*?pastPrice:\s*analysis\.referencePrice,[\s\S]*?quality:\s*analysis\.quality[\s\S]*?\}\);/);
 
   // Telegram dispatch loops through matchingSubs using each entry's own period and pctChange
   assert.match(ENGINE_SRC, /• <b>Период:<\/b> \$\{entryPeriodMins\} мин/);
@@ -39,11 +39,11 @@ test("alertEngine sends targeted WebSocket alerts with targetUserId and user's p
 
 test("alertEngine global WebSocket broadcast is strictly benchmark 5m and does not bleed subscriber settings", () => {
   const wsBlock = ENGINE_SRC.slice(
-    ENGINE_SRC.indexOf("// Check 5-minute threshold for real-time WebSocket broadcast to website users"),
+    ENGINE_SRC.indexOf("// Public real-time feed uses the same path-quality"),
     ENGINE_SRC.indexOf("if (matchingSubs.length === 0) return;")
   );
   assert.match(wsBlock, /bars:\s*5/);
-  assert.match(wsBlock, /const wsPct = defaultPctChange;/);
+  assert.match(wsBlock, /const wsPct = wsAnalysis\.pct;/);
   assert.doesNotMatch(wsBlock, /matchingSubs\.length > 0 \? detectedPctChange : defaultPctChange/);
 });
 
@@ -59,11 +59,26 @@ test("app.js enforces targetUserId and period/timeframe matching on server push 
   assert.match(handlerBody, /const userBars = Math\.max\(1, Math\.round\(pdSettings\.periodMinutes \|\| 5\)\);/);
   assert.match(handlerBody, /const alertBars = Math\.max\(1, Math\.round\(data\.bars \|\| 5\)\);/);
   assert.match(handlerBody, /if \(alertBars !== userBars\) return;/);
+  assert.match(handlerBody, /if \(!pdIsExchangeAllowed\(data\.ex\)\) return;/);
+  assert.match(APP_SRC, /function pdFireAlert\([^)]*\) \{\s*\/\/[\s\S]*?if \(!pdIsExchangeAllowed\(ex\)\) return;/);
+});
+
+test("the live detector reads volume from the ticker instead of an undefined variable", () => {
+  const start = APP_SRC.indexOf("function pdCheckLiveTick");
+  const end = APP_SRC.indexOf("window.pdTrackPrice", start);
+  const block = APP_SRC.slice(start, end);
+  assert.match(block, /const coin = window\.coins/);
+  assert.doesNotMatch(block, /\bc\s*&&\s*c\.v\b/);
 });
 
 test("app.js scopes localStorage by user ID to prevent cross-account settings overwrite", () => {
   assert.match(APP_SRC, /function pdGetStorageKey\(\)/);
   assert.match(APP_SRC, /`obsidian_pump_alert_settings_\$\{userId\}`/);
+});
+
+test("the pump settings UI uses ALL as a mode and delegates exchange toggling to PumpLogic", () => {
+  assert.match(APP_SRC, /pdLogic\.toggleExchangeSelection\(draft\.exchanges, ex\)/);
+  assert.doesNotMatch(APP_SRC, /draft\.exchanges = \["all", "BN", "BB", "OX"/);
 });
 
 test("functional: alertEngine processes ticks and delivers distinct messages to distinct subscribers", async () => {
@@ -209,3 +224,79 @@ test("functional: alertEngine processes ticks and delivers distinct messages to 
   }
 });
 
+test("functional: pump alerts never escape the subscriber's selected exchanges", async () => {
+  delete require.cache[require.resolve("../alertEngine")];
+  const alertEngine = require("../alertEngine");
+
+  const sentTelegram = [];
+  const targetedWsAlerts = [];
+  const mockUserStore = {
+    getAllUsers: () => ({
+      "exchange-filter-user": {
+        id: "exchange-filter-user",
+        telegramChatId: "tg-exchange-filter",
+        preferences: {
+          notifications: {
+            tgEnabled: true,
+            pumpDump: {
+              enabled: true,
+              periodMinutes: 1,
+              minPct: 1,
+              minVolume: 1000,
+              direction: "both",
+              marketType: "both",
+              exchanges: ["BN", "BB"],
+              cooldownSeconds: 1
+            }
+          }
+        }
+      }
+    })
+  };
+
+  const tickers = new Map([
+    ["BN:ALLOWEDUSDT", { key: "BN:ALLOWEDUSDT", p: 103, v: 5_000_000 }],
+    ["MX:BLOCKEDUSDT", { key: "MX:BLOCKEDUSDT", p: 103, v: 5_000_000 }]
+  ]);
+
+  alertEngine.init({
+    tickers,
+    userStore: mockUserStore,
+    telegramBot: {
+      sendAlert: async (chatId, text) => {
+        sentTelegram.push({ chatId, text });
+        return { ok: true };
+      }
+    },
+    fetchCandles: async () => Array.from({ length: 12 }, (_, i) => ({
+      t: Date.now() - (12 - i) * 60_000,
+      o: 100,
+      h: 104,
+      l: 99,
+      c: 103,
+      v: 1000
+    })),
+    sendUserAlert: (userId, type, data) => targetedWsAlerts.push({ userId, type, data }),
+    broadcastAlert: () => {}
+  });
+
+  try {
+    const now = Date.now();
+    for (const key of ["BN:ALLOWEDUSDT", "MX:BLOCKEDUSDT"]) {
+      alertEngine.priceHistory.push(key, now - 60_000, 100);
+      alertEngine.processTicker({ key, p: 103, v: 5_000_000 }, now);
+    }
+
+    const deadline = Date.now() + 4000;
+    while (targetedWsAlerts.length < 1 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+
+    assert.equal(targetedWsAlerts.length, 1, "only the selected Binance route may alert");
+    assert.equal(targetedWsAlerts[0].data.ex, "BN");
+    assert.equal(targetedWsAlerts.some(alert => alert.data.ex === "MX"), false);
+  } finally {
+    alertEngine.stop();
+  }
+});

@@ -82,15 +82,16 @@ test("a single sighting is never published (anti-flicker confirmation gate)", ()
   assert.deepEqual(walls, []);
 });
 
-test("a level is published on its second confirmation with low persistence", () => {
+test("a level is published only after three confirmations", () => {
   reset();
   let t = 1_100_000;
+  feed({ wallUsd: 900_000 }, t); t += 20_000;
   feed({ wallUsd: 900_000 }, t); t += 20_000;
   const walls = feed({ wallUsd: 900_000 }, t);
 
   const wall = walls.find(w => w.side === "bid");
   assert.ok(wall, "wall must appear once confirmed");
-  assert.equal(wall.confirmations, 2);
+  assert.equal(wall.confirmations, 3);
   assert.ok(wall.persistence < 0.35, `persistence too high when barely confirmed: ${wall.persistence}`);
   // firstSeenAt must point at the original sighting, not the confirming poll.
   assert.equal(wall.firstSeenAt, 1_100_000);
@@ -108,6 +109,8 @@ test("persistence, confirmations and score all rise as a level survives", () => 
     if (i === 0) {
       // Held back by the confirmation gate.
       assert.equal(wall, undefined);
+    } else if (i === 1) {
+      assert.equal(wall, undefined, "two sightings must still be held behind the anti-spoof gate");
     } else {
       assert.ok(wall, `wall lost on poll ${i}`);
       if (!first) first = wall;
@@ -116,7 +119,7 @@ test("persistence, confirmations and score all rise as a level survives", () => 
     t += 20_000;
   }
 
-  assert.equal(first.confirmations, 2);
+  assert.equal(first.confirmations, 3);
   assert.ok(last.confirmations >= 8, `confirmations=${last.confirmations}`);
   assert.ok(last.persistence > first.persistence);
   // Same raw book, so the increase must come purely from confirmed survival.
@@ -186,7 +189,8 @@ test("a symbol with a high pull rate has its densities discounted", () => {
   assert.ok(spoofy.pulled >= 3, `expected several pulls, got ${JSON.stringify(spoofy)}`);
   assert.ok(spoofy.pullRate > 0.5, `pullRate=${spoofy.pullRate}`);
 
-  // Two polls so the level clears the confirmation gate on both symbols.
+  // Three polls so the level clears the anti-spoof gate on both symbols.
+  feed({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }, t); t += 20_000;
   feed({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }, t); t += 20_000;
   const spoofWalls = feed({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }, t);
   const spoofWall = spoofWalls.find(w => w.side === "bid");
@@ -195,6 +199,12 @@ test("a symbol with a high pull rate has its densities discounted", () => {
   const CLEAN_SYM = "CLEANUSDT";
   const CLEAN_COIN = { sym: CLEAN_SYM, base: "CLEAN", p: 100, v: 40_000_000, cs: 1 };
   resetSymbolState(EX, CLEAN_SYM);
+  ingestBook({
+    ex: EX,
+    coin: CLEAN_COIN,
+    now: t - 40_000,
+    ...buildBook({ mid: 100, wallUsd: 900_000, wallPrice: 99.3 }),
+  });
   ingestBook({
     ex: EX,
     coin: CLEAN_COIN,
@@ -255,7 +265,8 @@ test("a level that is eaten down then restored is counted as a refill", () => {
 test("published densities carry the full professional signal set", () => {
   reset();
   feed({ wallUsd: 900_000 }, 8_000_000);
-  const walls = feed({ wallUsd: 900_000 }, 8_020_000);
+  feed({ wallUsd: 900_000 }, 8_020_000);
+  const walls = feed({ wallUsd: 900_000 }, 8_040_000);
   const wall = walls.find(w => w.side === "bid");
   assert.ok(wall);
 
@@ -283,7 +294,8 @@ test("spot symbols are labelled as the spot market", () => {
   const SPOT_COIN = { sym: SPOT_SYM, base: "SPOTCOIN", p: 100, v: 20_000_000, cs: 1 };
   resetSymbolState(EX, SPOT_SYM);
   ingestBook({ ex: EX, coin: SPOT_COIN, now: 9_000_000, ...buildBook({ wallUsd: 900_000 }) });
-  const walls = ingestBook({ ex: EX, coin: SPOT_COIN, now: 9_020_000, ...buildBook({ wallUsd: 900_000 }) });
+  ingestBook({ ex: EX, coin: SPOT_COIN, now: 9_020_000, ...buildBook({ wallUsd: 900_000 }) });
+  const walls = ingestBook({ ex: EX, coin: SPOT_COIN, now: 9_040_000, ...buildBook({ wallUsd: 900_000 }) });
   const wall = walls.find(w => w.side === "bid");
   assert.ok(wall);
   assert.equal(wall.market, "spot");
@@ -301,6 +313,8 @@ test("a bid wall and an ask wall are tracked independently", () => {
     return { bids, asks };
   };
 
+  ingestBook({ ex: EX, coin: coinAt(100), now: t, ...build() });
+  t += 20_000;
   ingestBook({ ex: EX, coin: coinAt(100), now: t, ...build() });
   t += 20_000;
   const walls = ingestBook({ ex: EX, coin: coinAt(100), now: t, ...build() });

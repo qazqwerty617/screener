@@ -7,6 +7,12 @@
 
 const telegramQueue = require("./telegramQueue");
 const { sharedStore, SPAN_MS } = require("./priceHistoryStore");
+const {
+  normalizeExchanges,
+  isExchangeAllowed,
+  analyzeMove,
+  SignalConfirmationGate
+} = require("./public/js/pumpLogic");
 
 let tickersMap = null;
 let telegramBotModule = null;
@@ -32,11 +38,13 @@ let lastHistoryPruneAt = 0;
 // Cooldown tracker per chatId:key
 // Map<string, number> (key: `${chatId}:${ex}:${sym}:${type}`) -> timestamp
 const cooldownTracker = new Map();
+const signalConfirmationGate = new SignalConfirmationGate({ minConfirmations: 2, minSpacingMs: 250, ttlMs: 10_000 });
 const COOLDOWN_MAX_ENTRIES = 20000;
 const COOLDOWN_TTL_MS = 60 * 60 * 1000;
 // After a failed send, retry this soon instead of waiting out the full cooldown
 // (which loses the alert) or retrying immediately (which hot-loops on outages).
 const FAILED_SEND_RETRY_MS = 60 * 1000;
+const CHART_RENDER_BUDGET_MS = 1800;
 let lastCooldownPruneAt = 0;
 
 // Unconditional periodic prune. The previous version only ran inside the
@@ -368,7 +376,10 @@ function getAllAlertSubscribers() {
       const pumpDump = {
         ...DEFAULT_USER_ALERT_SETTINGS.pumpDump,
         ...pdUserPrefs,
-        enabled: pdUserPrefs.enabled !== undefined ? !!pdUserPrefs.enabled : true
+        enabled: pdUserPrefs.enabled !== undefined ? !!pdUserPrefs.enabled : true,
+        exchanges: pdUserPrefs.exchanges === undefined
+          ? ["all"]
+          : normalizeExchanges(pdUserPrefs.exchanges)
       };
 
       const priceAlerts = Array.isArray(u.priceAlerts) ? u.priceAlerts : (Array.isArray(prefs.priceAlerts) ? prefs.priceAlerts : []);
@@ -568,9 +579,45 @@ function processTicker(t, now, activeSubscribers) {
 
   const sampleCount = priceHistory.sampleCount(t.key);
   if (sampleCount < 2) return;
-  const oldestSampleTime = priceHistory.oldestTime(t.key);
 
   const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
+  let movementSamples = null;
+  const analysisCache = new Map();
+  const confirmationCache = new Map();
+
+  function analyzeFor(periodMins, minPct, direction) {
+    const cacheKey = `${periodMins}|${minPct}|${direction}`;
+    if (analysisCache.has(cacheKey)) return analysisCache.get(cacheKey);
+    if (!movementSamples) {
+      movementSamples = priceHistory.toSeries(t.key);
+      const last = movementSamples[movementSamples.length - 1];
+      if (last && Math.abs(now - last.t) <= 2_000) movementSamples[movementSamples.length - 1] = { t: now, p: t.p };
+      else movementSamples.push({ t: now, p: t.p });
+    }
+    const analysis = analyzeMove(movementSamples, {
+      now,
+      periodMs: periodMins * 60 * 1000,
+      minPct,
+      volume: t.v || 0,
+      direction
+    });
+    analysisCache.set(cacheKey, analysis);
+    return analysis;
+  }
+
+  function isConfirmed(periodMins, analysis) {
+    if (!analysis || !analysis.accepted) return false;
+    const cacheKey = `${periodMins}|${analysis.direction}`;
+    if (!confirmationCache.has(cacheKey)) {
+      confirmationCache.set(cacheKey, signalConfirmationGate.observe(
+        `${t.key}:${periodMins}`,
+        analysis.direction,
+        now,
+        analysis.pct
+      ));
+    }
+    return confirmationCache.get(cacheKey);
+  }
 
   // Check matching subscribers for this ticker
   const matchingSubs = [];
@@ -578,39 +625,21 @@ function processTicker(t, now, activeSubscribers) {
   for (const sub of activeSubscribers) {
     const pd = sub.pumpDump;
     const periodMins = Number(pd.periodMinutes) || 5;
-    const periodMs = periodMins * 60 * 1000;
     const minPct = Number(pd.minPct) || 3;
     const minVol = Number(pd.minVolume) || 0;
     const cooldownMs = (Number(pd.cooldownSeconds) || 300) * 1000;
     const dirFilter = pd.direction || "both";
     const marketFilter = pd.marketType || "both";
-    const allowedExs = Array.isArray(pd.exchanges) ? pd.exchanges : ["all"];
-    const isAllEx = allowedExs.includes("all");
 
-    if (!isAllEx && !allowedExs.includes(exCode)) continue;
+    if (!isExchangeAllowed(exCode, pd.exchanges)) continue;
     if (minVol > 0 && (t.v || 0) < minVol) continue;
     if (marketFilter === "futures" && isSpot) continue;
     if (marketFilter === "spot" && !isSpot) continue;
 
-    const targetTime = now - periodMs;
-    let pastPoint = priceHistory.findAtOrBefore(t.key, targetTime);
-    // findAtOrBefore already falls back to the oldest retained sample; only
-    // accept that fallback when the window is at least partially covered.
-    if (pastPoint && pastPoint.t > targetTime && !(now - oldestSampleTime >= periodMs * 0.35)) {
-      pastPoint = null;
-    }
-
-    if (!pastPoint || pastPoint.p <= 0 || !Number.isFinite(pastPoint.p)) continue;
-    if (Math.abs(now - pastPoint.t) < periodMs * 0.35) continue;
-
-    const pctChange = ((t.p - pastPoint.p) / pastPoint.p) * 100;
-    const absPct = Math.abs(pctChange);
-    const maxDrop = periodMins <= 1 ? 35 : periodMins <= 5 ? 50 : 75;
-    if (pctChange <= -maxDrop || pctChange >= 250 || absPct < minPct || !Number.isFinite(pctChange)) continue;
-
-    const isPump = pctChange > 0;
-    if (dirFilter === "pump" && !isPump) continue;
-    if (dirFilter === "dump" && isPump) continue;
+    const analysis = analyzeFor(periodMins, minPct, dirFilter);
+    if (!analysis.accepted || !isConfirmed(periodMins, analysis)) continue;
+    const pctChange = analysis.pct;
+    const isPump = analysis.direction === "pump";
 
     const cooldownKey = `${sub.chatId}:${t.key}:${isPump ? "pump" : "dump"}`;
     const oppCooldownKey = `${sub.chatId}:${t.key}:${isPump ? "dump" : "pump"}`;
@@ -628,7 +657,16 @@ function processTicker(t, now, activeSubscribers) {
     // than left in place, so the alert is neither lost nor spammed.
     cooldownTracker.set(cooldownKey, now);
     cooldownTracker.set(baseCooldownKey, now);
-    matchingSubs.push({ sub, pctChange, pastPrice: pastPoint.p, isPump, periodMins, cooldownKey, cooldownMs });
+    matchingSubs.push({
+      sub,
+      pctChange,
+      pastPrice: analysis.referencePrice,
+      isPump,
+      periodMins,
+      cooldownKey,
+      cooldownMs,
+      quality: analysis.quality
+    });
   }
 
   // Send targeted WebSocket alerts to matching subscribers' accounts
@@ -649,6 +687,7 @@ function processTicker(t, now, activeSubscribers) {
             pastPrice: entry.pastPrice,
             vol: t.v || 0,
             bars: entry.periodMins,
+            quality: entry.quality,
             ts: now,
             targetUserId: entry.sub.userId
           };
@@ -662,20 +701,14 @@ function processTicker(t, now, activeSubscribers) {
     }
   }
 
-  // Check 5-minute threshold for real-time WebSocket broadcast to website users
-  const target5m = now - 5 * 60 * 1000;
-  let p5m = priceHistory.findAtOrBefore(t.key, target5m);
-  if (p5m && p5m.t > target5m && !(now - oldestSampleTime >= 60000)) p5m = null;
-  const defaultPctChange = (p5m && p5m.p > 0 && t.p > 0) ? ((t.p - p5m.p) / p5m.p) * 100 : 0;
-
-  const absDefaultPct = Math.abs(defaultPctChange);
+  // Public real-time feed uses the same path-quality and persistence checks as
+  // account alerts; no second, weaker detector can leak noisy signals.
   const coinVol = t.v || 0;
-  
-  // Guard against micro-cap noise: never broadcast coins under $50,000 24h volume over global WS
-  const shouldBroadcastWs = coinVol >= 50000 && p5m && absDefaultPct >= 2.5 && absDefaultPct <= 200 && defaultPctChange > -50;
+  const wsAnalysis = analyzeFor(5, 2.5, "both");
+  const shouldBroadcastWs = coinVol >= 50_000 && wsAnalysis.accepted && isConfirmed(5, wsAnalysis);
 
   if (shouldBroadcastWs && typeof broadcastAlertFn === "function") {
-    const wsPct = defaultPctChange;
+    const wsPct = wsAnalysis.pct;
     if (Math.abs(wsPct) <= 200 && wsPct > -75 && Number.isFinite(wsPct)) {
       const wsIsPump = wsPct > 0;
       const baseKey = `ws:${t.key}`;
@@ -700,9 +733,10 @@ function processTicker(t, now, activeSubscribers) {
           market: isSpot ? "spot" : "futures",
           pct: Math.round(wsPct * 100) / 100,
           price: t.p,
-          pastPrice: p5m ? p5m.p : t.p,
+          pastPrice: wsAnalysis.referencePrice,
           vol: t.v || 0,
           bars: 5,
+          quality: wsAnalysis.quality,
           ts: now
         });
       }
@@ -719,7 +753,8 @@ function processTicker(t, now, activeSubscribers) {
     const cleanSym = sym.replace("_SPOT", "");
     const timeStr = new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-    // Render chart ONCE for this alert event (bounded by 12s timeout)
+    // Render once, but never hold a time-sensitive Telegram signal for a slow
+    // exchange candle endpoint. Text fallback wins after the strict budget.
     let photoBuffer = null;
     if (serverChartRenderer && typeof serverChartRenderer.renderServerChartSnapshot === "function") {
       try {
@@ -751,7 +786,7 @@ function processTicker(t, now, activeSubscribers) {
         })();
         let chartTimer = null;
         const chartTimeout = new Promise(resolve => {
-          chartTimer = setTimeout(() => resolve(null), 12000);
+          chartTimer = setTimeout(() => resolve(null), CHART_RENDER_BUDGET_MS);
           if (chartTimer && typeof chartTimer.unref === "function") chartTimer.unref();
         });
         photoBuffer = await Promise.race([chartTask, chartTimeout]);
@@ -776,6 +811,7 @@ function processTicker(t, now, activeSubscribers) {
       const entryIcon = entryIsPump ? "🟢" : "🔴";
       const entryTitle = entryIsPump ? "PUMP DETECTED" : "DUMP DETECTED";
       const entrySign = entryIsPump ? "+" : "";
+      const entryQuality = Math.round((Number(entry.quality) || 0) * 100);
 
       const msg =
         `${entryIcon} <b>${entryTitle} [${entrySign}${entryPctChange.toFixed(2)}%]</b>\n\n` +
@@ -784,6 +820,7 @@ function processTicker(t, now, activeSubscribers) {
         `• <b>Текущая цена:</b> $${formatPrice(t.p)}\n` +
         `• <b>Цена до импульса:</b> $${formatPrice(entryPastPrice)}\n` +
         `• <b>Объём 24ч:</b> ${formatVolume(t.v || 0)}\n` +
+        `• <b>Качество импульса:</b> ${entryQuality}/100\n` +
         `─────────────────────────\n` +
         `⚡ <b>Obsidian Screener</b>`;
 
@@ -967,6 +1004,7 @@ function init(options = {}) {
   cachedSubscribers = null;
   lastSubscribersFetch = 0;
   cooldownTracker.clear();
+  signalConfirmationGate.clear();
 
   stop();
 
@@ -984,10 +1022,10 @@ function init(options = {}) {
   scanningTimer = setInterval(() => {
     scanPumpDump().catch(err => console.error("[ALERT ENGINE PD ERROR]", err.message));
     scanPriceAlerts().catch(err => console.error("[ALERT ENGINE PRICE ERROR]", err.message));
-  }, 1500);
+  }, 1000);
   if (scanningTimer && typeof scanningTimer.unref === "function") scanningTimer.unref();
 
-  console.log("⚡ [ALERT ENGINE] Ultra-Fast Real-Time 24/7 Background Alert Engine initialized (1000ms/1500ms cycle).");
+  console.log("⚡ [ALERT ENGINE] Ultra-Fast Real-Time 24/7 Background Alert Engine initialized (1000ms cycle).");
 }
 
 module.exports = {

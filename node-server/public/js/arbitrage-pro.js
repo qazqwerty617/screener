@@ -55,7 +55,7 @@
       pro.tf = btn.dataset.arbTf;
       document.querySelectorAll('[data-arb-tf]').forEach(x => x.classList.toggle('on', x === btn));
       const titleEl = $('arb-chart-title');
-      if (titleEl) titleEl.textContent = pro.tf === 'live' ? 'Спред в реальном времени (Live ⚡)' : `Исторический спред (${pro.tf})`;
+      if (titleEl) titleEl.textContent = pro.tf === 'live' ? 'Исполнимый спред BBO · Live' : `Исполнимый спред BBO · ${pro.tf}`;
       loadCharts();
     }));
 
@@ -80,35 +80,34 @@
     }
   }
 
-  function recordLivePoint(t, bPrice, sPrice) {
+  function recordLivePoint(t) {
     const r = pro.row; if (!r) return;
     const l = legs(r);
     const coins = window.coins;
+    const bCoin = coins?.get(`${l.buyEx}:${l.buySymbol}`);
+    const sCoin = coins?.get(`${l.sellEx}:${l.sellSymbol}`);
+    const buyAsk = Number(bCoin?.ask) || Number(r.buyAsk) || Number(l.buyPrice);
+    const buyBid = Number(bCoin?.bid) || Number(r.buyBid) || buyAsk;
+    const sellBid = Number(sCoin?.bid) || Number(r.sellBid) || Number(l.sellPrice);
+    const sellAsk = Number(sCoin?.ask) || Number(r.sellAsk) || sellBid;
 
-    if (!bPrice || !sPrice) {
-      bPrice = pro.lastBuyPrice || l.buyPrice;
-      sPrice = pro.lastSellPrice || l.sellPrice;
-      if (coins) {
-        const bCoin = coins.get(`${l.buyEx}:${l.buySymbol}`);
-        if (bCoin && (bCoin.ask > 0 || bCoin.p > 0)) bPrice = bCoin.ask || bCoin.p;
-        const sCoin = coins.get(`${l.sellEx}:${l.sellSymbol}`);
-        if (sCoin && (sCoin.bid > 0 || sCoin.p > 0)) sPrice = sCoin.bid || sCoin.p;
-      }
-    }
-
-    if (bPrice > 0 && sPrice > 0) {
-      const bNorm = bPrice / (l.buyMult || 1);
-      const sNorm = sPrice / (l.sellMult || 1);
-      let spread = ((sNorm - bNorm) / bNorm) * 100 - (pro.isFunding ? 0 : (r.fees || 0));
+    if (buyAsk > 0 && buyBid > 0 && sellBid > 0 && sellAsk > 0) {
+      const bAskNorm = buyAsk / (l.buyMult || 1);
+      const bBidNorm = buyBid / (l.buyMult || 1);
+      const sBidNorm = sellBid / (l.sellMult || 1);
+      const sAskNorm = sellAsk / (l.sellMult || 1);
+      const fees = pro.isFunding ? 0 : (r.fees || 0);
+      let spread = ((sBidNorm - bAskNorm) / bAskNorm) * 100 - fees;
+      const exit = ((bBidNorm - sAskNorm) / sAskNorm) * 100 - fees;
       if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
         const offset = pro.depth.netPct - r.net;
         spread += offset;
       }
       const last = pro.livePoints.at(-1);
-      if (!last || last.buyP !== bPrice || last.sellP !== sPrice || (t - last.t >= 2000)) {
-        pro.livePoints.push({ t, buyP: bPrice, sellP: sPrice, spread: spread });
-        if (pro.livePoints.length > 600) pro.livePoints.shift();
-        if (pro.tf === 'live') scheduleCharts();
+      if (!last || last.buyP !== buyAsk || last.sellP !== sellBid || last.exit !== exit || (t - last.t >= 2000)) {
+        pro.livePoints.push({ t, buyP: buyAsk, sellP: sellBid, spread, exit, buyExit: buyBid, sellExit: sellAsk });
+        if (pro.livePoints.length > 2160) pro.livePoints.shift();
+        scheduleCharts();
       }
     }
   }
@@ -151,11 +150,11 @@
       $('arb-chart-empty').hidden = false;
     }
 
-    if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = l.buyName;
-    if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = l.sellName;
+    if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = 'Вход';
+    if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = 'Выход';
 
     const titleEl = $('arb-chart-title');
-    if (titleEl) titleEl.textContent = 'Спред в реальном времени (Live ⚡)';
+    if (titleEl) titleEl.textContent = 'Исполнимый спред BBO';
 
     loadServerHistory(row.key);
     if (pro.historyTimer) clearInterval(pro.historyTimer);
@@ -175,11 +174,15 @@
         t: Number(point[0]) || 0,
         spread: Number(point[1]) || 0,
         buyP: Number(point[2]) || 0,
-        sellP: Number(point[3]) || 0
+        sellP: Number(point[3]) || 0,
+        exit: Number.isFinite(Number(point[5])) ? Number(point[5]) : NaN,
+        buyExit: Number(point[6]) || 0,
+        sellExit: Number(point[7]) || 0,
       })).filter(point => point.t > 0 && point.buyP > 0 && point.sellP > 0);
 
-      if (points.length >= 2) {
-        pro.livePoints = points.slice(-500);
+      if (points.length) {
+        const liveTail = pro.livePoints.filter(point => point.t > points.at(-1).t);
+        pro.livePoints = points.concat(liveTail).slice(-2160);
         if ($('arb-chart-empty')) $('arb-chart-empty').hidden = true;
         renderCharts();
       }
@@ -301,7 +304,7 @@
       if (side === 'buy') pro.lastBuyPrice = p;
       if (side === 'sell') pro.lastSellPrice = p;
 
-      recordLivePoint(t, pro.lastBuyPrice, pro.lastSellPrice);
+      recordLivePoint(t);
 
       const tfMs = ({ "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 })[pro.tf] || 300000;
       let last = list.at(-1);
@@ -357,63 +360,25 @@
     pro.klines = { buy: pick(br, 'buy'), sell: pick(sr, 'sell') };
     const haveBoth = pro.klines.buy.length > 1 && pro.klines.sell.length > 1;
 
-    // Seed continuous live points from 1m klines
-    if (tf === 'live' && haveBoth && pro.livePoints.length < 5) {
-      const seeded = [];
-      const buyCandles = pro.klines.buy;
-      const sellMap = new Map(pro.klines.sell.map(c => [c.t, c]));
-      let lastKnownSell = pro.klines.sell[0]?.c || 0;
-
-      for (const b of buyCandles) {
-        const s = sellMap.get(b.t);
-        if (s && s.c > 0) lastKnownSell = s.c;
-        if (b.c > 0 && lastKnownSell > 0) {
-          const bNorm = b.c / (l.buyMult || 1);
-          const sNorm = lastKnownSell / (l.sellMult || 1);
-          const spread = ((sNorm - bNorm) / bNorm) * 100 - (pro.isFunding ? 0 : r.fees);
-          seeded.push({ t: b.t, buyP: b.c, sellP: lastKnownSell, spread });
-        }
-      }
-      if (seeded.length > 2) pro.livePoints = seeded.slice(-200);
-    }
-
     subscribeCharts(l, tf);
     renderCharts();
-    const hasData = haveBoth || pro.livePoints.length > 1;
+    recordLivePoint(Date.now());
+    const hasData = pro.livePoints.length > 1;
     if ($('arb-chart-empty')) {
       $('arb-chart-empty').hidden = hasData;
-      if (!hasData) $('arb-chart-empty').textContent = 'Данные одной из бирж временно недоступны';
+      if (!hasData) $('arb-chart-empty').textContent = 'Собираем BBO-историю выбранной связки…';
     }
   }
 
   function renderCharts() {
     const r = pro.row, k = pro.klines; if (!r) return;
     const l = legs(r);
-    let points = [];
-
-    if (pro.tf === 'live' || !k || !k.buy.length || !k.sell.length) {
-      points = pro.livePoints.slice(-200);
-    } else {
-      // Robust historical timeframe timeline merger with forward-fill
-      const buyList = k.buy;
-      const sellList = k.sell;
-      const sellMap = new Map(sellList.map(c => [c.t, c]));
-      let lastKnownSell = sellList[0]?.c || 0;
-
-      points = buyList.map(b => {
-        const s = sellMap.get(b.t);
-        if (s && s.c > 0) lastKnownSell = s.c;
-        if (b.c <= 0 || lastKnownSell <= 0) return null;
-
-        const bNorm = b.c / (l.buyMult || 1);
-        const sNorm = lastKnownSell / (l.sellMult || 1);
-        let spread = ((sNorm - bNorm) / bNorm) * 100 - (pro.isFunding ? 0 : r.fees);
-        if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
-          const offset = pro.depth.netPct - r.net;
-          spread += offset;
-        }
-        return { t: b.t, buyP: b.c, sellP: lastKnownSell, spread };
-      }).filter(Boolean);
+    const windowMs = ({ live: 5 * 60000, '5m': 5 * 60000, '15m': 15 * 60000, '1h': 3600000, '4h': 4 * 3600000 })[pro.tf] || 5 * 60000;
+    const latest = pro.livePoints.at(-1)?.t || Date.now();
+    let points = pro.livePoints.filter(point => point.t >= latest - windowMs);
+    if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
+      const offset = pro.depth.netPct - r.net;
+      points = points.map(point => ({ ...point, spread: point.spread + offset }));
     }
 
     drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live', r);
@@ -446,81 +411,57 @@
 
   function drawSpread(canvas, points, funding, isLive = false, row = null) {
     if (!canvas) return;
-    const { ctx, w, h, dpr } = fit(canvas, 230);
+    const { ctx, w, h, dpr } = fit(canvas, 270);
     if (!ctx) return;
     ctx.clearRect(0, 0, w, h);
     if (!points || points.length < 2) return;
-    points = points.slice(-200);
+    if (points.length > 900) {
+      const step = Math.ceil(points.length / 900);
+      points = points.filter((_, index) => index % step === 0 || index === points.length - 1);
+    }
+    const entry = points.map(point => Number(point.spread)).filter(Number.isFinite);
+    const exit = points.map(point => Number(point.exit)).filter(Number.isFinite);
+    const domain = entry.concat(exit, [0]);
+    let sMn = Math.min(...domain), sMx = Math.max(...domain);
+    const span = (sMx - sMn) || Math.max(Math.abs(sMx) * 0.02, 0.05);
+    sMn -= span * 0.14; sMx += span * 0.14;
+    const sRange = sMx - sMn || 1;
 
-    const firstBuy = points[0].buyP || 1;
-    const firstSell = points[0].sellP || 1;
-    const buyPct = points.map(p => ((p.buyP - firstBuy) / firstBuy) * 100);
-    const sellPct = points.map(p => ((p.sellP - firstSell) / firstSell) * 100);
-    const spreadVal = points.map(p => p.spread);
-
-    let sMn = Math.min(...spreadVal), sMx = Math.max(...spreadVal);
-    const span = (sMx - sMn) || Math.max(Math.abs(sMx) * 0.005, 0.1);
-    sMn -= span * 0.25; sMx += span * 0.25;
-    const sRange = sMx - sMn;
-
-    let pMn = Math.min(...buyPct, ...sellPct, 0), pMx = Math.max(...buyPct, ...sellPct, 0);
-    const pPad = (pMx - pMn) * 0.15 || 0.1;
-    pMn -= pPad; pMx += pPad;
-
-    const pad = { l: 12 * dpr, r: 60 * dpr, t: 20 * dpr, b: 24 * dpr };
+    const pad = { l: 12 * dpr, r: 74 * dpr, t: 20 * dpr, b: 28 * dpr };
     const tMin = points[0].t;
     const tMax = isLive ? Math.max(Date.now(), points.at(-1).t) : points.at(-1).t;
     const tRange = Math.max(5000, tMax - tMin);
     const x = time => pad.l + (time - tMin) * (w - pad.l - pad.r) / tRange;
     const ySpread = v => pad.t + (sMx - v) * (h - pad.t - pad.b) / sRange;
-    const yPrice = v => pad.t + (pMx - v) * (h - pad.t - pad.b) / (pMx - pMn);
 
-    // Horizontal grid lines & percentage labels
     ctx.font = `${8.5 * dpr}px Inter, sans-serif`;
     ctx.textAlign = 'right';
     for (let i = 0; i <= 4; i++) {
       const v = sMx - sRange * i / 4, yy = ySpread(v);
       ctx.strokeStyle = '#1e2430'; ctx.lineWidth = dpr;
       ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
-      ctx.fillStyle = '#a78bfa'; ctx.fillText(`${v.toFixed(2)}%`, w - 6 * dpr, yy + 3 * dpr);
+      ctx.fillStyle = '#747d8f'; ctx.fillText(`${v.toFixed(2)}%`, w - 8 * dpr, yy + 3 * dpr);
     }
 
-    if (sMn < 0 && sMx > 0) {
-      const zy = ySpread(0);
-      ctx.strokeStyle = '#4b5566'; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.lineWidth = dpr;
-      ctx.beginPath(); ctx.moveTo(pad.l, zy); ctx.lineTo(w - pad.r, zy); ctx.stroke(); ctx.setLineDash([]);
-      ctx.fillStyle = '#6b7686'; ctx.fillText('0%', w - 6 * dpr, zy - 4 * dpr);
-    }
+    const zeroY = ySpread(0);
+    ctx.strokeStyle = '#51596a'; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.lineWidth = dpr;
+    ctx.beginPath(); ctx.moveTo(pad.l, zeroY); ctx.lineTo(w - pad.r, zeroY); ctx.stroke(); ctx.setLineDash([]);
 
-    // Background Leg percentage curves
-    ctx.lineWidth = dpr;
-    ctx.globalAlpha = 0.35;
-    ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(buyPct[i])) : ctx.moveTo(x(p.t), yPrice(buyPct[i])));
-    if (isLive) ctx.lineTo(x(tMax), yPrice(buyPct.at(-1)));
-    ctx.strokeStyle = '#2bd98a'; ctx.stroke();
+    const drawSeries = (field, color, width) => {
+      let started = false;
+      ctx.beginPath();
+      for (const point of points) {
+        const value = Number(point[field]);
+        if (!Number.isFinite(value)) continue;
+        if (started) ctx.lineTo(x(point.t), ySpread(value));
+        else { ctx.moveTo(x(point.t), ySpread(value)); started = true; }
+      }
+      ctx.strokeStyle = color; ctx.lineWidth = width * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
+    };
+    drawSeries('exit', '#ef556a', 1.8);
+    drawSeries('spread', '#24d383', 2.2);
 
-    ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), yPrice(sellPct[i])) : ctx.moveTo(x(p.t), yPrice(sellPct[i])));
-    if (isLive) ctx.lineTo(x(tMax), yPrice(sellPct.at(-1)));
-    ctx.strokeStyle = '#ef647a'; ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    // Main Spread Curve
-    ctx.beginPath();
-    points.forEach((p, i) => i ? ctx.lineTo(x(p.t), ySpread(spreadVal[i])) : ctx.moveTo(x(p.t), ySpread(spreadVal[i])));
-    if (isLive) ctx.lineTo(x(tMax), ySpread(spreadVal.at(-1)));
-    ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = 2.6 * dpr; ctx.stroke();
-
-    ctx.lineTo(x(tMax), h - pad.b);
-    ctx.lineTo(x(tMin), h - pad.b);
-    ctx.closePath();
-    const fill = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
-    fill.addColorStop(0, 'rgba(167, 139, 250, 0.28)');
-    fill.addColorStop(1, 'rgba(167, 139, 250, 0)');
-    ctx.fillStyle = fill; ctx.fill();
-
-    // Dynamic Trend Badge
+    const spreadVal = points.map(point => Number(point.spread)).filter(Number.isFinite);
     const trendWin = spreadVal.slice(0, -1).slice(-30);
     const trend = trendWin.length ? spreadVal.at(-1) - trendWin.reduce((a, b) => a + b, 0) / trendWin.length : 0;
     const eps = span * 0.015;
@@ -537,21 +478,25 @@
     ctx.strokeStyle = trendCol; ctx.lineWidth = dpr; ctx.stroke();
     ctx.fillStyle = trendCol; ctx.fillText(label, 18 * dpr, 19.5 * dpr);
 
-    // Time Axis Labels
     ctx.font = `${8 * dpr}px Inter, sans-serif`; ctx.fillStyle = '#677181';
     const timeFmt = isLive ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
     [tMin, tMin + tRange / 2, tMax].forEach((tVal, idx) => {
       ctx.fillText(new Date(tVal).toLocaleTimeString('ru-RU', timeFmt), pad.l + (idx / 2) * (w - pad.l - pad.r) - 20 * dpr, h - 6 * dpr);
     });
 
-    // Pulsing Tip Indicator in Live Mode
-    if (isLive) {
-      const lastX = x(tMax), lastY = ySpread(spreadVal.at(-1));
-      ctx.beginPath(); ctx.arc(lastX, lastY, 7 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = 'rgba(167, 139, 250, 0.35)'; ctx.fill();
-      ctx.beginPath(); ctx.arc(lastX, lastY, 3.5 * dpr, 0, 2 * Math.PI);
-      ctx.fillStyle = '#e2e8f0'; ctx.fill();
-    }
+    const tipX = x(points.at(-1).t);
+    const lastEntry = Number(points.at(-1).spread);
+    const lastExit = Number(points.at(-1).exit);
+    [[lastEntry, '#24d383'], [lastExit, '#ef556a']].forEach(([value, color]) => {
+      if (!Number.isFinite(value)) return;
+      const yy = ySpread(value);
+      ctx.beginPath(); ctx.arc(tipX, yy, 3.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = color; ctx.fill();
+      const badge = `${color === '#24d383' ? 'IN' : 'OUT'}  ${value >= 0 ? '+' : ''}${value.toFixed(3)}%`;
+      ctx.font = `700 ${8 * dpr}px Inter, sans-serif`; ctx.textAlign = 'left';
+      const bw = ctx.measureText(badge).width + 10 * dpr;
+      ctx.fillStyle = color; ctx.fillRect(w - pad.r + 4 * dpr, yy - 8 * dpr, bw, 15 * dpr);
+      ctx.fillStyle = '#07100c'; ctx.fillText(badge, w - pad.r + 9 * dpr, yy + 2.5 * dpr);
+    });
 
     // Interactive Hover Crosshair & Floating Tooltip
     if (pro.hoverX > 0) {
@@ -574,7 +519,7 @@
 
         // Tooltip badge
         const ttDate = new Date(closest.t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const ttText = `${ttDate}  Спред: ${pct(closest.spread, 3)}`;
+        const ttText = `${ttDate}  Вход ${pct(closest.spread, 3)}  ·  Выход ${pct(closest.exit, 3)}`;
         ctx.font = `600 ${9 * dpr}px Inter, sans-serif`;
         const tw = ctx.measureText(ttText).width + 16 * dpr;
         let tx = hx - tw / 2;
@@ -590,12 +535,9 @@
       }
     }
 
-    const l = row ? legs(row) : null;
-    if (l) {
-      if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = `${l.buyName} (${pct(buyPct.at(-1), 2)})`;
-      if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = `${l.sellName} (${pct(sellPct.at(-1), 2)})`;
-    }
-    if ($('arb-chart-current')) $('arb-chart-current').textContent = (isLive ? 'LIVE ⚡ ' : '') + pct(spreadVal.at(-1));
+    if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = `Вход ${pct(lastEntry)}`;
+    if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = Number.isFinite(lastExit) ? `Выход ${pct(lastExit)}` : 'Выход —';
+    if ($('arb-chart-current')) $('arb-chart-current').textContent = (isLive ? 'LIVE · ' : '') + pct(lastEntry);
     if ($('arb-chart-funding')) $('arb-chart-funding').textContent = pct(funding, 4);
   }
 

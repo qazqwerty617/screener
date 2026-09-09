@@ -923,7 +923,7 @@ function applyAccountPreferences(prefs) {
     if (p && typeof p === "object") {
       const current = (typeof pdSettings !== "undefined" && pdSettings) ? pdSettings : (typeof DEFAULT_PD_SETTINGS !== "undefined" ? DEFAULT_PD_SETTINGS : {});
       const merged = { ...current, ...p,
-        exchanges: Array.isArray(p.exchanges) && p.exchanges.length ? p.exchanges : (current.exchanges || ["all"]),
+        exchanges: Array.isArray(p.exchanges) ? p.exchanges : (current.exchanges || ["all"]),
         marketType: p.marketType || current.marketType || "both"
       };
       if (typeof pdSettings !== "undefined") pdSettings = merged;
@@ -10202,10 +10202,9 @@ document.addEventListener("contextmenu", (e) => {
 // 1. DENSITY_NON_TRADABLE — instruments that are not crypto order-book plays at
 //    all (stablecoins, tokenized stocks, ETFs, commodities).  Always hidden,
 //    matched structurally so new tickers are covered too.
-// 2. DEFAULT_DENSITY_BLACKLIST — the *user's* starting hide list.  It is now
-//    empty: majors are the highest-quality densities on the board, and hiding
-//    BTC/ETH/SOL by default meant the map silently discarded its best signals.
-//    Anything the user wants gone can still be added from the UI.
+// 2. DEFAULT_DENSITY_BLACKLIST — mirrors the structural exclusions in the
+//    existing blacklist UI. Majors stay available; non-crypto instruments are
+//    visible in the list and remain structurally blocked even if it is cleared.
 const DENSITY_NON_TRADABLE = [
   // Stablecoins & fiat:
   "USDT", "USDC", "BUSD", "DAI", "FDUSD", "TUSD", "USDP", "USDE", "PYUSD",
@@ -10221,6 +10220,9 @@ const DENSITY_NON_TRADABLE = [
   "HON", "UNP", "LIN", "BMY", "AMGN", "LOW", "IBM", "SBUX", "GE", "CAT",
   "BA", "GS", "MS", "BLK", "C", "WFC", "AXP", "SCHW", "HOOD", "RBLX",
   "ARM", "SMCI", "SOFI", "MARA", "RIOT", "CLSK", "HUT", "BITF", "CRCL",
+  "SAMSUNG", "ANTHROPIC", "OPENAI", "SPACEX", "SPCX", "UNITREE", "FIGMA", "STRIPE",
+  "SKHYNIX", "SKHY", "SNDK", "DELL", "RKLB", "AAOI", "MRVL", "NBIS", "CXMT",
+  "XIAOMI", "TENCENT", "ALIBABA", "SONY", "TOYOTA", "TESLA", "NIULAI",
   "AVGOX", "AAPLX", "TSLAX", "NVDAX", "MSFTX", "AMZNX", "GOOGX", "GOOGLX", "METAX",
   // ETFs / leveraged index funds:
   "TQQQ", "SQQQ", "SPXL", "SPXS", "SOXL", "SOXS", "UVXY", "SVXY", "VXX",
@@ -10231,7 +10233,7 @@ const DENSITY_NON_TRADABLE = [
   "XAUT", "PAXG"
 ];
 
-const DEFAULT_DENSITY_BLACKLIST = [];
+const DEFAULT_DENSITY_BLACKLIST = DENSITY_NON_TRADABLE.slice();
 
 const KNOWN_STOCK_SET = new Set(DENSITY_NON_TRADABLE.map(c => c.toUpperCase()));
 
@@ -10275,6 +10277,7 @@ const LEGACY_DEFAULT_HIDDEN_MAJORS = new Set([
 
 let densityBlacklistSet = (function() {
   const MIGRATION_KEY = "density_blacklist_majors_cleared_v1";
+  const NON_CRYPTO_MIGRATION_KEY = "density_blacklist_non_crypto_v2";
   try {
     const saved = localStorage.getItem("density_blacklist_coins");
     if (saved) {
@@ -10288,15 +10291,20 @@ let densityBlacklistSet = (function() {
             cleaned.add(coin);
           }
           set = cleaned;
-          try {
-            localStorage.setItem("density_blacklist_coins", JSON.stringify(Array.from(set)));
-            localStorage.setItem(MIGRATION_KEY, "1");
-          } catch (_) {}
         }
+        if (!localStorage.getItem(NON_CRYPTO_MIGRATION_KEY)) {
+          for (const coin of DEFAULT_DENSITY_BLACKLIST) set.add(coin.toUpperCase());
+        }
+        try {
+          localStorage.setItem("density_blacklist_coins", JSON.stringify(Array.from(set)));
+          localStorage.setItem(MIGRATION_KEY, "1");
+          localStorage.setItem(NON_CRYPTO_MIGRATION_KEY, "1");
+        } catch (_) {}
         return set;
       }
     }
     localStorage.setItem(MIGRATION_KEY, "1");
+    localStorage.setItem(NON_CRYPTO_MIGRATION_KEY, "1");
   } catch(_) {}
   return new Set(DEFAULT_DENSITY_BLACKLIST.map(c => c.toUpperCase()));
 })();
@@ -18310,9 +18318,42 @@ if (document.readyState === "loading") {
     maxCards: 50,             // max alert cards in the panel
   };
 
+  const pdLogic = window.PumpLogic;
+
+  function pdNormalizeExchanges(values, fallback = DEFAULT_PD_SETTINGS.exchanges) {
+    if (!pdLogic) return Array.isArray(values) ? values : [...fallback];
+    if (!Array.isArray(values)) return [...fallback];
+    return pdLogic.normalizeExchanges(values);
+  }
+
+  function pdIsExchangeAllowed(exchange, settings = pdSettings) {
+    const selected = pdNormalizeExchanges(settings && settings.exchanges, []);
+    if (pdLogic) return pdLogic.isExchangeAllowed(exchange, selected);
+    const code = String(exchange || "").toUpperCase();
+    return selected.includes("all") || selected.includes(code);
+  }
+
+  function pdAlertMatchesSettings(alert, settings = pdSettings) {
+    if (!alert || !pdIsExchangeAllowed(alert.ex, settings)) return false;
+    const rawKey = String(alert.key || alert.sym || "");
+    const market = alert.market === "spot" || alert.market === "futures"
+      ? alert.market
+      : (/_SPOT$/i.test(rawKey) ? "spot" : "futures");
+    const marketFilter = settings.marketType || "both";
+    if (marketFilter !== "both" && market !== marketFilter) return false;
+    const pct = Number(alert.pct);
+    if (!Number.isFinite(pct) || pct <= -75 || pct >= 250 || Math.abs(pct) < (Math.abs(settings.minPct) || 1)) return false;
+    if (settings.direction === "pump" && pct <= 0) return false;
+    if (settings.direction === "dump" && pct >= 0) return false;
+    if ((Number(settings.minVolume) || 0) > 0 && (Number(alert.vol) || 0) < Number(settings.minVolume)) return false;
+    return true;
+  }
+
   let pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
   let pdScanInterval = null;
   let pdScanRunning = false;
+  let pdScanGeneration = 0;
+  let pdScanController = null;
   const pdCooldownMap = new Map();   // key "EX:SYM" → timestamp last fired
   const pdAlertCards = [];           // [{id, ex, sym, pct, dir, price, ts}]
   const pdKlinesCache = new Map();   // key "EX:SYM" → {ts, data:[]}
@@ -18335,7 +18376,7 @@ if (document.readyState === "loading") {
       if (raw && isConfigured) {
         const parsed = JSON.parse(raw);
         pdSettings = { ...DEFAULT_PD_SETTINGS, ...parsed,
-          exchanges: Array.isArray(parsed.exchanges) && parsed.exchanges.length ? parsed.exchanges : [...DEFAULT_PD_SETTINGS.exchanges],
+          exchanges: pdNormalizeExchanges(parsed.exchanges),
           marketType: parsed.marketType || "both"
         };
       } else {
@@ -18350,7 +18391,7 @@ if (document.readyState === "loading") {
 
   function pdSave(s) {
     localStorage.setItem("obsidian_pump_alerts_user_configured", "true");
-    pdSettings = s || pdSettings;
+    pdSettings = { ...(s || pdSettings), exchanges: pdNormalizeExchanges((s || pdSettings).exchanges) };
     const key = pdGetStorageKey();
     localStorage.setItem(key, JSON.stringify(pdSettings));
     localStorage.setItem("obsidian_pump_alert_settings", JSON.stringify(pdSettings));
@@ -18399,7 +18440,7 @@ if (document.readyState === "loading") {
         const s = d.settings.pumpDump || d.settings.pumpAlerts || d.settings;
         if (s && typeof s === "object") {
           pdSettings = { ...DEFAULT_PD_SETTINGS, ...s,
-            exchanges: Array.isArray(s.exchanges) && s.exchanges.length ? s.exchanges : [...DEFAULT_PD_SETTINGS.exchanges],
+            exchanges: pdNormalizeExchanges(s.exchanges),
             marketType: s.marketType || "both"
           };
           const key = pdGetStorageKey();
@@ -18420,6 +18461,9 @@ if (document.readyState === "loading") {
 
   // ── High-Speed Real-Time Live Price Ring Buffer ────────────────────────
   const pdPriceRing = new Map(); // key "EX:SYM" → [{ t, p }]
+  const pdSignalConfirmationGate = pdLogic
+    ? new pdLogic.SignalConfirmationGate({ minConfirmations: 2, minSpacingMs: 250, ttlMs: 10_000 })
+    : null;
   let pdIsSeeded = false;
 
   function pdTrackPrice(key, price) {
@@ -18449,53 +18493,42 @@ if (document.readyState === "loading") {
     const ex = key.substring(0, colonIdx);
     const sym = key.substring(colonIdx + 1);
 
-    if (pdSettings.exchanges && pdSettings.exchanges.length && !pdSettings.exchanges.includes("all") && !pdSettings.exchanges.includes(ex)) return;
+    if (!pdIsExchangeAllowed(ex)) return;
 
     // Market Type filter (Spot / Futures)
     const isSpot = /_SPOT$/i.test(sym);
     if (pdSettings.marketType === "futures" && isSpot) return;
     if (pdSettings.marketType === "spot" && !isSpot) return;
 
-    const cooldownMs = (pdSettings.cooldownSeconds || 300) * 1000;
-    const lastFired = pdCooldownMap.get(key) || 0;
-    if (now - lastFired < cooldownMs) return;
-
     const bars = Math.max(1, Math.round(pdSettings.periodMinutes));
     const minPct = Math.abs(pdSettings.minPct) || 1;
     const dir = pdSettings.direction || "both";
     const minVol = pdSettings.minVolume || 0;
-    const targetTs = now - bars * 60 * 1000;
+    const coin = window.coins && typeof window.coins.get === "function" ? window.coins.get(key) : null;
+    const volume = Number(coin && coin.v) || 0;
+    if (minVol > 0 && volume < minVol) return;
+    if (!pdLogic || !pdSignalConfirmationGate) return;
 
-    if (minVol > 0 && c && c.v && c.v < minVol) return;
+    const samples = ring.slice();
+    const latest = samples[samples.length - 1];
+    if (!latest || Math.abs(now - latest.t) > 250) samples.push({ t: now, p: currentPrice });
+    else samples[samples.length - 1] = { t: now, p: currentPrice };
+    const analysis = pdLogic.analyzeMove(samples, {
+      now,
+      periodMs: bars * 60 * 1000,
+      minPct,
+      volume,
+      direction: dir
+    });
+    if (!analysis.accepted) return;
+    if (!pdSignalConfirmationGate.observe(`${key}:${bars}`, analysis.direction, now, analysis.pct)) return;
 
-    let pastSample = ring[0];
-    for (let i = 0; i < ring.length; i++) {
-      if (Math.abs(ring[i].t - targetTs) < Math.abs(pastSample.t - targetTs)) {
-        pastSample = ring[i];
-      }
-    }
-
-    if (!pastSample || !pastSample.p || pastSample.p <= 0) return;
-    if (now - pastSample.t < 8000) return;
-
-    const changePct = ((currentPrice - pastSample.p) / pastSample.p) * 100;
-    const absPct = Math.abs(changePct);
-    const maxDrop = bars <= 1 ? 35 : bars <= 5 ? 50 : 75;
-    if (changePct <= -maxDrop || changePct >= 250 || absPct < minPct || !Number.isFinite(changePct)) return;
-
-    const isPump = changePct > 0;
-    const isDump = changePct < 0;
-    if (dir === "pump" && !isPump) return;
-    if (dir === "dump" && !isDump) return;
-
-    // Trigger immediately!
-    pdCooldownMap.set(key, now);
     pdFireAlert({
       ex,
       sym,
-      pct: changePct,
+      pct: analysis.pct,
       price: currentPrice,
-      vol: (c && c.v) || 0,
+      vol: volume,
       bars
     });
   }
@@ -18534,19 +18567,11 @@ if (document.readyState === "loading") {
     const minPct = Math.abs(pdSettings.minPct) || 1;
     if (Math.abs(data.pct) < minPct) return;
 
-    const allowedExs = Array.isArray(pdSettings.exchanges) && pdSettings.exchanges.length ? pdSettings.exchanges : ["all"];
-    if (!allowedExs.includes("all") && !allowedExs.includes(data.ex) && !allowedExs.includes(String(data.ex).toUpperCase())) return;
+    if (!pdIsExchangeAllowed(data.ex)) return;
 
     const minVol = pdSettings.minVolume || 0;
     if (minVol > 0 && data.vol && data.vol < minVol) return;
 
-    const now = Date.now();
-    const cooldownMs = (pdSettings.cooldownSeconds || 300) * 1000;
-    const cdKey = `${data.ex}:${data.sym}:${isPump ? "pump" : "dump"}`;
-    const lastFired = pdCooldownMap.get(cdKey) || 0;
-    if (now - lastFired < cooldownMs) return;
-
-    pdCooldownMap.set(cdKey, now);
     pdFireAlert({
       ex: data.ex,
       sym: data.sym,
@@ -18566,14 +18591,15 @@ if (document.readyState === "loading") {
   }, 1000);
 
   // ── Scanner Loop (Dual Engine: Server + In-Memory) ────────────────────────
-  async function pdRunScan() {
-    if (pdScanRunning || !pdSettings.enabled) return;
+  async function pdRunScan(expectedGeneration = pdScanGeneration) {
+    if (pdScanController || !pdSettings.enabled || expectedGeneration !== pdScanGeneration) return;
+    const controller = new AbortController();
+    pdScanController = controller;
     pdScanRunning = true;
     try {
       const bars = Math.max(1, Math.round(pdSettings.periodMinutes));
       const minPct = Math.abs(pdSettings.minPct) || 1;
       const dir = pdSettings.direction || "both";
-      const cooldownMs = (pdSettings.cooldownSeconds || 300) * 1000;
       const minVol = pdSettings.minVolume || 0;
       const now = Date.now();
 
@@ -18582,18 +18608,23 @@ if (document.readyState === "loading") {
         const exParam = Array.isArray(pdSettings.exchanges) && pdSettings.exchanges.length ? pdSettings.exchanges.join(",") : "";
         const mtParam = pdSettings.marketType || "both";
         const r = await fetch(`/api/market/pump-alerts?period=${bars}&minPct=${minPct}&dir=${dir}&marketType=${mtParam}&ex=${encodeURIComponent(exParam)}&minVol=${minVol}`, {
-          cache: "no-store"
+          cache: "no-store",
+          signal: controller.signal
         });
+        if (expectedGeneration !== pdScanGeneration) return;
         if (r.ok) {
           const data = await r.json();
+          if (expectedGeneration !== pdScanGeneration) return;
           if (data && Array.isArray(data.alerts)) {
-            const validAlerts = data.alerts.filter(a => a && a.pct > -75 && a.pct < 250);
+            // The response can have been created just before settings changed.
+            // Apply the current account filter again at the final client seam.
+            const validAlerts = data.alerts.filter(alert => pdAlertMatchesSettings(alert));
             if (!pdIsSeeded) {
               // First run: quietly seed top existing moves into the feed without blast spamming
               pdIsSeeded = true;
               const topInit = validAlerts.slice(0, 5);
               for (const alert of topInit) {
-                const cdKey = `${alert.ex}:${alert.sym}`;
+                const cdKey = `${alert.ex}:${alert.sym}:${alert.pct > 0 ? "pump" : "dump"}`;
                 pdCooldownMap.set(cdKey, now);
                 pdAddCard({
                   ex: alert.ex,
@@ -18612,12 +18643,6 @@ if (document.readyState === "loading") {
             } else {
               // Real-time: alert individually as each new coin breaks threshold
               for (const alert of validAlerts) {
-                const alertIsPump = alert.pct > 0;
-                const cdKey = `${alert.ex}:${alert.sym}:${alertIsPump ? "pump" : "dump"}`;
-                const lastFired = pdCooldownMap.get(cdKey) || 0;
-                if (now - lastFired < cooldownMs) continue;
-
-                pdCooldownMap.set(cdKey, now);
                 pdFireAlert({
                   ex: alert.ex,
                   sym: alert.sym,
@@ -18631,13 +18656,16 @@ if (document.readyState === "loading") {
           }
         }
       } catch (err) {
-        console.warn("[PD SERVER SCAN]", err);
+        if (err && err.name !== "AbortError") console.warn("[PD SERVER SCAN]", err);
       }
 
     } catch (err) {
       console.error("[PD SCANNER ERROR]", err);
     } finally {
-      pdScanRunning = false;
+      if (pdScanController === controller) {
+        pdScanController = null;
+        pdScanRunning = false;
+      }
     }
   }
 
@@ -18690,8 +18718,16 @@ if (document.readyState === "loading") {
 
   // ── Alert Dispatch ───────────────────────────────────────────────────────
   function pdFireAlert({ ex, sym, pct, price, vol, bars }) {
+    // Last-line fail-closed guard shared by REST, WebSocket and live-tick paths.
+    // Even a stale async response can never escape the user's current venues.
+    if (!pdIsExchangeAllowed(ex)) return;
     if (pct == null || pct <= -75 || pct >= 250 || !Number.isFinite(pct) || !price || price <= 0) return;
     const isPump = pct > 0;
+    const cooldownKey = `${ex}:${sym}:${isPump ? "pump" : "dump"}`;
+    const nowMs = Date.now();
+    const cooldownMs = (Number(pdSettings.cooldownSeconds) || 300) * 1000;
+    if (nowMs - (pdCooldownMap.get(cooldownKey) || 0) < cooldownMs) return;
+    pdCooldownMap.set(cooldownKey, nowMs);
     const dirLabel = isPump ? "PUMP" : "DUMP";
     const dirLabelRu = isPump ? "Памп" : "Дамп";
     const exFull = typeof getFullExchangeName === "function" ? getFullExchangeName(ex) : ex;
@@ -18840,10 +18876,17 @@ if (document.readyState === "loading") {
   // ── Scanner start/stop ───────────────────────────────────────────────────
   function pdRestartScanner() {
     if (pdScanInterval) { clearInterval(pdScanInterval); pdScanInterval = null; }
+    pdScanGeneration++;
+    if (pdScanController) {
+      pdScanController.abort();
+      pdScanController = null;
+      pdScanRunning = false;
+    }
     if (!pdSettings.enabled) return;
-    // First run immediately (200ms), then every 2s
-    setTimeout(pdRunScan, 200);
-    pdScanInterval = setInterval(pdRunScan, 2000);
+    const generation = pdScanGeneration;
+    // First result almost immediately, then align with the server's 1s cache.
+    setTimeout(() => pdRunScan(generation), 100);
+    pdScanInterval = setInterval(() => pdRunScan(generation), 1500);
   }
 
   window.pdRunScan = pdRunScan;
@@ -18979,10 +19022,11 @@ if (document.readyState === "loading") {
     // Exchanges
     const exAll = document.querySelector("#pd-exchanges-group button[data-ex='all']");
     const exBtns = document.querySelectorAll("#pd-exchanges-group button[data-ex]:not([data-ex='all'])");
-    const isAll = s.exchanges.includes("all") || s.exchanges.length >= 10;
+    const selected = pdNormalizeExchanges(s.exchanges);
+    const isAll = selected.includes("all");
     if (exAll) exAll.classList.toggle("active", isAll);
     exBtns.forEach(btn => {
-      btn.classList.toggle("active", isAll || s.exchanges.includes(btn.dataset.ex));
+      btn.classList.toggle("active", isAll || selected.includes(btn.dataset.ex));
     });
   }
 
@@ -19286,22 +19330,10 @@ if (document.readyState === "loading") {
       btn.onclick = () => {
         const ex = btn.dataset.ex;
         const draft = pdGetDraft();
-        if (ex === "all") {
-          const isActive = btn.classList.contains("active");
-          if (!isActive) {
-            document.querySelectorAll("#pd-exchanges-group button[data-ex]").forEach(b => b.classList.add("active"));
-            draft.exchanges = ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"];
-          } else {
-            document.querySelectorAll("#pd-exchanges-group button[data-ex]").forEach(b => b.classList.remove("active"));
-            draft.exchanges = [];
-          }
-        } else {
-          btn.classList.toggle("active");
-          const allBtn = document.querySelector("#pd-exchanges-group button[data-ex='all']");
-          const activeExs = Array.from(document.querySelectorAll("#pd-exchanges-group button[data-ex]:not([data-ex='all']).active")).map(b => b.dataset.ex);
-          draft.exchanges = activeExs;
-          if (allBtn) allBtn.classList.toggle("active", activeExs.length === 10);
-        }
+        draft.exchanges = pdLogic
+          ? pdLogic.toggleExchangeSelection(draft.exchanges, ex)
+          : (ex === "all" ? ["all"] : [ex]);
+        pdSyncModalUI(draft);
       };
     });
 

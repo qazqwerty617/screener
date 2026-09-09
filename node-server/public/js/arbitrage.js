@@ -12,6 +12,7 @@
     active: false, initialized: false, loading: false, mode: "spreads", data: null,
     selectedExchanges: new Set(Object.keys(EX)), favorites: new Set(JSON.parse(localStorage.getItem("arbFavorites") || "[]")),
     trail: new Map(), timer: null, detailKey: null, detailRow: null,
+    transferByKey: new Map(), transferRequested: new Set(), transferLoading: false,
   };
 
   function esc(value) {
@@ -65,6 +66,7 @@
     const sortEl = $("arb-sort"); if (sortEl) sortEl.addEventListener("change", render);
     const bboEl = $("arb-bbo-only"); if (bboEl) bboEl.addEventListener("change", render);
     const favEl = $("arb-favorites-only"); if (favEl) favEl.addEventListener("change", render);
+    const transferEl = $("arb-transfer-only"); if (transferEl) transferEl.addEventListener("change", render);
     const refreshBtn = $("arb-refresh"); if (refreshBtn) refreshBtn.addEventListener("click", () => fetchData(true));
     const allExBtn = $("arb-all-exchanges"); if (allExBtn) allExBtn.addEventListener("click", () => {
       state.selectedExchanges = new Set(Object.keys(EX));
@@ -85,7 +87,8 @@
     if ($("arb-search")) $("arb-search").value = "";
     if ($("arb-min-net")) $("arb-min-net").value = "0";
     if ($("arb-min-volume")) $("arb-min-volume").value = "0";
-    if ($("arb-bbo-only")) $("arb-bbo-only").checked = false;
+    if ($("arb-bbo-only")) $("arb-bbo-only").checked = true;
+    if ($("arb-transfer-only")) $("arb-transfer-only").checked = false;
     if ($("arb-favorites-only")) $("arb-favorites-only").checked = false;
     if ($("arb-sort")) $("arb-sort").value = "score";
     state.selectedExchanges = new Set(Object.keys(EX));
@@ -118,9 +121,10 @@
       const res = await fetch(`/api/arbitrage/snapshot?${q}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       state.data = await res.json();
-      updateTrails(state.data.spreads, "net");
-      updateTrails(state.data.funding, "daily");
+      updateTrails(state.data.spreads, "net", state.data.generatedAt);
+      updateTrails(state.data.funding, "daily", state.data.generatedAt);
       render();
+      fetchTransferStatuses();
     } catch (err) {
       console.warn("[Arbitrage]", err.message);
     } finally {
@@ -128,20 +132,20 @@
     }
   }
 
-  function updateTrails(rows, field) {
-    const now = Date.now();
+  function updateTrails(rows, field, generatedAt) {
+    const now = Number(generatedAt) || Date.now();
     (rows || []).forEach(row => {
       let points = state.trail.get(row.key);
       if (!points) {
         // Pre-seed from server history if available
         if (Array.isArray(row.history) && row.history.length > 0) {
-          const step = 2000;
+          const step = 5000;
           points = row.history.map((val, idx) => [now - (row.history.length - idx) * step, Number(val) || 0]);
         } else {
           points = [];
         }
       }
-      points.push([now, Number(row[field]) || 0]);
+      if (points.at(-1)?.[0] !== now) points.push([now, Number(row[field]) || 0]);
       if (points.length > 50) points.shift();
       state.trail.set(row.key, points);
     });
@@ -157,6 +161,11 @@
     if ($("arb-kpi-route")) $("arb-kpi-route").textContent = best ? `${best.base} · ${best.buyName} → ${best.sellName}` : "рынок эффективен";
     const bestFunding = (data.funding || [])[0];
     if ($("arb-kpi-funding")) $("arb-kpi-funding").textContent = bestFunding ? pct(bestFunding.daily) : "—";
+    if ($("arb-kpi-streams")) $("arb-kpi-streams").textContent = Number(data.marketCount || 0).toLocaleString("ru-RU");
+    if ($("arb-update-age")) {
+      const age = Math.max(0, Date.now() - Number(data.generatedAt || 0));
+      $("arb-update-age").textContent = age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;
+    }
     if ($("arb-spread-badge")) $("arb-spread-badge").textContent = data.totals?.spreads ?? data.spreads.length;
     if ($("arb-funding-badge")) $("arb-funding-badge").textContent = data.totals?.funding ?? data.funding.length;
 
@@ -170,6 +179,7 @@
     let rows = [...(state.mode === "spreads" ? state.data.spreads : state.data.funding)];
     if ($("arb-bbo-only")?.checked) rows = rows.filter(x => x.quality === "bbo");
     if ($("arb-favorites-only")?.checked) rows = rows.filter(x => state.favorites.has(x.base));
+    if ($("arb-transfer-only")?.checked) rows = rows.filter(x => state.transferByKey.get(x.key)?.status === "open");
 
     const sort = $("arb-sort")?.value || "score";
     if (sort === "freshness") {
@@ -187,8 +197,8 @@
   }
 
   function pairCell(r) {
-    const isMemeOrStock = r.base.length > 6 || r.buyMultiplier > 1;
-    const subLabel = r.buyMultiplier > 1 ? `x${r.buyMultiplier.toLocaleString()}` : "PERPETUAL";
+    const multiplier = r.buyMultiplier || r.longMultiplier || 1;
+    const subLabel = multiplier > 1 ? `x${multiplier.toLocaleString()}` : "PERPETUAL";
     return `<div class="arb-pair"><span class="arb-coin">${esc(r.base.slice(0, 4))}</span><div><strong>${esc(r.base)}/USDT</strong><small>${esc(subLabel)}</small></div></div>`;
   }
   function legCell(ex, name, value, sub) {
@@ -202,6 +212,52 @@
     return `<canvas class="arb-spark" width="152" height="50" data-spark="${esc(r.key)}" data-field="${field}"></canvas>`;
   }
 
+  function routeCell(a, b) {
+    return `<div class="arb-route-pair">${a}${b}</div>`;
+  }
+
+  function routeLeg(ex, name, value, meta, side) {
+    return `<div class="arb-route-leg ${side}"><span class="arb-route-arrow">${side === "buy" ? "↑" : "↓"}</span><img src="${icon(ex)}" alt=""><strong>${esc(name)}</strong><b>${esc(value)}</b><small>${esc(meta)}</small></div>`;
+  }
+
+  function statusBadge(label, value) {
+    const cls = value === true ? "on" : value === false ? "off" : "unknown";
+    return `<i class="arb-dw ${cls}">${label}</i>`;
+  }
+
+  function transferCell(r) {
+    const route = state.transferByKey.get(r.key);
+    if (!route) return `<div class="arb-transfer-mini loading"><span>проверяем сети…</span></div>`;
+    const network = route.status === "open" ? route.networks.slice(0, 2).join(" · ") : route.status === "closed" ? "нет общей сети" : "нет публичных данных";
+    return `<div class="arb-transfer-mini ${route.status}"><div><b>${esc(r.buyEx || r.longEx)}</b>${statusBadge("D", route.buy.deposit)}${statusBadge("W", route.buy.withdraw)}</div><div><b>${esc(r.sellEx || r.shortEx)}</b>${statusBadge("D", route.sell.deposit)}${statusBadge("W", route.sell.withdraw)}</div><span>${esc(network)}</span></div>`;
+  }
+
+  async function fetchTransferStatuses() {
+    if (!state.data || state.transferLoading) return;
+    const source = state.mode === "spreads" ? state.data.spreads : state.data.funding;
+    const keys = source.slice(0, 400).map(row => row.key).filter(key => !state.transferRequested.has(key));
+    if (!keys.length) return;
+    keys.forEach(key => state.transferRequested.add(key));
+    state.transferLoading = true;
+    try {
+      const batches = [];
+      for (let index = 0; index < keys.length; index += 80) batches.push(keys.slice(index, index + 80));
+      const payloads = await Promise.all(batches.map(async batch => {
+        const response = await fetch(`/api/arbitrage/transfers?routes=${encodeURIComponent(batch.join(","))}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      }));
+      for (const data of payloads) for (const route of data.routes || []) state.transferByKey.set(route.key, route);
+      render();
+      if (state.detailRow) renderTransferDetail(state.detailRow);
+    } catch (error) {
+      keys.forEach(key => state.transferRequested.delete(key));
+      console.warn("[Arbitrage transfers]", error.message);
+    } finally {
+      state.transferLoading = false;
+    }
+  }
+
   function renderSpreads(rows) {
     const body = $("arb-spreads-body");
     if (!body) return;
@@ -209,11 +265,11 @@
       <tr data-key="${esc(r.key)}">
         <td><button class="arb-star ${state.favorites.has(r.base) ? "on" : ""}" data-fav="${esc(r.base)}">★</button></td>
         <td>${pairCell(r)}</td>
-        <td>${legCell(r.buyEx, r.buyName, price(r.buyAsk), "ASK")}</td>
-        <td>${legCell(r.sellEx, r.sellName, price(r.sellBid), "BID")}</td>
-        <td class="arb-num">${pct(r.gross)}</td>
-        <td class="arb-num arb-cost">−${Number(r.fees).toFixed(3)}%</td>
+        <td>${routeCell(routeLeg(r.buyEx, r.buyName, price(r.buyAsk), "ASK · LONG", "buy"), routeLeg(r.sellEx, r.sellName, price(r.sellBid), "BID · SHORT", "sell"))}</td>
+        <td class="arb-num ${fundingEdge(r) >= 0 ? "arb-positive" : "arb-cost"}">${pct(fundingEdge(r), 3)}</td>
         <td class="arb-num arb-net">${pct(r.net)}</td>
+        <td class="arb-num arb-exit">${pct(r.exitNet)}</td>
+        <td>${transferCell(r)}</td>
         <td class="arb-num">${money(r.liquidity)}</td>
         <td>${sparkCell(r, "net")}</td>
         <td>${scoreCell(r)}</td>
@@ -228,15 +284,19 @@
       <tr data-key="${esc(r.key)}">
         <td><button class="arb-star ${state.favorites.has(r.base) ? "on" : ""}" data-fav="${esc(r.base)}">★</button></td>
         <td>${pairCell(r)}</td>
-        <td>${legCell(r.longEx, r.longName, pct(r.longFunding, 4), `${r.longInterval}ч`)}</td>
-        <td>${legCell(r.shortEx, r.shortName, pct(r.shortFunding, 4), `${r.shortInterval}ч`)}</td>
+        <td>${routeCell(routeLeg(r.longEx, r.longName, pct(r.longFunding, 4), `LONG · ${r.longInterval}ч`, "buy"), routeLeg(r.shortEx, r.shortName, pct(r.shortFunding, 4), `SHORT · ${r.shortInterval}ч`, "sell"))}</td>
         <td class="arb-num arb-net">${pct(r.daily)}</td>
         <td class="arb-num">${pct(r.monthly, 2)}</td>
         <td class="arb-num">${pct(r.apr, 1)}</td>
         <td class="arb-num ${Math.abs(r.basis) > 1 ? "arb-cost" : "arb-muted"}">${pct(r.basis)}</td>
+        <td>${transferCell(r)}</td>
         <td class="arb-countdown" data-until="${r.nextFunding || 0}">${countdown(r.nextFunding)}</td>
         <td>${scoreCell(r)}</td>
       </tr>`).join("");
+  }
+
+  function fundingEdge(r) {
+    return ((Number(r.sellFunding) || 0) / (Number(r.sellInterval) || 8) - (Number(r.buyFunding) || 0) / (Number(r.buyInterval) || 8)) * 24;
   }
 
   function tableClick(e) {
@@ -298,6 +358,7 @@
     const r = all.find(x => x.key === key);
     if (!r) return;
     state.detailKey = key;
+    state.detailRow = r;
     const isFunding = key.startsWith("funding:");
 
     if ($("arb-detail-kind")) $("arb-detail-kind").textContent = isFunding ? "FUNDING ARBITRAGE" : "FUTURES SPREAD";
@@ -316,7 +377,7 @@
     if ($("arb-detail-breakdown")) {
       $("arb-detail-breakdown").innerHTML = isFunding
         ? breakdown([["Ставка в сутки", pct(r.daily)], ["Оценка за 30 дней", pct(r.monthly, 2)], ["APR без реинвестирования", pct(r.apr, 1)], ["Ценовой базис", pct(r.basis)], ["Ликвидность 24ч", money(r.liquidity)]])
-        : breakdown([["Валовый спред", pct(r.gross)], ["Taker-комиссии", `−${r.fees.toFixed(3)}%`], ["Чистый спред", pct(r.net)], ["Ликвидность 24ч", money(r.liquidity)], ["Качество котировки", r.quality.toUpperCase()]]);
+        : breakdown([["Валовый вход", pct(r.gross)], ["Taker-комиссии", `−${r.fees.toFixed(3)}%`], ["Чистый вход", pct(r.net)], ["Обратный выход сейчас", pct(r.exitNet)], ["Funding / сутки", pct(fundingEdge(r), 4)], ["Ликвидность 24ч", money(r.liquidity)], ["Качество котировки", r.quality.toUpperCase()]]);
     }
     const urls = isFunding
       ? [[r.longUrl, `Открыть LONG · ${r.longName}`], [r.shortUrl, `Открыть SHORT · ${r.shortName}`]]
@@ -330,7 +391,28 @@
       $("arb-drawer").setAttribute("aria-hidden", "false");
     }
 
+    renderTransferDetail(r);
+    fetchTransferStatuses();
     if (window.ArbitragePro) window.ArbitragePro.open(r, isFunding);
+  }
+
+  function renderTransferDetail(r) {
+    const route = state.transferByKey.get(r.key);
+    const title = $("arb-transfer-title"), badge = $("arb-transfer-state"), body = $("arb-transfer-route");
+    if (!title || !badge || !body) return;
+    if (!route) {
+      title.textContent = "Проверяем общие сети…";
+      badge.textContent = "ЗАГРУЗКА";
+      badge.className = "";
+      body.innerHTML = "";
+      return;
+    }
+    const buyName = r.buyName || r.longName, sellName = r.sellName || r.shortName;
+    const label = route.status === "open" ? route.networks.join(" · ") : route.status === "closed" ? "Открытой общей сети сейчас нет" : "Биржа не отдаёт публичный статус";
+    title.textContent = label;
+    badge.textContent = route.status === "open" ? "МАРШРУТ ОТКРЫТ" : route.status === "closed" ? "ЗАКРЫТ" : "НЕТ ДАННЫХ";
+    badge.className = route.status;
+    body.innerHTML = `<div><img src="${icon(r.buyEx || r.longEx)}" alt=""><strong>${esc(buyName)}</strong><span>${statusBadge("D", route.buy.deposit)}${statusBadge("W", route.buy.withdraw)}</span></div><i>→</i><div><img src="${icon(r.sellEx || r.shortEx)}" alt=""><strong>${esc(sellName)}</strong><span>${statusBadge("D", route.sell.deposit)}${statusBadge("W", route.sell.withdraw)}</span></div>`;
   }
 
   function detailLeg(label, name, value, kind) {
@@ -341,6 +423,7 @@
   }
   function closeDetail() {
     state.detailKey = null;
+    state.detailRow = null;
     if (window.ArbitragePro) window.ArbitragePro.close();
     if ($("arb-drawer")) {
       $("arb-drawer").classList.remove("open");

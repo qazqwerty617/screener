@@ -374,7 +374,7 @@ test("dominance measures resting size against its own neighbourhood", () => {
   // exactly: the ladder has jitter, and the seed level already held one normal
   // unit before the wall was added.)
   let previous = 0;
-  for (const mult of [10, 20, 40, 80]) {
+  for (const mult of [16, 20, 40, 80]) {
     const book = ladder({ ...s, walls: [{ side: "bid", price: wallPrice, usd: s.baseUsd * mult }] });
     const a = analyzeBook({ ex: "BN", coin: coinFor(s, quiet), ...book });
     const top = asideBids(a)[0];
