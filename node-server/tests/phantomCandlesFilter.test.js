@@ -87,7 +87,7 @@ test("server.js rejects stale Go scanner klines and klines with huge gaps", () =
   assert.match(serverJs, /dataGo\[i\]\.t - dataGo\[i - 1\]\.t > maxAllowedGapMs/);
 });
 
-test("sanitizeCandles truncates ancient disconnected historical candles (e.g. July 14 vs Sept 4)", () => {
+test("sanitizeCandles preserves real historical epochs instead of hiding missing intervals", () => {
   // Simulate candles array: 5 candles from July 14th at 64k, followed by 5 candles from Sept 4 at 79.5k
   const julyTs = 1784040540000;
   const septTs = 1788530400000;
@@ -109,12 +109,12 @@ test("sanitizeCandles truncates ancient disconnected historical candles (e.g. Ju
   const runner = new Function("list", tfMsDef + fnSanitizeOneMatch[0] + "\n" + fnMatch[0] + "\n" + fnSanitizeMatch[0] + "\nreturn sanitizeCandles(list);");
 
   const cleaned = runner(rawList);
-  // The ancient July candles must be pruned, only September candles must remain!
-  assert.equal(cleaned.length, 3, `Expected only 3 September candles, got ${cleaned.length}`);
-  assert.ok(cleaned.every(c => c.c > 75000), "All retained candles must be around 79,500");
+  // Missing intervals must be repaired at the data source, not by deleting
+  // otherwise valid history. Market identity is checked by the caller.
+  assert.deepEqual(cleaned, rawList);
 });
 
-test("mergeCandles drops disconnected ancient remnants from existingList", () => {
+test("mergeCandles preserves historical pages on both sides of a missing interval", () => {
   const julyTs = 1784040540000;
   const septTs = 1788530400000;
   const existingList = [
@@ -134,6 +134,5 @@ test("mergeCandles drops disconnected ancient remnants from existingList", () =>
   const runner = new Function("existing, incoming", tfMsDef + fnSanitizeOneMatch[0] + "\n" + fnMatch[0] + "\n" + fnSanitizeMatch[0] + "\n" + fnMergeMatch[0] + "\nreturn mergeCandles(existing, incoming);");
 
   const merged = runner(existingList, incomingList);
-  assert.equal(merged.length, 2, `Expected only 2 incoming candles, got ${merged.length}`);
-  assert.ok(merged.every(c => c.c > 75000), "Ancient July candles must not be merged into live series");
+  assert.deepEqual(merged, [...existingList, ...incomingList]);
 });

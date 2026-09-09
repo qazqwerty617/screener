@@ -10,21 +10,22 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   async function init() {
     try {
       if (updateExStatus) updateExStatus("MX", "connecting");
-      const [data, detailResp] = await Promise.all([
-        apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 15000, 2),
-        apiFetch("https://contract.mexc.com/api/v1/contract/detail", 15000, 2),
-      ]);
-      if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) throw new Error("MEXC API error");
-
       const detailMap = new Map();
-      if (detailResp?.success && Array.isArray(detailResp.data)) {
+      // Contract sizes enrich metadata but must not hold chart availability.
+      apiFetch("https://contract.mexc.com/api/v1/contract/detail", 15000, 2).then(detailResp => {
+        if (!detailResp?.success || !Array.isArray(detailResp.data)) return;
         for (const item of detailResp.data) {
           if (item.symbol && item.contractSize) {
             detailMap.set(item.symbol, +item.contractSize);
+            const existing = tickers.get("MX:" + item.symbol);
+            if (existing) existing.cs = +item.contractSize;
           }
         }
-      }
+      }).catch(() => {});
+      const data = await apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 15000, 2);
+      if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) throw new Error("MEXC API error");
 
+      mxSyms = [];
       let added = 0;
       for (const d of data.data) {
         if (!d.symbol || !d.symbol.endsWith("_USDT")) continue;
@@ -55,6 +56,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       connectWs();
       startRestPolling();
     } catch (e) {
+      if (updateExStatus) updateExStatus("MX", "offline", e.message);
       console.error("[MX] Init error:", e.message);
       setTimeout(init, 5000);
     }

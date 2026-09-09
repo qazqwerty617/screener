@@ -8,6 +8,17 @@ var authToken = localStorage.getItem("obsidian_auth_token") || "";
 const coins = new Map();
 window.coins = coins;
 const dirty = new Set();
+// Ticker-table dirtiness and chart dirtiness have different lifecycles. The
+// table drains a bounded number of rows per frame, while visible charts need
+// only the newest value for their own market. A separate set prevents every
+// grid canvas from being updated on every animation frame.
+const chartTickerDirty = new Set();
+
+function markTickerDirty(key) {
+  if (!key) return;
+  dirty.add(key);
+  chartTickerDirty.add(key);
+}
 const rowEls = new Map();
 const priceHistories = new Map();
 let isHoveringScreener = false;
@@ -414,7 +425,7 @@ function getCachedFormationDetection(candles, key, detector, ttlMs = 900) {
   const signature = `${candles.length}|${last?.t || 0}|${last?.c || 0}|${last?.h || 0}|${last?.l || 0}`;
   const now = performance.now();
   const previous = cache.get(key);
-  if (previous && (previous.signature === signature || now - previous.at < ttlMs)) {
+  if (previous && previous.signature === signature && now - previous.at < ttlMs) {
     return previous.value;
   }
   const value = detector() || [];
@@ -576,7 +587,7 @@ function updateActiveTradeStream(ex, sym) {
               const c = coins.get(`KC:${sym}`);
               if (p > 0 && c) {
                 c.p = p;
-                dirty.add(c.key);
+                markTickerDirty(c.key);
               }
             }
           } catch (_) { }
@@ -637,10 +648,10 @@ function updateActiveTradeStream(ex, sym) {
               // Priority: Deals always update. Tickers only if no deal for 250ms or price is same.
               const now = Date.now();
               if (d.channel === "push.deal") {
-                c.p = lp; c.lastDeal = now; dirty.add(c.key);
+                c.p = lp; c.lastDeal = now; markTickerDirty(c.key);
               } else if (d.channel === "push.ticker") {
                 if (!c.lastDeal || (now - c.lastDeal) > 250) {
-                  c.p = lp; dirty.add(c.key);
+                  c.p = lp; markTickerDirty(c.key);
                 }
               }
             }
@@ -655,7 +666,7 @@ function updateActiveTradeStream(ex, sym) {
           const c = coins.get(`${ex}:${sym}`);
           if (c) {
             c.p = p;
-            dirty.add(c.key);
+            markTickerDirty(c.key);
             checkPriceAlerts(ex, sym, p);
           }
         }
@@ -995,7 +1006,50 @@ let ws = null,
 let chartNeedsDraw = false; // set true when live candle updated
 const MAX_DIRTY_ROWS_PER_TICK = 1000;
 const KLINES_CACHE_TTL_MS = 300000;
+const KLINES_CACHE_MAX_ENTRIES = 128;
+const KLINES_CACHE_MAX_CANDLES = 120000;
 const KLINES_CACHE = new Map();
+
+function countCachedCandles(data) {
+  if (!Array.isArray(data)) return 0;
+  return typeof data[0] === "number" ? Math.ceil(data.length / 6) : data.length;
+}
+
+function pruneClientKlinesCache(now = Date.now()) {
+  let totalCandles = 0;
+  for (const [key, entry] of KLINES_CACHE) {
+    if (!entry || !Array.isArray(entry.data) || now - (entry.ts || 0) > KLINES_CACHE_TTL_MS * 6) {
+      KLINES_CACHE.delete(key);
+      continue;
+    }
+    totalCandles += countCachedCandles(entry.data);
+  }
+  while (KLINES_CACHE.size > KLINES_CACHE_MAX_ENTRIES || totalCandles > KLINES_CACHE_MAX_CANDLES) {
+    const oldestKey = KLINES_CACHE.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = KLINES_CACHE.get(oldestKey);
+    totalCandles -= countCachedCandles(oldest?.data);
+    KLINES_CACHE.delete(oldestKey);
+  }
+}
+
+function touchKlinesCache(key) {
+  const entry = KLINES_CACHE.get(key);
+  if (!entry) return null;
+  entry.used = Date.now();
+  KLINES_CACHE.delete(key);
+  KLINES_CACHE.set(key, entry);
+  return entry;
+}
+
+function storeKlinesCache(key, data, ts = Date.now()) {
+  if (!key || !Array.isArray(data) || data.length === 0) return;
+  KLINES_CACHE.delete(key);
+  KLINES_CACHE.set(key, { ts, used: ts, data });
+  pruneClientKlinesCache(ts);
+}
+const KLINE_REQUESTS = new Map();
+const GRID_KLINE_QUEUE = new Map();
 let klFetchToken = 0;
 const marketListeners = new Map();
 let mainMarketUnsubscribe = null;
@@ -1072,13 +1126,14 @@ function processTickData(dt) {
 
   // 1. Interpolate all active coin prices with smooth exponential lerp (no teleportation)
   if (interpActive.size > 0) {
-    const keysToRemove = [];
     const currentActiveKey = `${activeEx}:${activeSym}`;
     for (const [key, info] of interpActive) {
       const c = coins.get(key);
-      if (!c) { keysToRemove.push(key); continue; }
-      if (key === currentActiveKey) { c.displayP = c.p; keysToRemove.push(key); continue; }
-      if (!c.displayP) { c.displayP = c.p; keysToRemove.push(key); continue; }
+      if (!c || key === currentActiveKey || !c.displayP) {
+        if (c && key === currentActiveKey) c.displayP = c.p;
+        interpActive.delete(key);
+        continue;
+      }
       checkPriceAlerts(c.ex, c.sym, c.p);
 
       const diff = c.p - c.displayP;
@@ -1086,15 +1141,14 @@ function processTickData(dt) {
 
       if (absDiff < 1e-9) {
         c.displayP = c.p;
-        keysToRemove.push(key);
+        interpActive.delete(key);
       } else {
         // Ultra-responsive smooth exponential lerp (fast & buttery smooth 120 FPS Glide)
         const factor = 1 - Math.exp(-35 * clampedDt);
         c.displayP += diff * factor;
-        dirty.add(key);
+        markTickerDirty(key);
       }
     }
-    keysToRemove.forEach(k => interpActive.delete(k));
   }
 
   // 2. DOM updates for dirty rows
@@ -1129,6 +1183,17 @@ function processTickData(dt) {
 
       if (now >= candleEnd) {
         const numBars = Math.floor((now - last.t) / tfMs);
+        const maxBarsToFill = Math.min(numBars, 100);
+        for (let b = 1; b < maxBarsToFill; b++) {
+          candles.push({
+            t: last.t + b * tfMs,
+            o: last.c,
+            h: last.c,
+            l: last.c,
+            c: last.c,
+            v: 0
+          });
+        }
         const expectedCandleStart = last.t + numBars * tfMs;
         const newCandle = {
           t: expectedCandleStart,
@@ -1139,9 +1204,12 @@ function processTickData(dt) {
           v: 0
         };
         candles.push(newCandle);
-        if (candles.length > 3000) candles.shift();
+        if (candles.length > 3000) candles.splice(0, candles.length - 3000);
         clearCandleCaches(candles);
-        if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
+        if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + Math.min(numBars, 100));
+        if (numBars > 1) {
+          refetchMissingHistory(activeEx, activeSym, activeTf);
+        }
         chartNeedsDraw = true;
       }
 
@@ -1162,18 +1230,18 @@ function processTickData(dt) {
   }
 
   if (screenerView === "multichart" || activeView === "formations") {
-    if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances) && chartInstances.length > 0) {
+    if (chartTickerDirty.size > 0 && typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
       for (let i = 0; i < chartInstances.length; i++) {
         const inst = chartInstances[i];
-        if (inst && inst.key) {
-          const c = coins.get(inst.key);
-          if (c && c.p > 0) inst.update(c);
-        } else if (inst && inst.candles && inst.candles.length > 0) {
-          inst.draw();
-        }
+        if (!inst?.key || !chartTickerDirty.has(inst.key)) continue;
+        const c = coins.get(inst.key);
+        if (c && c.p > 0) inst.update(c);
       }
     }
   }
+  // Hidden markets do not need a backlog: a newly built cell receives the
+  // current ticker immediately from initChartGrid/renderCurrentPage.
+  chartTickerDirty.clear();
 }
 
 function startMcLoop() {
@@ -2537,7 +2605,7 @@ function drawDensityTimelineOnChart(ctx, options) {
     liveIds.add(wall.wallId || `${wall.ex}:${wall.sym}:${wall.side}:${wall.price}`);
     source.push({ ...wall, active: true, endedAt: null });
   }
-  if (Array.isArray(densityHistoryData)) {
+  if (options?.showHistory && Array.isArray(densityHistoryData)) {
     for (const record of densityHistoryData) {
       if (record.base !== base) continue;
       if (record.active) continue;
@@ -2591,17 +2659,17 @@ function drawDensityTimelineOnChart(ctx, options) {
     const endX = Math.max(startX + 1, Math.min(PW, rawEndX));
     const isBid = wall.side === "bid";
     const active = wall.active !== false && !wall.endedAt;
+    if (!active) continue; // Never draw inactive/ended walls that produce dashed clutter
     const rgb = isBid ? [38, 201, 122] : [255, 69, 96];
 
-    // Clean, crisp solid line (NO gradient shimmers/fades)
-    ctx.strokeStyle = active ? `rgba(${rgb.join(',')}, 0.85)` : `rgba(${rgb.join(',')}, 0.40)`;
+    // Clean, crisp solid line (NO dashed clutter)
+    ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.85)`;
     ctx.lineWidth = 1.5;
-    ctx.setLineDash(active ? [] : [4, 4]);
+    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(startX, Math.round(y) - 0.5);
     ctx.lineTo(endX, Math.round(y) - 0.5);
     ctx.stroke();
-    ctx.setLineDash([]);
 
     if (active && rawStartX >= -80 && rawStartX <= PW - 30) {
       const timeText = new Date(Number(wall.firstSeenAt) || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -2685,7 +2753,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const getFmtColor = (hex, op = 75) => (typeof hexToRgba === "function") ? hexToRgba(hex, op) : hex;
   const getFmtDotColor = (hex, op = 75) => (typeof hexToRgba === "function") ? hexToRgba(hex, Math.min(100, (Number(op) || 75) + 15)) : hex;
 
-  // ─── 1. CASCADES ───
   const hasCascades = hasType('cascades');
   if (hasCascades) {
     let levels = window.FormationEngine
@@ -2707,14 +2774,15 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const startIdx = lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0);
       if (typeof startIdx !== "number" || startIdx < 0) continue;
 
-      // Verify no candle between startIdx and N-1 pierces the cascade level
       let pierced = false;
-      for (let k = startIdx; k < N; k++) {
+      const eps = Math.max(1e-7, lastPrice * 0.00001);
+      for (let k = startIdx + 1; k < N; k++) {
         const c = candles[k];
+        if (!c) continue;
         if (isUp) {
-          if (c.h > lv.price || c.c > lv.price || c.o > lv.price) { pierced = true; break; }
+          if (c.h > lv.price + eps || c.c > lv.price || toY(c.h) < y - 1) { pierced = true; break; }
         } else {
-          if (c.l < lv.price || c.c < lv.price || c.o < lv.price) { pierced = true; break; }
+          if (c.l < lv.price - eps || c.c < lv.price || toY(c.l) > y + 1) { pierced = true; break; }
         }
       }
       if (pierced) continue;
@@ -2732,7 +2800,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.lineTo(PW, y);
       ctx.stroke();
 
-      // Draw all touch dots if touches enabled (locked to exact timestamps)
       if (fovShowTouches) {
         ctx.fillStyle = touchColor;
         const touchTimes = Array.isArray(lv.touchTimes) ? lv.touchTimes : [];
@@ -2743,6 +2810,12 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
           const rawIdx = touchIndices[ti] !== undefined ? touchIndices[ti] : startIdx;
           const tIdx = tTime ? getIdxFromTime(tTime, candles) : rawIdx;
           if (typeof tIdx !== "number" || tIdx < startIdx || tIdx >= N) continue;
+          const c = candles[tIdx];
+          if (c) {
+            const wick = isUp ? c.h : c.l;
+            if (Math.abs(toY(wick) - y) > 3.5) continue;
+            if (Math.abs(wick - lv.price) / lv.price > 0.00025) continue;
+          }
           const tX = getCandleX(tIdx);
           if (tX >= 0 && tX <= PW) {
             ctx.beginPath();
@@ -2757,15 +2830,17 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
     }
   }
 
-  // ─── 2. HORIZONTAL LEVELS ───
-  const hasLevels = hasType('levels');
-  if (hasLevels) {
+  const hasHorizontals = hasType('levels');
+  if (hasHorizontals) {
+    const minTouches = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : (chartFovBreakoutMin || 2);
     let levels = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:levels:${fovMin}`, () => window.FormationEngine.detectHorizontals(candles, fovMin))
+      ? getCachedFormationDetection(candles, `overlay:levels:${minTouches}`, () => window.FormationEngine.detectHorizontals(candles, minTouches))
       : [];
 
-    const minTouches = Math.max(1, fovMin || 1);
-    levels = levels.filter(lv => (lv.touches || 1) >= minTouches && Math.abs(lv.price - lastPrice) / lastPrice <= 0.15);
+    levels = levels.filter(lv => {
+      const count = lv.touches || (Array.isArray(lv.touchIndices) ? lv.touchIndices.length : 1);
+      return count >= minTouches && Math.abs(lv.price - lastPrice) / lastPrice <= 0.15;
+    });
 
     if (fovNearest && levels.length > 0) {
       levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
@@ -2780,17 +2855,22 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if (y < TOP || y > TOP + PH) continue;
 
       const isUp = (lv.direction === "up" || lv.price >= lastPrice);
-      const startIdx = lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0);
-      if (typeof startIdx !== "number" || startIdx < 0) continue;
+      const firstTouchIdx = (Array.isArray(lv.touchIndices) && lv.touchIndices.length > 0)
+        ? Math.min(...lv.touchIndices)
+        : (lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0));
+      const startIdx = (typeof firstTouchIdx === "number" && firstTouchIdx >= 0) ? firstTouchIdx : 0;
 
-      // Verify no candle between startIdx and N-1 pierces the horizontal level
       let pierced = false;
-      for (let k = startIdx; k < N; k++) {
+      const eps = Math.max(1e-7, lastPrice * 0.00001);
+      const touchSet = new Set(Array.isArray(lv.touchIndices) ? lv.touchIndices : [startIdx]);
+      for (let k = startIdx + 1; k < N; k++) {
+        if (touchSet.has(k)) continue;
         const c = candles[k];
+        if (!c) continue;
         if (isUp) {
-          if (c.h > lv.price || c.c > lv.price || c.o > lv.price) { pierced = true; break; }
+          if (c.h > lv.price + eps || c.c > lv.price || toY(c.h) < y - 1) { pierced = true; break; }
         } else {
-          if (c.l < lv.price || c.c < lv.price || c.o < lv.price) { pierced = true; break; }
+          if (c.l < lv.price - eps || c.c < lv.price || toY(c.l) > y + 1) { pierced = true; break; }
         }
       }
       if (pierced) continue;
@@ -2806,17 +2886,22 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       ctx.lineTo(PW, y);
       ctx.stroke();
 
-      // Draw all touch dots if touches enabled (locked to exact timestamps)
       if (fovShowTouches) {
         ctx.fillStyle = touchColor;
         const touchTimes = Array.isArray(lv.touchTimes) ? lv.touchTimes : [];
         const touchIndices = Array.isArray(lv.touchIndices) ? lv.touchIndices : [];
-        const count = Math.max(touchTimes.length, touchIndices.length, 1);
+        const count = Math.max(touchTimes.length, touchIndices.length);
         for (let ti = 0; ti < count; ti++) {
           const tTime = touchTimes[ti];
-          const rawIdx = touchIndices[ti] !== undefined ? touchIndices[ti] : startIdx;
+          const rawIdx = touchIndices[ti] !== undefined ? touchIndices[ti] : null;
           const tIdx = tTime ? getIdxFromTime(tTime, candles) : rawIdx;
           if (typeof tIdx !== "number" || tIdx < startIdx || tIdx >= N) continue;
+          const c = candles[tIdx];
+          if (c) {
+            const wick = isUp ? c.h : c.l;
+            if (Math.abs(toY(wick) - y) > 3.5) continue;
+            if (Math.abs(wick - lv.price) / lv.price > 0.00025) continue;
+          }
           const tX = getCandleX(tIdx);
           if (tX >= 0 && tX <= PW) {
             ctx.beginPath();
@@ -2831,7 +2916,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
     }
   }
 
-  // ─── 3. TRENDLINES ───
   const hasTrendlines = hasType('trendlines');
   if (hasTrendlines) {
     let trendlines = window.FormationEngine
@@ -2850,22 +2934,29 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const lineColor = isUp ? getFmtColor(fmtColors.trendlineUp, fmtColors.trendlineUpOp) : getFmtColor(fmtColors.trendlineDown, fmtColors.trendlineDownOp);
       const touchColor = isUp ? getFmtDotColor(fmtColors.trendlineUp, fmtColors.trendlineUpOp) : getFmtDotColor(fmtColors.trendlineDown, fmtColors.trendlineDownOp);
 
-      const idx1 = tl.p1.t ? getIdxFromTime(tl.p1.t, candles) : tl.p1.idx;
-      const idx2 = tl.p2.t ? getIdxFromTime(tl.p2.t, candles) : tl.p2.idx;
+      let idx1 = tl.p1.idx;
+      let idx2 = tl.p2.idx;
+      if (!candles[idx1] || candles[idx1].t !== tl.p1.t) {
+        idx1 = tl.p1.t ? getIdxFromTime(tl.p1.t, candles) : tl.p1.idx;
+      }
+      if (!candles[idx2] || candles[idx2].t !== tl.p2.t) {
+        idx2 = tl.p2.t ? getIdxFromTime(tl.p2.t, candles) : tl.p2.idx;
+      }
       if (typeof idx1 !== "number" || typeof idx2 !== "number" || idx2 <= idx1 || idx1 < 0) continue;
 
       const slope = (tl.p2.price - tl.p1.price) / (idx2 - idx1);
       const isResistance = isUp;
 
-      // Strictly verify that NO candle pierces this trendline from idx1 to N - 1
       let pierced = false;
-      for (let k = idx1; k < N; k++) {
+      const eps = Math.max(1e-7, lastPrice * 0.00001);
+      for (let k = idx1 + 1; k < N; k++) {
         const line = tl.p1.price + slope * (k - idx1);
         const c = candles[k];
+        if (!c) continue;
         if (isResistance) {
-          if (c.h > line || c.c > line || c.o > line) { pierced = true; break; }
+          if (c.h > line + eps || c.c > line + eps || toY(c.h) < toY(line) - 1) { pierced = true; break; }
         } else {
-          if (c.l < line || c.c < line || c.o < line) { pierced = true; break; }
+          if (c.l < line - eps || c.c < line - eps || toY(c.l) > toY(line) + 1) { pierced = true; break; }
         }
       }
       if (pierced) continue;
@@ -2896,11 +2987,22 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
         for (let ti = 0; ti < count; ti++) {
           const tTime = touchTimes[ti];
-          const rawIdx = touchIndices[ti];
-          const tIdx = tTime ? getIdxFromTime(tTime, candles) : rawIdx;
+          let tIdx = touchIndices[ti];
+          if (!candles[tIdx] || (tTime && candles[tIdx].t !== tTime)) {
+            tIdx = tTime ? getIdxFromTime(tTime, candles) : tIdx;
+          }
           if (typeof tIdx !== "number" || tIdx < idx1 || tIdx >= N) continue;
 
           const tPrice = tl.p1.price + slope * (tIdx - idx1);
+          const c = candles[tIdx];
+          if (c) {
+            const wick = isResistance ? c.h : c.l;
+            const wickY = toY(wick);
+            const lineY = toY(tPrice);
+            if (Math.abs(wickY - lineY) > 3.5) continue;
+            if (Math.abs(wick - tPrice) / tPrice > 0.00020) continue;
+          }
+
           const tX = getCandleX(tIdx);
           const tY = toY(tPrice);
           if (tX >= x1 && tX <= x2 && tX >= 0 && tX <= PW) {
@@ -2997,7 +3099,9 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
 function drawChart() {
   if (!chartW || !chartH) return;
-  if (typeof isLoadingKlines !== "undefined" && isLoadingKlines || !candles || candles.length < 2) {
+  // Performance guard: do not draw main chart if main screener view is hidden and chart not borrowed
+  if (activeView !== "screener" && !window.isFormationFullChartOpen?.()) return;
+  if (typeof isLoadingKlines !== "undefined" && isLoadingKlines || !candles || !candles.length) {
     if ((typeof isLoadingKlines !== "undefined" && isLoadingKlines) || !candles || !candles.length) {
       const dpr = window.devicePixelRatio || 1;
       ctx.clearRect(0, 0, chartW, chartH);
@@ -3070,7 +3174,7 @@ function drawChart() {
   if (!vis.length && futureGap <= 0.5) return;
 
   // Infinite scroll: dynamically load older historical candles when approaching left edge
-  if (offsetX > 0 && viewStart < 80 && candles.length > 0 && !isLoadingOlderCandles && !hasReachedStartOfHistory) {
+  if (viewStart < 80 && candles.length > 0 && !isLoadingOlderCandles && !hasReachedStartOfHistory) {
     loadOlderHistory(activeEx, activeSym, activeTf);
   }
 
@@ -3162,8 +3266,8 @@ function drawChart() {
       yL = toY(c.l);
     const yO = toY(c.o),
       yC = toY(c.c);
-    const bH = Math.max(1.8, Math.abs(yC - yO));
-    const bT = Math.abs(yC - yO) < 1.8 ? Math.min(yO, yC) - 0.9 : Math.min(yO, yC);
+    const bH = Math.max(2, Math.abs(yC - yO));
+    const bT = Math.abs(yC - yO) < 2 ? Math.min(yO, yC) - 1 : Math.min(yO, yC);
 
     const leftX = Math.round((rawX - hw) * dpr);
     const rightX = Math.round((rawX + hw) * dpr);
@@ -3171,7 +3275,7 @@ function drawChart() {
     const fillX = leftX / dpr;
     const fillY = Math.round(bT * dpr) / dpr;
     const fillW = fillPixelW / dpr;
-    const fillH = Math.max(1.5 / dpr, Math.round(bH * dpr) / dpr);
+    const fillH = Math.max(2 / dpr, Math.round(bH * dpr) / dpr);
 
     // Wick is placed at exact mathematical pixel center of candle body (TigerTrade standard)
     const wickPixel = Math.round(leftX + fillPixelW / 2);
@@ -6759,7 +6863,7 @@ function connectWS() {
         const oldP = c.p;
         c.p = p; c.chg = chg; c.v = v; c.h = h; c.l = l; c.o = o;
         c.funding = funding; c.nextFunding = nextFunding; c.oi = oi; c.trades = trades;
-        dirty.add(key);
+        markTickerDirty(key);
         if (c.p !== oldP) {
           scheduleInterp(key);
           checkPriceAlerts(c.ex, c.sym, p);
@@ -6768,9 +6872,11 @@ function connectWS() {
 
         if (key === `${activeEx}:${activeSym}` && candles.length > 0 && !hasMainMarketStream()) {
           const lastC = candles[candles.length - 1];
-          lastC.c = p;
-          if (p > lastC.h) lastC.h = p;
-          if (p < lastC.l) lastC.l = p;
+          if (Date.now() >= lastC.t && Date.now() < lastC.t + (TF_MS[activeTf] || 60000)) {
+            lastC.c = p;
+            if (p > lastC.h) lastC.h = p;
+            if (p < lastC.l) lastC.l = p;
+          }
           chartNeedsDraw = true;
         }
       }
@@ -6851,16 +6957,9 @@ function connectWS() {
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
-          requestAnimationFrame(drawChart);
+          requestDraw();
           if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
-            chartInstances.forEach(inst => {
-              if (inst && inst.key) {
-                const c = coins.get(inst.key);
-                if (c && c.p > 0) inst.update(c);
-              } else if (inst && typeof inst.draw === "function") {
-                inst.draw();
-              }
-            });
+            chartInstances.forEach(inst => { if (inst) inst.dirty = true; });
           }
         }
       }
@@ -6911,23 +7010,15 @@ function connectWS() {
           processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, oi, trades);
           addedNew = true;
         }
-        dirty.add(key);
-
-        if (screenerView === "multichart" || activeView === "formations") {
-          for (let j = 0; j < chartInstances.length; j++) {
-            const inst = chartInstances[j];
-            if (inst && inst.sym) {
-              if (!inst.key) inst.key = `${inst.ex}:${inst.sym}`;
-              if (inst.key === key) inst.update(c);
-            }
-          }
-        }
+        markTickerDirty(key);
 
         if (key === activeKey && candles.length > 0 && !hasMainMarketStream()) {
           const lastC = candles[candles.length - 1];
-          lastC.c = p;
-          if (p > lastC.h) lastC.h = p;
-          if (p < lastC.l) lastC.l = p;
+          if (Date.now() >= lastC.t && Date.now() < lastC.t + (TF_MS[activeTf] || 60000)) {
+            lastC.c = p;
+            if (p > lastC.h) lastC.h = p;
+            if (p < lastC.l) lastC.l = p;
+          }
           chartNeedsDraw = true;
         }
       }
@@ -6956,6 +7047,7 @@ function connectWS() {
 function unfreezeAndResync() {
   lastRafTs = performance.now();
   chartNeedsDraw = true;
+  window._isRefetchingGap = false; // reset refetch lock on resync so gaps are always healed
   if (activeEx && activeSym && activeTf) {
     refetchMissingHistory(activeEx, activeSym, activeTf);
     if (!klWs || klWs.readyState > 1) {
@@ -6996,6 +7088,7 @@ function processTickerUpdate(t) {
   const base = existing || { prev: t.p, displayP: t.p };
   if (!base.displayP) base.displayP = t.p;
   coins.set(t.key, Object.assign(base, t));
+  markTickerDirty(t.key);
 }
 
 function processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, oi, trades) {
@@ -7012,9 +7105,10 @@ function processTickerUpdateFlat(key, p, chg, v, h, l, o, funding, nextFunding, 
     const colonIdx = key.indexOf(':');
     const ex = colonIdx > 0 ? key.substring(0, colonIdx) : '';
     const sym = colonIdx > 0 ? key.substring(colonIdx + 1) : key;
-    const base = sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '');
+    const base = sym.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, '').replace(/[-_]?(?:SWAP|PERP|PERPETUAL|SPOT)$/i, '');
     coins.set(key, { key, ex, sym, base, prev: p, displayP: p, p, chg, v, h, l, o, funding: funding || 0, nextFunding: nextFunding || 0, oi: oi || 0, trades: trades || 0 });
   }
+  markTickerDirty(key);
 }
 
 // тХРтХРтХР Fallback removed тАФ all data via server WS тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
@@ -7165,9 +7259,6 @@ function sanitizeCandles(list, maxLimit = 3000) {
   const out = [];
   for (let i = 0; i < sorted.length; i++) {
     const k = sorted[i];
-    const isLast = (i === sorted.length - 1);
-    // Ignore dummy placeholder bars with 0 volume and 0 price range
-    if (!isLast && k.h === k.l && (!k.v || k.v === 0)) continue;
     const clean = sanitizeCandle(k, out.length ? out[out.length - 1].c : null);
     if (!clean) continue;
     if (out.length) {
@@ -7180,31 +7271,10 @@ function sanitizeCandles(list, maxLimit = 3000) {
     out.push(clean);
   }
 
-  // Contiguity check: detect severed historical epochs.
-  // If there is an unbridgeable time void (> 50 bars and > 4 hours on intraday, or > 24 hours),
-  // retain only the active contiguous series leading to the latest candle.
-  if (out.length > 2) {
-    const tfMs = (typeof activeTf !== "undefined" && TF_MS[activeTf]) ? TF_MS[activeTf] : 60000;
-    const maxGapMs = Math.max(tfMs * 50, 4 * 3600000);
-    let contiguousStartIdx = 0;
-    for (let i = out.length - 1; i > 0; i--) {
-      const dt = out[i].t - out[i - 1].t;
-      if (dt > maxGapMs) {
-        const pxJump = Math.abs(out[i].o - out[i - 1].c) / out[i - 1].c;
-        if (dt > 24 * 3600000 || pxJump > 0.08) {
-          contiguousStartIdx = i;
-          break;
-        }
-      }
-    }
-    if (contiguousStartIdx > 0) {
-      out.splice(0, contiguousStartIdx);
-    }
-  }
-
-  const cleaned = cleanPhantomWicksAndCandles(out);
+  // Preserve exchange OHLCV. Missing intervals are not evidence of zero-volume
+  // trades, and an unrelated chart timeframe must never trim this history.
   const cap = Number.isFinite(maxLimit) && maxLimit > 0 ? maxLimit : 3000;
-  return cleaned.slice(-cap);
+  return out.slice(-cap);
 }
 
 let currentLoadedEx = null;
@@ -7219,10 +7289,6 @@ function mergeCandles(existingList, incomingList, maxLimit = 3000) {
   const cleanIncoming = sanitizeCandles(incomingList, maxLimit);
   if (!cleanIncoming.length) return sanitizeCandles(existingList, maxLimit);
 
-  const tfMs = (typeof activeTf !== "undefined" && TF_MS[activeTf]) ? TF_MS[activeTf] : 60000;
-  const maxGapMs = Math.max(tfMs * 50, 4 * 3600000);
-
-  const firstIn = cleanIncoming[0].t;
   const lastIn = cleanIncoming[cleanIncoming.length - 1].t;
 
   const map = new Map();
@@ -7237,19 +7303,10 @@ function mergeCandles(existingList, incomingList, maxLimit = 3000) {
   const lastExisting = existingList[existingList.length - 1];
   for (const c of existingList) {
     if (!c || !Number.isFinite(c.t) || c.t <= 0) continue;
-    if (c !== lastExisting && c.h === c.l && (!c.v || c.v === 0)) continue;
-
-    // Discard any existing candle that is separated from incoming range by a giant gap
-    if (c.t < firstIn && (firstIn - c.t > maxGapMs)) {
-      continue; // drop disconnected historical remnants from old epochs
-    }
-    if (c.t > lastIn && (c.t - lastIn > maxGapMs)) {
-      continue;
-    }
 
     const incoming = map.get(c.t);
     if (incoming) {
-      if (c === lastExisting) {
+      if (c === lastExisting && c.t === lastIn) {
         if (c.c > 0 && Math.abs(c.c - incoming.c) / incoming.c < 0.15) {
           incoming.c = c.c;
           if (c.c > incoming.h) incoming.h = c.c;
@@ -7270,14 +7327,7 @@ async function refetchMissingHistory(ex, sym, tf) {
   if (window._isRefetchingGap) return;
   window._isRefetchingGap = true;
   try {
-    const directPromise = fetchDirectKlines(ex, sym, tf).then(c => (c && c.length > 0 ? c : Promise.reject()));
-    const serverPromise = fetchServerKlines(ex, sym, tf, 1).then(c => (c && c.length > 0 ? c : Promise.reject()));
-    let fresh = [];
-    try {
-      fresh = await Promise.any([directPromise, serverPromise]);
-    } catch (_) {
-      fresh = await fetchServerKlines(ex, sym, tf, 0);
-    }
+    const fresh = await fetchChartKlines(ex, sym, tf);
     if (fresh && fresh.length > 0 && activeEx === ex && activeSym === sym && activeTf === tf) {
       const prevAnchorTime = (offsetX > 0 && candles.length > 0)
         ? candles[Math.max(0, Math.min(candles.length - 1, Math.round(candles.length - 1 - offsetX)))]?.t
@@ -7293,7 +7343,7 @@ async function refetchMissingHistory(ex, sym, tf) {
       }
 
       const key = `${ex}|${sym}|${tf}`;
-      KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
+      storeKlinesCache(key, candles);
       chartNeedsDraw = true;
       if (typeof drawChart === "function") requestAnimationFrame(drawChart);
     }
@@ -7303,9 +7353,16 @@ async function refetchMissingHistory(ex, sym, tf) {
   }
 }
 
-async function fetchDirectKlines(ex, sym, tf) {
+async function fetchDirectKlines(ex, sym, tf, signal) {
+  // These venues have no native 3d interval. Only the server aggregates it.
+  if (tf === '3d' && ['BB', 'MX', 'KC', 'HT'].includes(ex)) return [];
+  // Spot symbols must go through the server's market-specific routing.
+  if (sym.includes('_SPOT')) return [];
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 900);
+  const abort = () => controller.abort();
+  if (signal?.aborted) return [];
+  signal?.addEventListener('abort', abort, { once: true });
+  const timeoutId = setTimeout(abort, 2500);
 
   try {
     let resultCandles = [];
@@ -7314,21 +7371,14 @@ async function fetchDirectKlines(ex, sym, tf) {
     const encSym = encodeURIComponent(sym);
 
     if (ex === "BN" || ex === "AD") {
-      const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
-      const [r1, r2] = await Promise.all([
-        fetch(`https://${domain}/fapi/v1/klines?symbol=${encSym}&interval=${TFB[tf] || tf}&limit=1000`, { signal: controller.signal }).then(r => r.json()).catch(() => []),
-        fetch(`https://${domain}/fapi/v1/klines?symbol=${encSym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => [])
-      ]);
-      const merged = [...(Array.isArray(r2) ? r2 : []), ...(Array.isArray(r1) ? r1 : [])];
+      const domain = ex === "BN" ? "fapi.binance.com" : "fapi.asterdex.com";
+      const r1 = await fetch(`https://${domain}/fapi/v1/klines?symbol=${encSym}&interval=${TFB[tf] || tf}&limit=300`, { signal: controller.signal }).then(r => r.json());
+      const merged = Array.isArray(r1) ? r1 : [];
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] })));
     } else if (ex === "BB") {
-      const [r1, r2] = await Promise.all([
-        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${encSym}&interval=${TFBB[tf] || "60"}&limit=1000`, { signal: controller.signal }).then(r => r.json()).catch(() => null),
-        fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${encSym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => null)
-      ]);
+      const r1 = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${encSym}&interval=${TFBB[tf] || "60"}&limit=300`, { signal: controller.signal }).then(r => r.json());
       const l1 = r1?.result?.list || [];
-      const l2 = r2?.result?.list || [];
-      const merged = [...l2, ...l1];
+      const merged = l1;
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "OX") {
       const r = await fetch(`https://www.okx.com/api/v5/market/candles?instId=${encSym}&bar=${TFOK[tf] || "1H"}&limit=300`, { signal: controller.signal });
@@ -7344,7 +7394,7 @@ async function fetchDirectKlines(ex, sym, tf) {
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
       const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
-      const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
+      const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
       const startSec = Math.floor((now - 1000 * tfMs) / 1000);
       const endSec = Math.floor(now / 1000);
       const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(mxSym)}?interval=${mxTfMap[tf] || "Min60"}&start=${startSec}&end=${endSec}`, { signal: controller.signal });
@@ -7355,24 +7405,20 @@ async function fetchDirectKlines(ex, sym, tf) {
         return { t: t * 1000, o: +data.data.open[i], h: +data.data.high[i], l: +data.data.low[i], c, v };
       }));
     } else if (ex === "KC") {
-      const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440 };
-      const startMs = now - 1000 * tfMs;
+      const kcTfMap = { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080 };
+      const startMs = now - 200 * tfMs;
       const r = await fetch(`https://api-futures.kucoin.com/api/v1/kline/query?symbol=${encSym}&granularity=${kcTfMap[tf] || 60}&from=${startMs}&to=${now}`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "BX") {
       const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
-      const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
-      const [r1, r2] = await Promise.all([
-        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000&startTime=${now - 1000 * tfMs}&endTime=${now}`, { signal: controller.signal }).then(r => r.json()).catch(() => null),
-        fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=1000&startTime=${now - 2000 * tfMs}&endTime=${now - 1000 * tfMs}`, { signal: controller.signal }).then(r => r.json()).catch(() => null)
-      ]);
+      const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
+      const r1 = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${encodeURIComponent(bxSym)}&interval=${bxTfMap[tf] || "1h"}&limit=300`, { signal: controller.signal }).then(r => r.json());
       const l1 = r1?.data || [];
-      const l2 = r2?.data || [];
-      const merged = [...l2, ...l1];
+      const merged = l1;
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
-      const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "1h": "60min", "4h": "4hour", "1d": "1day" };
+      const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "60min", "4h": "4hour", "1d": "1day", "1w": "1week" };
       const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${encSym}&period=${htTfMap[tf] || "60min"}&size=1000`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.l, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
@@ -7386,34 +7432,188 @@ async function fetchDirectKlines(ex, sym, tf) {
     return [];
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
-async function fetchServerKlines(ex, sym, tf, lite = 1) {
+async function fetchChartKlines(ex, sym, tf) {
+  const key = `fast|${ex}|${sym}|${tf}`;
+  if (KLINE_REQUESTS.has(key)) return KLINE_REQUESTS.get(key);
+  const request = (async () => {
+    const directController = new AbortController();
+    if (tf === '3d' && ['BB', 'MX', 'KC', 'HT'].includes(ex)) return fetchServerKlines(ex, sym, tf, 1);
+    let hedgeTimer, startDirect;
+    const nonempty = data => data?.length > 0 ? data : Promise.reject(new Error('No candles yet'));
+    const direct = new Promise((resolve, reject) => {
+      let started = false;
+      startDirect = () => {
+        if (started) return;
+        started = true;
+        fetchDirectKlines(ex, sym, tf, directController.signal).then(nonempty).then(resolve, reject);
+      };
+      // A warm server cache should not generate an extra exchange request.
+      hedgeTimer = setTimeout(startDirect, 400);
+    });
+    const server = fetchServerKlines(ex, sym, tf, 1).then(nonempty).catch(error => {
+      startDirect();
+      throw error;
+    });
+    try { return await Promise.any([server, direct]); }
+    catch (_) { return []; }
+    finally { clearTimeout(hedgeTimer); directController.abort(); }
+  })();
+  KLINE_REQUESTS.set(key, request);
+  try { return await request; }
+  finally { if (KLINE_REQUESTS.get(key) === request) KLINE_REQUESTS.delete(key); }
+}
+
+function consumeGridRequest(request, signal) {
+  request.users = (request.users || 0) + 1;
+  return new Promise(resolve => {
+    let done = false;
+    const finish = data => {
+      if (done) return;
+      done = true;
+      signal?.removeEventListener('abort', abort);
+      request.users--;
+      if (!request.users && !request.settled) request.cancel?.();
+      resolve(data);
+    };
+    const abort = () => finish([]);
+    if (signal?.aborted) return abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    request.then(finish, () => finish([]));
+  });
+}
+
+function fetchGridKlines(ex, sym, tf, signal) {
+  if (signal?.aborted) return Promise.resolve([]);
+  const key = `grid|${ex}|${sym}|${tf}`;
+  if (KLINE_REQUESTS.has(key)) return consumeGridRequest(KLINE_REQUESTS.get(key), signal);
+  const groupKey = `${ex}|${tf}`;
+  let group = GRID_KLINE_QUEUE.get(groupKey);
+  if (!group) {
+    group = { ex, tf, items: new Map() };
+    GRID_KLINE_QUEUE.set(groupKey, group);
+    // Collect cells created together, without waiting for a rendering frame.
+    setTimeout(() => {
+      if (GRID_KLINE_QUEUE.get(groupKey) === group) GRID_KLINE_QUEUE.delete(groupKey);
+      flushGridKlines(group);
+    }, 0);
+  }
+  let resolveRequest;
+  const request = new Promise(resolve => { resolveRequest = resolve; group.items.set(sym, resolve); });
+  request.cancel = () => {
+    request.settled = true;
+    if (KLINE_REQUESTS.get(key) === request) KLINE_REQUESTS.delete(key);
+    group.items.delete(sym);
+    group.pending?.delete(sym);
+    if (group.pending && !group.pending.size) group.controller?.abort();
+    resolveRequest([]);
+  };
+  KLINE_REQUESTS.set(key, request);
+  request.finally(() => { request.settled = true; if (KLINE_REQUESTS.get(key) === request) KLINE_REQUESTS.delete(key); });
+  return consumeGridRequest(request, signal);
+}
+
+async function flushGridKlines(group) {
+  if (!group.items.size) return;
+  const controller = new AbortController();
+  group.controller = controller;
+  const timer = setTimeout(() => controller.abort(), 12000);
+  const pending = new Map(group.items);
+  group.pending = pending;
+  const recover = sym => {
+    const resolve = pending.get(sym);
+    if (!resolve) return;
+    pending.delete(sym);
+    fetchChartKlines(group.ex, sym, group.tf).then(resolve, () => resolve([]));
+  };
+  const consume = line => {
+    if (!line.trim()) return;
+    const row = JSON.parse(line);
+    const data = decodeKlinePayload(row.data);
+    if (data.length > 0 && pending.has(row.sym)) {
+      pending.get(row.sym)(data);
+      pending.delete(row.sym);
+    } else if (row.pending) {
+      recover(row.sym);
+    }
+  };
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const r = await fetch(`/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&lite=${lite}`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    const data = await r.json();
-    if (Array.isArray(data) && data.length > 0) {
-      if (typeof data[0] === 'number') {
-        const flat = [];
-        for (let i = 0; i < data.length; i += 6) {
-          flat.push({ t: data[i], o: data[i + 1], h: data[i + 2], l: data[i + 3], c: data[i + 4], v: data[i + 5] });
+    const symbols = [...pending.keys()].join(',');
+    const response = await fetch(`/api/klines/batch?ex=${encodeURIComponent(group.ex)}&symbols=${encodeURIComponent(symbols)}&tf=${encodeURIComponent(group.tf)}&lite=1&stream=1`, { signal: controller.signal });
+    if (!response.ok) throw new Error('Grid history unavailable');
+    if (response.body?.getReader) {
+      const reader = response.body.getReader(), decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+          let end;
+          while ((end = buffer.indexOf('\n')) >= 0) {
+            consume(buffer.slice(0, end)); buffer = buffer.slice(end + 1);
+          }
+          if (done) { if (buffer.trim()) consume(buffer); break; }
         }
-        return sanitizeCandles(flat);
+      } finally { reader.releaseLock(); }
+    } else {
+      for (const line of (await response.text()).split('\n')) consume(line);
+    }
+  } catch (_) {
+    // Completed cells remain usable if a different cell times out.
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    for (const sym of [...pending.keys()]) recover(sym);
+  }
+}
+
+function decodeKlinePayload(payload, maxLimit = 3000) {
+  if (!Array.isArray(payload) || !payload.length) return [];
+  if (typeof payload[0] !== 'number') return sanitizeCandles(payload, maxLimit);
+  if (payload.length % 6) return [];
+  const candles = [];
+  for (let i = 0; i < payload.length; i += 6) {
+    candles.push({ t: payload[i], o: payload[i + 1], h: payload[i + 2], l: payload[i + 3], c: payload[i + 4], v: payload[i + 5] });
+  }
+  return sanitizeCandles(candles, maxLimit);
+}
+
+async function fetchServerKlines(ex, sym, tf, lite = 1) {
+  const key = `${ex}|${sym}|${tf}|${lite}`;
+  if (KLINE_REQUESTS.has(key)) return KLINE_REQUESTS.get(key);
+  const request = (async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const controller = new AbortController();
+      // Covers both headers AND body, and exceeds the server's response deadline.
+      const timeoutId = setTimeout(() => controller.abort(), 7000);
+      let retryMs = 0;
+      try {
+        const r = await fetch(`/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&lite=${lite}`, { signal: controller.signal });
+        if (!r.ok) return [];
+        const data = decodeKlinePayload(await r.json());
+        if (data.length) return data;
+        if (r.headers.get('X-Klines-Pending') !== '1') return [];
+        retryMs = Math.max(100, Math.min(10000, (Number(r.headers.get('Retry-After')) || 1) * 1000));
+      } catch (_) {
+        return [];
+      } finally {
+        clearTimeout(timeoutId);
       }
-      return sanitizeCandles(data);
+      if (attempt < 2) await new Promise(resolve => setTimeout(resolve, retryMs));
     }
     return [];
-  } catch (_) {
-    return [];
-  }
+  })();
+  KLINE_REQUESTS.set(key, request);
+  try { return await request; }
+  finally { if (KLINE_REQUESTS.get(key) === request) KLINE_REQUESTS.delete(key); }
 }
 
 async function fetchKlines(ex, sym, tf) {
   const fetchToken = ++klFetchToken;
+  lastAppliedTradeTime = 0;
   if (klWs) { try { klWs.onmessage = null; klWs.onerror = null; klWs.onclose = null; klWs.close(); } catch (_) { } klWs = null; }
   if (klPoll) { clearInterval(klPoll); klPoll = null; }
 
@@ -7448,18 +7648,20 @@ async function fetchKlines(ex, sym, tf) {
   ctx.fillText("Loading " + sym + "...", chartW / 2, chartH / 2);
   ctx.textAlign = "left";
 
+  // Negotiate live transport while history is in flight, not after it arrives.
+  connectKlWs(ex, sym, tf);
   try {
     const key = `${ex}|${sym}|${tf}`;
-    const cached = KLINES_CACHE.get(key);
+    const cached = touchKlinesCache(key);
     let loadedSuccess = false;
 
     // 1. Instant cache hit (0ms)
-    if (cached && Date.now() - cached.ts < KLINES_CACHE_TTL_MS && Array.isArray(cached.data) && cached.data.length > 1) {
+    if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
       const sanitized = sanitizeCandles(cached.data);
       const liveTicker = coins.get(`${ex}:${sym}`);
       const lastCandle = sanitized[sanitized.length - 1];
       const isOutlier = (liveTicker && liveTicker.p > 0 && lastCandle && lastCandle.c > 0 && Math.abs(lastCandle.c - liveTicker.p) / liveTicker.p > 0.15);
-      if (!isOutlier && sanitized.length > 1) {
+      if (!isOutlier && sanitized.length > 0) {
         candles = sanitized;
         isLoadingKlines = false;
         loadedSuccess = true;
@@ -7474,21 +7676,13 @@ async function fetchKlines(ex, sym, tf) {
 
     // 2. Ultra-fast parallel racer: Direct Exchange REST API and Server Proxy in parallel
     if (!loadedSuccess) {
-      const directPromise = fetchDirectKlines(ex, sym, tf).then(c => (c && c.length > 1 ? c : Promise.reject()));
-      const serverPromise = fetchServerKlines(ex, sym, tf, 1).then(c => (c && c.length > 1 ? c : Promise.reject()));
-
-      let fastCandles = [];
-      try {
-        fastCandles = await Promise.any([directPromise, serverPromise]);
-      } catch (_) {
-        fastCandles = await fetchServerKlines(ex, sym, tf, 0);
-      }
+      const fastCandles = await fetchChartKlines(ex, sym, tf);
 
       if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf) {
-        if (fastCandles && fastCandles.length > 1) {
+        if (fastCandles && fastCandles.length > 0) {
           candles = fastCandles;
           isLoadingKlines = false;
-          KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
+          storeKlinesCache(key, candles);
           loadedSuccess = true;
           updateOHLC();
           if (!chartW || !chartH) resizeChart();
@@ -7498,16 +7692,17 @@ async function fetchKlines(ex, sym, tf) {
       }
     }
 
-    // 3. Background full history fetch without blocking initial rendering
-    setTimeout(() => {
+    // Refresh the recent tail of an already displayed cache. Deep history is
+    // fetched on pan; switching timeframes must not launch full-history pages.
+    if (cached && loadedSuccess && Date.now() - cached.ts >= 10000) setTimeout(() => {
       if (fetchToken !== klFetchToken) return;
-      fetchServerKlines(ex, sym, tf, 0)
+      fetchServerKlines(ex, sym, tf, 1)
         .then(parsed => {
           if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
-          if (Array.isArray(parsed) && parsed.length > 1) {
+          if (Array.isArray(parsed) && parsed.length > 0) {
             candles = mergeCandles(candles, parsed);
             isLoadingKlines = false;
-            KLINES_CACHE.set(key, { ts: Date.now(), data: candles });
+            storeKlinesCache(key, candles);
             chartNeedsDraw = true;
             drawChart();
           }
@@ -7516,7 +7711,6 @@ async function fetchKlines(ex, sym, tf) {
     }, 150);
 
     if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
-    connectKlWs(ex, sym, tf);
   } catch (err) {
     console.error("klines", err);
     if (fetchToken === klFetchToken && activeEx === ex && activeSym === sym) {
@@ -7525,77 +7719,49 @@ async function fetchKlines(ex, sym, tf) {
       ctx.fillText("Loading error: " + err.message, chartW / 2, chartH / 2);
     }
   } finally {
-    if (fetchToken === klFetchToken && candles.length > 1) {
+    if (fetchToken === klFetchToken && candles.length > 0) {
       isLoadingKlines = false;
     }
   }
 }
 
 
+async function fetchOlderKlines(ex, sym, tf, before) {
+  const key = `older|${ex}|${sym}|${tf}|${before}`;
+  if (KLINE_REQUESTS.has(key)) return KLINE_REQUESTS.get(key);
+  const request = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    try {
+      const response = await fetch(`/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&before=${before}`, { signal: controller.signal });
+      if (!response.ok) throw new Error(`History temporarily unavailable (${response.status})`);
+      const payload = await response.json();
+      if (!Array.isArray(payload)) throw new Error('Invalid history response');
+      const decoded = decodeKlinePayload(payload, 20000);
+      if (payload.length && !decoded.length) throw new Error('Invalid history candles');
+      if (decoded.length && !decoded.some(c => c.t <= before)) throw new Error('History cursor did not advance');
+      return decoded.filter(c => c.t <= before);
+    } finally { clearTimeout(timer); }
+  })();
+  KLINE_REQUESTS.set(key, request);
+  try { return await request; }
+  finally { if (KLINE_REQUESTS.get(key) === request) KLINE_REQUESTS.delete(key); }
+}
+
 async function loadOlderHistory(ex, sym, tf) {
   if (isLoadingOlderCandles || hasReachedStartOfHistory || !candles.length) return;
+  if (candles.length >= 20000) return;
+  const requestKey = `${klFetchToken}|${ex}|${sym}|${tf}`;
+  const retry = loadOlderHistory.retry;
+  if (retry?.key === requestKey && retry.at > Date.now()) return;
   isLoadingOlderCandles = true;
   const curToken = klFetchToken;
   const oldestCandle = candles[0];
   const oldestTs = oldestCandle.t;
 
   try {
-    let olderCandles = [];
-    const tfMs = TF_MS[tf] || 60000;
     const endTime = oldestTs - 1;
-
-    if (ex === "BN" || ex === "AD") {
-      try {
-        const domain = ex === "BN" ? "fapi.binance.com" : "fstream.asterdex.com";
-        const r = await fetch(`https://${domain}/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf] || tf}&limit=1000&endTime=${endTime}`);
-        const data = await r.json();
-        if (Array.isArray(data)) {
-          olderCandles = data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[5] }));
-        }
-      } catch (_) {
-        const r = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&before=${endTime}`);
-        const data = await r.json();
-        if (Array.isArray(data)) olderCandles = data;
-      }
-    } else if (ex === "BB") {
-      const r = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${sym}&interval=${TFBB[tf] || "60"}&limit=1000&end=${endTime}`);
-      const data = await r.json();
-      if (data.result?.list) {
-        olderCandles = data.result.list.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
-      }
-    } else if (ex === "BX") {
-      const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
-      const bxTfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
-      const startMs = endTime - 1000 * tfMs;
-      const r = await fetch(`https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${bxSym}&interval=${bxTfMap[tf] || "1h"}&limit=1000&startTime=${startMs}&endTime=${endTime}`);
-      const data = await r.json();
-      if (data.data) {
-        olderCandles = data.data.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) }));
-      }
-    } else if (ex === "BG") {
-      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${sym}&granularity=${TFOK[tf] || "1H"}&limit=1000&endTime=${endTime}`);
-      const data = await r.json();
-      if (data.data) {
-        olderCandles = data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] }));
-      }
-    } else if (ex === "GT") {
-      const endSec = Math.floor(endTime / 1000);
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${sym}&interval=${tf}&limit=1000&to=${endSec}`);
-      const data = await r.json();
-      if (Array.isArray(data)) {
-        olderCandles = data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) }));
-      }
-    } else if (ex === "HL") {
-      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: endTime - (1000 * tfMs), endTime: endTime } }) });
-      const data = await r.json();
-      if (Array.isArray(data)) {
-        olderCandles = data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }));
-      }
-    } else {
-      const r = await fetch(`/api/klines?ex=${ex}&sym=${sym}&tf=${tf}&before=${endTime}`);
-      const data = await r.json();
-      if (Array.isArray(data)) olderCandles = data;
-    }
+    const olderCandles = await fetchOlderKlines(ex, sym, tf, endTime);
 
     if (curToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
 
@@ -7605,14 +7771,7 @@ async function loadOlderHistory(ex, sym, tf) {
       return;
     }
 
-    // Verify olderCandles connects contiguously to oldestTs
-    const newestOlderTs = sanitized[sanitized.length - 1].t;
-    const maxHistGap = Math.max(tfMs * 50, 4 * 3600000);
-    if (oldestTs - newestOlderTs > maxHistGap) {
-      console.warn("loadOlderHistory: gap detected between oldestTs and olderCandles, stopping scroll history");
-      hasReachedStartOfHistory = true;
-      return;
-    }
+    loadOlderHistory.retry = null;
 
     const prevAnchorTime = (candles.length > 0)
       ? candles[Math.max(0, Math.min(candles.length - 1, Math.round(candles.length - 1 - Math.max(0, offsetX))))]?.t
@@ -7629,11 +7788,20 @@ async function loadOlderHistory(ex, sym, tf) {
       }
     }
     chartNeedsDraw = true;
-    drawChart();
+    storeKlinesCache(`${ex}|${sym}|${tf}`, candles);
   } catch (err) {
-    console.warn("loadOlderHistory error:", err);
+    if (curToken === klFetchToken) {
+      const failures = retry?.key === requestKey ? retry.failures + 1 : 1;
+      const delay = Math.min(30000, 1000 * 2 ** Math.min(failures, 5));
+      loadOlderHistory.retry = { key: requestKey, failures, at: Date.now() + delay };
+      setTimeout(() => { if (curToken === klFetchToken) requestAnimationFrame(drawChart); }, delay).unref?.();
+    }
   } finally {
-    isLoadingOlderCandles = false;
+    if (curToken === klFetchToken) {
+      isLoadingOlderCandles = false;
+      // Allow a second page to fill a wide viewport, even without a new tick.
+      requestAnimationFrame(drawChart);
+    }
   }
 }
 
@@ -7682,36 +7850,20 @@ function appendCandle(k) {
     }
     candles.push(clean);
     if (candles.length > 3000) {
-      candles.shift();
+      candles.splice(0, candles.length - 3000);
     }
     if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
     clearCandleCaches(candles);
   } else {
-    // If clean.t < last.t:
-    while (candles.length > 1 && candles[candles.length - 1].t > clean.t) {
-      candles.pop();
-    }
-    const currentLast = candles[candles.length - 1];
-    if (currentLast && currentLast.t === clean.t) {
-      currentLast.o = clean.o;
-      currentLast.h = clean.h;
-      currentLast.l = clean.l;
-      if (!lastMarketEventAt || Date.now() - lastMarketEventAt > 2500) {
-        currentLast.c = clean.c;
-      }
-      if (clean.v > 0) currentLast.v = Math.max(currentLast.v, clean.v);
+    // Exchanges may finalize an older candle after a newer one was received.
+    // Replace only that timestamp; never rewind the chart or fire live alerts.
+    const target = candles.find(c => c.t === clean.t);
+    if (target) {
+      Object.assign(target, clean);
       clearCandleCaches(candles);
-    } else {
-      // If exchange finalized a recently closed candle (e.g. within last 15 bars)
-      const target = candles.slice(-15).find(c => c.t === clean.t);
-      if (target) {
-        target.o = clean.o;
-        target.h = clean.h;
-        target.l = clean.l;
-        target.c = clean.c;
-        if (clean.v > 0) target.v = Math.max(target.v, clean.v);
-      }
     }
+    chartNeedsDraw = true;
+    return;
   }
 
   chartNeedsDraw = true;
@@ -7736,6 +7888,7 @@ function applyMainMarketTick(data, isRelay = false) {
   }
 
   let last = candles[candles.length - 1];
+  if (!(eventTime > 1e11) || eventTime < last.t || eventTime < lastAppliedTradeTime) return;
   const refPrice = (last.c > 0) ? last.c : (last.o > 0 ? last.o : 0);
 
   // Outlier tick protection: drop ticks deviating > 15% from current candle
@@ -7797,15 +7950,12 @@ function applyMainMarketTick(data, isRelay = false) {
     };
     candles.push(last);
     if (candles.length > 3000) {
-      candles.shift();
+      candles.splice(0, candles.length - 3000);
     }
     if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
     clearCandleCaches(candles);
   } else {
-    // Out of order trade slightly before last.t due to network jitter: update extremes & close of current bar
-    if (price > last.h) last.h = price;
-    if (price < last.l) last.l = price;
-    last.c = price;
+    return;
   }
 
   chartNeedsDraw = true;
@@ -8209,24 +8359,22 @@ function rebuildList() {
     list = list.filter((c) => activeColorFilters.has(coinTags[c.key]));
   }
 
-  // Sort
+  // Sort: pre-calculate numeric sort values in O(N) pass to avoid repeated work inside O(N log N) comparator
   const dir = sortDir === -1 ? -1 : 1;
-  const num = (v) => (Number.isFinite(v) ? v : 0);
-  const cmp = (a, b) => {
-    if (sortCol === "v") return (num(b.v) - num(a.v)) * dir;
-    if (sortCol === "oi") return (num(getOiPct(b)) - num(getOiPct(a))) * dir;
-    if (sortCol === "trades") {
-      const natrA = (a.p > 0 && a.h >= a.l) ? ((a.h - a.l) / a.p) * 100 : 0;
-      const natrB = (b.p > 0 && b.h >= b.l) ? ((b.h - b.l) / b.p) * 100 : 0;
-      return (natrB - natrA) * dir;
-    }
-    if (sortCol === "funding") return (num(b.funding) - num(a.funding)) * dir;
-    if (sortCol === "corr") return (num(b.corr) - num(a.corr)) * dir;
-    return (num(b.chg) - num(a.chg)) * dir;
-  };
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    let val = 0;
+    if (sortCol === "v") val = c.v || 0;
+    else if (sortCol === "oi") val = getOiPct(c) || 0;
+    else if (sortCol === "trades") val = (c.p > 0 && c.h >= c.l) ? ((c.h - c.l) / c.p) * 100 : 0;
+    else if (sortCol === "funding") val = c.funding || 0;
+    else if (sortCol === "corr") val = c.corr || 0;
+    else val = c.chg || 0;
+    c._sortVal = Number.isFinite(val) ? val : 0;
+  }
   list.sort((a, b) => {
-    const d = cmp(a, b);
-    if (d !== 0) return d;
+    const diff = (b._sortVal - a._sortVal) * dir;
+    if (diff !== 0) return diff;
     return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
   });
 
@@ -9672,6 +9820,7 @@ function selectCoin(c) {
   loadDrawings();
   updateSymInfo();
   fetchKlines(c.ex, c.sym, activeTf);
+  window.TradeOverlay?.refresh(true);
 
   // Mobile: scroll chart into view when coin selected
   if (window.innerWidth <= 767) {
@@ -9783,6 +9932,7 @@ document.querySelectorAll("#exc-menu .exc-item:not(.disabled)").forEach((item) =
       }
       updateSymInfo();
       fetchKlines(cex, btcSym, activeTf);
+      window.TradeOverlay?.refresh(true);
     }
   });
 });
@@ -10254,6 +10404,8 @@ class ChartInstance {
     this.viewMn = null;
     this.viewMx = null;
     this.autoFitY = true;
+    this.loadingOlder = false;
+    this.hasReachedStart = false;
 
     this.isRuler = false;
     this.rulerStart = { x: null, y: null, price: null, idx: null };
@@ -10396,7 +10548,7 @@ class ChartInstance {
       e.stopPropagation();
     };
 
-    window.addEventListener('mousemove', (e) => {
+    this._onPointerMove = (e) => {
       if (this.isRuler) {
         const r = this.canvas.getBoundingClientRect();
         const px = e.clientX - r.left;
@@ -10450,9 +10602,10 @@ class ChartInstance {
           this.draw(true);
         }
       }
-    }, { passive: false });
+    };
+    window.addEventListener('mousemove', this._onPointerMove, { passive: false });
 
-    window.addEventListener('mouseup', () => {
+    this._onPointerUp = () => {
       if (this.isRuler) {
         this.isRuler = false;
         this.rulerStart = { x: null, y: null, price: null, idx: null };
@@ -10465,10 +10618,18 @@ class ChartInstance {
         this.isDragY = false;
         this.canvas.style.cursor = 'crosshair';
       }
-    });
+    };
+    window.addEventListener('mouseup', this._onPointerUp);
 
     this.canvas.ondblclick = (e) => {
       e.preventDefault();
+      this.offsetX = 0;
+      this.candleW = 8;
+      this.autoFitY = true;
+      this.isManualYScale = false;
+      this.viewMn = null;
+      this.viewMx = null;
+      this.draw(true);
     };
 
     this.canvas.oncontextmenu = (e) => e.preventDefault();
@@ -10479,8 +10640,26 @@ class ChartInstance {
       if (e.shiftKey || this.isRuler) return;
       let dy = e.deltaY || 0;
       if (e.deltaMode === 1) dy *= 16;
-      const factor = clamp(1 - dy * 0.0004, 0.90, 1.10);
-      this.candleW = clamp(this.candleW * factor, 0.90, 50);
+      else if (e.deltaMode === 2) dy *= 100;
+
+      const r = this.canvas.getBoundingClientRect();
+      const mouseX = e.clientX - r.left;
+      const PR = 60;
+      const PW = Math.max(10, this.canvas.clientWidth - PR);
+
+      const nBefore = PW / this.candleW;
+      const vStartBefore = this.candles.length - nBefore - this.offsetX;
+      const pivot = vStartBefore + mouseX / this.candleW;
+
+      const factor = clamp(1 - dy * 0.0004, 0.85, 1.15);
+      this.candleW = clamp(this.candleW * factor, 1.2, 50);
+
+      const nAfter = PW / this.candleW;
+      const vStartAfter = pivot - mouseX / this.candleW;
+      const minOffsetX = -(nAfter - 5);
+      const maxOffsetX = Math.max(0, this.candles.length - 2);
+      this.offsetX = clamp(this.candles.length - nAfter - vStartAfter, minOffsetX, maxOffsetX);
+
       this.draw(true);
       e.stopPropagation();
     };
@@ -10501,13 +10680,8 @@ class ChartInstance {
     if (!force && now - this._lastFormationDetectAt < 900) return;
     this._lastFormationDetectAt = now;
     const next = window.detectChartLevelsFn?.(this.candles) || [];
-    // During a live candle an intermediate wick can temporarily invalidate a
-    // setup. Keep the last confirmed drawing until a positive replacement is
-    // available; full history loads still establish the authoritative state.
-    if (next.length > 0) {
-      this.levels = next;
-      window.registerFormationsCoinLevels?.(this.ex, this.sym, next);
-    }
+    this.levels = next;
+    window.registerFormationsCoinLevels?.(this.ex, this.sym, next);
   }
 
   subscribeLive() {
@@ -10520,8 +10694,8 @@ class ChartInstance {
       ex: this.ex,
       sym: this.sym,
       tf: this.tf,
-      onKline: data => this.applyOfficialKline(data),
-      onTick: data => this.applyOfficialTick(data),
+      onKline: data => { if (!this._disposed && this._marketKey === nextKey) this.applyOfficialKline(data); },
+      onTick: data => { if (!this._disposed && this._marketKey === nextKey) this.applyOfficialTick(data); },
     });
   }
 
@@ -10534,47 +10708,67 @@ class ChartInstance {
     if (clean.t === last.t) {
       Object.assign(last, clean);
     } else if (clean.t > last.t) {
+      const gap = Math.round((clean.t - last.t) / tfMs);
+      if (gap > 1 && !this._gapRefresh) {
+        const token = this._loadToken, ex = this.ex, sym = this.sym, tf = this.tf;
+        this._gapRefresh = true;
+        fetchServerKlines(ex, sym, tf, 1).then(data => {
+          if (this._disposed || this._loadToken !== token || this.ex !== ex || this.sym !== sym || this.tf !== tf) return;
+          if (data.length > 1) { this.candles = mergeCandles(this.candles, data, 10000); this.dirty = true; }
+        }).catch(() => {}).finally(() => { this._gapRefresh = false; });
+      }
       this.candles.push(clean);
-      if (this.candles.length > 1500) this.candles.shift();
+      if (this.candles.length > 1500) this.candles.splice(0, this.candles.length - 1500);
     } else {
-      while (this.candles.length > 1 && this.candles[this.candles.length - 1].t > clean.t) {
-        this.candles.pop();
-      }
-      const cur = this.candles[this.candles.length - 1];
-      if (cur && cur.t === clean.t) {
-        Object.assign(cur, clean);
-      } else {
-        const target = this.candles.slice(-10).find(c => c.t === clean.t);
-        if (target) Object.assign(target, clean);
-      }
+      const target = this.candles.find(c => c.t === clean.t);
+      if (target) Object.assign(target, clean);
+      clearCandleCaches(this.candles);
+      this.dirty = true;
+      return;
     }
+    clearCandleCaches(this.candles);
     this.headerPrice.textContent = fP(clean.c);
     this.dirty = true;
     this.refreshFormationLevels();
-    this.draw();
   }
 
   applyOfficialTick(data) {
     if (!Array.isArray(data) || !this.candles.length) return;
     const p = +data[1], hi = +data[2] || p, lo = +data[3] || p;
     if (!(p > 0)) return;
-    const last = this.candles[this.candles.length - 1];
+    let last = this.candles[this.candles.length - 1];
+    const eventTime = +data[0], tfMs = TF_MS[this.tf] || 60000;
+    if (!(eventTime > 1e11) || eventTime < last.t || eventTime < (this._lastTradeTime || 0)) return;
     if (last) {
       const refP = last.c > 0 ? last.c : (last.o > 0 ? last.o : 0);
       if (refP > 0 && (p > refP * 1.15 || p < refP * 0.85)) return;
+      this._lastTradeTime = eventTime;
+      if (eventTime >= last.t + tfMs) {
+        const t = last.t + Math.floor((eventTime - last.t) / tfMs) * tfMs;
+        last = { t, o: p, h: p, l: p, c: p, v: 0 };
+        this.candles.push(last);
+        if (this.offsetX > 0) this.offsetX++;
+        if (this.candles.length > 10000) this.candles.splice(0, this.candles.length - 10000);
+      }
       last.c = p;
       if (p > last.h) last.h = p;
       if (hi > last.h && (refP <= 0 || hi <= refP * 1.15)) last.h = hi;
       if (p < last.l) last.l = p;
       if (lo < last.l && (refP <= 0 || lo >= refP * 0.85)) last.l = lo;
     }
+    clearCandleCaches(this.candles);
     this.headerPrice.textContent = fP(p);
     this.dirty = true;
     this.refreshFormationLevels();
-    this.draw();
   }
 
   dispose() {
+    this._disposed = true;
+    this._historyController?.abort();
+    if (this._historyRetryTimer) clearTimeout(this._historyRetryTimer);
+    window.removeEventListener('mousemove', this._onPointerMove);
+    window.removeEventListener('mouseup', this._onPointerUp);
+    this._loadToken = (this._loadToken || 0) + 1;
     this._marketUnsub?.();
     this._marketUnsub = null;
     this._marketKey = null;
@@ -10582,33 +10776,44 @@ class ChartInstance {
   }
 
   update(ticker) {
-    if (!ticker) return;
-    this.dirty = true;
+    if (!ticker || this._disposed) return;
     const changed = this.sym !== ticker.sym || this.ex !== ticker.ex;
     this.ex = ticker.ex;
     this.sym = ticker.sym;
     this.key = `${this.ex}:${this.sym}`;
 
     const exIcons = { BN: "BN.svg", BB: "BB.svg", OX: "OK.svg", BG: "BG.svg", GT: "GT.svg", MX: "MX.svg", KC: "KC.svg", BX: "BX.svg", HT: "HX.svg", HL: "HL.svg", AD: "AS.svg" };
-    if (exIcons[ticker.ex]) {
-      this.headerExIcon.style.background = `center/contain no-repeat url('/img/${exIcons[ticker.ex]}')`;
-      this.headerExIcon.style.display = "block";
-    } else {
-      this.headerExIcon.style.display = "none";
+    if (changed || this._lastHeaderEx !== ticker.ex) {
+      if (exIcons[ticker.ex]) {
+        this.headerExIcon.style.background = `center/contain no-repeat url('/img/${exIcons[ticker.ex]}')`;
+        this.headerExIcon.style.display = "block";
+      } else {
+        this.headerExIcon.style.display = "none";
+      }
+      this._lastHeaderEx = ticker.ex;
     }
 
-    this.headerSym.textContent = ticker.sym;
-    this.headerTf.textContent = this.tf;
+    if (this.headerSym.textContent !== ticker.sym) this.headerSym.textContent = ticker.sym;
+    if (this.headerTf.textContent !== this.tf) this.headerTf.textContent = this.tf;
 
     const p = +ticker.p;
+    let candleChanged = false;
     if (p > 0) {
-      this.headerPrice.textContent = fP(p);
+      const pStr = fP(p);
+      if (this._lastPStr !== pStr) {
+        this.headerPrice.textContent = pStr;
+        this._lastPStr = pStr;
+      }
       const chg = ticker.chg || 0;
-      this.headerChg.textContent = fC(chg);
-      this.headerChg.className = "cell-chg " + (chg >= 0 ? "pos" : "neg");
+      const chgStr = fC(chg);
+      if (this._lastCStr !== chgStr) {
+        this.headerChg.textContent = chgStr;
+        this.headerChg.className = "cell-chg " + (chg >= 0 ? "pos" : "neg");
+        this._lastCStr = chgStr;
+      }
 
       // Update current live candle with real-time price tick
-      if (!this._marketUnsub && this.candles && this.candles.length > 0) {
+      if (!changed && !this._marketUnsub && this.candles && this.candles.length > 0) {
         const tfMs = TF_MS[this.tf] || 60000;
         const now = Date.now();
         let last = this.candles[this.candles.length - 1];
@@ -10616,42 +10821,99 @@ class ChartInstance {
 
         if (now >= candleEnd) {
           const numBars = Math.floor((now - last.t) / tfMs);
+          const maxBarsToFill = Math.min(numBars, 100);
+          for (let b = 1; b < maxBarsToFill; b++) {
+            this.candles.push({
+              t: last.t + b * tfMs,
+              o: last.c,
+              h: last.c,
+              l: last.c,
+              c: last.c,
+              v: 0
+            });
+          }
           const expectedStart = last.t + numBars * tfMs;
           last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
           this.candles.push(last);
-          if (this.candles.length > 1500) this.candles.shift();
+          if (this.candles.length > 1500) this.candles.splice(0, this.candles.length - 1500);
+          candleChanged = true;
         } else if (now >= last.t && now < candleEnd) {
-          last.c = p;
-          if (p > last.h) last.h = p;
-          if (p < last.l) last.l = p;
+          if (last.c !== p) {
+            last.c = p;
+            if (p > last.h) last.h = p;
+            if (p < last.l) last.l = p;
+            candleChanged = true;
+          }
         }
       }
     }
 
     if (changed) {
+      this.dirty = true;
       this.offsetX = 0;
       this.autoFitY = true;
       this.loadKlines();
-    } else {
-      this.draw();
+    } else if (candleChanged) {
+      clearCandleCaches(this.candles);
+      this.dirty = true;
     }
   }
 
   async loadKlines() {
-    if (!this.sym) return;
+    if (!this.sym || this._disposed) return;
+    this._historyController?.abort();
+    const historyController = this._historyController = new AbortController();
+    if (this._historyRetryTimer) { clearTimeout(this._historyRetryTimer); this._historyRetryTimer = null; }
     this.subscribeLive();
     const myToken = (this._loadToken = (this._loadToken || 0) + 1);
+    const dataKey = `${this.ex}|${this.sym}|${this.tf}`;
+    if (this._dataKey !== dataKey) {
+      this.candles = [];
+      this.levels = [];
+      this._dataKey = dataKey;
+      this._historyFailures = 0;
+    }
     this.loadingKlines = true;
+    this._lastTradeTime = 0;
     this.headerTf.textContent = this.tf;
     this.offsetX = 0;
     this.autoFitY = true;
     this.isManualYScale = false;
     this.viewMn = null;
     this.viewMx = null;
-    const key = `${this.ex}|${this.sym}|${this.tf}`;
-    const cached = KLINES_CACHE.get(key);
+    this.hasReachedStart = false;
+    this.loadingOlder = false;
+    this._olderRetryAt = 0;
+    this._olderFailures = 0;
 
-    if (cached && Date.now() - cached.ts < 300000 && Array.isArray(cached.data) && cached.data.length > 0) {
+    // 0. Direct check from active screener chart if it matches (0ms instant!)
+    if (
+      typeof activeSym !== "undefined" &&
+      activeSym === this.sym &&
+      typeof activeEx !== "undefined" &&
+      activeEx === this.ex &&
+      typeof activeTf !== "undefined" &&
+      activeTf === this.tf &&
+      typeof currentLoadedEx !== "undefined" && currentLoadedEx === this.ex &&
+      typeof currentLoadedSym !== "undefined" && currentLoadedSym === this.sym &&
+      typeof currentLoadedTf !== "undefined" && currentLoadedTf === this.tf &&
+      typeof candles !== "undefined" &&
+      Array.isArray(candles) &&
+      candles.length > 0
+    ) {
+      this.candles = candles.map(c => ({ ...c }));
+      this.levels = window.detectChartLevelsFn(this.candles);
+      if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
+      this.loadingKlines = false;
+      this.draw(true);
+      return;
+    }
+
+    const key = `${this.ex}|${this.sym}|${this.tf}`;
+    const cached = touchKlinesCache(key);
+
+    // 1. Instant cache hit from KLINES_CACHE (0ms)
+    if (cached && Date.now() - cached.ts < (typeof KLINES_CACHE_TTL_MS !== "undefined" ? KLINES_CACHE_TTL_MS : 300000) && Array.isArray(cached.data) && cached.data.length > 0) {
       let candList = [];
       if (typeof cached.data[0] === 'number') {
         const flat = [];
@@ -10672,58 +10934,135 @@ class ChartInstance {
       }
     }
 
+    this.draw(true);
+
     try {
-      // 1. Instant lite fetch for ultra-fast initial response (<50ms for all grid cells)
-      const rLite = await fetch(`/api/klines?ex=${encodeURIComponent(this.ex)}&sym=${encodeURIComponent(this.sym)}&tf=${encodeURIComponent(this.tf)}&lite=1`);
-      if (this._loadToken !== myToken) return;
-      const dataLite = await rLite.json();
+      // Load the visible page through the shared stream. Obsolete cells release
+      // their requests without cancelling other consumers of the same market.
+      const fastCandles = await fetchGridKlines(this.ex, this.sym, this.tf, historyController.signal);
+
       if (this._loadToken !== myToken) return;
 
-      if (Array.isArray(dataLite) && dataLite.length > 0) {
-        const flat = [];
-        if (typeof dataLite[0] === 'number') {
-          for (let i = 0; i < dataLite.length; i += 6) {
-            flat.push({ t: dataLite[i], o: dataLite[i + 1], h: dataLite[i + 2], l: dataLite[i + 3], c: dataLite[i + 4], v: dataLite[i + 5] });
-          }
-          this.candles = sanitizeCandles(flat);
-        } else {
-          this.candles = sanitizeCandles(dataLite);
-        }
+      if (Array.isArray(fastCandles) && fastCandles.length > 0) {
+        this.candles = sanitizeCandles(fastCandles);
         this.levels = window.detectChartLevelsFn(this.candles);
         if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
+        storeKlinesCache(key, this.candles);
+        this.loadingKlines = false;
         this.draw(true);
       }
 
-      // 2. Background full fetch for complete history without clogging cache with lite data
-      const rFull = await fetch(`/api/klines?ex=${encodeURIComponent(this.ex)}&sym=${encodeURIComponent(this.sym)}&tf=${encodeURIComponent(this.tf)}&lite=0`);
-      if (this._loadToken !== myToken) return;
-      const dataFull = await rFull.json();
-      if (this._loadToken !== myToken) return;
-
-      if (Array.isArray(dataFull) && dataFull.length > 0) {
-        const flat = [];
-        if (typeof dataFull[0] === 'number') {
-          for (let i = 0; i < dataFull.length; i += 6) {
-            flat.push({ t: dataFull[i], o: dataFull[i + 1], h: dataFull[i + 2], l: dataFull[i + 3], c: dataFull[i + 4], v: dataFull[i + 5] });
-          }
-          this.candles = sanitizeCandles(flat);
-        } else {
-          this.candles = sanitizeCandles(dataFull);
-        }
-        this.levels = window.detectChartLevelsFn(this.candles);
-        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
-        KLINES_CACHE.set(key, { ts: Date.now(), data: dataFull });
-        this.draw(true);
+      // 3. Background full fetch without blocking rendering or user interaction
+      // Grid history is loaded on demand when panning; only the single chart
+      // needs a deep-history preload. Avoid a burst of pages per grid cell.
+      const wantsDeepHistory = activeView === "screener" && screenerView === "single";
+      if (!wantsDeepHistory) return;
+      if (this.candles.length < 500) {
+        setTimeout(async () => {
+          if (this._loadToken !== myToken) return;
+          try {
+            const parsed = await fetchServerKlines(this.ex, this.sym, this.tf, 0);
+            if (this._loadToken !== myToken) return;
+            if (Array.isArray(parsed) && parsed.length > this.candles.length) {
+              this.candles = mergeCandles(this.candles, parsed);
+              this.levels = window.detectChartLevelsFn(this.candles);
+              if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
+              storeKlinesCache(key, this.candles);
+              this.draw(true);
+            }
+          } catch (_) { }
+        }, 200);
       }
     } catch (e) { } finally {
       if (this._loadToken === myToken) {
         this.loadingKlines = false;
+        if (this.candles.length) this._historyFailures = 0;
+        else if (!this._disposed) {
+          const delay = Math.min(30000, 2000 * 2 ** Math.min(this._historyFailures || 0, 4));
+          this._historyFailures = (this._historyFailures || 0) + 1;
+          this._historyRetryTimer = setTimeout(() => {
+            this._historyRetryTimer = null;
+            if (!this._disposed && this._loadToken === myToken && `${this.ex}|${this.sym}|${this.tf}` === dataKey) this.loadKlines();
+          }, delay);
+          this._historyRetryTimer?.unref?.();
+        }
+      }
+    }
+  }
+
+  async loadOlderHistory() {
+    if (this.loadingOlder || this.hasReachedStart || !this.candles.length || !this.sym) return;
+    if (this._disposed || this.candles.length >= 10000 || this._olderRetryAt > Date.now()) return;
+    this.loadingOlder = true;
+    const loadToken = this._loadToken;
+    const oldestCandle = this.candles[0];
+    const oldestTs = oldestCandle?.t;
+    if (!oldestTs) {
+      this.loadingOlder = false;
+      return;
+    }
+    const endTime = oldestTs - 1;
+    const curSym = this.sym;
+    const curEx = this.ex;
+    const curTf = this.tf;
+
+    try {
+      const olderCandles = await fetchOlderKlines(curEx, curSym, curTf, endTime);
+
+      if (this._disposed || this._loadToken !== loadToken || this.sym !== curSym || this.ex !== curEx || this.tf !== curTf) return;
+
+      const sanitized = olderCandles.filter(c => c && c.t < oldestTs);
+      if (!sanitized.length) {
+        this.hasReachedStart = true;
+        return;
+      }
+
+      this._olderFailures = 0;
+      this._olderRetryAt = 0;
+      this.candles = mergeCandles(this.candles, sanitized, 10000);
+      // offsetX is measured from the newest bar; prepending must not change it.
+      storeKlinesCache(`${curEx}|${curSym}|${curTf}`, this.candles);
+      this.refreshFormationLevels(true);
+    } catch (e) {
+      if (!this._disposed && this._loadToken === loadToken) {
+        this._olderFailures = (this._olderFailures || 0) + 1;
+        const delay = Math.min(30000, 1000 * 2 ** Math.min(this._olderFailures, 5));
+        this._olderRetryAt = Date.now() + delay;
+        setTimeout(() => { if (!this._disposed && this._loadToken === loadToken) this.draw(true); }, delay).unref?.();
+      }
+    } finally {
+      if (!this._disposed && this._loadToken === loadToken) {
+        this.loadingOlder = false;
+        requestAnimationFrame(() => { if (!this._disposed && this._loadToken === loadToken) this.draw(true); });
       }
     }
   }
 
   draw(force = false) {
-    if (!this.candles.length || (activeView === "screener" && screenerView !== "multichart")) return;
+    if (this._disposed) return;
+    if (activeView === "screener" && screenerView !== "multichart") return;
+    if (!this.candles.length) {
+      if (this.loadingKlines && this.canvas) {
+        const cw = this.canvas.clientWidth;
+        const ch = this.canvas.clientHeight;
+        if (cw && ch && cw >= 30 && ch >= 30) {
+          const dpr = window.devicePixelRatio || 1;
+          if (this.canvas.width !== cw * dpr || this.canvas.height !== ch * dpr) {
+            this.canvas.width = cw * dpr;
+            this.canvas.height = ch * dpr;
+          }
+          this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          this.ctx.fillStyle = getCanvasBgColor();
+          this.ctx.fillRect(0, 0, cw, ch);
+          this.ctx.fillStyle = "rgba(160, 160, 180, 0.4)";
+          this.ctx.font = "11px Inter, sans-serif";
+          this.ctx.textAlign = "center";
+          this.ctx.textBaseline = "middle";
+          this.ctx.fillText("Загрузка...", cw / 2, ch / 2);
+        }
+      }
+      return;
+    }
 
     // Only the screener's single chart is "focused". In the Formations tab the
     // expanded view is the real main chart (drawn by drawChart), never a cell.
@@ -10813,7 +11152,8 @@ class ChartInstance {
     const candleWidth = this.candleW;
     const n = PW / candleWidth;
     const minOffsetX = -(n - 5);
-    this.offsetX = Math.max(minOffsetX, this.offsetX);
+    const maxOffsetX = Math.max(0, this.candles.length - 2);
+    this.offsetX = clamp(this.offsetX, minOffsetX, maxOffsetX);
     const viewStart = this.candles.length - n - this.offsetX;
     const s = Math.max(0, Math.floor(viewStart));
     const vis = this.candles.slice(s, s + Math.ceil(n) + 2);
@@ -10822,7 +11162,9 @@ class ChartInstance {
     if (!vis.length) return;
 
     if (viewStart < 60 && this.candles.length > 0 && !this.loadingOlder && !this.hasReachedStart) {
-      this.loadOlderHistory();
+      if (typeof this.loadOlderHistory === "function") {
+        this.loadOlderHistory().catch(() => {});
+      }
     }
 
     // Fast DOM text update for multichart (since binary protocol bypasses update())
@@ -10949,7 +11291,8 @@ class ChartInstance {
 
       const yH = toY(c.h), yL = toY(c.l);
       const yO = toY(c.o), yC = toY(c.c);
-      const bT = Math.min(yO, yC), bH = Math.max(1, Math.abs(yC - yO));
+      const bH = Math.max(2, Math.abs(yC - yO));
+      const bT = Math.abs(yC - yO) < 2 ? Math.min(yO, yC) - 1 : Math.min(yO, yC);
 
       if (cs.wick.show) {
         const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
@@ -10971,7 +11314,7 @@ class ChartInstance {
         const fillX = leftX / dpr;
         const fillY = topY / dpr;
         const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
-        const fillH = Math.max(1 / dpr, (bottomY - topY) / dpr);
+        const fillH = Math.max(2 / dpr, (bottomY - topY) / dpr);
 
         ctx.fillStyle = hexToRgba(cs.body[side], cs.body[side + "Op"]);
         ctx.fillRect(fillX, fillY, fillW, fillH);
@@ -11001,17 +11344,21 @@ class ChartInstance {
     // own overlay renderer, so the mini charts are pixel-identical. The tab only
     // supplies which formation type its toolbar has selected.
     let cellFormationBadges = [];
-    if (activeView === "formations") {
-      const fmOpts = window.getFormationsOverlayOpts?.();
-      if (fmOpts) {
+    try {
+      if (activeView === "formations") {
+        const fmOpts = window.getFormationsOverlayOpts?.();
+        if (fmOpts) {
+          cellFormationBadges = renderFormationsOnChart(
+            ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart, fmOpts
+          ) || [];
+        }
+      } else if (chartFormationsOnChart) {
         cellFormationBadges = renderFormationsOnChart(
-          ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart, fmOpts
+          ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart
         ) || [];
       }
-    } else if (chartFormationsOnChart) {
-      cellFormationBadges = renderFormationsOnChart(
-        ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart
-      ) || [];
+    } catch (e) {
+      console.warn("[ChartInstance] renderFormationsOnChart error:", e);
     }
 
     // Price badges on the right scale for the formation levels, same look as the
@@ -11228,6 +11575,7 @@ class ChartInstance {
       PW,
       PH,
       TOP: 0,
+      hideHistory: true,
     });
 
     // Draw price badges on the right price scale of this grid cell
@@ -11767,9 +12115,6 @@ window.switchView = function switchView(view) {
         renderScreenerHeatmap();
       };
     });
-    setInterval(() => {
-      if (activeView === "screener" && screenerView === "heatmap") renderScreenerHeatmap();
-    }, 3000);
     resizeChart();
   } else if (view === "map") {
     if (mainEl) mainEl.style.display = "none";
@@ -13560,6 +13905,9 @@ window.addEventListener("resize", () => {
   };
 
   window.detectChartBreakoutLevels = function (candles, minTouchesOverride) {
+    if (window.FormationEngine) {
+      return window.FormationEngine.detectHorizontals(candles, minTouchesOverride);
+    }
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
@@ -13733,6 +14081,9 @@ window.addEventListener("resize", () => {
 
 
   window.detectChartTrendlines = function (candles, minTouchesOverride) {
+    if (window.FormationEngine) {
+      return window.FormationEngine.detectTrendlines(candles, minTouchesOverride);
+    }
     if (!candles || candles.length < 40) return [];
     const N = candles.length;
     const lastPrice = candles[N - 1].c;
@@ -14172,33 +14523,42 @@ window.addEventListener("resize", () => {
   // Replace the legacy detectors with the shared, server-tested geometry
   // engine. Keeping the public names avoids touching the rendering layer.
   if (window.FormationEngine) {
-    window.detectChartLevelsAndTouches = (items) => window.FormationEngine.detectCascades(items, formationsMinCascade);
-    window.detectChartBreakoutLevels = (items) => window.FormationEngine.detectHorizontals(items, formationsMinCascade);
-    window.detectChartTrendlines = (items) => window.FormationEngine.detectTrendlines(items, formationsMinCascade);
+    window.detectChartLevelsAndTouches = (items, min) => window.FormationEngine.detectCascades(items, Number.isFinite(min) ? min : formationsMinCascade);
+    window.detectChartBreakoutLevels = (items, min) => window.FormationEngine.detectHorizontals(items, Number.isFinite(min) ? min : formationsMinCascade);
+    window.detectChartTrendlines = (items, min) => window.FormationEngine.detectTrendlines(items, Number.isFinite(min) ? min : formationsMinCascade);
     window.detectChartRetests = (items) => window.FormationEngine.detectRetests(items);
     window.detectChartApproachingRetests = (items) => window.FormationEngine.detectApproachingRetests(items);
   }
 
   window.detectChartLevelsFn = function (candles) {
     if (!candles || candles.length < 30) return [];
+    const lastP = candles[candles.length - 1].c;
 
     if (typeof activeFormation !== 'undefined') {
       if (activeFormation === 'breakout') {
-        return getCachedFormationDetection(candles, `view:breakout:${formationsMinCascade}`, () => window.detectChartBreakoutLevels(candles));
+        const minT = Math.max(1, formationsMinCascade || 2);
+        const res = getCachedFormationDetection(candles, `view:breakout:${minT}`, () => window.FormationEngine ? window.FormationEngine.detectHorizontals(candles, minT) : window.detectChartBreakoutLevels(candles, minT));
+        return (res || []).filter(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= minT && Math.abs(l.price - lastP) / lastP <= 0.15);
       } else if (activeFormation === 'trendline') {
-        return getCachedFormationDetection(candles, `view:trendline:${formationsMinCascade}`, () => window.detectChartTrendlines(candles));
+        const minT = Math.max(1, formationsMinCascade || 2);
+        const res = getCachedFormationDetection(candles, `view:trendline:${minT}`, () => window.FormationEngine ? window.FormationEngine.detectTrendlines(candles, minT) : window.detectChartTrendlines(candles, minT));
+        return (res || []).filter(tl => (tl.touches || 2) >= minT && Math.abs(tl.endPrice - lastP) / lastP <= 0.15);
       } else if (activeFormation === 'retest') {
         const showApproaching = $("formations-approaching-toggle")?.checked;
-        return getCachedFormationDetection(candles, `view:retest:${showApproaching ? 1 : 0}`, () => showApproaching
+        const res = getCachedFormationDetection(candles, `view:retest:${showApproaching ? 1 : 0}`, () => showApproaching
           ? window.detectChartApproachingRetests(candles)
           : window.detectChartRetests(candles));
+        return (res || []).filter(rt => Math.abs(rt.price - lastP) / lastP <= 0.15);
       } else {
         // 'cascades' or 'levels': horizontal levels and cascades only
-        return getCachedFormationDetection(candles, `view:cascades:${formationsMinCascade}`, () => window.detectChartLevelsAndTouches(candles));
+        const minT = Math.max(1, formationsMinCascade || 2);
+        const res = getCachedFormationDetection(candles, `view:cascades:${minT}`, () => window.FormationEngine ? window.FormationEngine.detectCascades(candles, minT) : window.detectChartLevelsAndTouches(candles));
+        return (res || []).filter(lv => Math.abs(lv.price - lastP) / lastP <= 0.15);
       }
     }
 
-    return getCachedFormationDetection(candles, 'view:cascades:default', () => window.detectChartLevelsAndTouches(candles));
+    const res = getCachedFormationDetection(candles, 'view:cascades:default', () => window.FormationEngine ? window.FormationEngine.detectCascades(candles, 2) : window.detectChartLevelsAndTouches(candles));
+    return (res || []).filter(lv => Math.abs(lv.price - lastP) / lastP <= 0.15);
   };
 
   // Options for renderFormationsOnChart so the Formations tab draws through the
@@ -14302,9 +14662,10 @@ window.addEventListener("resize", () => {
   };
 
   let formationsCols = parseInt(localStorage.getItem("formations_cols") || "2", 10) || 2;
-  let formationsTf = localStorage.getItem("formations_tf") || "4h";
+  let formationsTf = localStorage.getItem("formations_tf") || "15m";
   let activeFormation = localStorage.getItem("formations_active_tab") || 'cascades';
   let formationsMinCascade = parseInt(localStorage.getItem("formations_min_cascade") || "2", 10) || 2;
+  const formationsMapClientCache = new Map(); // "type:tf" -> mapData for 0ms instant UI switching
 
   const formationsNearestToggle = $("formations-nearest-toggle");
   if (formationsNearestToggle) {
@@ -14332,7 +14693,15 @@ window.addEventListener("resize", () => {
       formationsTf = btn.dataset.tf;
       localStorage.setItem("formations_tf", formationsTf);
       if (typeof schedulePreferencesSync === "function") schedulePreferencesSync();
-      formationsCoinsLevelsMap.clear();
+      // Instantly swap in cached levels for the newly selected timeframe if available
+      const cached = formationsMapClientCache.get(`${activeFormation}:${formationsTf}`);
+      if (cached && Object.keys(cached).length > 0) {
+        formationsCoinsLevelsMap.clear();
+        formationMissesByCoin.clear();
+        for (const k in cached) formationsCoinsLevelsMap.set(k, cached[k]);
+      } else {
+        formationsCoinsLevelsMap.clear();
+      }
       window.loadFormations(true);
     };
   });
@@ -14479,19 +14848,22 @@ window.addEventListener("resize", () => {
     fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=${encodeURIComponent(type)}`)
       .then(r => r.ok ? r.json() : null)
       .then(mapData => {
-        if (type !== activeFormation) return;
         if (mapData && Object.keys(mapData).length > 0) {
-          for (const coinKey in mapData) {
-            formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
-          }
-          if (activeView === "formations") {
-            window.loadFormations();
+          formationsMapClientCache.set(`${type}:${tf}`, mapData);
+          if (type === activeFormation && tf === formationsTf) {
+            for (const coinKey in mapData) {
+              formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
+              formationMissesByCoin.delete(coinKey);
+            }
+            if (activeView === "formations") {
+              window.loadFormations();
+            }
           }
         }
       })
       .catch(() => {});
   }
-  setTimeout(preloadFormationsInBackground, 800);
+  setTimeout(preloadFormationsInBackground, 300);
   setInterval(preloadFormationsInBackground, 15000);
 
   // Formations Selection Dropdown Binding
@@ -14596,9 +14968,16 @@ window.addEventListener("resize", () => {
         syncFormationsSelect();
         fgSelectMenu.classList.remove("open");
         fgSelectBtn.classList.remove("open");
-        // Clear cached formations level map because we changed the active formation type
-        formationsCoinsLevelsMap.clear();
-        formationMissesByCoin.clear();
+        // Instantly swap in cached levels for the newly selected formation type if available
+        const cached = formationsMapClientCache.get(`${activeFormation}:${formationsTf}`);
+        if (cached && Object.keys(cached).length > 0) {
+          formationsCoinsLevelsMap.clear();
+          formationMissesByCoin.clear();
+          for (const k in cached) formationsCoinsLevelsMap.set(k, cached[k]);
+        } else {
+          formationsCoinsLevelsMap.clear();
+          formationMissesByCoin.clear();
+        }
         window.loadFormations(true);
       };
     });
@@ -14654,9 +15033,12 @@ window.addEventListener("resize", () => {
     fgSettingsMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
       item.onclick = () => {
         formationsMinCascade = parseInt(item.dataset.value, 10);
+        localStorage.setItem("formations_min_cascade", formationsMinCascade);
         syncFormationsSettings();
         fgSettingsMenu.classList.remove("open");
         fgSettingsBtn.classList.remove("open");
+        formationsCoinsLevelsMap.clear();
+        formationMissesByCoin.clear();
         window.loadFormations(true);
       };
     });
@@ -14705,8 +15087,23 @@ window.addEventListener("resize", () => {
     formationsScanAbortController?.abort();
     formationsScanAbortController = new AbortController();
     const signal = formationsScanAbortController.signal;
-    scanProgressText = "Загрузка с сервера...";
-    updateFormationsPagination();
+
+    // If we have cached results in memory, paint them instantly without showing loading text
+    const clientKey = `${activeFormation}:${tf}`;
+    const cachedClient = formationsMapClientCache.get(clientKey);
+    if (cachedClient && Object.keys(cachedClient).length > 0) {
+      for (const coinKey in cachedClient) {
+        if (checkedEx.includes(coinKey.split(':')[0])) {
+          formationsCoinsLevelsMap.set(coinKey, cachedClient[coinKey]);
+          formationMissesByCoin.delete(coinKey);
+        }
+      }
+      scanProgressText = "";
+      updateFormationsPagination();
+    } else {
+      scanProgressText = "Загрузка с сервера...";
+      updateFormationsPagination();
+    }
 
     try {
       const r = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=${encodeURIComponent(activeFormation)}`, { signal });
@@ -14714,14 +15111,17 @@ window.addEventListener("resize", () => {
         const mapData = await r.json();
         if (scanId !== activeScanId) return;
         if (mapData && Object.keys(mapData).length > 0) {
+          formationsMapClientCache.set(clientKey, mapData);
           for (const coinKey in mapData) {
             if (checkedEx.includes(coinKey.split(':')[0])) {
               formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
               formationMissesByCoin.delete(coinKey);
             }
           }
+          scanProgressText = "";
           updateFormationsPagination();
           window.loadFormations();
+          return;
         }
       }
     } catch (error) {
@@ -14731,7 +15131,7 @@ window.addEventListener("resize", () => {
     const eligibleCoins = [];
     for (const ex of checkedEx) {
       const exCoins = Array.from(coins.values())
-        .filter(c => c.ex === ex && isUsdtFutures(c) && c.v >= 80000 && !isStablecoinBase(c));
+        .filter(c => c.ex === ex && isUsdtFutures(c) && c.v >= 100000 && !isStablecoinBase(c));
       eligibleCoins.push(...exCoins);
     }
     eligibleCoins.sort((a, b) => {
@@ -14739,9 +15139,8 @@ window.addEventListener("resize", () => {
       const bSeeded = formationsCoinsLevelsMap.has(b.ex + ':' + b.sym) ? 1 : 0;
       return bSeeded - aSeeded || b.v - a.v;
     });
-    // The server seed is rendered immediately. A bounded local verification
-    // pass keeps it live without downloading thousands of histories per tab.
-    if (eligibleCoins.length > 500) eligibleCoins.length = 500;
+    // Fallback: fast scan top 20 liquid coins
+    if (eligibleCoins.length > 20) eligibleCoins.length = 20;
 
     let index = 0;
     const total = eligibleCoins.length;
@@ -14772,7 +15171,8 @@ window.addEventListener("resize", () => {
         return;
       }
 
-      const batch = eligibleCoins.slice(index, index + 50);
+      // Concurrency 4 to keep fallback fast
+      const batch = eligibleCoins.slice(index, index + 4);
       index += batch.length;
 
       const promises = batch.map(async (c) => {
@@ -14780,18 +15180,14 @@ window.addEventListener("resize", () => {
         let klinesData = null;
 
         try {
-          const cached = KLINES_CACHE.get(key);
+          const cached = touchKlinesCache(key);
           if (cached && Date.now() - cached.ts < 300000) {
             klinesData = cached.data;
           } else {
             try {
-              const r = await fetch(`/api/klines?ex=${c.ex}&sym=${c.sym}&tf=${tf}&lite=1`, { signal });
-              if (r.ok) {
-                const rawKlines = await r.json();
-                if (Array.isArray(rawKlines) && rawKlines.length > 0) {
-                  klinesData = rawKlines;
-                  KLINES_CACHE.set(key, { ts: Date.now(), data: rawKlines });
-                }
+              klinesData = await fetchChartKlines(c.ex, c.sym, tf);
+              if (Array.isArray(klinesData) && klinesData.length > 0) {
+                storeKlinesCache(key, klinesData);
               }
             } catch (e) { }
           }
@@ -14812,10 +15208,14 @@ window.addEventListener("resize", () => {
             let wasEligible = false;
             const hadLevel = formationsCoinsLevelsMap.has(coinKey);
             if (hadLevel) {
-              if (activeFormation === 'breakout' || activeFormation === 'trendline') {
+              const prevLvls = formationsCoinsLevelsMap.get(coinKey) || [];
+              if (activeFormation === 'breakout') {
+                wasEligible = prevLvls.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
+              } else if (activeFormation === 'trendline') {
+                wasEligible = prevLvls.some(l => (l.touches || 2) >= formationsMinCascade);
+              } else if (activeFormation === 'retest') {
                 wasEligible = true;
               } else {
-                const prevLvls = formationsCoinsLevelsMap.get(coinKey);
                 let upC = 0, downC = 0;
                 for (const l of prevLvls) {
                   if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
@@ -14824,24 +15224,26 @@ window.addEventListener("resize", () => {
               }
             }
 
-            const hasLevel = detectedLevels && detectedLevels.length > 0;
+            const hasLevel = Array.isArray(detectedLevels) && detectedLevels.length > 0;
             if (hasLevel) {
               formationsCoinsLevelsMap.set(coinKey, detectedLevels);
               formationMissesByCoin.delete(coinKey);
             } else {
-              const misses = (formationMissesByCoin.get(coinKey) || 0) + 1;
-              formationMissesByCoin.set(coinKey, misses);
-              if (misses >= 3) formationsCoinsLevelsMap.delete(coinKey);
+              formationsCoinsLevelsMap.delete(coinKey);
+              formationMissesByCoin.delete(coinKey);
             }
 
             let isEligible = false;
-            if (hasLevel || formationsCoinsLevelsMap.has(coinKey)) {
-              if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+            if (hasLevel) {
+              if (activeFormation === 'breakout') {
+                isEligible = detectedLevels.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
+              } else if (activeFormation === 'trendline') {
+                isEligible = detectedLevels.some(l => (l.touches || 2) >= formationsMinCascade);
+              } else if (activeFormation === 'retest') {
                 isEligible = true;
               } else {
                 let upC = 0, downC = 0;
-                const effectiveLevels = hasLevel ? detectedLevels : (formationsCoinsLevelsMap.get(coinKey) || []);
-                for (const l of effectiveLevels) {
+                for (const l of detectedLevels) {
                   if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
                 }
                 isEligible = Math.max(upC, downC) >= formationsMinCascade;
@@ -14872,7 +15274,7 @@ window.addEventListener("resize", () => {
 
       await Promise.all(promises);
 
-      setTimeout(nextBatch, 10);
+      setTimeout(nextBatch, 60);
     }
 
     nextBatch();
@@ -14885,10 +15287,14 @@ window.addEventListener("resize", () => {
 
     let wasEligible = false;
     if (had) {
-      if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+      const prev = formationsCoinsLevelsMap.get(key) || [];
+      if (activeFormation === 'breakout') {
+        wasEligible = prev.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
+      } else if (activeFormation === 'trendline') {
+        wasEligible = prev.some(l => (l.touches || 2) >= formationsMinCascade);
+      } else if (activeFormation === 'retest') {
         wasEligible = true;
       } else {
-        const prev = formationsCoinsLevelsMap.get(key);
         let upC = 0, downC = 0;
         for (const l of prev) {
           if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
@@ -14897,24 +15303,26 @@ window.addEventListener("resize", () => {
       }
     }
 
-    const hasL = levels && levels.length > 0;
+    const hasL = Array.isArray(levels) && levels.length > 0;
     if (hasL) {
       formationsCoinsLevelsMap.set(key, levels);
       formationMissesByCoin.delete(key);
     } else {
-      const misses = (formationMissesByCoin.get(key) || 0) + 1;
-      formationMissesByCoin.set(key, misses);
-      if (misses >= 3) formationsCoinsLevelsMap.delete(key);
+      formationsCoinsLevelsMap.delete(key);
+      formationMissesByCoin.delete(key);
     }
 
-    const effectiveLevels = hasL ? levels : (formationsCoinsLevelsMap.get(key) || []);
     let isEligible = false;
-    if (effectiveLevels.length > 0) {
-      if (activeFormation === 'breakout' || activeFormation === 'trendline' || activeFormation === 'retest') {
+    if (hasL) {
+      if (activeFormation === 'breakout') {
+        isEligible = levels.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
+      } else if (activeFormation === 'trendline') {
+        isEligible = levels.some(l => (l.touches || 2) >= formationsMinCascade);
+      } else if (activeFormation === 'retest') {
         isEligible = true;
       } else {
         let upC = 0, downC = 0;
-        for (const l of effectiveLevels) {
+        for (const l of levels) {
           if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
         }
         isEligible = Math.max(upC, downC) >= formationsMinCascade;
@@ -14997,10 +15405,37 @@ window.addEventListener("resize", () => {
         if (onlyFormations) {
           const lvls = formationsCoinsLevelsMap.get(c.ex + ':' + c.sym);
           if (!lvls || lvls.length === 0) return false;
-          if (activeFormation !== 'breakout' && activeFormation !== 'trendline' && activeFormation !== 'retest') {
+          const curP = c.p || 0;
+          if (activeFormation === 'breakout') {
+            const minT = Math.max(1, formationsMinCascade || 2);
+            const hasQualifying = lvls.some(l => {
+              const count = l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1);
+              const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
+              return count >= minT && dist <= 0.15;
+            });
+            if (!hasQualifying) return false;
+          } else if (activeFormation === 'trendline') {
+            const minT = Math.max(1, formationsMinCascade || 2);
+            const hasQualifying = lvls.some(l => {
+              const count = l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 2);
+              const ep = l.endPrice || (l.p2 ? l.p2.price : 0);
+              const dist = (curP > 0 && ep) ? Math.abs(ep - curP) / curP : 0;
+              return count >= minT && dist <= 0.15;
+            });
+            if (!hasQualifying) return false;
+          } else if (activeFormation === 'retest') {
+            const hasQualifying = lvls.some(l => {
+              const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
+              return dist <= 0.15;
+            });
+            if (!hasQualifying) return false;
+          } else {
             let upC = 0, downC = 0;
             for (const l of lvls) {
-              if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+              const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
+              if (dist <= 0.15) {
+                if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
+              }
             }
             const cascadeSize = Math.max(upC, downC);
             if (cascadeSize < formationsMinCascade) return false;
@@ -15062,6 +15497,8 @@ window.addEventListener("resize", () => {
   function renderCurrentPage() {
     const grid = $("formations-grid");
     if (!grid) return;
+    // Do not rebuild grid when formations tab is hidden
+    if (activeView !== "formations") return;
     // The real chart is expanded over the grid: leave it alone.
     if (fullChartOpen) {
       updateFormationsPagination();
@@ -17330,7 +17767,7 @@ function initNotificationsUI() {
   function isClientCoinInPlay(ex, sym) {
     if (typeof coins === "undefined" || !coins || coins.size === 0) return true;
     const cleanSym = String(sym || "").toUpperCase().replace(/_SPOT$/i, "");
-    const baseSym = cleanSym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "");
+    const baseSym = cleanSym.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, "");
     
     // Sort all active tickers by absolute 24h change %
     const allCoins = Array.from(coins.values())
@@ -17339,7 +17776,7 @@ function initNotificationsUI() {
     const topMovers = allCoins.slice(0, 100);
     return topMovers.some(c => {
       const cClean = String(c.sym || "").toUpperCase().replace(/_SPOT$/i, "");
-      const cBase = c.base || cClean.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "");
+      const cBase = c.base || cClean.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, "");
       return c.sym === sym || cClean === cleanSym || cBase === baseSym || (c.ex === ex && cClean === cleanSym);
     });
   }
@@ -18230,7 +18667,7 @@ if (document.readyState === "loading") {
     if (window.coins) {
       coinObj = window.coins.get(`${targetEx}:${targetSym}`);
       if (!coinObj) {
-        const baseSym = targetSym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "");
+        const baseSym = targetSym.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, "");
         for (const c of window.coins.values()) {
           if (c.ex === targetEx && (c.sym === targetSym || c.base === baseSym || c.sym === targetSym + "USDT" || c.sym.startsWith(baseSym))) {
             coinObj = c;
@@ -18920,4 +19357,3 @@ if (document.readyState === "loading") {
   // Auto-init (delayed to not block initial render)
   setTimeout(pdInit, 1500);
 })();
-

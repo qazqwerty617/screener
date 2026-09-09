@@ -117,6 +117,82 @@ const cachedFormationMaps = {
   retest: Object.create(null)
 };
 
+// ── Persistent disk cache for 24/7 instant formations availability across restarts ──
+const FORMATION_CACHE_FILE = path.join(__dirname, "formation_maps_cache.json");
+let lastFormationCacheSaveAt = 0;
+
+function loadFormationMaps() {
+  try {
+    if (!fs.existsSync(FORMATION_CACHE_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(FORMATION_CACHE_FILE, "utf8"));
+    if (!raw || typeof raw !== "object") return;
+    const now = Date.now();
+    const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    if (raw.savedAt && (now - raw.savedAt > MAX_AGE_MS)) {
+      console.log("[FORMATION CACHE] Disk cache is older than 24h, skipping restore");
+      return;
+    }
+    let restoredCoins = 0;
+    if (raw.cachedFormationMaps && typeof raw.cachedFormationMaps === "object") {
+      for (const type of ["cascades", "levels", "trendline", "retest"]) {
+        const typeObj = raw.cachedFormationMaps[type];
+        if (!typeObj || typeof typeObj !== "object") continue;
+        if (!cachedFormationMaps[type]) cachedFormationMaps[type] = Object.create(null);
+        for (const tf in typeObj) {
+          if (!cachedFormationMaps[type][tf]) cachedFormationMaps[type][tf] = Object.create(null);
+          Object.assign(cachedFormationMaps[type][tf], typeObj[tf]);
+        }
+      }
+    }
+    if (raw.cachedTfMaps && typeof raw.cachedTfMaps === "object") {
+      for (const tf in raw.cachedTfMaps) {
+        if (!cachedTfMaps[tf]) cachedTfMaps[tf] = Object.create(null);
+        Object.assign(cachedTfMaps[tf], raw.cachedTfMaps[tf]);
+        for (const coinKey in raw.cachedTfMaps[tf]) {
+          serverFormationsMap.set(`${coinKey}:${tf}`, raw.cachedTfMaps[tf][coinKey]);
+          restoredCoins++;
+        }
+      }
+    }
+    console.log(`[FORMATION CACHE] Restored formation maps from disk: ${restoredCoins} entries`);
+  } catch (e) {
+    console.warn(`[FORMATION CACHE] Could not restore from disk: ${e.message}`);
+  }
+}
+
+function saveFormationMaps(force = false) {
+  const now = Date.now();
+  if (!force && now - lastFormationCacheSaveAt < 20000) return;
+  lastFormationCacheSaveAt = now;
+  try {
+    const payload = {
+      savedAt: now,
+      cachedFormationMaps: {
+        cascades: cachedFormationMaps.cascades,
+        levels: cachedFormationMaps.levels,
+        trendline: cachedFormationMaps.trendline,
+        retest: cachedFormationMaps.retest
+      },
+      cachedTfMaps
+    };
+    const json = JSON.stringify(payload);
+    const tmp = `${FORMATION_CACHE_FILE}.tmp`;
+    if (force) {
+      fs.writeFileSync(tmp, json, "utf8");
+      fs.renameSync(tmp, FORMATION_CACHE_FILE);
+      return;
+    }
+    fs.writeFile(tmp, json, "utf8", (err) => {
+      if (err) return;
+      fs.rename(tmp, FORMATION_CACHE_FILE, () => {});
+    });
+  } catch (e) {
+    console.warn(`[FORMATION CACHE] Could not persist: ${e.message}`);
+  }
+}
+
+loadFormationMaps();
+
 /**
  * Drop cached formations for symbols that are no longer in the ticker map.
  * Called once per completed scan cycle — cheap relative to the scan itself, and
@@ -546,7 +622,7 @@ function updateLiveTradeTick(ex, sym, tf, tradeTime, price, volume) {
     let c = flat[flat.length - 2];
     let v = flat[flat.length - 1];
 
-    if (normT >= lastT) {
+    if (normT >= lastT && normT < lastT + getTfMs(tf)) {
       const refP = c > 0 ? c : o;
       if (refP > 0 && (price > refP * 1.35 || price < refP * 0.65)) return;
 
@@ -672,8 +748,10 @@ if (corsOrigins.length) {
 
 const apiIpLimit = createSlidingWindowLimiter({ windowMs: 60_000, max: 1200, key: req => req.ip });
 const journalSyncLimit = createSlidingWindowLimiter({ windowMs: 60 * 60_000, max: 2000, key: req => req.ip });
+const journalLiveLimit = createSlidingWindowLimiter({ windowMs: 60_000, max: 600, key: req => req.ip });
 app.use("/api", apiIpLimit);
-app.use(["/api/journal/sync", "/api/journal/live", "/api/journal/credentials"], journalSyncLimit);
+app.use(["/api/journal/sync", "/api/journal/credentials"], journalSyncLimit);
+app.use("/api/journal/live", journalLiveLimit);
 const server = http.createServer(app);
 server.requestTimeout = 30_000;
 server.headersTimeout = 15_000;
@@ -953,6 +1031,8 @@ function connectKlineWs(sub) {
   sub.extraWs = null;
 
   const { ex, sym, tf } = sub;
+  const sourceTf = syntheticSourceTf(ex, tf) || tf;
+  const emitSourceCandle = (...args) => sourceTf === tf ? broadcastKline(...args) : broadcastSyntheticKline(...args);
   
   if (ex === "BN") {
     const tfMap = { "1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d", "3d": "3d", "1w": "1w" };
@@ -980,7 +1060,7 @@ function connectKlineWs(sub) {
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] BB:${sym}`, e.message));
     sub.ws.on("open", () => {
       markMarketOpen(sub);
-      sub.ws.send(JSON.stringify({ op: "subscribe", args: [`kline.${tfMap[tf] || "60"}.${sym}`, `publicTrade.${sym}`] }));
+      sub.ws.send(JSON.stringify({ op: "subscribe", args: [`kline.${tfMap[sourceTf] || "60"}.${sym}`, `publicTrade.${sym}`] }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send('{"op":"ping"}'); }, 20000);
     });
     sub.ws.on("message", (raw) => {
@@ -989,7 +1069,7 @@ function connectKlineWs(sub) {
         if (!d.data?.length) return;
         if (d.topic?.startsWith("kline.")) {
           const k = d.data[0];
-          broadcastKline(ex, sym, tf, { t: k.start, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.turnover });
+          emitSourceCandle(ex, sym, tf, { t: k.start, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +k.turnover });
         } else if (d.topic?.startsWith("publicTrade.")) {
           for (const trade of d.data) publishMarketTrade(ex, sym, tf, trade.T || d.ts, trade.p, Number(trade.v) * Number(trade.p));
         }
@@ -1048,7 +1128,10 @@ function connectKlineWs(sub) {
         const d = JSON.parse(raw.toString());
         if (!d.action || !d.arg?.channel) return;
         if (d.arg.channel === "candle" + (tfMap[tf] || "1H")) {
-          for (const k of (d.data || [])) broadcastKline(ex, sym, tf, { t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] });
+          // The initial snapshot can contain 500 historical bars. History is
+          // loaded over REST; the live channel publishes only its newest bar.
+          const k = (d.data || []).reduce((last, row) => !last || +row[0] >= +last[0] ? row : last, null);
+          if (k) broadcastKline(ex, sym, tf, { t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] });
         } else if (d.arg.channel === "trade") {
           for (const trade of (d.data || [])) publishMarketTrade(ex, sym, tf, trade.ts, trade.price, Number(trade.size) * Number(trade.price));
         }
@@ -1091,7 +1174,7 @@ function connectKlineWs(sub) {
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] MX:${mxSym}`, e.message));
     sub.ws.on("open", () => {
       markMarketOpen(sub);
-      sub.ws.send(JSON.stringify({ method: "sub.kline", param: { symbol: mxSym, interval: tfMap[tf] || "Hour4" } }));
+      sub.ws.send(JSON.stringify({ method: "sub.kline", param: { symbol: mxSym, interval: tfMap[sourceTf] || "Hour4" } }));
       sub.ws.send(JSON.stringify({ method: "sub.deal", param: { symbol: mxSym } }));
       sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ method: "ping" })); }, 15000);
     });
@@ -1107,13 +1190,13 @@ function connectKlineWs(sub) {
               const t = tickers.get("MX:" + mxSym);
               if (t) { t.p = tp; dirtyKeys.add(t.key); }
               publishMarketTrade(ex, sym, tf, tt, tp, tv);
-              updateLiveTradeTick(ex, sym, tf, tt, tp, tv);
+              if (sourceTf === tf) updateLiveTradeTick(ex, sym, tf, tt, tp, tv);
             }
           }
         }
         if (d.channel === "push.kline" && d.data) {
           const k = d.data;
-          broadcastKline(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.a || (+k.q * +k.c) });
+          emitSourceCandle(ex, sym, tf, { t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.a || (+k.q * +k.c) });
         }
       } catch (_) {}
     });
@@ -1133,7 +1216,8 @@ function connectKlineWs(sub) {
         if (!d.data) return;
         if (d.channel === "candle") {
           const candles = Array.isArray(d.data) ? d.data : [d.data];
-          for (const k of candles) broadcastKline(ex, sym, tf, { t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: Number(k.v) * Number(k.c) });
+          const k = candles.reduce((last, row) => !last || +row.t >= +last.t ? row : last, null);
+          if (k) broadcastKline(ex, sym, tf, { t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: Number(k.v) * Number(k.c) });
         } else if (d.channel === "trades") {
           for (const trade of d.data) publishMarketTrade(ex, sym, tf, trade.time, trade.px, Number(trade.sz) * Number(trade.px));
         }
@@ -1161,23 +1245,27 @@ function connectKlineWs(sub) {
     sub.ws.on("error", () => {});
   } else if (ex === "KC") {
     // KuCoin needs a token
+    const generation = sub.generation = (sub.generation || 0) + 1;
     getKuCoinToken().then(tk => {
+      if (sub.closing || sub.generation !== generation) return;
       if (!tk) return startKlinePolling(sub);
       const url = `${tk.endpoint}?token=${tk.token}`;
       sub.ws = new WebSocket(url, { perMessageDeflate: false });
       sub.ws.on("error", (e) => console.warn(`[KL ERROR] KC:${sym}`, e.message));
       sub.ws.on("open", () => {
         markMarketOpen(sub);
-        sub.ws.send(JSON.stringify({ id: Date.now(), type: "subscribe", topic: `/contractMarket/kline:${sym}_${TF_MAP.KC[tf] || "60"}` }));
+        const periods = { "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1hour", "4h": "4hour", "1d": "1day", "1w": "1week" };
+        sub.ws.send(JSON.stringify({ id: Date.now(), type: "subscribe", topic: `/contractMarket/limitCandle:${sym}_${periods[sourceTf] || "1hour"}`, privateChannel: false, response: true }));
         sub.ws.send(JSON.stringify({ id: Date.now() + 1, type: "subscribe", topic: `/contractMarket/execution:${sym}`, privateChannel: false, response: true }));
-        sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ id: Date.now(), type: "ping" })); }, 20000);
+        // Keep comfortably inside KuCoin's 18s per-session heartbeat window.
+        sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ id: Date.now(), type: "ping" })); }, 9000);
       });
       sub.ws.on("message", (raw) => {
         try {
           const d = JSON.parse(raw.toString());
-          if (d.subject === "kline.update") {
-            const k = d.data;
-            broadcastKline(ex, sym, tf, { t: k.timestamp, o: +k.open, h: +k.high, l: +k.low, c: +k.close, v: +(k.amount || k.turnover || k.vol) });
+          if (d.subject === "candle.stick" && Array.isArray(d.data?.candles)) {
+            const k = d.data.candles;
+            emitSourceCandle(ex, sym, tf, { t: +k[0] * 1000, o: +k[1], h: +k[3], l: +k[4], c: +k[2], v: +k[6] });
           } else if ((d.subject === "match" || d.subject === "match.update") && d.data) {
             const trade = d.data;
             publishMarketTrade(ex, sym, tf, trade.ts || trade.time || trade.timestamp, trade.price, Number(trade.size || trade.value || 0) * Number(trade.price));
@@ -1185,7 +1273,7 @@ function connectKlineWs(sub) {
         } catch (_) {}
       });
       sub.ws.on("close", () => { clearInterval(sub.pingTimer); scheduleKlineReconnect(sub, 2000); });
-    }).catch(() => startKlinePolling(sub));
+    }).catch(() => { if (!sub.closing && sub.generation === generation) startKlinePolling(sub); });
   } else if (ex === "BX") {
     const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
     sub.ws = new WebSocket("wss://open-api-swap.bingx.com/swap-market", { perMessageDeflate: false });
@@ -1247,7 +1335,7 @@ function connectKlineWs(sub) {
     sub.ws.on("error", (e) => console.warn(`[KL ERROR] HT:${sym}`, e.message));
     sub.ws.on("open", () => {
       markMarketOpen(sub);
-      sub.ws.send(JSON.stringify({ sub: `market.${sym}.kline.${TF_MAP.HT[tf] || "60min"}`, id: "id1" }));
+      sub.ws.send(JSON.stringify({ sub: `market.${sym}.kline.${TF_MAP.HT[sourceTf] || "60min"}`, id: "id1" }));
       sub.ws.send(JSON.stringify({ sub: `market.${sym}.trade.detail`, id: "id2" }));
     });
     sub.ws.on("message", (raw) => {
@@ -1258,7 +1346,7 @@ function connectKlineWs(sub) {
           if (d.ping) return sub.ws.send(JSON.stringify({ pong: d.ping }));
           if (d.tick && d.ch?.includes(".kline.")) {
             const k = d.tick;
-            broadcastKline(ex, sym, tf, { t: k.id * 1000, o: k.open, h: k.high, l: k.low, c: k.close, v: +(k.trade_turnover || k.amount || k.vol) });
+            emitSourceCandle(ex, sym, tf, { t: k.id * 1000, o: k.open, h: k.high, l: k.low, c: k.close, v: +(k.trade_turnover || k.amount || k.vol) });
           } else if (d.tick && d.ch?.includes(".trade.detail")) {
             for (const trade of (d.tick.data || [])) publishMarketTrade(ex, sym, tf, trade.ts, trade.price, Number(trade.amount) * Number(trade.price));
           }
@@ -1290,6 +1378,11 @@ function startKlinePolling(sub) {
     if (sub.pollInFlight || sub.closing) return;
     sub.pollInFlight = true;
     try {
+      if (syntheticSourceTf(sub.ex, sub.tf)) {
+        const candles = await fetchSyntheticHistory(sub.ex, sub.sym, sub.tf);
+        if (!sub.closing && candles.length) broadcastKline(sub.ex, sub.sym, sub.tf, candles.at(-1));
+        return;
+      }
       const url = getKlinesUrl(sub.ex, sub.sym, sub.tf, 3);
       if (!url) return;
       const data = await apiFetch(url, 3000, 0);
@@ -1327,6 +1420,9 @@ function mkExWs(exId, url, onMsg, onOpen) {
     ws = new WebSocket(url, { 
       handshakeTimeout: 15000,
       perMessageDeflate: false,
+      // Thousands of public ticker frames may arrive in one socket read.
+      // Yield between them so HTTP history and chart timers can also run.
+      allowSynchronousEvents: false,
       headers
     });
 
@@ -1469,13 +1565,27 @@ function venuePauseSnapshot() {
 }
 
 /**
- * Binance futures klines have a public mirror that does not share the futures
- * weight budget. Returns null for anything else.
+ * Only spot candles can use Binance's spot market-data endpoint. Futures must
+ * never silently fall back to spot prices, even for the same symbol.
  */
 function binanceFallbackUrl(url) {
   const s = String(url || "");
-  if (!s.includes("fapi.binance.com/fapi/v1/klines")) return null;
-  return s.replace("https://fapi.binance.com/fapi/v1/klines", "https://data-api.binance.vision/api/v3/klines");
+  if (!s.startsWith("https://api.binance.com/api/v3/klines?")) return null;
+  return s.replace("https://api.binance.com", "https://data-api.binance.vision");
+}
+
+function isVenueThrottle(url, data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const host = hostOf(url);
+  const code = String(data.retCode ?? data.code ?? data["err-code"] ?? data.label ?? "");
+  const message = String(data.retMsg ?? data.msg ?? data.message ?? data["err-msg"] ?? data.error ?? "");
+  if ((host.includes("binance") || host.includes("asterdex")) && code === "-1003") return true;
+  if (host.includes("bybit") && ["10006", "10429"].includes(code)) return true;
+  if (host.includes("okx") && ["50011", "50040"].includes(code)) return true;
+  if (host.includes("mexc") && code === "510") return true;
+  if (host.includes("bingx") && code === "100410") return true;
+  return /^(429|429000|TOO_MANY_REQUESTS)$/.test(code) ||
+    /too many (requests|visits)|rate limit|requests too frequent|request frequency too fast/i.test(message);
 }
 
 /**
@@ -1526,20 +1636,27 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
   // Every attempt gets its own controller; the fallback must never reuse an
   // already-aborted signal (that made the old fallback reject immediately).
   const attempt = async (targetUrl) => {
+    if (isVenuePaused(targetUrl)) throw new Error("VENUE_PAUSED");
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        ctrl.abort();
+        reject(new Error("UPSTREAM_TIMEOUT"));
+      }, timeoutMs);
+    });
     try {
       // native fetch (Node 18+) does NOT support `agent` — omit it
       const options = { method, signal: ctrl.signal, headers };
       if (!USE_NATIVE_FETCH) options.agent = httpsAgent;
       if (payload) options.body = payload;
-      const res = await fetchImpl(targetUrl, options);
-      if (!res.ok) {
-        res._cachedText = await res.text().catch(() => "");
-      } else {
-        res._cachedJson = await res.json().catch(() => null);
-      }
-      return res;
+      const work = (async () => {
+        const res = await fetchImpl(targetUrl, options);
+        if (!res.ok) res._cachedText = await res.text().catch(() => "");
+        else res._cachedJson = await res.json();
+        return res;
+      })();
+      return await Promise.race([work, deadline]);
     } finally {
       clearTimeout(timer);
     }
@@ -1555,7 +1672,8 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
         }
         if (r.status === 418 || r.status === 429 || r.status === 403) {
           const retryAfter = Number(r.headers.get("retry-after"));
-          const reported = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 0;
+          const reported = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 :
+            Math.max(0, Date.parse(r.headers.get("retry-after")) - Date.now()) || 0;
           if (r.status === 429) {
             // Soft limit: park this endpoint only, and only for as long as the
             // venue asks (or 2 seconds), so one hot order-book burst cannot
@@ -1575,8 +1693,14 @@ async function apiFetch(url, timeoutMs = 8000, retries = 1, method = "GET", body
         }
         throw new Error(`HTTP ${r.status}: ${text.slice(0, 100)}`);
       }
-      return r._cachedJson !== undefined ? r._cachedJson : (await r.json());
+      const data = r._cachedJson !== undefined ? r._cachedJson : (await r.json());
+      if (isVenueThrottle(url, data)) {
+        pauseVenue(url, VENUE_RATE_LIMIT_MS, "API rate limit", "endpoint");
+        throw new Error("VENUE_PAUSED: API rate limit");
+      }
+      return data;
     } catch (e) {
+      if (isVenuePaused(url) || e.message?.startsWith("VENUE_PAUSED")) throw e;
       if (e.message && (e.message.startsWith("HTTP 400") || e.message.startsWith("HTTP 404"))) throw e;
       const fallbackUrl = binanceFallbackUrl(url);
       if (fallbackUrl && !isVenuePaused(fallbackUrl)) {
@@ -1705,7 +1829,9 @@ function getKlinesUrl(ex, sym, tf, limit, before) {
     return `https://open-api.bingx.com/openApi/swap/v2/quote/klines?symbol=${cleanSym}&interval=${TF_MAP.BX[tf] || "1h"}&limit=${limit}${qs}`;
   }
   if (ex === "HT") {
-    return `https://api.hbdm.vn/linear-swap-ex/market/history/kline?contract_code=${cleanSym}&period=${TF_MAP.HT[tf] || "60min"}&size=${limit}`;
+    // HTX ignores from/to if size is also supplied.
+    const range = before ? `&from=${Math.floor(startMs / 1000)}&to=${Math.floor(endMs / 1000)}` : `&size=${limit}`;
+    return `https://api.hbdm.vn/linear-swap-ex/market/history/kline?contract_code=${cleanSym}&period=${TF_MAP.HT[tf] || "60min"}${range}`;
   }
   if (ex === "HL") {
     return null; // HL uses POST
@@ -1773,7 +1899,84 @@ function parseKlines(ex, data) {
   }
 }
 
+// Venues without a native three-day candle use real lower-interval OHLCV.
+// HTX daily candles are UTC+8; four-hour bars allow UTC-aligned aggregation.
+function syntheticSourceTf(ex, tf) {
+  if (tf !== "3d") return null;
+  if (["BB", "MX", "KC"].includes(ex)) return "1d";
+  return ex === "HT" ? "4h" : null;
+}
+
+function aggregateTimeframeCandles(candles, tf) {
+  const width = getTfMs(tf), buckets = new Map();
+  const unique = new Map(candles.map(c => [c.t, c]));
+  for (const c of [...unique.values()].sort((a, b) => a.t - b.t)) {
+    const t = Math.floor(c.t / width) * width;
+    const prev = buckets.get(t);
+    if (!prev) buckets.set(t, { ...c, t });
+    else { prev.h = Math.max(prev.h, c.h); prev.l = Math.min(prev.l, c.l); prev.c = c.c; prev.v += c.v; }
+  }
+  return [...buckets.values()];
+}
+
+function seedSyntheticCandles(sub, source) {
+  if (!sub || sub.closing) return;
+  // WebSocket updates received while REST was in flight own their timestamp.
+  const merged = new Map(source.map(c => [c.t, c]));
+  for (const [t, c] of sub.syntheticCandles || []) merged.set(t, c);
+  sub.syntheticCandles = new Map([...merged].sort((a, b) => a[0] - b[0]).slice(-64));
+  sub.syntheticReady = true;
+}
+
+async function fetchSyntheticHistory(ex, sym, tf, before) {
+  const sourceTf = syntheticSourceTf(ex, tf);
+  const key = `${ex}|${sym}|${tf}|${before || 'latest'}`;
+  const requests = fetchSyntheticHistory.requests ||= new Map();
+  if (requests.has(key)) return requests.get(key);
+  const request = (async () => {
+    const limit = ex === "KC" ? 198 : (ex === "HT" ? 990 : 900);
+    const url = getKlinesUrl(ex, sym, sourceTf, limit, before || Date.now());
+    const data = await apiFetch(url, 4000, 0);
+    if (data?.success === false || data?.status === 'error' || (data?.retCode && data.retCode !== 0) || (ex === 'KC' && data?.code !== '200000')) {
+      throw new Error('Source candle request rejected');
+    }
+    const source = parseKlines(ex, data).filter(c => !before || c.t < before);
+    if (!before && !source.length) throw new Error('Source candle history is pending');
+    let result = aggregateTimeframeCandles(source, tf);
+    // Do not publish a truncated first bucket at a page boundary. Short pages
+    // can be new listings, whose first partial bucket is legitimate history.
+    if (source.length >= limit && result.length > 1 && source[0].t > result[0].t) result.shift();
+    if (!before) seedSyntheticCandles(klineSubs.get(`${ex}|${sym}|${tf}`), source);
+    return result;
+  })();
+  requests.set(key, request);
+  try { return await request; }
+  finally { if (requests.get(key) === request) requests.delete(key); }
+}
+
+function broadcastSyntheticKline(ex, sym, tf, candle) {
+  const sub = klineSubs.get(`${ex}|${sym}|${tf}`);
+  const clean = marketDataCore.normalizeCandle(candle);
+  if (!sub || sub.closing || !clean) return;
+  sub.syntheticCandles ||= new Map();
+  sub.syntheticCandles.set(clean.t, clean);
+  sub.syntheticCandles = new Map([...sub.syntheticCandles].sort((a, b) => a[0] - b[0]).slice(-64));
+  if (!sub.syntheticReady) {
+    if (!sub.syntheticSeed && !(sub.syntheticRetryAt > Date.now())) {
+      sub.syntheticSeed = fetchSyntheticHistory(ex, sym, tf).then(() => {
+        if (klineSubs.get(sub.key) !== sub || sub.closing) return;
+        const latest = [...sub.syntheticCandles.values()].at(-1);
+        if (latest) broadcastSyntheticKline(ex, sym, tf, latest);
+      }).catch(() => { sub.syntheticRetryAt = Date.now() + 5000; }).finally(() => { sub.syntheticSeed = null; });
+    }
+    return;
+  }
+  const latest = aggregateTimeframeCandles([...sub.syntheticCandles.values()], tf).at(-1);
+  if (latest) broadcastKline(ex, sym, tf, latest);
+}
+
 async function fetchFullHistory(ex, sym, tf, lite = false) {
+  if (syntheticSourceTf(ex, tf)) return fetchSyntheticHistory(ex, sym, tf);
   let fetchEx = ex;
   let fetchSym = sym;
   
@@ -1792,7 +1995,7 @@ async function fetchFullHistory(ex, sym, tf, lite = false) {
   const maxP = lite ? 1 : (pages[fetchEx] || 3);
   const limit = limits[fetchEx] || 1000;
   
-  const hlCoin = sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "") || sym;
+  const hlCoin = sym.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, "") || sym;
 
   if (lite) {
     const tFetch0 = Date.now();
@@ -2295,7 +2498,7 @@ function startKlinesRefresh(ex, sym, tf, useLite, key) {
   const startedAt = Date.now();
   const promise = fetchFullHistory(ex, sym, tf, useLite)
     .then(candles => {
-      if (Array.isArray(candles) && candles.length > 0) {
+      if (klinesInFlight.get(key)?.promise === promise && Array.isArray(candles) && candles.length > 0) {
         const at = Date.now();
         const encoded = encodeFlatCandles(candles);
         klinesCache.set(key, { at, used: at, data: encoded });
@@ -2316,7 +2519,7 @@ function startKlinesRefresh(ex, sym, tf, useLite, key) {
     .finally(() => {
       // Only clear our own entry: a newer attempt may already own the key.
       const cur = klinesInFlight.get(key);
-      if (cur && cur.startedAt === startedAt) klinesInFlight.delete(key);
+      if (cur && cur.promise === promise) klinesInFlight.delete(key);
     });
 
   klinesInFlight.set(key, { promise, startedAt });
@@ -2334,7 +2537,9 @@ app.get("/api/klines", async (req, res) => {
     const beforeTs = Number(before);
     if (Number.isFinite(beforeTs) && beforeTs > 0) {
       try {
-        if (ex === "HL") {
+        if (syntheticSourceTf(ex, tf)) {
+          return res.json(await fetchSyntheticHistory(ex, sym, tf, beforeTs));
+        } else if (ex === "HL") {
           const tfMs = (() => {
             const low = tf.toLowerCase();
             const num = parseInt(low, 10) || 1;
@@ -2364,8 +2569,8 @@ app.get("/api/klines", async (req, res) => {
           const url0 = `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${cleanSym}&granularity=${gran}&from=${start0}&to=${beforeTs}`;
           const url1 = `https://api-futures.kucoin.com/api/v1/kline/query?symbol=${cleanSym}&granularity=${gran}&from=${start1}&to=${start0}`;
           const [r0, r1] = await Promise.all([
-            apiFetch(url0, 4000, 0).catch(() => null),
-            apiFetch(url1, 4000, 0).catch(() => null)
+            apiFetch(url0, 4000, 0),
+            apiFetch(url1, 4000, 0)
           ]);
           const p0 = r0 ? parseKlines(ex, r0) : [];
           const p1 = r1 ? parseKlines(ex, r1) : [];
@@ -2380,7 +2585,8 @@ app.get("/api/klines", async (req, res) => {
           return res.json(parsed);
         }
       } catch (e) {
-        return res.json([]);
+        res.setHeader("Retry-After", "2");
+        return res.status(503).json({ error: "Historical candles temporarily unavailable" });
       }
     }
   }
@@ -2404,6 +2610,7 @@ app.get("/api/klines", async (req, res) => {
     const fullCached = klinesCache.get(fullKey);
     if (fullCached && fullCached.data && Array.isArray(fullCached.data) && fullCached.data.length > 0) {
       fullCached.used = now;
+      if (now - fullCached.at >= ttl) startKlinesRefresh(ex, sym, tf, useLite, key).catch(() => {});
       const liteCount = 300 * 6;
       const liteData = fullCached.data.length > liteCount ? fullCached.data.slice(-liteCount) : fullCached.data;
       return res.json(liteData);
@@ -2420,24 +2627,13 @@ app.get("/api/klines", async (req, res) => {
     return res.json(cached.data);
   }
 
-  // Cross-cache stale: If full history requested, but lite is in cache, return lite immediately so canvas paints,
-  // and trigger full history fetch in background!
-  if (!useLite) {
-    const liteKey = cacheKey(ex, sym, tf, true);
-    const liteCached = klinesCache.get(liteKey);
-    if (liteCached && liteCached.data && Array.isArray(liteCached.data) && liteCached.data.length > 0) {
-      liteCached.used = now;
-      startKlinesRefresh(ex, sym, tf, useLite, key).catch(() => {});
-      return res.json(liteCached.data);
-    }
-  }
 
   const tStart = Date.now();
   console.log(`[KLINES REQ] ${ex}:${sym}:${tf} lite=${lite}`);
   try {
     const candles = await raceWithTimeout(
       startKlinesRefresh(ex, sym, tf, useLite, key),
-      useLite ? 8000 : KLINES_RESPONSE_DEADLINE_MS,
+      KLINES_RESPONSE_DEADLINE_MS,
       null
     );
     console.log(`[KLINES RES] ${ex}:${sym}:${tf} took ${Date.now() - tStart}ms, candles=${Array.isArray(candles) ? candles.length : candles}`);
@@ -2454,11 +2650,13 @@ app.get("/api/klines", async (req, res) => {
     }
     // Return pending status gracefully so client retries seamlessly without failing
     res.setHeader("X-Klines-Pending", "1");
+    res.setHeader("Retry-After", "1");
     return res.json([]);
   } catch (e) {
     console.error(`[KLINES ERROR] ${ex} ${sym} ${tf}:`, e.message);
     if (cached) return res.json(cached.data);
     res.setHeader("X-Klines-Pending", "1");
+    res.setHeader("Retry-After", "1");
     return res.json([]);
   }
 });
@@ -2487,17 +2685,34 @@ app.get("/api/klines/batch", async (req, res) => {
   const now = Date.now();
   const ttl = (tf === "1m" || tf === "5m") ? 10000 : 300000;
   const results = {};
+  const streaming = req.query.stream === "1";
+  if (streaming) {
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+  }
 
   // Stagger MEXC requests by 80ms to avoid MEXC anti-DDoS rate-limit tarpit; parallelize others
   const isPaced = (ex === "MX");
-  await Promise.all(rawList.map(async (rawSym, i) => {
+  await mapConcurrent(rawList, streaming ? 6 : rawList.length, async (rawSym, i) => {
+    if (res.destroyed || res.writableEnded) return;
     if (isPaced && i > 0) await new Promise(r => setTimeout(r, i * 80));
+    if (res.destroyed || res.writableEnded) return;
     const sym = normalizeExchangeSymbol(ex, rawSym);
     const key = cacheKey(ex, sym, tf, useLite);
     const cached = klinesCache.get(key);
 
+    let delivered = false;
     const storeResult = (flat) => {
       if (!flat || !flat.length) return;
+      delivered = true;
+      if (streaming) {
+        if (!res.destroyed && !res.writableEnded) {
+          res.write(JSON.stringify({ sym: rawSym, data: flat }) + "\n");
+          res.flush?.();
+        }
+        return;
+      }
       results[rawSym] = flat;
       results[sym] = flat;
       const clean = sym.replace(/[-_]/g, "");
@@ -2506,8 +2721,9 @@ app.get("/api/klines/batch", async (req, res) => {
       results[rawClean] = flat;
     };
 
-    if (cached && now - cached.at < ttl && cached.data && cached.data.length > 0) {
+    if (cached && cached.data && cached.data.length > 0) {
       cached.used = now;
+      if (now - cached.at >= ttl) startKlinesRefresh(ex, sym, tf, useLite, key).catch(() => {});
       storeResult(cached.data);
       return;
     }
@@ -2517,6 +2733,7 @@ app.get("/api/klines/batch", async (req, res) => {
       const fullCached = klinesCache.get(fullKey);
       if (fullCached && fullCached.data && Array.isArray(fullCached.data) && fullCached.data.length > 0) {
         fullCached.used = now;
+        if (now - fullCached.at >= ttl) startKlinesRefresh(ex, sym, tf, useLite, key).catch(() => {});
         const liteCount = 300 * 6;
         const liteData = fullCached.data.length > liteCount ? fullCached.data.slice(-liteCount) : fullCached.data;
         storeResult(liteData);
@@ -2527,7 +2744,7 @@ app.get("/api/klines/batch", async (req, res) => {
     try {
       const candles = await raceWithTimeout(
         startKlinesRefresh(ex, sym, tf, useLite, key),
-        useLite ? 3500 : 8000,
+        streaming ? KLINES_RESPONSE_DEADLINE_MS : (useLite ? 3500 : 8000),
         null
       );
       if (Array.isArray(candles) && candles.length > 0) {
@@ -2537,17 +2754,19 @@ app.get("/api/klines/batch", async (req, res) => {
         if (fresh && fresh.data && fresh.data.length > 0) {
           fresh.used = Date.now();
           storeResult(fresh.data);
-        } else {
-          klinesCache.set(key, { at: now, used: now, data: [] });
-          pruneKlinesCache();
         }
       }
-    } catch (_) {
-      klinesCache.set(key, { at: now, used: now, data: [] });
-      pruneKlinesCache();
+    } catch (_) {} finally {
+      // Let this cell recover independently; another slow symbol must not
+      // hold its retry until the entire stream ends.
+      if (streaming && !delivered && !res.destroyed && !res.writableEnded) {
+        res.write(JSON.stringify({ sym: rawSym, data: [], pending: true }) + "\n");
+        res.flush?.();
+      }
     }
-  }));
+  });
 
+  if (streaming) return res.end();
   return res.json(results);
 });
 
@@ -2868,10 +3087,20 @@ function getJournalUser(req) {
   return userStore.getUserByToken(token);
 }
 
+function findLinkedJournalCredentials(userId, exchange) {
+  // Credentials are private to the authenticated account. IP, role and profile
+  // fields are not proof of ownership and must never trigger key migration.
+  return journalCredentials.get(userId, exchange);
+}
+
+function findLinkedJournalExchanges(userId) {
+  return journalCredentials.list(userId);
+}
+
 async function runJournalSync(userId, exchangeInput, options = {}) {
   const exchange = journalCredentials.canonicalExchange(exchangeInput);
   if (!exchange) throw Object.assign(new Error("Биржа не поддерживается"), { statusCode: 400 });
-  const credentials = options.credentials || journalCredentials.get(userId, exchange);
+  const credentials = options.credentials || findLinkedJournalCredentials(userId, exchange);
   if (!credentials) throw Object.assign(new Error("API-ключи для биржи не подключены"), { statusCode: 404 });
   const cacheKey = `${userId}:${exchange}`;
   const current = journalSyncCache.get(cacheKey);
@@ -2899,7 +3128,7 @@ app.get("/api/journal/credentials", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   const user = getJournalUser(req);
   if (!user) return res.status(401).json({ error: "Необходима авторизация" });
-  return res.json({ success: true, exchanges: journalCredentials.list(user.id) });
+  return res.json({ success: true, ownerId: user.id, exchanges: findLinkedJournalExchanges(user.id) });
 });
 
 app.put("/api/journal/credentials/:exchange", express.json(), async (req, res) => {
@@ -2936,7 +3165,7 @@ app.get("/api/journal/live", async (req, res) => {
   const exchange = journalCredentials.canonicalExchange(req.query.exchange);
   if (!exchange) return res.status(400).json({ error: "Биржа не поддерживается" });
   try {
-    return res.json(journalPayload(await runJournalSync(user.id, exchange, { maxAge: 400, fast: true }), req.query.symbol));
+    return res.json(journalPayload(await runJournalSync(user.id, exchange, { maxAge: 2500, fast: true }), req.query.symbol));
   } catch (error) {
     return res.status(error.statusCode || 502).json({ error: String(error.message || "Ошибка синхронизации").slice(0, 300) });
   }
@@ -3860,8 +4089,11 @@ app.get("/api/formations/map", (req, res) => {
   }
 
   const map = Object.create(null);
+  const maxSignalAge = 30 * 60 * 1000;
+  const now = Date.now();
   for (const signal of patternsCache) {
     if (!signal || signal.tf !== tf || signal.type !== type) continue;
+    if (signal.ts && (now - signal.ts > maxSignalAge)) continue;
     const key = `${signal.ex}:${signal.sym}`;
     if (!map[key]) map[key] = [];
     if (map[key].length >= 8) continue;
@@ -4480,7 +4712,7 @@ server.listen(PORT, () => {
       const activeTimeframes = ["5m", "15m", "1h"];
       const now = Date.now();
       let newSignalsCount = 0;
-      const PARALLEL_CONCURRENCY = 2;
+      const PARALLEL_CONCURRENCY = 3;
 
       // Use a Map for O(1) keyed replacement instead of O(n) .filter() on every coin
       if (!scanAllPatterns._pMap) scanAllPatterns._pMap = new Map();
@@ -4498,7 +4730,7 @@ server.listen(PORT, () => {
           if (colonIdx <= 0) return;
           const ex = t.key.substring(0, colonIdx);
           const sym = t.key.substring(colonIdx + 1);
-          const base = t.base || sym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '') || sym;
+          const base = t.base || sym.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, '') || sym;
           const coinKey = `${ex}:${sym}`;
 
           // Signals from every timeframe are pooled and dispatched once per coin
@@ -4590,7 +4822,7 @@ server.listen(PORT, () => {
         // The per-unit yield above already keeps latency low; this only paces
         // outbound exchange requests between batches.
         if (i + PARALLEL_CONCURRENCY < list.length) {
-          await new Promise(r => setTimeout(r, 400));
+          await new Promise(r => setTimeout(r, 250));
         }
       }
 
@@ -4618,6 +4850,7 @@ server.listen(PORT, () => {
       // revisited, so its levels/trendlines/retests stayed resident for the whole
       // process lifetime across five separate maps.
       pruneFormationCaches();
+      saveFormationMaps(false);
 
       const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
       if (newSignalsCount > 0 || Math.random() < 0.05) {
@@ -4628,6 +4861,70 @@ server.listen(PORT, () => {
     } finally {
       isScanningPatterns = false;
       setTimeout(scanAllPatterns, nextDelayMs);
+    }
+  }
+
+  // ── Periodic 4h Formations Scanner (Top liquid coins, cached for instant UI view) ──
+  let isScanning4h = false;
+  async function scan4hPatterns() {
+    if (isScanning4h) return;
+    isScanning4h = true;
+    try {
+      const perCoin = new Map();
+      for (const t of tickers.values()) {
+        if (!t || !t.key || !t.p || t.p <= 0) continue;
+        if (/_SPOT$/i.test(t.key) || /_SPOT$/i.test(String(t.sym || ""))) continue;
+        if (typeof isNonCryptoOrStock === "function" && isNonCryptoOrStock(t.base, t.key)) continue;
+        const k = String(t.key).toUpperCase();
+        if (k.includes("STOCK") || k.includes("INDEX") || k.includes("ETF") || k.includes("NVIDIA") ||
+            k.includes("TSLA") || k.includes("AAPL") || k.includes("SOXL") || k.includes("SNDK") || k.includes("SKHY")) continue;
+        const coin = normalizeCoinKey(t);
+        if (!coin) continue;
+        let venues = perCoin.get(coin);
+        if (!venues) { venues = []; perCoin.set(coin, venues); }
+        venues.push(t);
+      }
+      const fullList = assignScanVenues(perCoin);
+      const list4h = fullList.slice(0, 300);
+      const tf = "4h";
+      if (!cachedFormationMaps.cascades[tf]) cachedFormationMaps.cascades[tf] = Object.create(null);
+      if (!cachedFormationMaps.levels[tf]) cachedFormationMaps.levels[tf] = Object.create(null);
+      if (!cachedFormationMaps.trendline[tf]) cachedFormationMaps.trendline[tf] = Object.create(null);
+      if (!cachedFormationMaps.retest[tf]) cachedFormationMaps.retest[tf] = Object.create(null);
+      if (!cachedTfMaps[tf]) cachedTfMaps[tf] = Object.create(null);
+
+      for (let i = 0; i < list4h.length; i += 3) {
+        const batch = list4h.slice(i, i + 3);
+        await Promise.all(batch.map(async (t) => {
+          const colonIdx = t.key.indexOf(':');
+          if (colonIdx <= 0) return;
+          const ex = t.key.substring(0, colonIdx);
+          const sym = t.key.substring(colonIdx + 1);
+          const coinKey = `${ex}:${sym}`;
+          try {
+            const candles = await getCachedCandlesForScanner(ex, sym, tf);
+            if (!candles || candles.length < 25) return;
+            const formations = serverLevels.scanAll(candles, 2);
+            const { cascades: detectedCascades, horizontals: detectedHorizontals,
+                    trendlines: detectedTrendlines, retests: detectedRetests } = formations;
+            if (detectedCascades.length > 0) {
+              cachedFormationMaps.cascades[tf][coinKey] = detectedCascades;
+              cachedTfMaps[tf][coinKey] = detectedCascades;
+              serverFormationsMap.set(`${coinKey}:${tf}`, detectedCascades);
+            }
+            if (detectedHorizontals.length > 0) cachedFormationMaps.levels[tf][coinKey] = detectedHorizontals;
+            if (detectedTrendlines.length > 0) cachedFormationMaps.trendline[tf][coinKey] = detectedTrendlines;
+            if (detectedRetests.length > 0) cachedFormationMaps.retest[tf][coinKey] = detectedRetests;
+          } catch (_) {}
+        }));
+        if (i + 3 < list4h.length) await new Promise(r => setTimeout(r, 200));
+      }
+      saveFormationMaps(false);
+    } catch (e) {
+      console.warn("[PATTERNS 4H] Error:", e.message);
+    } finally {
+      isScanning4h = false;
+      setTimeout(scan4hPatterns, 10 * 60 * 1000);
     }
   }
 
@@ -4737,6 +5034,7 @@ server.listen(PORT, () => {
     console.log(`[SHUTDOWN] ${signal} received — flushing state`);
 
     try { saveFormationCooldowns(true); } catch (_) {}
+    try { saveFormationMaps(true); } catch (_) {}
     try { correlationEngine.saveCacheSync?.(); } catch (_) {}
     try { correlationEngine.stop?.(); } catch (_) {}
 
@@ -4819,7 +5117,7 @@ server.listen(PORT, () => {
         const ex = t.key.substring(0, colonIdx);
         const sym = t.key.substring(colonIdx + 1);
         const cleanSym = sym.replace(/_SPOT$/i, "");
-        const base = t.base || cleanSym.replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, '');
+        const base = t.base || cleanSym.replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, '');
         newSet.add(sym);
         newSet.add(cleanSym);
         newSet.add(base);
@@ -5046,7 +5344,7 @@ server.listen(PORT, () => {
         // Check In-Play filter: skip if user wants only active movers and this coin is not in the set
         if (s.inPlayOnly) {
           const cleanSym = String(sym || "").replace(/_SPOT$/i, "");
-          const baseSym = String(base || sym).replace(/[-_]?(USDT|USDTM|USDC|BUSD|DAI|USD).*$/i, "");
+          const baseSym = String(base || sym).replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|DAI|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL|SPOT))?$/i, "");
           const isInPlay = inPlayMoversSet.has(`${ex}:${sym}`) ||
                            inPlayMoversSet.has(`${ex}:${cleanSym}`) ||
                            inPlayMoversSet.has(sym) ||
@@ -5338,6 +5636,7 @@ server.listen(PORT, () => {
 
   // Initial trigger after 2 seconds
   setTimeout(scanAllPatterns, 2000);
+  setTimeout(scan4hPatterns, 5000);
 
   // Periodic snapshots as data arrives
   let snapCount = 0;
