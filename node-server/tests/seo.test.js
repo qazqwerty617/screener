@@ -15,6 +15,19 @@ test("Google Search Console verification file remains publicly deployable", () =
   assert.equal(verification, "google-site-verification: google7a6742ba1122d8b6.html");
 });
 
+test("production proxy enforces HTTPS without breaking verification or WebSockets", () => {
+  const nginx = fs.readFileSync(
+    path.join(__dirname, "../ops/nginx/obsidianscreener.com.conf"),
+    "utf8"
+  );
+
+  assert.match(nginx, /return 301 https:\/\/obsidianscreener\.com\$request_uri/);
+  assert.match(nginx, /location = \/google7a6742ba1122d8b6\.html/);
+  assert.match(nginx, /ssl_protocols TLSv1\.2 TLSv1\.3/);
+  assert.match(nginx, /proxy_set_header Upgrade \$http_upgrade/);
+  assert.match(nginx, /proxy_set_header Connection \$connection_upgrade/);
+});
+
 test("every SEO landing page has unique crawlable metadata and visible content", () => {
   assert.ok(PAGES.length >= 6);
   const titles = new Set();
