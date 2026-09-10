@@ -15,6 +15,11 @@ test("Google Search Console verification file remains publicly deployable", () =
   assert.equal(verification, "google-site-verification: google7a6742ba1122d8b6.html");
 });
 
+test("the application tab keeps the product brand as its exact title", () => {
+  const home = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8");
+  assert.match(home, /<title>Obsidian Screener<\/title>/);
+});
+
 test("production proxy enforces HTTPS without breaking verification or WebSockets", () => {
   const nginx = fs.readFileSync(
     path.join(__dirname, "../ops/nginx/obsidianscreener.com.conf"),
