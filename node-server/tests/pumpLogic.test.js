@@ -8,7 +8,8 @@ const {
   isExchangeAllowed,
   toggleExchangeSelection,
   analyzeMove,
-  SignalConfirmationGate
+  SignalConfirmationGate,
+  SignalCooldownGate
 } = require("../public/js/pumpLogic");
 
 test("clicking Binance from the initial ALL state selects Binance only", () => {
@@ -54,6 +55,30 @@ test("a noisy round-trip that merely ends above threshold is rejected", () => {
   assert.equal(result.reason, "noisy_path");
 });
 
+test("an isolated bad reference tick cannot create a persistent fake pump", () => {
+  const now = 1_000_000;
+  const result = analyzeMove([
+    { t: now - 75_000, p: 100.0 },
+    { t: now - 60_000, p: 90.0 },
+    { t: now - 55_000, p: 100.0 },
+    { t: now, p: 100.0 }
+  ], { now, periodMs: 60_000, minPct: 2, volume: 8_000_000 });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, "unstable_reference");
+});
+
+test("two sparse endpoint samples are not enough to prove a pump", () => {
+  const now = 1_000_000;
+  const result = analyzeMove([
+    { t: now - 60_000, p: 100 },
+    { t: now, p: 104 }
+  ], { now, periodMs: 60_000, minPct: 2, volume: 8_000_000 });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, "insufficient_samples");
+});
+
 test("thin markets need a stronger move than liquid markets", () => {
   const now = 1_000_000;
   const samples = [
@@ -71,4 +96,16 @@ test("confirmation gate rejects a one-tick glitch and confirms a persistent impu
   assert.equal(gate.observe("BN:TESTUSDT", "pump", 1_100, 3.2), false);
   assert.equal(gate.observe("BN:TESTUSDT", "pump", 1_300, 3.0), true);
   assert.equal(gate.observe("BN:OTHERUSDT", "pump", 20_000, 3.0), false);
+});
+
+test("cooldown gate blocks rapid opposite-direction whipsaw alerts", () => {
+  const gate = new SignalCooldownGate({
+    sameDirectionMs: 300_000,
+    oppositeDirectionMs: 180_000,
+    symbolMs: 60_000
+  });
+
+  assert.equal(gate.allow("BN:JCTUSDT", "pump", 1_000), true);
+  assert.equal(gate.allow("BN:JCTUSDT", "dump", 31_000), false);
+  assert.equal(gate.allow("BN:JCTUSDT", "dump", 181_001), true);
 });

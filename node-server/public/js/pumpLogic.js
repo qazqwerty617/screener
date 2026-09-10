@@ -89,7 +89,7 @@
       .map(sample => ({ t: Number(sample?.t), p: finitePositive(sample?.p) }))
       .filter(sample => Number.isFinite(sample.t) && sample.p > 0 && sample.t <= now + 2_000)
       .sort((a, b) => a.t - b.t);
-    if (clean.length < 2) return { accepted: false, reason: "insufficient_history", threshold };
+    if (clean.length < 3) return { accepted: false, reason: "insufficient_samples", threshold };
 
     const target = now - periodMs;
     let referenceIndex = 0;
@@ -109,6 +109,30 @@
       return { accepted: false, reason: "insufficient_coverage", threshold, coverage };
     }
 
+    // A single bad quote exactly at the lookback boundary used to become the
+    // reference price for many consecutive scans. Persistence confirmation
+    // could not help because every scan reused the same corrupt baseline. A
+    // genuine impulse progresses through its neighbours; an isolated wick is
+    // surrounded by two mutually-consistent prices on the other side.
+    if (referenceIndex > 0 && referenceIndex + 1 < clean.length) {
+      const before = clean[referenceIndex - 1].p;
+      const after = clean[referenceIndex + 1].p;
+      const neighbourMid = (before + after) / 2;
+      const neighbourSpreadPct = Math.abs(before - after) / neighbourMid * 100;
+      const referenceDeviationPct = Math.abs(reference.p - neighbourMid) / neighbourMid * 100;
+      const neighbourTolerancePct = Math.max(0.8, threshold * 0.4);
+      const isolatedDeviationPct = Math.max(1.2, threshold * 0.75);
+      if (neighbourSpreadPct <= neighbourTolerancePct && referenceDeviationPct >= isolatedDeviationPct) {
+        return {
+          accepted: false,
+          reason: "unstable_reference",
+          threshold,
+          referenceDeviationPct,
+          neighbourSpreadPct
+        };
+      }
+    }
+
     const pct = ((latest.p - reference.p) / reference.p) * 100;
     const absPct = Math.abs(pct);
     const maxDrop = periodMs <= 60_000 ? 35 : periodMs <= 5 * 60_000 ? 50 : 75;
@@ -123,16 +147,29 @@
     }
 
     const path = clean.slice(referenceIndex);
+    if (path.length < 3) {
+      return { accepted: false, reason: "insufficient_samples", threshold, coverage, points: path.length };
+    }
     let travelledPct = 0;
     let largestCounterPct = 0;
+    let directionalSteps = 0;
+    const meaningfulStepPct = Math.max(0.02, threshold * 0.03);
     for (let i = 1; i < path.length; i++) {
       const stepPct = ((path[i].p - path[i - 1].p) / path[i - 1].p) * 100;
       travelledPct += Math.abs(stepPct);
       const isCounter = direction === "pump" ? stepPct < 0 : stepPct > 0;
       if (isCounter) largestCounterPct = Math.max(largestCounterPct, Math.abs(stepPct));
+      const followsDirection = direction === "pump" ? stepPct > 0 : stepPct < 0;
+      if (followsDirection && Math.abs(stepPct) >= meaningfulStepPct) directionalSteps++;
     }
     const efficiency = travelledPct > 0 ? Math.min(1, absPct / travelledPct) : 0;
-    if (path.length >= 4 && (efficiency < 0.28 || (largestCounterPct > absPct * 0.8 && efficiency < 0.55))) {
+    // When the requested reference is also the oldest known sample, there is
+    // no pre-window quote available to validate it. In that young-history case
+    // demand two progressing steps instead of trusting a single gap and flat.
+    if (referenceIndex === 0 && directionalSteps < 2) {
+      return { accepted: false, reason: "unconfirmed_path", threshold, pct, direction, efficiency, directionalSteps };
+    }
+    if (path.length >= 3 && (efficiency < 0.28 || (largestCounterPct > absPct * 0.8 && efficiency < 0.55))) {
       return { accepted: false, reason: "noisy_path", threshold, pct, direction, efficiency };
     }
 
@@ -205,6 +242,62 @@
     }
   }
 
+  class SignalCooldownGate {
+    constructor(options = {}) {
+      this.sameDirectionMs = Math.max(0, Number(options.sameDirectionMs) || 300_000);
+      this.oppositeDirectionMs = Math.max(0, Number(options.oppositeDirectionMs) || 180_000);
+      this.symbolMs = Math.max(0, Number(options.symbolMs) || 60_000);
+      this.maxEntries = Math.max(100, Number(options.maxEntries) || 20_000);
+      this.entries = new Map();
+    }
+
+    mark(key, direction, now = Date.now()) {
+      if (!key || (direction !== "pump" && direction !== "dump")) return false;
+      this.entries.set(`${key}:${direction}`, now);
+      this.entries.set(`${key}:any`, now);
+      this.prune(now);
+      return true;
+    }
+
+    allow(key, direction, now = Date.now(), options = {}) {
+      if (!key || (direction !== "pump" && direction !== "dump")) return false;
+      const sameDirectionMs = Math.max(0, Number(options.sameDirectionMs) || this.sameDirectionMs);
+      const oppositeDirectionMs = Math.max(0, Number(options.oppositeDirectionMs) || this.oppositeDirectionMs);
+      const symbolMs = Math.max(0, Number(options.symbolMs) || this.symbolMs);
+      const opposite = direction === "pump" ? "dump" : "pump";
+      const sameAt = this.entries.get(`${key}:${direction}`);
+      const oppositeAt = this.entries.get(`${key}:${opposite}`);
+      const symbolAt = this.entries.get(`${key}:any`);
+
+      if (Number.isFinite(sameAt) && now - sameAt < sameDirectionMs) return false;
+      if (Number.isFinite(oppositeAt) && now - oppositeAt < oppositeDirectionMs) return false;
+      if (Number.isFinite(symbolAt) && now - symbolAt < symbolMs) return false;
+      return this.mark(key, direction, now);
+    }
+
+    clear(key) {
+      if (!key) return this.entries.clear();
+      this.entries.delete(`${key}:pump`);
+      this.entries.delete(`${key}:dump`);
+      this.entries.delete(`${key}:any`);
+    }
+
+    prune(now = Date.now()) {
+      if (this.entries.size < this.maxEntries) return;
+      const ttl = Math.max(this.sameDirectionMs, this.oppositeDirectionMs, this.symbolMs);
+      for (const [key, at] of this.entries) {
+        if (now - at > ttl) this.entries.delete(key);
+      }
+      if (this.entries.size <= this.maxEntries) return;
+      const excess = this.entries.size - this.maxEntries;
+      let removed = 0;
+      for (const key of this.entries.keys()) {
+        this.entries.delete(key);
+        if (++removed >= excess) break;
+      }
+    }
+  }
+
   return {
     EXCHANGE_CODES,
     canonicalExchange,
@@ -213,6 +306,7 @@
     toggleExchangeSelection,
     adaptiveThreshold,
     analyzeMove,
-    SignalConfirmationGate
+    SignalConfirmationGate,
+    SignalCooldownGate
   };
 });

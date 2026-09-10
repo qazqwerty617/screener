@@ -63,6 +63,16 @@ test("app.js enforces targetUserId and period/timeframe matching on server push 
   assert.match(APP_SRC, /function pdFireAlert\([^)]*\) \{\s*\/\/[\s\S]*?if \(!pdIsExchangeAllowed\(ex\)\) return;/);
 });
 
+test("app.js applies one symbol cooldown across pump and dump delivery paths", () => {
+  assert.match(APP_SRC, /new pdLogic\.SignalCooldownGate\(/);
+  const fireStart = APP_SRC.indexOf("function pdFireAlert");
+  const fireEnd = APP_SRC.indexOf("// ── Alert Card Panel", fireStart);
+  const fireBody = APP_SRC.slice(fireStart, fireEnd);
+  assert.match(fireBody, /pdSignalCooldownGate\.allow\(/);
+  assert.match(fireBody, /oppositeDirectionMs:\s*180_000/);
+  assert.doesNotMatch(fireBody, /const cooldownKey = `\$\{ex\}:\$\{sym\}:\$\{isPump/);
+});
+
 test("the live detector reads volume from the ticker instead of an undefined variable", () => {
   const start = APP_SRC.indexOf("function pdCheckLiveTick");
   const end = APP_SRC.indexOf("window.pdTrackPrice", start);
@@ -182,6 +192,7 @@ test("functional: alertEngine processes ticks and delivers distinct messages to 
     // Now: price is 100 (5.26% jump in 1m; 11.11% jump in 15m)
     alertEngine.priceHistory.push("BN:TESTUSDT", now - 15 * 60 * 1000, 90);
     alertEngine.priceHistory.push("BN:TESTUSDT", now - 1 * 60 * 1000, 95);
+    alertEngine.priceHistory.push("BN:TESTUSDT", now - 30 * 1000, 97.5);
 
     alertEngine.processTicker({
       key: "BN:TESTUSDT",
@@ -284,6 +295,7 @@ test("functional: pump alerts never escape the subscriber's selected exchanges",
     const now = Date.now();
     for (const key of ["BN:ALLOWEDUSDT", "MX:BLOCKEDUSDT"]) {
       alertEngine.priceHistory.push(key, now - 60_000, 100);
+      alertEngine.priceHistory.push(key, now - 30_000, 101.5);
       alertEngine.processTicker({ key, p: 103, v: 5_000_000 }, now);
     }
 

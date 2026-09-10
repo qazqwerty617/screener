@@ -18354,7 +18354,9 @@ if (document.readyState === "loading") {
   let pdScanRunning = false;
   let pdScanGeneration = 0;
   let pdScanController = null;
-  const pdCooldownMap = new Map();   // key "EX:SYM" → timestamp last fired
+  const pdSignalCooldownGate = pdLogic
+    ? new pdLogic.SignalCooldownGate({ sameDirectionMs: 300_000, oppositeDirectionMs: 180_000, symbolMs: 60_000 })
+    : null;
   const pdAlertCards = [];           // [{id, ex, sym, pct, dir, price, ts}]
   const pdKlinesCache = new Map();   // key "EX:SYM" → {ts, data:[]}
   const PD_KLINES_TTL = 28000;       // 28 s cache for 1m klines
@@ -18624,8 +18626,9 @@ if (document.readyState === "loading") {
               pdIsSeeded = true;
               const topInit = validAlerts.slice(0, 5);
               for (const alert of topInit) {
-                const cdKey = `${alert.ex}:${alert.sym}:${alert.pct > 0 ? "pump" : "dump"}`;
-                pdCooldownMap.set(cdKey, now);
+                if (pdSignalCooldownGate) {
+                  pdSignalCooldownGate.mark(`${alert.ex}:${alert.sym}`, alert.pct > 0 ? "pump" : "dump", now);
+                }
                 pdAddCard({
                   ex: alert.ex,
                   sym: alert.sym,
@@ -18723,11 +18726,14 @@ if (document.readyState === "loading") {
     if (!pdIsExchangeAllowed(ex)) return;
     if (pct == null || pct <= -75 || pct >= 250 || !Number.isFinite(pct) || !price || price <= 0) return;
     const isPump = pct > 0;
-    const cooldownKey = `${ex}:${sym}:${isPump ? "pump" : "dump"}`;
     const nowMs = Date.now();
     const cooldownMs = (Number(pdSettings.cooldownSeconds) || 300) * 1000;
-    if (nowMs - (pdCooldownMap.get(cooldownKey) || 0) < cooldownMs) return;
-    pdCooldownMap.set(cooldownKey, nowMs);
+    if (!pdSignalCooldownGate || !pdSignalCooldownGate.allow(
+      `${ex}:${sym}`,
+      isPump ? "pump" : "dump",
+      nowMs,
+      { sameDirectionMs: cooldownMs, oppositeDirectionMs: 180_000, symbolMs: 60_000 }
+    )) return;
     const dirLabel = isPump ? "PUMP" : "DUMP";
     const dirLabelRu = isPump ? "Памп" : "Дамп";
     const exFull = typeof getFullExchangeName === "function" ? getFullExchangeName(ex) : ex;
