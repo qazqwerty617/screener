@@ -831,7 +831,6 @@ function processTicker(t, now, activeSubscribers) {
       const entryIcon = entryIsPump ? "🟢" : "🔴";
       const entryTitle = entryIsPump ? "PUMP DETECTED" : "DUMP DETECTED";
       const entrySign = entryIsPump ? "+" : "";
-      const entryQuality = Math.round((Number(entry.quality) || 0) * 100);
 
       const msg =
         `${entryIcon} <b>${entryTitle} [${entrySign}${entryPctChange.toFixed(2)}%]</b>\n\n` +
@@ -840,7 +839,6 @@ function processTicker(t, now, activeSubscribers) {
         `• <b>Текущая цена:</b> $${formatPrice(t.p)}\n` +
         `• <b>Цена до импульса:</b> $${formatPrice(entryPastPrice)}\n` +
         `• <b>Объём 24ч:</b> ${formatVolume(t.v || 0)}\n` +
-        `• <b>Качество импульса:</b> ${entryQuality}/100\n` +
         `─────────────────────────\n` +
         `⚡ <b>Obsidian Screener</b>`;
 

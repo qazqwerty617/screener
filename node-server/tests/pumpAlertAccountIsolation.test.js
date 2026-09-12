@@ -26,6 +26,8 @@ test("alertEngine isolates subscribers and prevents cross-subscriber pollution",
   // Telegram dispatch loops through matchingSubs using each entry's own period and pctChange
   assert.match(ENGINE_SRC, /• <b>Период:<\/b> \$\{entryPeriodMins\} мин/);
   assert.match(ENGINE_SRC, /\[\$\{entrySign\}\$\{entryPctChange\.toFixed\(2\)\}%\]/);
+  assert.doesNotMatch(ENGINE_SRC, /Качество импульса/,
+    "Telegram pump/dump messages must not expose the internal quality score");
 
   // GroupToken incorporates entryPeriodMins so Telegram alerts don't conflict across periods
   assert.match(ENGINE_SRC, /const groupToken = `pd:\$\{t\.key\}:\$\{entryIsPump \? "pump" : "dump"\}:\$\{entryPeriodMins\}:\$\{now\}`;/);
