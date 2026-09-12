@@ -163,10 +163,12 @@
       if (followsDirection && Math.abs(stepPct) >= meaningfulStepPct) directionalSteps++;
     }
     const efficiency = travelledPct > 0 ? Math.min(1, absPct / travelledPct) : 0;
-    // When the requested reference is also the oldest known sample, there is
-    // no pre-window quote available to validate it. In that young-history case
-    // demand two progressing steps instead of trusting a single gap and flat.
-    if (referenceIndex === 0 && directionalSteps < 2) {
+    // A real impulse has to progress through at least two independently sampled
+    // prices. Two bad baseline samples followed by one correction otherwise
+    // look perfectly efficient and repeatedly produce alternating fake
+    // pump/dump alerts. This applies even when pre-window history exists: the
+    // neighbour check only catches one isolated bad quote, not a short plateau.
+    if (directionalSteps < 2) {
       return { accepted: false, reason: "unconfirmed_path", threshold, pct, direction, efficiency, directionalSteps };
     }
     if (path.length >= 3 && (efficiency < 0.28 || (largestCounterPct > absPct * 0.8 && efficiency < 0.55))) {

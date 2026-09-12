@@ -68,6 +68,29 @@ test("an isolated bad reference tick cannot create a persistent fake pump", () =
   assert.equal(result.reason, "unstable_reference");
 });
 
+test("a short bad-price plateau followed by one correction is not a pump or dump", () => {
+  const now = 1_000_000;
+  const common = { now, periodMs: 60_000, minPct: 3, volume: 100_000_000 };
+
+  const fakePump = analyzeMove([
+    { t: now - 90_000, p: 100 },
+    { t: now - 60_000, p: 90 },
+    { t: now - 30_000, p: 90 },
+    { t: now, p: 100 }
+  ], common);
+  const fakeDump = analyzeMove([
+    { t: now - 90_000, p: 90 },
+    { t: now - 60_000, p: 100 },
+    { t: now - 30_000, p: 100 },
+    { t: now, p: 90 }
+  ], common);
+
+  assert.equal(fakePump.accepted, false);
+  assert.equal(fakePump.reason, "unconfirmed_path");
+  assert.equal(fakeDump.accepted, false);
+  assert.equal(fakeDump.reason, "unconfirmed_path");
+});
+
 test("two sparse endpoint samples are not enough to prove a pump", () => {
   const now = 1_000_000;
   const result = analyzeMove([
