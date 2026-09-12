@@ -346,10 +346,10 @@ const EX_PROFILE = {
 const VENUE_QUALITY_PROFILE = Object.freeze({
   BN: Object.freeze({ minDominance: 13, minSignificance: 0.40, minQuality: 0.44, minConfirmations: 3, floorScale: 1.00 }),
   BB: Object.freeze({ minDominance: 16, minSignificance: 0.43, minQuality: 0.48, minConfirmations: 3, floorScale: 1.00 }),
-  OX: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.39, minConfirmations: 3, floorScale: 0.85 }),
+  OX: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.46, minConfirmations: 3, floorScale: 1.00 }),
   BG: Object.freeze({ minDominance: 14, minSignificance: 0.42, minQuality: 0.39, minConfirmations: 3, floorScale: 0.75 }),
   GT: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.39, minConfirmations: 3, floorScale: 0.75 }),
-  MX: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.39, minConfirmations: 3, floorScale: 0.70 }),
+  MX: Object.freeze({ minDominance: 14, minSignificance: 0.41, minQuality: 0.46, minConfirmations: 3, floorScale: 0.90 }),
   KC: Object.freeze({ minDominance: 13, minSignificance: 0.40, minQuality: 0.38, minConfirmations: 3, floorScale: 0.75 }),
   BX: Object.freeze({ minDominance: 16, minSignificance: 0.43, minQuality: 0.50, minConfirmations: 3, floorScale: 1.00 }),
   HT: Object.freeze({ minDominance: 15, minSignificance: 0.42, minQuality: 0.40, minConfirmations: 3, floorScale: 0.65 }),

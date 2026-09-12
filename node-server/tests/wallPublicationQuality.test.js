@@ -136,11 +136,15 @@ test("high-output venues reject borderline walls while keeping strong evidence",
     wall({ base: "BBSTRONG", sym: "BBSTRONGUSDT", ex: "BB", score: 9, rtwi: 9 }),
     wall({ base: "BXWEAK", sym: "BXWEAKUSDT", ex: "BX", score: 7.2, rtwi: 7.2 }),
     wall({ base: "BXSTRONG", sym: "BXSTRONGUSDT", ex: "BX", score: 9, rtwi: 9 }),
+    wall({ base: "OXWEAK", sym: "OXWEAK-USDT-SWAP", ex: "OX", score: 6.5, rtwi: 6.5 }),
+    wall({ base: "OXSTRONG", sym: "OXSTRONG-USDT-SWAP", ex: "OX", score: 9, rtwi: 9 }),
+    wall({ base: "MXWEAK", sym: "MXWEAK_USDT", ex: "MX", score: 6.5, rtwi: 6.5 }),
+    wall({ base: "MXSTRONG", sym: "MXSTRONG_USDT", ex: "MX", score: 9, rtwi: 9 }),
   ];
 
   assert.deepEqual(
     new Set(buildWallSnapshot(input).map(item => item.base)),
-    new Set(["BNSTRONG", "BBSTRONG", "BXSTRONG"])
+    new Set(["BNSTRONG", "BBSTRONG", "BXSTRONG", "OXSTRONG", "MXSTRONG"])
   );
 });
 
