@@ -169,8 +169,8 @@ test("every exchange keeps output slots when a loud venue dominates", () => {
         base: `Q${ex}${i}`,
         sym: `Q${ex}${i}USDT`,
         price: 500 + i,
-        score: 7.0,
-        rtwi: 7.0,
+        score: 8.0,
+        rtwi: 8.0,
       }));
     }
   }

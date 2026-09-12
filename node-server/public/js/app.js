@@ -291,10 +291,41 @@ function getDensityScore(wall) {
 }
 
 function getDensitySizeType(wall) {
+  // The scanner classifies tiers against absolute USD floors adjusted for the
+  // coin and venue.  Keep that authoritative classification stable in the UI;
+  // rank is only a compatibility fallback for old cached payloads.
+  const serverType = String(wall && (wall.sizeType || wall.tier) || "").toLowerCase();
+  if (serverType === "small" || serverType === "medium" || serverType === "large") {
+    return serverType;
+  }
   const rank = getDensityRelativeRank(wall);
   if (rank >= 7) return "large";
   if (rank >= 5) return "medium";
   return "small";
+}
+
+function getDensityStableKey(wall) {
+  if (!wall || typeof wall !== "object") return "";
+  if (wall.wallId) return String(wall.wallId);
+  const level = wall.levelKey || Number(wall.price || 0).toPrecision(8);
+  return [wall.ex, wall.sym || wall.base, wall.market, wall.side, level]
+    .map(value => String(value || ""))
+    .join(":");
+}
+
+function getDensityStableAngle(wall) {
+  const key = getDensityStableKey(wall);
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ((hash >>> 0) / 4294967296) * Math.PI * 2 - Math.PI / 2;
+}
+
+function getDensityBubbleRadius(wall, isHover = false) {
+  const baseRadius = { small: 21, medium: 27, large: 34 }[getDensitySizeType(wall)] || 21;
+  return baseRadius + (isHover ? 4 : 0);
 }
 
 function passesDensitySizeFilter(wall, selectedSize) {
@@ -12339,7 +12370,7 @@ function updateDensitySizeCounts(baseFiltered) {
     btn.textContent = `${label} ${count}`;
     btn.title = type === "all"
       ? "Все стены после остальных фильтров"
-      : `${label}: относительный размер для каждой монеты (${count})`;
+      : `${label}: долларовый размер по порогам сканера (${count})`;
   });
 }
 
@@ -12379,15 +12410,33 @@ function layoutDensityBadges() {
   const maxRadius = Math.min(cx, cy) - 60;
   const minRadius = 50;
 
-  for (let i = 0; i < densityVisibleData.length; i++) {
-    const d = densityVisibleData[i];
+  for (const d of densityVisibleData) {
     const norm = Math.max(0, Math.min(1, (d.pct - 0.3) / 5.7));
     const r = minRadius + norm * (maxRadius - minRadius);
-    const step = 2.399963;
-    const angle = i * step - Math.PI / 2;
+    // Angle belongs to the wall identity, not its current sort position. Live
+    // score/volume updates can reorder the list without teleporting bubbles.
+    const angle = getDensityStableAngle(d);
     d.rx = cx + Math.cos(angle) * r;
     d.ry = cy + Math.sin(angle) * r;
   }
+}
+
+function findDensityAt(x, y) {
+  let bestIndex = -1;
+  let bestDistanceSq = Infinity;
+  for (let i = 0; i < densityVisibleData.length; i++) {
+    const d = densityVisibleData[i];
+    if (!Number.isFinite(d.rx) || !Number.isFinite(d.ry)) continue;
+    const dx = x - d.rx;
+    const dy = y - d.ry;
+    const distanceSq = dx * dx + dy * dy;
+    const hitRadius = getDensityBubbleRadius(d) + 10;
+    if (distanceSq <= hitRadius * hitRadius && distanceSq < bestDistanceSq) {
+      bestIndex = i;
+      bestDistanceSq = distanceSq;
+    }
+  }
+  return bestIndex;
 }
 
 // тФАтФА Draw density radar map тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -12521,15 +12570,12 @@ function drawDensityMap() {
 
   // тФАтФА Draw badges
   const filtered = densityVisibleData;
-  densityHover = -1;
+  densityHover = findDensityAt(densityMouseX, densityMouseY);
   for (let i = 0; i < filtered.length; i++) {
     const d = filtered[i];
     if (d.rx === undefined) continue;
-    const dx = densityMouseX - d.rx;
-    const dy = densityMouseY - d.ry;
-    const isHover = dx * dx + dy * dy < 2025;
-    if (isHover) densityHover = i;
-    const isSelected = densitySelectedKey && (d.ex + ":" + d.sym === densitySelectedKey);
+    const isHover = i === densityHover;
+    const isSelected = densitySelectedKey && getDensityStableKey(d) === densitySelectedKey;
     if (isHover || isSelected) {
       drawDensityBubble(ctx, d, d.rx, d.ry, true);
     } else {
@@ -12541,7 +12587,7 @@ function drawDensityMap() {
   // Active item for tooltip / line (hovered or explicitly selected on tap)
   let activeItemIndex = densityHover;
   if (activeItemIndex < 0 && densitySelectedKey) {
-    activeItemIndex = filtered.findIndex(d => (d.ex + ":" + d.sym) === densitySelectedKey);
+    activeItemIndex = filtered.findIndex(d => getDensityStableKey(d) === densitySelectedKey);
   }
 
   // тФАтФА Hover/Select connector line & Tooltip
@@ -12721,11 +12767,9 @@ function drawDensityMap() {
 // тФАтФА Draw a single bubble badge тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 function drawDensityBubble(ctx, d, x, y, isHover) {
   const isBid = d.side === "bid";
-  // Bubble size tracks the engine's composite score (same 0..15 scale the old
-  // `rtwi` used), so geometry is unchanged.
-  const scoreFactor = Math.min(1. + (getDensityScore(d) || 5) / 30, 2.2);
-  const baseR = Math.min(32, 24 + scoreFactor * 3); // Larger base radius to fit 3 lines
-  const R = Math.round(isHover ? baseR + 4 : baseR);
+  // Small, medium and large must remain visibly different even when their
+  // composite scores happen to be close.
+  const R = getDensityBubbleRadius(d, isHover);
   const bc = isBid ? [22, 199, 132] : [255, 69, 96];
 
   ctx.save();
@@ -12807,9 +12851,9 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
 }
 
 function getDensityBubbleSprite(d) {
-  const stableId = d.wallId || `${d.ex}:${d.sym}:${d.side}:${Number(d.price).toPrecision(8)}`;
+  const stableId = getDensityStableKey(d);
   const scale = Math.min(2, window.devicePixelRatio || 1);
-  const key = `${stableId}|${d.wallK}|${getDensityScore(d).toFixed(1)}|${Number(d.pct || 0).toFixed(2)}|${scale}`;
+  const key = `${stableId}|${getDensitySizeType(d)}|${d.wallK}|${getDensityScore(d).toFixed(1)}|${Number(d.pct || 0).toFixed(2)}|${scale}`;
   const cached = densityBubbleSpriteCache.get(key);
   if (cached) return cached;
 
@@ -12886,6 +12930,13 @@ document.addEventListener("click", (e) => {
   if (activeView !== "map") return;
   if (e.target !== densityCanvas) return; // Only switch view when clicking directly on the density canvas
 
+  // Recompute the target from the click itself. The animation loop may not
+  // have rendered since the last pointer move, especially on touch devices.
+  const rect = densityCanvas.getBoundingClientRect();
+  densityMouseX = e.clientX - rect.left;
+  densityMouseY = e.clientY - rect.top;
+  densityHover = findDensityAt(densityMouseX, densityMouseY);
+
   if (densityHover < 0) {
     // Clicked empty canvas space — deselect
     densitySelectedKey = null;
@@ -12896,12 +12947,12 @@ document.addEventListener("click", (e) => {
   const d = filtered[densityHover];
   if (!d) return;
 
-  const currentKey = d.ex + ":" + d.sym;
+  const currentKey = getDensityStableKey(d);
 
   if (densitySelectedKey === currentKey) {
     // 2nd tap/click on the SAME bubble — open chart in screener!
     densitySelectedKey = null;
-    let c = coins.get(currentKey);
+    let c = coins.get(d.ex + ":" + d.sym);
 
     // Spot walls must open the equivalent futures chart: spot symbols have no
     // kline feed in the screener, so a spot-only coin must never be selected.

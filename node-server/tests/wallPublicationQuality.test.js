@@ -107,7 +107,9 @@ test("snapshot filtering is authoritative even for stale cached walls", () => {
 });
 
 test("venue policy compares evidence instead of forcing equal result counts", () => {
+  const binance = qualityProfileFor("BN");
   const bybit = qualityProfileFor("BB");
+  const bingx = qualityProfileFor("BX");
   const bitget = qualityProfileFor("BG");
   const hyperliquid = qualityProfileFor("HL");
 
@@ -115,10 +117,31 @@ test("venue policy compares evidence instead of forcing equal result counts", ()
     "a 200-level raw book and a 20-level book must not share one quality bar");
   assert.ok(bitget.minDominance > hyperliquid.minDominance,
     "pre-merged 100-level buckets need more dominance than Hyperliquid's shallow book");
+  assert.equal(binance.minConfirmations, 3);
   assert.equal(bybit.minConfirmations, 3);
+  assert.equal(bingx.minConfirmations, 3);
   assert.equal(bitget.minConfirmations, 3);
   assert.equal(hyperliquid.minConfirmations, 3,
     "lower structural thresholds must never weaken anti-spoof confirmation");
+  assert.ok(bybit.minQuality > binance.minQuality);
+  assert.ok(bingx.minQuality > bybit.minQuality,
+    "BingX's aggregated book needs the strictest evidence bar of the noisy venues");
+});
+
+test("high-output venues reject borderline walls while keeping strong evidence", () => {
+  const input = [
+    wall({ base: "BNWEAK", sym: "BNWEAKUSDT", ex: "BN", score: 6.3, rtwi: 6.3 }),
+    wall({ base: "BNSTRONG", sym: "BNSTRONGUSDT", ex: "BN", score: 9, rtwi: 9 }),
+    wall({ base: "BBWEAK", sym: "BBWEAKUSDT", ex: "BB", score: 7, rtwi: 7 }),
+    wall({ base: "BBSTRONG", sym: "BBSTRONGUSDT", ex: "BB", score: 9, rtwi: 9 }),
+    wall({ base: "BXWEAK", sym: "BXWEAKUSDT", ex: "BX", score: 7.2, rtwi: 7.2 }),
+    wall({ base: "BXSTRONG", sym: "BXSTRONGUSDT", ex: "BX", score: 9, rtwi: 9 }),
+  ];
+
+  assert.deepEqual(
+    new Set(buildWallSnapshot(input).map(item => item.base)),
+    new Set(["BNSTRONG", "BBSTRONG", "BXSTRONG"])
+  );
 });
 
 test("the venue evidence bar removes borderline Bybit noise without starving Hyperliquid", () => {
@@ -135,7 +158,7 @@ test("the venue evidence bar removes borderline Bybit noise without starving Hyp
 });
 
 test("snapshot honours hysteresis only for walls admitted by the lifecycle", () => {
-  const borderline = wall({ base: "STEADY", sym: "STEADYUSDT", ex: "BB", score: 5, rtwi: 5 });
+  const borderline = wall({ base: "STEADY", sym: "STEADYUSDT", ex: "BB", score: 5.5, rtwi: 5.5 });
   assert.equal(buildWallSnapshot([borderline]).length, 0,
     "an unverified cached record must clear the full entry bar");
   assert.equal(buildWallSnapshot([{ ...borderline, qualityAdmitted: true }]).length, 1,
