@@ -2291,106 +2291,50 @@ async function fetchBacktestCandles(ex, sym, tf) {
 }
 
 function scoreBacktestCandidate(candles, cut, visibleBars, futureBars, tf) {
+  if (cut < visibleBars || candles.length < cut + futureBars) return 0;
   const visible = candles.slice(cut - visibleBars, cut);
-  const future = candles.slice(cut, cut + futureBars);
-  if (visible.length < visibleBars || future.length < futureBars) return 0;
-
-  const lastClose = visible[visible.length - 1].c;
-  if (!lastClose || lastClose <= 0) return 0;
-
-  const visHigh = Math.max(...visible.map(c => c.h));
-  const visLow = Math.min(...visible.map(c => c.l));
-  const visRangePct = (visHigh - visLow) / lastClose;
-
-  const futHigh = Math.max(...future.map(c => c.h));
-  const futLow = Math.min(...future.map(c => c.l));
-  const futRangePct = (futHigh - futLow) / lastClose;
-
-  // Strict dynamic filters: guarantees active, volatile market, not a boring flat channel
-  const minVisRange = { "1m": 0.035, "5m": 0.055, "15m": 0.080, "30m": 0.100, "1h": 0.130, "4h": 0.180, "1d": 0.250 }[tf] || 0.06;
-  const minFutRange = { "1m": 0.020, "5m": 0.030, "15m": 0.045, "30m": 0.060, "1h": 0.080, "4h": 0.120, "1d": 0.160 }[tf] || 0.035;
-
-  if (visRangePct < minVisRange || futRangePct < minFutRange) return 0;
-
-  // Check activity near cutoff (last 25 bars must have movement)
-  const recent = visible.slice(-25);
-  const recHigh = Math.max(...recent.map(c => c.h));
-  const recLow = Math.min(...recent.map(c => c.l));
-  const recRangePct = (recHigh - recLow) / lastClose;
-  if (recRangePct < minFutRange * 0.4) return 0;
-
-  // Measure ATR and Candle Bodies
-  let trSum = 0;
-  let bodySum = 0;
-  for (let i = 1; i < visible.length; i++) {
-    const cur = visible[i];
-    const prev = visible[i - 1].c;
-    trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - prev), Math.abs(cur.l - prev));
-    bodySum += Math.abs(cur.c - cur.o);
+  const recent = visible.slice(-40);
+  const last = recent.at(-1)?.c;
+  if (!(last > 0)) return 0;
+  const minMove = { '1m': .0004, '5m': .0008, '15m': .0012, '30m': .0015, '1h': .002, '4h': .003, '1d': .005 }[tf] || .0008;
+  const moves = [], ranges = [];
+  for (let i = 1; i < recent.length; i++) {
+    const c = recent[i], previous = recent[i-1].c;
+    if (!(c.h >= Math.max(c.o,c.c)) || !(c.l <= Math.min(c.o,c.c)) || !(c.l > 0)) return 0;
+    moves.push(Math.max(Math.abs(c.c-c.o), Math.abs(c.c-previous)) / previous);
+    ranges.push((c.h-c.l)/previous);
   }
-  const avgTr = trSum / (visible.length - 1);
-  const avgBody = bodySum / (visible.length - 1);
-  const atrPct = avgTr / lastClose;
-  const bodyPct = avgBody / lastClose;
-
-  const firstOpen = visible[0].o;
-  const trendPct = Math.abs(lastClose - firstOpen) / firstOpen;
-
-  return (visRangePct * 100) * 2.5 
-       + (futRangePct * 100) * 3.5 
-       + (recRangePct * 100) * 2.0 
-       + (atrPct * 1000) * 3.0 
-       + (bodyPct * 1000) * 2.0 
-       + (trendPct * 100) * 1.5;
+  const active = moves.filter(move => move >= minMove).length;
+  const medianRange = ranges.sort((a,b)=>a-b)[Math.floor(ranges.length/2)];
+  const path = moves.reduce((sum, move) => sum + move, 0);
+  // Activity must be sustained near the decision point, not one old impulse/wick.
+  if (active < 14 || medianRange < minMove || path < minMove * 24) return 0;
+  const range = (Math.max(...recent.map(c=>c.h)) - Math.min(...recent.map(c=>c.l))) / last;
+  if (range < minMove * 8) return 0;
+  // Rank using revealed history only: future bars do not select a favourable outcome.
+  return active + medianRange * 3000 + Math.min(path, .6) * 100 + Math.min(range,.4) * 100;
 }
 
 function findBestBacktestWindow(candles, tf) {
   if (!candles || candles.length < 260) return null;
-  const visibleBars = Math.min(200, Math.max(150, Math.floor(candles.length * 0.45)));
-  const futureBars = Math.min(90, Math.max(50, Math.floor(candles.length * 0.18)));
-  const minCut = visibleBars;
+  const visibleBars = Math.min(200, Math.max(150, Math.floor(candles.length * .45)));
+  const futureBars = Math.min(90, Math.max(50, Math.floor(candles.length * .18)));
   const maxCut = candles.length - futureBars;
-  if (maxCut <= minCut) return null;
-
+  const stride = Math.max(1, Math.floor((maxCut - visibleBars) / 90));
   const candidates = [];
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
-    const score = scoreBacktestCandidate(candles, candidateCut, visibleBars, futureBars, tf);
-    if (score > 0) {
-      candidates.push({
-        cut: candidateCut,
-        visible: candles.slice(candidateCut - visibleBars, candidateCut),
-        future: candles.slice(candidateCut, candidateCut + futureBars),
-        score,
-      });
-    }
+  for (let cut = visibleBars; cut <= maxCut; cut += stride) {
+    const score = scoreBacktestCandidate(candles, cut, visibleBars, futureBars, tf);
+    if (score > 0) candidates.push({cut, score});
   }
-
-  // Fallback with slightly relaxed criteria if strict filter didn't match in this specific batch
-  if (candidates.length === 0) {
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
-      const visible = candles.slice(candidateCut - visibleBars, candidateCut);
-      const future = candles.slice(candidateCut, candidateCut + futureBars);
-      const lastClose = visible[visible.length - 1].c;
-      const visHigh = Math.max(...visible.map(c => c.h));
-      const visLow = Math.min(...visible.map(c => c.l));
-      const visRangePct = (visHigh - visLow) / lastClose;
-      const futHigh = Math.max(...future.map(c => c.h));
-      const futLow = Math.min(...future.map(c => c.l));
-      const futRangePct = (futHigh - futLow) / lastClose;
-
-      if (visRangePct > 0.035 && futRangePct > 0.02) {
-        candidates.push({ cut: candidateCut, visible, future, score: visRangePct + futRangePct });
-      }
-    }
-  }
-
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.score - a.score);
-  const top = candidates.slice(0, Math.min(3, candidates.length));
-  return top[Math.floor(Math.random() * top.length)];
+  if (!candidates.length) return null;
+  candidates.sort((a,b)=>b.score-a.score);
+  const best = candidates[Math.floor(Math.random() * Math.min(8,candidates.length))];
+  return { ...best, visible: candles.slice(best.cut-visibleBars,best.cut), future: candles.slice(best.cut,best.cut+futureBars) };
 }
+
+const backtestPool = require('./backtestPool').createBacktestPool({
+  getUniverse: getBacktestUniverse, loadCandles: fetchBacktestCandles, selectWindow: findBestBacktestWindow
+});
 
 function publicBacktestCandle(c) {
   return [c.t, c.o, c.h, c.l, c.c, c.v];
@@ -2798,62 +2742,36 @@ app.get("/api/backtest/new", async (req, res) => {
       return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
     }
 
-    // Pick from the top active liquid coins (ranked by volume & volatility)
-    const topPool = universe.slice(0, Math.min(80, universe.length)).sort(() => Math.random() - 0.5);
-    let lastError = null;
+    const { ticker, best } = await backtestPool.take(exchange, tf);
+    if (res.destroyed) return;
+    while (backtestSessions.size >= 2000) backtestSessions.delete(backtestSessions.keys().next().value);
+    const id = randomUUID();
+    backtestSessions.set(id, {
+      id,
+      createdAt: Date.now(),
+      ex: ticker.ex,
+      sym: ticker.sym,
+      base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+      tf,
+      future: best.future,
+      revealed: 0,
+    });
 
-    // A batch of 3 meant up to 27 strictly sequential round trips before the
-    // first usable candidate — seconds of latency on a cold cache for a route
-    // that aims at sub-300ms. 8 keeps the burst modest while cutting the worst
-    // case to 10 rounds, and the first acceptable candidate still short-circuits.
-    const BATCH_SIZE = 8;
-    for (let i = 0; i < topPool.length; i += BATCH_SIZE) {
-      const batch = topPool.slice(i, i + BATCH_SIZE);
-      const fetchPromises = batch.map(ticker =>
-        fetchBacktestCandles(ticker.ex, ticker.sym, tf)
-          .then(candles => ({ ticker, candles }))
-          .catch(err => { lastError = err; return null; })
-      );
-
-      const results = await Promise.all(fetchPromises);
-
-      for (const resItem of results) {
-        if (!resItem || !resItem.candles || resItem.candles.length < 260) continue;
-        const best = findBestBacktestWindow(resItem.candles, tf);
-        if (!best || !best.visible || best.visible.length === 0) continue;
-
-        const ticker = resItem.ticker;
-        const id = randomUUID();
-        backtestSessions.set(id, {
-          id,
-          createdAt: Date.now(),
-          ex: ticker.ex,
-          sym: ticker.sym,
-          base: ticker.base || ticker.sym.replace(/USDT$/, ""),
-          tf,
-          future: best.future,
-          revealed: 0,
-        });
-
-        return res.json({
-          id,
-          ex: ticker.ex,
-          exchange: BACKTEST_EXCHANGES[exchange],
-          sym: ticker.sym,
-          base: ticker.base || ticker.sym.replace(/USDT$/, ""),
-          tf,
-          cutoffTime: best.visible[best.visible.length - 1].t,
-          candles: best.visible.map(publicBacktestCandle),
-          futureCount: best.future.length,
-          universeSize: universe.length,
-        });
-      }
-    }
-
-    res.status(503).json({ error: lastError?.message || "Не удалось подобрать активный исторический участок. Попробуйте еще раз." });
+    return res.json({
+      id,
+      ex: ticker.ex,
+      exchange: BACKTEST_EXCHANGES[exchange],
+      sym: ticker.sym,
+      base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+      tf,
+      cutoffTime: best.visible[best.visible.length - 1].t,
+      candles: best.visible.map(publicBacktestCandle),
+      futureCount: best.future.length,
+      universeSize: universe.length,
+    });
   } catch (err) {
     console.error("[BACKTEST NEW]", err && err.message);
-    if (!res.headersSent) res.status(503).json({ error: "Не удалось создать сессию бэктеста" });
+    if (!res.headersSent) res.status(503).json({ error: err.message || "Не удалось создать сессию бэктеста" });
   }
 });
 

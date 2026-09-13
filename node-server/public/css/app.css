@@ -8529,4 +8529,32 @@ body {
 .pd-card-price { font-size: 10px; color: #6b7280; font-family: monospace; }
 .pd-empty { padding: 32px 20px; text-align: center; color: #4b5563; font-size: 13px; line-height: 1.6; }
 
+/* Complete appearance palettes. Preview colors come from the same catalogue. */
+[data-appearance-theme] .settings-modal { width: 790px; height: 720px; background: var(--bg2); }
+[data-appearance-theme] .settings-sidebar,
+[data-appearance-theme] .settings-footer { background: var(--bg); }
+[data-appearance-theme] .theme-grid { gap: 12px; }
+[data-appearance-theme] .theme-opt { padding: 0 0 12px; overflow: hidden; text-align: left; border-radius: 10px; background: var(--bg3); color: var(--t1); }
+[data-appearance-theme] .theme-opt svg { display: block; width: 100%; height: auto; border-bottom: 1px solid var(--bd); }
+[data-appearance-theme] .theme-opt.active { outline: 2px solid var(--ac); outline-offset: 2px; background: var(--bg3); color: var(--t1); }
+[data-appearance-theme] .theme-opt:focus-visible { outline: 3px solid var(--ac); outline-offset: 2px; }
+.theme-name { display: block; padding: 10px 12px 3px; font-weight: 700; font-size: 13px; }
+.theme-description { display: block; padding: 0 12px; font-size: 10px; line-height: 1.5; color: var(--t2); }
+[data-appearance-theme] :is(#bt-trade-panel, #bt-chart-head, .bt-indicators-menu, .bt-result, .color-dropdown, .bt-exchange-select) { background: var(--bg2); color: var(--t1); }
+[data-appearance-theme] :is(.bt-field input, .bt-field textarea, #bt-draw-tools) { background: var(--bg3); color: var(--t1); }
+[data-appearance-theme] .bt-loader { background: color-mix(in srgb, var(--bg) 85%, transparent); }
+[data-appearance-theme] :is(.settings-tab.active, .settings-apply-btn, .bt-primary, .bt-reveal, .bt-tf.on, .bt-speeds button.on, .bt-chip.on, .bt-stage-row span.on, .bt-commit-plan, .bt-module-icon, .bt-level-input button, .nav-tab.active) { background: var(--ac); color: var(--on-accent); box-shadow: none; }
+[data-appearance-theme] #bt-plan-state { color: var(--ac); background: var(--bg3); border-color: var(--bd); }
+[data-appearance-theme] .settings-pane h2 { color: var(--t1); }
+[data-appearance-theme] .ntab.on { color: var(--on-accent); }
+[data-appearance-theme] .exc-menu { background: var(--bg2) !important; }
+[data-appearance-theme] #bt-draw-tools .dt-btn.on { background: var(--ac); color: var(--on-accent); box-shadow: none; }
+[data-appearance-theme] #bt-long { color: var(--t1); background: var(--bg3); border-color: var(--bd2); }
+[data-appearance-theme] #bt-short { color: var(--rd); background: var(--bg3); border-color: var(--bd2); }
+[data-appearance-theme] #bt-long.on, [data-appearance-theme] #bt-short.on { background: var(--bgh); border-color: var(--ac); }
+@media (max-width: 600px) {
+    [data-appearance-theme] .settings-content { padding: 16px; }
+    [data-appearance-theme] .theme-grid { grid-template-columns: 1fr; }
+}
+
 

@@ -3254,7 +3254,7 @@ function drawChart() {
   const gridStep = calcNiceStep(pr, Math.max(4, Math.floor(PH / 70)));
   let gridPrice = Math.ceil(mn / gridStep) * gridStep;
   ctx.setLineDash([]);
-  ctx.strokeStyle = "rgba(255,255,255,.045)";
+  ctx.strokeStyle = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme).grid || "rgba(255,255,255,.045)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   while (gridPrice <= mx + gridStep * 0.01) {
@@ -9061,24 +9061,6 @@ if (settingsBtn && settingsOverlay) {
     };
   });
 
-  // Theme switching
-  document.querySelectorAll(".theme-opt").forEach(opt => {
-    opt.onclick = () => {
-      document.querySelectorAll(".theme-opt").forEach(o => o.classList.remove("active"));
-      opt.classList.add("active");
-      const theme = opt.dataset.theme;
-      let c = "#0d0f14";
-      if (theme === "dark") c = "#0d0f14";
-      if (theme === "black") c = "#000000";
-      if (theme === "blue") c = "#0a0c1a";
-      pendingBg = c;
-      const bgPrev = $("bg-color-preview");
-      if (bgPrev) bgPrev.style.backgroundColor = c;
-      updateBgColor(c, pendingOpacity || 100, true);
-    };
-  });
-
-
   // ═══ Formations Overlay Settings Init ═══
   (function initFormationsOverlay() {
     const LS_KEY = 'fov_settings';
@@ -9554,7 +9536,52 @@ if (settingsBtn && settingsOverlay) {
       pickers[id] = createColorPicker(el, initialColor, initialOpacity, onUpdate);
     });
 
+    function selectAppearanceTheme(id) {
+      const theme = window.AppearanceThemes.applyShell(id);
+      localStorage.setItem('screener-appearance-theme', theme.id);
+      pendingBg = theme.bg; pendingOpacity = 100;
+      pendingAxisColor = theme.muted; pendingAxisOpacity = 100;
+      updateBgColor(theme.bg, 100, true);
+      updateAxisColor(theme.muted, 100, true);
+      updateScreenerBgColor(theme.panel, true);
+      updateScreenerHeaderColor(theme.raised, true);
+      for (const type of ['body', 'border', 'wick']) {
+        Object.assign(candleState[type], { show: true, up: type === 'body' ? theme.up : theme.wickUp, down: type === 'body' ? theme.down : theme.wickDown, upOp: 100, downOp: 100 });
+        if ($('set-candle-' + type)) $('set-candle-' + type).checked = true;
+        for (const side of ['up', 'down']) pickers['candle-' + side + '-' + type]?.setColor(candleState[type][side], 100);
+      }
+      Object.assign(volumeState, { show: true, up: theme.volumeUp, down: theme.volumeDown, upOp: 85, downOp: 85 });
+      if ($('set-show-volume')) $('set-show-volume').checked = true;
+      for (const side of ['up', 'down']) pickers['volume-' + side]?.setColor(volumeState[side], 85);
+      pickers['screener-bg']?.setColor(theme.panel, 100);
+      pickers['screener-header']?.setColor(theme.raised, 100);
+      localStorage.setItem('screener-candle-settings', JSON.stringify(candleState));
+      localStorage.setItem('screener-volume-settings', JSON.stringify(volumeState));
+      if (bgPreview) bgPreview.style.backgroundColor = theme.bg;
+      if (axisPreview) axisPreview.style.backgroundColor = theme.muted;
+      if (opacitySlider) opacitySlider.value = 100;
+      if (opacityVal) opacityVal.textContent = '100%';
+      if (axisOpacitySlider) axisOpacitySlider.value = 100;
+      if (axisOpacityVal) axisOpacityVal.textContent = '100%';
+      document.querySelectorAll('.theme-opt').forEach(button => {
+        const selected = button.dataset.theme === theme.id;
+        button.classList.toggle('active', selected);
+        button.setAttribute('aria-pressed', String(selected));
+      });
+      schedulePreferencesSync();
+      refreshCharts();
+    }
+    const themeGrid = document.querySelector('.theme-grid');
+    if (themeGrid && window.AppearanceThemes) {
+      const saved = localStorage.getItem('screener-appearance-theme');
+      const selected = window.AppearanceThemes.get(saved).id;
+      themeGrid.innerHTML = window.AppearanceThemes.themes.map(theme => '<button type="button" class="theme-opt' + (theme.id === selected ? ' active' : '') + '" data-theme="' + theme.id + '" aria-pressed="' + (theme.id === selected) + '">' + window.AppearanceThemes.preview(theme) + '<span class="theme-name">' + theme.name + '</span><span class="theme-description">' + theme.description + '</span></button>').join('');
+      themeGrid.querySelectorAll('button').forEach(button => button.onclick = () => selectAppearanceTheme(button.dataset.theme));
+      if (!saved) setTimeout(() => selectAppearanceTheme(selected), 0);
+    }
+
     function refreshCharts() {
+      window.dispatchEvent(new Event("appearancechange"));
       if (typeof drawChart === "function") requestAnimationFrame(drawChart);
       if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
         chartInstances.forEach(inst => {
@@ -9626,6 +9653,7 @@ if (settingsBtn && settingsOverlay) {
         localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
 
         localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
+        schedulePreferencesSync();
 
         if (typeof pdCommitDraftAndSave === "function") {
           pdCommitDraftAndSave();
@@ -9645,34 +9673,7 @@ if (settingsBtn && settingsOverlay) {
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
       resetBtn.onclick = () => {
-        // 1. Reset theme and background color to default dark (#0d0f14)
-        pendingBg = "#0d0f14";
-        pendingOpacity = "100";
-        if (opacitySlider) opacitySlider.value = "100";
-        if (opacityVal) opacityVal.textContent = "100%";
-        if (bgPreview) bgPreview.style.backgroundColor = "#0d0f14";
-        document.querySelectorAll(".theme-opt").forEach(o => o.classList.toggle("active", o.dataset.theme === "dark"));
-        updateBgColor("#0d0f14", 100, true);
-
-        // 2. Reset axis text color to default
-        pendingAxisColor = "#d1d4dc";
-        pendingAxisOpacity = "100";
-        if (axisOpacitySlider) axisOpacitySlider.value = "100";
-        if (axisOpacityVal) axisOpacityVal.textContent = "100%";
-        if (axisPreview) axisPreview.style.backgroundColor = "#d1d4dc";
-        updateAxisColor("#d1d4dc", 100, true);
-
-        // 3. Reset screener sidebar color
-        updateScreenerBgColor("#0d0f14", true);
-
-        // 4. Reset candle settings
-        if ($("set-candle-body")) $("set-candle-body").checked = true;
-        if ($("set-candle-border")) $("set-candle-border").checked = true;
-        if ($("set-candle-wick")) $("set-candle-wick").checked = true;
-        candleState.body.show = true;
-        candleState.border.show = true;
-        candleState.wick.show = true;
-        localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
+        selectAppearanceTheme("aurora");
 
         // 5. Reset compact & animation & volume
         if ($("set-compact-list")) $("set-compact-list").checked = false;
@@ -9765,7 +9766,8 @@ function updateScreenerBgColor(color, save = true) {
 }
 
 function updateScreenerHeaderColor(color, save = true) {
-  updateScreenerBgColor(color, save);
+  document.documentElement.style.setProperty("--screener-header-bg", color);
+  if (save) localStorage.setItem("screener-sidebar-header-bg-color", color);
 }
 
 let currentActiveBgColor = localStorage.getItem("screener-bg-color") || "#0d0f14";
@@ -9778,7 +9780,7 @@ function updateBgColor(color, opacity = 100, save = true) {
 
   const rgba = hexToRgba(color, opacity);
   document.documentElement.style.setProperty("--bg", rgba);
-  document.documentElement.style.setProperty("--bg2", rgba);
+  document.documentElement.style.setProperty("--bg2", window.AppearanceThemes ? window.AppearanceThemes.get(document.documentElement.dataset.appearanceTheme).panel : rgba);
 
   const chartArea = document.getElementById("chart-area");
   if (chartArea) chartArea.style.backgroundColor = rgba;
@@ -11251,7 +11253,7 @@ class ChartInstance {
     while (gridPrice <= mx + gridStep * 0.01) {
       const y = toY(gridPrice);
       if (y >= 8 && y <= ch - 8) {
-        ctx.strokeStyle = "rgba(255,255,255,0.045)";
+        ctx.strokeStyle = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme).grid || "rgba(255,255,255,0.045)";
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(PW, y); ctx.stroke();
 

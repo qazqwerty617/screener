@@ -23,6 +23,7 @@
     playing: false,
     stepping: false,
     activated: false,
+    loading: false,
     done: false,
     revealQueue: [],
     indicators: new Set(["volume"]),
@@ -86,7 +87,7 @@
   function hideResult() { $("bt-result").hidden = true; }
 
   function updateControls() {
-    const ready = Boolean(state.session);
+    const ready = Boolean(state.session) && !state.loading;
     $("bt-step").disabled = !ready || state.done || state.playing || state.stepping || state.revealQueue.length > 0;
     $("bt-play").disabled = !ready || state.done || state.stepping || state.revealQueue.length > 0;
     $("bt-reveal").disabled = !ready || state.done || state.playing || state.stepping;
@@ -108,6 +109,7 @@
     state.candles = [];
     state.stepBuffer = [];
     state.fetchingBuffer = false;
+    state.stepping = false;
     state.serverDone = false;
     state.initialCount = 0;
     state.initialPrice = 0;
@@ -140,32 +142,61 @@
     draw();
   }
 
-  async function fetchStepBuffer(count = 50) {
-    if (!state.session || state.serverDone || state.fetchingBuffer) return;
-    state.fetchingBuffer = true;
-    try {
-      const response = await fetch(`/api/backtest/${state.session.id}/step?count=${count}`, { method: "POST", cache: "no-store" });
+  // One prepared session per selected market; never fetch hidden replay bars here.
+  const preparedCases = new Map();
+  function prepareCase(ex = state.exchange, tf = state.tf) {
+    const key = ex + ':' + tf;
+    const existing = preparedCases.get(key);
+    if (existing && Date.now() - existing.at < 300000) return existing.promise;
+    const entry = { at: Date.now() };
+    entry.promise = (async () => {
+      const response = await fetch(`/api/backtest/new?tf=${encodeURIComponent(tf)}&ex=${encodeURIComponent(ex)}`, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
       const data = await response.json();
-      if (response.ok && data.candles) {
-        for (const row of data.candles) state.stepBuffer.push(parseCandle(row));
-        if (data.done) state.serverDone = true;
+      if (!response.ok || !data.candles?.length) throw new Error(data.error || 'Не удалось подготовить сценарий');
+      return data;
+    })();
+    preparedCases.set(key, entry);
+    while (preparedCases.size > 4) preparedCases.delete(preparedCases.keys().next().value);
+    entry.promise.catch(() => { if (preparedCases.get(key) === entry) preparedCases.delete(key); });
+    return entry.promise;
+  }
+
+  async function fetchStepBuffer(count = 50) {
+    if (!state.session || state.serverDone) return;
+    if (state.fetchingBuffer) return state.fetchingBuffer;
+    const session = state.session;
+    const seq = state.requestSeq;
+    const request = (async () => {
+      try {
+        const response = await fetch(`/api/backtest/${session.id}/step?count=${count}`, { method: "POST", cache: "no-store" });
+        const data = await response.json();
+        if (state.session !== session || state.requestSeq !== seq) return;
+        if (response.ok && data.candles) {
+          for (const row of data.candles) state.stepBuffer.push(parseCandle(row));
+          if (data.done) state.serverDone = true;
+        }
+      } catch (_) {} finally {
+        if (state.session === session && state.requestSeq === seq) state.fetchingBuffer = false;
       }
-    } catch (_) {
-    } finally {
-      state.fetchingBuffer = false;
-    }
+    })();
+    state.fetchingBuffer = request;
+    return request;
   }
 
   async function newCase() {
     const requestSeq = ++state.requestSeq;
-    resetCase();
+    stopPlaying();
+    state.loading = true;
+    updateControls();
     setLoading(true, "Подбираем активный сетап…");
     $("bt-new").disabled = true;
     try {
-      const response = await fetch(`/api/backtest/new?tf=${encodeURIComponent(state.tf)}&ex=${encodeURIComponent(state.exchange)}`, { cache: "no-store" });
-      const data = await response.json();
+      const key = state.exchange + ':' + state.tf;
+      const data = await prepareCase();
       if (requestSeq !== state.requestSeq) return;
-      if (!response.ok) throw new Error(data.error || "Не удалось создать бэктест");
+      preparedCases.delete(key);
+      resetCase();
+      state.loading = false;
       state.session = data;
       state.candles = data.candles.map(parseCandle);
       state.initialCount = state.candles.length;
@@ -178,22 +209,25 @@
       setLoading(false);
       updateControls();
       draw();
+      prepareCase().catch(() => {});
       // Pre-buffer first batch of candles in background
       fetchStepBuffer(50);
     } catch (error) {
       if (requestSeq === state.requestSeq) setLoading(true, error.message || "Ошибка загрузки. Попробуйте ещё раз.");
     } finally {
-      if (requestSeq === state.requestSeq) $("bt-new").disabled = false;
+      if (requestSeq === state.requestSeq) { state.loading = false; $("bt-new").disabled = false; updateControls(); }
     }
   }
 
   async function step() {
-    if (!state.session || state.done || state.stepping || state.playing || state.revealQueue.length) return false;
+    if (state.loading || !state.session || state.done || state.stepping || state.playing || state.revealQueue.length) return false;
+    const session = state.session;
     state.stepping = true;
     updateControls();
     try {
       if (!state.stepBuffer.length && !state.serverDone) {
         await fetchStepBuffer(20);
+        if (state.session !== session || state.loading) return false;
       }
       if (state.stepBuffer.length > 0) {
         const c = state.stepBuffer.shift();
@@ -207,8 +241,7 @@
       }
       return false;
     } finally {
-      state.stepping = false;
-      updateControls();
+      if (state.session === session) { state.stepping = false; updateControls(); }
     }
   }
 
@@ -223,8 +256,9 @@
 
   function togglePlay() {
     if (state.playing) return stopPlaying();
-    if (!state.session || state.done) return;
+    if (state.loading || !state.session || state.done) return;
     state.playing = true;
+    const session = state.session;
     updateControls();
 
     if (state.stepBuffer.length < 25 && !state.serverDone) {
@@ -246,6 +280,7 @@
         return stopPlaying();
       } else if (!state.fetchingBuffer) {
         await fetchStepBuffer(30);
+        if (state.session !== session || !state.playing || state.loading) return;
         if (state.stepBuffer.length > 0) {
           const candle = state.stepBuffer.shift();
           appendCandle(candle);
@@ -263,13 +298,17 @@
   }
 
   async function reveal() {
-    if (!state.session || state.done || state.stepping) return;
+    if (state.loading || !state.session || state.done || state.stepping) return;
+    const session = state.session;
     stopPlaying();
     state.stepping = true;
     updateControls();
     try {
-      const response = await fetch(`/api/backtest/${state.session.id}/reveal`, { method: "POST", cache: "no-store" });
+      await state.fetchingBuffer;
+      if (state.session !== session || state.loading) return;
+      const response = await fetch(`/api/backtest/${session.id}/reveal`, { method: "POST", cache: "no-store" });
       const data = await response.json();
+      if (state.session !== session || state.loading) return;
       if (!response.ok) throw new Error(data.error || "Ошибка раскрытия");
       const revealCandles = (data.candles || []).map(parseCandle);
       state.revealQueue = [...state.stepBuffer, ...revealCandles];
@@ -277,6 +316,7 @@
       state.stepping = false;
       animateReveal();
     } catch (error) {
+      if (state.session !== session || state.loading) return;
       state.stepping = false;
       showResult("Не удалось показать исход", error.message, "bad");
       updateControls();
@@ -302,6 +342,7 @@
   }
 
   function selectDirection(direction) {
+    if (state.loading) return;
     if (state.position || state.done) return;
     state.plannedDirection = direction;
     $("bt-long").classList.toggle("on", direction === "long");
@@ -328,6 +369,7 @@
   }
 
   function openPosition(direction = state.plannedDirection) {
+    if (state.loading) return;
     if (!state.session || state.position || state.done || !state.candles.length) return;
     if (!direction) return;
     const entry = state.candles[state.candles.length - 1].c;
@@ -518,6 +560,8 @@
   }
 
   function drawSubIndicators(m, allClose) {
+    const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
+    const background = typeof getCurrentBgColor === 'function' ? getCurrentBgColor() : '#101c28';
     if (!m.subKeys.length || !vCtx) return;
     const all = state.candles;
     const cache = {};
@@ -529,9 +573,9 @@
       vCtx.rect(0, top, m.plot.w, height);
       vCtx.clip();
 
-      vCtx.fillStyle = "rgba(13, 15, 20, 0.95)";
+      vCtx.fillStyle = background;
       vCtx.fillRect(0, top, m.plot.w, height);
-      vCtx.strokeStyle = "rgba(255,255,255,.06)";
+      vCtx.strokeStyle = theme?.grid || '#253744';
       vCtx.lineWidth = 1;
       vCtx.beginPath(); vCtx.moveTo(0, top + .5); vCtx.lineTo(m.plot.w, top + .5); vCtx.stroke();
 
@@ -603,8 +647,8 @@
 
       const lastValue = values?.[values.length - 1];
       // Rounded dark glass pill badge for indicator label
-      vCtx.fillStyle = "rgba(18, 20, 29, 0.85)";
-      vCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      vCtx.fillStyle = theme?.panel || background;
+      vCtx.strokeStyle = theme?.grid || '#253744';
       vCtx.lineWidth = 1;
       const textStr = `${label}${Number.isFinite(lastValue) ? `  ${price(lastValue)}` : ""}`;
       vCtx.font = "bold 9px Inter, sans-serif";
@@ -630,7 +674,7 @@
     const subKeys = ["rsi", "atr", "macd", "cvd"].filter(key => state.indicators.has(key));
     const subPanelH = Math.min(54, Math.max(38, (h - bottom) * .10));
     const subTotalH = subKeys.length * subPanelH;
-    const volumeH = state.indicators.has("volume") ? Math.min(70, h * .13) : 0;
+    const volumeH = state.indicators.has("volume") && window.volumeSettings?.show !== false ? Math.min(70, h * .13) : 0;
     const volTotalH = volumeH + subTotalH;
 
     if (volCv && vCtx) {
@@ -666,16 +710,26 @@
     return { w, h, plot, data, start, end, min, max, stepX, xForIndex, yForPrice, volumeH, range, subKeys, subPanelH, subTotalH, volTotalH, futureGap: actualGap };
   }
 
+  function chartColor(part, up) {
+    const side = up ? 'up' : 'down';
+    const settings = part === 'volume' ? window.volumeSettings : window.candleSettings?.[part];
+    const color = settings?.[side] || (up ? '#63dbb5' : '#f48b89');
+    return color + Math.round((settings?.[side + 'Op'] ?? 100) / 100 * 255).toString(16).padStart(2, '0');
+  }
   function draw() {
+    const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
+    const background = typeof getCurrentBgColor === 'function' ? getCurrentBgColor() : theme?.bg || '#101c28';
+    const grid = theme?.grid || '#253744';
+    const axis = typeof getAxisTextColor === 'function' ? getAxisTextColor() : theme?.muted || '#9fb4c3';
     const m = metrics();
     ctx.clearRect(0, 0, m.w, m.h);
-    ctx.fillStyle = "#0d0f14"; ctx.fillRect(0, 0, m.w, m.h);
+    ctx.fillStyle = background; ctx.fillRect(0, 0, m.w, m.h);
     ctx.lineWidth = 1;
     ctx.font = "9px Inter, sans-serif";
 
     if (volCv && vCtx) {
       vCtx.clearRect(0, 0, m.w, m.volTotalH);
-      vCtx.fillStyle = "#0d0f14";
+      vCtx.fillStyle = background;
       vCtx.fillRect(0, 0, m.w, m.volTotalH);
     }
 
@@ -685,10 +739,10 @@
     const gridStep = typeof calcNiceStep === "function" ? calcNiceStep(pr, Math.max(4, Math.floor(m.plot.priceH / 70))) : pr / 5;
     let gridPrice = Math.ceil(m.min / gridStep) * gridStep;
     ctx.setLineDash([]);
-    ctx.strokeStyle = "rgba(255,255,255,.045)";
+    ctx.strokeStyle = grid;
     ctx.lineWidth = 1;
     ctx.font = "10px Inter, sans-serif";
-    ctx.fillStyle = "#64748b";
+    ctx.fillStyle = axis;
     ctx.textAlign = "left";
     while (gridPrice <= m.max + gridStep * 0.01) {
       const y = m.yForPrice(gridPrice);
@@ -702,13 +756,13 @@
     // Time grid lines
     for (let i = 0; i <= 6; i++) {
       const x = m.plot.w * i / 6 + .5;
-      ctx.strokeStyle = "rgba(255,255,255,.035)"; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, m.plot.h); ctx.stroke();
+      ctx.strokeStyle = grid; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, m.plot.h); ctx.stroke();
       const c = m.data[Math.min(m.data.length - 1, Math.floor(m.data.length * i / 6))];
-      if (c) { ctx.fillStyle = "#596071"; ctx.fillText(new Date(c.t).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", timeZone: "UTC" }), Math.min(x + 3, m.plot.w - 38), m.h - 7); }
+      if (c) { ctx.fillStyle = axis; ctx.fillText(new Date(c.t).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", timeZone: "UTC" }), Math.min(x + 3, m.plot.w - 38), m.h - 7); }
     }
 
     if (state.session && m.data.length) {
-      ctx.save(); ctx.globalAlpha = .04; ctx.fillStyle = "#d1d4dc"; ctx.font = `700 ${Math.min(52, m.plot.w / 10)}px Inter`; ctx.textAlign = "center";
+      ctx.save(); ctx.globalAlpha = .04; ctx.fillStyle = axis; ctx.font = `700 ${Math.min(52, m.plot.w / 10)}px Inter`; ctx.textAlign = "center";
       ctx.fillText(state.session.sym, m.plot.w / 2, m.plot.priceH / 2); ctx.restore();
     }
 
@@ -728,23 +782,23 @@
       vCtx.rect(0, volumeTop, m.plot.w, m.volumeH);
       vCtx.clip();
 
-      vCtx.fillStyle = "rgba(13, 15, 20, 0.95)";
+      vCtx.fillStyle = background;
       vCtx.fillRect(0, volumeTop, m.plot.w, m.volumeH);
-      vCtx.strokeStyle = "rgba(255,255,255,.06)";
+      vCtx.strokeStyle = grid;
       vCtx.beginPath(); vCtx.moveTo(0, volumeTop + .5); vCtx.lineTo(m.plot.w, volumeTop + .5); vCtx.stroke();
 
       const volW = Math.max(1, m.stepX > 3 ? m.stepX - 2 : m.stepX);
       m.data.forEach((c, i) => {
         const vh = Math.min(1, visibleVols[i] / maxVol) * (m.volumeH - 8);
-        vCtx.fillStyle = c.c >= c.o ? "rgba(38,201,122,.85)" : "rgba(255,69,96,.85)";
+        vCtx.fillStyle = chartColor("volume", c.c >= c.o);
         if (vh > 0) vCtx.fillRect(m.xForIndex(i) - volW / 2, volumeTop + m.volumeH - Math.max(1, vh), volW, Math.max(1, vh));
       });
 
-      vCtx.fillStyle = "rgba(18, 20, 29, 0.85)";
-      vCtx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      vCtx.fillStyle = background;
+      vCtx.strokeStyle = grid;
       vCtx.fillRect(6, volumeTop + 4, 38, 15);
       vCtx.strokeRect(6, volumeTop + 4, 38, 15);
-      vCtx.fillStyle = "rgba(255,255,255,.6)"; vCtx.font = "bold 9px Inter, sans-serif"; vCtx.fillText("VOL", 11, volumeTop + 15);
+      vCtx.fillStyle = axis; vCtx.font = "bold 9px Inter, sans-serif"; vCtx.fillText("VOL", 11, volumeTop + 15);
       vCtx.restore();
     }
 
@@ -793,12 +847,12 @@
       const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
       const wickYH = Math.round(yH * dpr) / dpr;
       const wickYL = Math.round(yL * dpr) / dpr;
-      ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
+      ctx.strokeStyle = chartColor("wick", up);
       ctx.lineWidth = 1 / dpr;
       ctx.beginPath();
       ctx.moveTo(wickX, wickYH);
       ctx.lineTo(wickX, wickYL);
-      ctx.stroke();
+      if (window.candleSettings?.wick?.show !== false) ctx.stroke();
 
       // Solid filled candle body
       const leftX = Math.round((rawX - hw) * dpr);
@@ -811,8 +865,9 @@
       const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
       const fillH = Math.max(1 / dpr, (bottomY - topY) / dpr);
 
-      ctx.fillStyle = up ? "#26c97a" : "#ff4560";
-      ctx.fillRect(fillX, fillY, fillW, fillH);
+      ctx.fillStyle = chartColor("body", up);
+      if (window.candleSettings?.body?.show !== false) ctx.fillRect(fillX, fillY, fillW, fillH);
+      if (window.candleSettings?.border?.show !== false) { ctx.strokeStyle = chartColor("border", up); ctx.strokeRect(fillX, fillY, fillW, fillH); }
     });
 
     ctx.restore();
@@ -831,7 +886,7 @@
     drawPositionLines(m);
 
     // Right axis thin divider
-    ctx.strokeStyle = "rgba(255,255,255,.06)";
+    ctx.strokeStyle = grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(m.plot.w, 0);
@@ -857,12 +912,12 @@
       const tH = 22, tW = 74, tX = m.plot.w + 4, tY = ly2 - tH / 2;
       if (typeof roundRect === "function") roundRect(ctx, tX, tY, tW, tH, 6);
       else ctx.rect(tX, tY, tW, tH);
-      ctx.fillStyle = "#0d0f14";
+      ctx.fillStyle = background;
       ctx.fill();
-      ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
+      ctx.strokeStyle = chartColor("border", up);
       ctx.lineWidth = 1.5;
       ctx.stroke();
-      ctx.fillStyle = "#fff";
+      ctx.fillStyle = theme?.text || axis;
       ctx.font = "bold 11px Inter, sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(price(last.c), m.plot.w + 41, ly2 + 4);
@@ -1452,6 +1507,9 @@
   updateControls();
   draw();
 
+  setTimeout(() => prepareCase().catch(() => {}), 1200);
+  setInterval(() => { if (!document.hidden) prepareCase().catch(() => {}); }, 60000);
+  window.addEventListener("appearancechange", draw);
   window.CryptoBacktest = {
     activate() {
       draw();
