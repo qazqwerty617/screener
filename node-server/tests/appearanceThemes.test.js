@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const {JSDOM} = require('jsdom');
 const fs=require('node:fs'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../public/js/appearanceThemes.js'),'utf8');
+const appSource=fs.readFileSync(path.join(__dirname,'../public/js/app.js'),'utf8');
 const css=fs.readFileSync(path.join(__dirname,'../public/css/app.css'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
 test('every complete palette has an accurate chart, screener and volume preview',()=>{
   const dom=new JSDOM('<html></html>',{url:'https://local.test',runScripts:'outside-only'});
   dom.window.eval(source);
@@ -25,7 +27,9 @@ test('every complete palette has an accurate chart, screener and volume preview'
     bg:'#0d0f14', panel:'#13151e', raised:'#181b26', hover:'#1e2235', text:'#d1d4dc',
     muted:'#6b7080', border:'#2b2e39', accent:'#7c3aed', onAccent:'#ffffff', up:'#26c97a',
     down:'#ff4560', wickUp:'#26c97a', wickDown:'#ff4560', volumeUp:'#26c97a',
-    volumeDown:'#ff4560', grid:'#1c1f27', light:false
+    volumeDown:'#ff4560', grid:'#1c1f27', mapBg:'#04050d', mapPanel:'#0d0f14',
+    arbitrageBg:'#080a0f', arbitragePanel:'#0d1016', formationsBg:'#0d0f14',
+    formationsPanel:'#11131c', light:false
   });
   dom.window.close();
 });
@@ -51,6 +55,33 @@ test('migrates the accidentally automatic Aurora default back to Obsidian once',
 test('theme cards use a compact four-column preview grid',()=>{
   assert.match(css,/\.theme-grid \{ grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/);
   assert.match(css,/\.theme-opt svg \{[^}]*height: 72px;/);
+});
+
+test('every palette styles map, arbitrage and formations workspaces',()=>{
+  const dom=new JSDOM('<html></html>',{url:'https://local.test',runScripts:'outside-only'});
+  dom.window.eval(source);
+  for(const theme of dom.window.AppearanceThemes.themes){
+    for(const key of ['mapBg','mapPanel','arbitrageBg','arbitragePanel','formationsBg','formationsPanel']) {
+      assert.match(theme[key] || '', /^#[0-9a-f]{6}$/i, `${theme.id}.${key}`);
+    }
+    dom.window.AppearanceThemes.applyShell(theme.id);
+    const style=dom.window.document.documentElement.style;
+    for(const [cssVar,key] of [['--map-bg','mapBg'],['--map-panel','mapPanel'],['--arbitrage-bg','arbitrageBg'],['--arbitrage-panel','arbitragePanel'],['--formations-bg','formationsBg'],['--formations-panel','formationsPanel']]) {
+      assert.equal(style.getPropertyValue(cssVar),theme[key]);
+    }
+  }
+  dom.window.close();
+});
+
+test('appearance settings expose background and panel colors for all three workspaces',()=>{
+  for(const id of ['view-map-bg','view-map-panel','view-arbitrage-bg','view-arbitrage-panel','view-formations-bg','view-formations-panel']) {
+    assert.match(html,new RegExp(`data-picker-id="${id}"`),id);
+  }
+  assert.match(css,/#density-view\s*\{[^}]*var\(--map-bg/s);
+  assert.match(css,/#arbitrage-view\s*\{[^}]*var\(--arbitrage-bg/s);
+  assert.match(css,/#formations-view\s*\{[^}]*var\(--formations-bg/s);
+  assert.match(appSource,/getPropertyValue\("--map-bg"\)/);
+  assert.match(appSource,/getCanvasBgColorFor\(this\.canvas\)/);
 });
 test('saved palette restores the whole shell on page startup',()=>{
   const dom=new JSDOM('<html></html>',{url:'https://local.test',runScripts:'outside-only'});

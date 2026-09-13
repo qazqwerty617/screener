@@ -99,12 +99,17 @@ test("the formations grid matches the screener grid metrics", () => {
   const screener = /#chart-grid-container \{[^}]*\}/.exec(CSS);
   const formations = /#formations-grid \{[^}]*\}/.exec(CSS);
   assert.ok(screener && formations, "both grid rules must exist");
-  for (const prop of ["gap: 4px", "padding: 4px", "background: #1a1c22"]) {
+  for (const prop of ["gap: 4px", "padding: 4px"]) {
     assert.ok(
       formations[0].includes(prop),
       `#formations-grid must use the screener's "${prop}"`
     );
   }
+  assert.match(
+    CSS,
+    /\[data-appearance-theme\] #formations-grid\s*\{[^}]*background:\s*var\(--formations-bg, var\(--bg\)\)/,
+    "#formations-grid must use the active formations workspace theme"
+  );
 });
 
 test("restoring the screener view does not rebuild its grid", () => {
