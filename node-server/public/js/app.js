@@ -3332,7 +3332,7 @@ function drawChart() {
       ctx.fillRect(fillX, fillY, fillW, fillH);
     }
 
-    if (cs.border.show && candleW > 10) {
+    if (cs.border.show) {
       const strokeLeftX = (leftX + 0.5) / dpr;
       const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
       const strokeW = Math.max(1 / dpr, fillW);
@@ -4534,7 +4534,7 @@ function drawChart() {
   gridPrice = Math.ceil(mn / gridStep) * gridStep;
   ctx.font = "10px Inter";
   ctx.textAlign = "left";
-  const axisColor = getAxisTextColor();
+  const axisColor = getAxisTextColor(getCanvasBgColor());
   while (gridPrice <= mx + gridStep * 0.01) {
     const y = toY(gridPrice);
     if (y >= TOP + 10 && y <= TOP + PH - 10) {
@@ -4634,12 +4634,14 @@ function drawChart() {
       tX = PW + 4,
       tY = ly2 - tH / 2;
     roundRect(ctx, tX, tY, tW, tH, 6);
-    ctx.fillStyle = getCanvasBgColor();
+    const priceLabelBg = getCanvasBgColor();
+    const priceLabelText = getAxisTextColor(priceLabelBg);
+    ctx.fillStyle = priceLabelBg;
     ctx.fill();
     ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = priceLabelText;
     ctx.font = "bold 11px Inter";
     ctx.textAlign = "center";
     ctx.fillText(fP(dispClose), PW + PR / 2, ly2 + 4);
@@ -4662,12 +4664,12 @@ function drawChart() {
         cX = tX + (tW - cW) / 2,
         cY = ly2 + 18;
       roundRect(ctx, cX, cY, cW, cH, 3);
-      ctx.fillStyle = getCanvasBgColor();
+      ctx.fillStyle = priceLabelBg;
       ctx.fill();
       ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
       ctx.stroke();
 
-      ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.fillStyle = priceLabelText;
       ctx.font = "bold 9px Inter";
       ctx.fillText(timeStr, PW + PR / 2, cY + 10);
     }
@@ -9786,10 +9788,11 @@ function updateAxisColor(color, opacity = 100, save = true) {
   if (typeof drawChart === "function") requestAnimationFrame(drawChart);
 }
 
-function getAxisTextColor() {
+function getAxisTextColor(background = getCanvasBgColor()) {
   const color = localStorage.getItem("screener-axis-color") || "#d1d4dc";
   const opacity = localStorage.getItem("screener-axis-opacity") || "100";
-  return hexToRgba(color, opacity);
+  const preferred = hexToRgba(color, opacity);
+  return window.AppearanceThemes?.ensureReadableColor?.(preferred, background, 4.5) || preferred;
 }
 
 function hexToRgba(hex, opacity = 100) {
@@ -9823,6 +9826,17 @@ function applyWorkspaceAppearanceColors(colors, save = false) {
   for (const [key, cssVar] of Object.entries(WORKSPACE_APPEARANCE_FIELDS)) {
     if (/^#[0-9a-f]{6}$/i.test(next[key] || "")) document.documentElement.style.setProperty(cssVar, next[key]);
   }
+  const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
+  const readable = (preferred, background) => window.AppearanceThemes?.ensureReadableColor?.(preferred, background, 4.5) || preferred;
+  const contrastVars = {
+    "--map-text": readable(theme?.text || "#ffffff", next.mapPanel),
+    "--map-muted": readable(theme?.muted || "#94a3b8", next.mapPanel),
+    "--arbitrage-text": readable(theme?.text || "#ffffff", next.arbitragePanel),
+    "--arbitrage-muted": readable(theme?.muted || "#94a3b8", next.arbitragePanel),
+    "--formations-text": readable(theme?.text || "#ffffff", next.formationsPanel),
+    "--formations-muted": readable(theme?.muted || "#94a3b8", next.formationsPanel)
+  };
+  for (const [cssVar, value] of Object.entries(contrastVars)) document.documentElement.style.setProperty(cssVar, value);
   window.workspaceAppearanceColors = next;
   if (save) localStorage.setItem("screener-workspace-colors", JSON.stringify(next));
   return next;
@@ -11328,7 +11342,8 @@ class ChartInstance {
     ctx.setLineDash([]);
     ctx.font = "9px Inter";
     ctx.textAlign = "left";
-    const axisColor = getAxisTextColor();
+    const cellBackground = getCanvasBgColorFor(this.canvas);
+    const axisColor = getAxisTextColor(cellBackground);
     while (gridPrice <= mx + gridStep * 0.01) {
       const y = toY(gridPrice);
       if (y >= 8 && y <= ch - 8) {
@@ -11439,7 +11454,7 @@ class ChartInstance {
         ctx.fillStyle = hexToRgba(cs.body[side], cs.body[side + "Op"]);
         ctx.fillRect(fillX, fillY, fillW, fillH);
       }
-      if (cs.border.show && candleWidth > 10) {
+      if (cs.border.show) {
         const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
         const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
         const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
@@ -11524,13 +11539,13 @@ class ChartInstance {
 
     const tH = 18, tW = PR - 8, tX = PW + 4, tY = ly - tH / 2;
     roundRect(ctx, tX, tY, tW, tH, 4);
-    ctx.fillStyle = getCanvasBgColorFor(this.canvas);
+    ctx.fillStyle = cellBackground;
     ctx.fill();
     ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
     ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = axisColor;
     ctx.font = "bold 10px Inter";
     ctx.textAlign = "center";
     ctx.fillText(fP(lastPrice), PW + PR / 2, ly + 4);
@@ -12529,8 +12544,8 @@ function drawDensityMap() {
   const mapBg = rootStyle.getPropertyValue("--map-bg").trim() || activePalette?.mapBg || "#04050d";
   const mapPanel = rootStyle.getPropertyValue("--map-panel").trim() || activePalette?.mapPanel || "#0d0f14";
   const mapAccent = rootStyle.getPropertyValue("--ac").trim() || activePalette?.accent || "#7c3aed";
-  const mapText = rootStyle.getPropertyValue("--t1").trim() || activePalette?.text || "#ffffff";
-  const mapMuted = rootStyle.getPropertyValue("--t2").trim() || activePalette?.muted || "#94a3b8";
+  const mapText = rootStyle.getPropertyValue("--map-text").trim() || activePalette?.text || "#ffffff";
+  const mapMuted = rootStyle.getPropertyValue("--map-muted").trim() || activePalette?.muted || "#94a3b8";
   const mapBorder = rootStyle.getPropertyValue("--bd").trim() || activePalette?.border || "#2b2e39";
   const accentAlpha = alpha => hexToRgba(mapAccent, alpha * 100);
   const cx = densityW / 2;

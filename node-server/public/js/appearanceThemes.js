@@ -10,13 +10,76 @@
     { id: 'ice', name: 'Ледяной океан', description: 'Стальной синий · лёд и малина', bg: '#101721', panel: '#172231', raised: '#202f41', hover: '#2a3d53', text: '#e5f0fa', muted: '#93a9bc', border: '#34495e', accent: '#72b9e8', onAccent: '#0f2230', up: '#8dd8f2', down: '#ec7895', wickUp: '#b8ebfb', wickDown: '#ffadc0', volumeUp: '#568ea9', volumeDown: '#a9546d', grid: '#263748', mapBg: '#09121c', mapPanel: '#142535', arbitrageBg: '#0c1520', arbitragePanel: '#172534', formationsBg: '#0d1722', formationsPanel: '#182838', light: false },
   ];
   const get = id => themes.find(theme => theme.id === id) || themes[0];
+
+  function parseColor(value) {
+    if (typeof value !== 'string') return null;
+    const input = value.trim();
+    const hex = input.match(/^#([0-9a-f]{3,8})$/i)?.[1];
+    if (hex) {
+      const expanded = hex.length === 3 || hex.length === 4
+        ? hex.split('').map(char => char + char).join('')
+        : hex;
+      if (expanded.length !== 6 && expanded.length !== 8) return null;
+      return {
+        r: parseInt(expanded.slice(0, 2), 16),
+        g: parseInt(expanded.slice(2, 4), 16),
+        b: parseInt(expanded.slice(4, 6), 16),
+        a: expanded.length === 8 ? parseInt(expanded.slice(6, 8), 16) / 255 : 1
+      };
+    }
+    const rgb = input.match(/^rgba?\(\s*([\d.]+)\s*[, ]\s*([\d.]+)\s*[, ]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+)%?)?\s*\)$/i);
+    if (!rgb) return null;
+    return {
+      r: Math.max(0, Math.min(255, Number(rgb[1]))),
+      g: Math.max(0, Math.min(255, Number(rgb[2]))),
+      b: Math.max(0, Math.min(255, Number(rgb[3]))),
+      a: rgb[4] === undefined ? 1 : Math.max(0, Math.min(1, Number(rgb[4]) / (rgb[0].includes('%') ? 100 : 1)))
+    };
+  }
+
+  function composite(foreground, background) {
+    const alpha = foreground.a + background.a * (1 - foreground.a);
+    if (!alpha) return { r: 0, g: 0, b: 0, a: 0 };
+    return {
+      r: (foreground.r * foreground.a + background.r * background.a * (1 - foreground.a)) / alpha,
+      g: (foreground.g * foreground.a + background.g * background.a * (1 - foreground.a)) / alpha,
+      b: (foreground.b * foreground.a + background.b * background.a * (1 - foreground.a)) / alpha,
+      a: alpha
+    };
+  }
+
+  function luminance(color) {
+    const channel = value => {
+      const normalized = value / 255;
+      return normalized <= .04045 ? normalized / 12.92 : Math.pow((normalized + .055) / 1.055, 2.4);
+    };
+    return .2126 * channel(color.r) + .7152 * channel(color.g) + .0722 * channel(color.b);
+  }
+
+  function contrastRatio(foreground, background) {
+    const bg = parseColor(background) || parseColor('#0d0f14');
+    const fg = parseColor(foreground) || parseColor('#ffffff');
+    const opaqueBg = bg.a < 1 ? composite(bg, parseColor('#ffffff')) : bg;
+    const renderedFg = fg.a < 1 ? composite(fg, opaqueBg) : fg;
+    const lighter = Math.max(luminance(renderedFg), luminance(opaqueBg));
+    const darker = Math.min(luminance(renderedFg), luminance(opaqueBg));
+    return (lighter + .05) / (darker + .05);
+  }
+
+  function ensureReadableColor(preferred, background, minimum = 4.5) {
+    if (contrastRatio(preferred, background) >= minimum) return preferred;
+    const dark = '#18202b';
+    const light = '#f7f9fc';
+    return contrastRatio(dark, background) >= contrastRatio(light, background) ? dark : light;
+  }
+
   function applyShell(id) {
     const theme = get(id), el = root.document?.documentElement;
     if (!el) return theme;
     el.dataset.appearanceTheme = theme.id;
     el.dataset.appearanceLight = String(theme.light);
     el.style.colorScheme = theme.light ? 'light' : 'dark';
-    const vars = { bg: theme.bg, bg2: theme.panel, bg3: theme.raised, bgh: theme.hover, bgh2: theme.hover, bd: theme.border, bd2: theme.border, t1: theme.text, t2: theme.muted, t3: theme.muted, ac: theme.accent, gr: theme.light ? theme.wickUp : theme.up, rd: theme.down, 'on-accent': theme.onAccent, 'chart-grid': theme.grid, 'screener-bg': theme.panel, 'screener-header-bg': theme.raised, 'map-bg': theme.mapBg, 'map-panel': theme.mapPanel, 'arbitrage-bg': theme.arbitrageBg, 'arbitrage-panel': theme.arbitragePanel, 'formations-bg': theme.formationsBg, 'formations-panel': theme.formationsPanel, acglow: theme.accent + '22', grglow: theme.up + '22', rdglow: theme.down + '22' };
+    const vars = { bg: theme.bg, bg2: theme.panel, bg3: theme.raised, bgh: theme.hover, bgh2: theme.hover, bd: theme.border, bd2: theme.border, t1: theme.text, t2: theme.muted, t3: theme.muted, ac: theme.accent, gr: theme.light ? theme.wickUp : theme.up, rd: theme.down, 'on-accent': theme.onAccent, 'chart-grid': theme.grid, 'screener-bg': theme.panel, 'screener-header-bg': theme.raised, 'map-bg': theme.mapBg, 'map-panel': theme.mapPanel, 'map-text': ensureReadableColor(theme.text, theme.mapPanel), 'map-muted': ensureReadableColor(theme.muted, theme.mapPanel), 'arbitrage-bg': theme.arbitrageBg, 'arbitrage-panel': theme.arbitragePanel, 'arbitrage-text': ensureReadableColor(theme.text, theme.arbitragePanel), 'arbitrage-muted': ensureReadableColor(theme.muted, theme.arbitragePanel), 'formations-bg': theme.formationsBg, 'formations-panel': theme.formationsPanel, 'formations-text': ensureReadableColor(theme.text, theme.formationsPanel), 'formations-muted': ensureReadableColor(theme.muted, theme.formationsPanel), acglow: theme.accent + '22', grglow: theme.up + '22', rdglow: theme.down + '22' };
     for (const [key,value] of Object.entries(vars)) el.style.setProperty('--' + key, value);
     return theme;
   }
@@ -30,7 +93,7 @@
     const rows = [44,60,76,92,108].map((y,i) => `<rect x="8" y="${y}" width="18" height="3" rx="1" fill="${theme.muted}"/><rect x="33" y="${y}" width="13" height="3" rx="1" fill="${i%2 ? theme.volumeDown : theme.volumeUp}"/>`).join('');
     return `<svg viewBox="0 0 230 145" role="img" aria-label="${theme.description}: скринер, свечи и объёмы"><rect width="230" height="145" fill="${theme.bg}"/><rect width="230" height="23" fill="${theme.raised}"/><rect y="23" width="55" height="122" fill="${theme.panel}"/><rect x="8" y="10" width="29" height="4" rx="2" fill="${theme.accent}"/><rect x="68" y="10" width="21" height="4" rx="2" fill="${theme.muted}"/>${rows}<path d="M60 53H222M60 83H222M60 112H222" stroke="${theme.grid}"/>${bars}</svg>`;
   }
-  const api = { themes, get, applyShell, preview };
+  const api = { themes, get, applyShell, preview, contrastRatio, ensureReadableColor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.AppearanceThemes = api;
   if (root.document) {

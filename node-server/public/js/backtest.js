@@ -720,7 +720,7 @@
     const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
     const background = typeof getCurrentBgColor === 'function' ? getCurrentBgColor() : theme?.bg || '#101c28';
     const grid = theme?.grid || '#253744';
-    const axis = typeof getAxisTextColor === 'function' ? getAxisTextColor() : theme?.muted || '#9fb4c3';
+    const axis = typeof getAxisTextColor === 'function' ? getAxisTextColor(background) : theme?.muted || '#9fb4c3';
     const m = metrics();
     ctx.clearRect(0, 0, m.w, m.h);
     ctx.fillStyle = background; ctx.fillRect(0, 0, m.w, m.h);
@@ -867,7 +867,11 @@
 
       ctx.fillStyle = chartColor("body", up);
       if (window.candleSettings?.body?.show !== false) ctx.fillRect(fillX, fillY, fillW, fillH);
-      if (window.candleSettings?.border?.show !== false) { ctx.strokeStyle = chartColor("border", up); ctx.strokeRect(fillX, fillY, fillW, fillH); }
+      if (window.candleSettings?.border?.show !== false) {
+        ctx.strokeStyle = chartColor("border", up);
+        ctx.lineWidth = 1 / dpr;
+        ctx.strokeRect(fillX, fillY, fillW, fillH);
+      }
     });
 
     ctx.restore();

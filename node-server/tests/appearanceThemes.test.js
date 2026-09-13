@@ -4,6 +4,7 @@ const {JSDOM} = require('jsdom');
 const fs=require('node:fs'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../public/js/appearanceThemes.js'),'utf8');
 const appSource=fs.readFileSync(path.join(__dirname,'../public/js/app.js'),'utf8');
+const backtestSource=fs.readFileSync(path.join(__dirname,'../public/js/backtest.js'),'utf8');
 const css=fs.readFileSync(path.join(__dirname,'../public/css/app.css'),'utf8');
 const html=fs.readFileSync(path.join(__dirname,'../public/index.html'),'utf8');
 test('every complete palette has an accurate chart, screener and volume preview',()=>{
@@ -82,6 +83,41 @@ test('appearance settings expose background and panel colors for all three works
   assert.match(css,/#formations-view\s*\{[^}]*var\(--formations-bg/s);
   assert.match(appSource,/getPropertyValue\("--map-bg"\)/);
   assert.match(appSource,/getCanvasBgColorFor\(this\.canvas\)/);
+});
+
+test('candle borders stay enabled at compact zoom levels',()=>{
+  assert.doesNotMatch(appSource,/border\.show\s*&&\s*candleW\s*>\s*10/);
+  assert.doesNotMatch(appSource,/border\.show\s*&&\s*candleWidth\s*>\s*10/);
+  assert.match(appSource,/strokeRect\(strokeLeftX, strokeTopY, strokeW, strokeH\)/);
+  assert.match(backtestSource,/strokeRect\(fillX, fillY, fillW, fillH\)/);
+});
+
+test('palette contrast helper repairs unreadable text colors',()=>{
+  const dom=new JSDOM('<html></html>',{url:'https://local.test',runScripts:'outside-only'});
+  dom.window.eval(source);
+  const {contrastRatio,ensureReadableColor}=dom.window.AppearanceThemes;
+  assert.ok(contrastRatio('#232b35','#edf0f3') >= 4.5);
+  assert.equal(ensureReadableColor('#232b35','#edf0f3'),'#232b35');
+  const repaired=ensureReadableColor('#edf0f3','#edf0f3');
+  assert.ok(contrastRatio(repaired,'#edf0f3') >= 4.5);
+  assert.notEqual(repaired.toLowerCase(),'#edf0f3');
+  for(const theme of dom.window.AppearanceThemes.themes){
+    dom.window.AppearanceThemes.applyShell(theme.id);
+    const style=dom.window.document.documentElement.style;
+    for(const [textVar,bg] of [['--map-text',theme.mapPanel],['--map-muted',theme.mapPanel],['--arbitrage-text',theme.arbitragePanel],['--arbitrage-muted',theme.arbitragePanel],['--formations-text',theme.formationsPanel],['--formations-muted',theme.formationsPanel]]) {
+      assert.ok(contrastRatio(style.getPropertyValue(textVar),bg) >= 4.5,`${theme.id} ${textVar}`);
+    }
+  }
+  dom.window.close();
+});
+
+test('chart and workspace labels use their rendered background for contrast',()=>{
+  assert.match(appSource,/function getAxisTextColor\(background = getCanvasBgColor\(\)\)/);
+  assert.match(appSource,/getAxisTextColor\(cellBackground\)/);
+  assert.match(backtestSource,/getAxisTextColor\(background\)/);
+  for(const cssVar of ['--map-text','--map-muted','--arbitrage-text','--arbitrage-muted','--formations-text','--formations-muted']) {
+    assert.ok(css.includes(`var(${cssVar}`),cssVar);
+  }
 });
 test('saved palette restores the whole shell on page startup',()=>{
   const dom=new JSDOM('<html></html>',{url:'https://local.test',runScripts:'outside-only'});
