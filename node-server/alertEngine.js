@@ -44,7 +44,8 @@ const COOLDOWN_TTL_MS = 60 * 60 * 1000;
 // After a failed send, retry this soon instead of waiting out the full cooldown
 // (which loses the alert) or retrying immediately (which hot-loops on outages).
 const FAILED_SEND_RETRY_MS = 60 * 1000;
-const CHART_RENDER_BUDGET_MS = 1800;
+const CHART_RENDER_BUDGET_MS = 12_000;
+const CHART_FAILED_RETRY_MS = 15_000;
 let lastCooldownPruneAt = 0;
 
 // Unconditional periodic prune. The previous version only ran inside the
@@ -147,8 +148,9 @@ async function sendTelegramMessage(chatId, text) {
 // successful text-only send, and `false` when delivery ultimately failed.
 // Callers must treat a falsy result as "not delivered" and refrain from arming
 // an alert cooldown, otherwise the alert is silently lost.
-async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null, group = null) {
+async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null, group = null, requirePhoto = false) {
   if (!chatId || !text) return false;
+  if (requirePhoto && !Buffer.isBuffer(photoBuffer) && !fileId) return false;
   if (!process.env.TELEGRAM_BOT_TOKEN && !process.env.ADMIN_BOT_TOKEN && (!telegramBotModule || typeof telegramBotModule.sendAlert !== "function")) return false;
 
   if (userStoreModule && typeof userStoreModule.isTelegramAlertsEnabled === "function") {
@@ -166,7 +168,7 @@ async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null
     }
   }
 
-  const res = await telegramQueue.enqueue({ chatId, text, photoBuffer, fileId, group });
+  const res = await telegramQueue.enqueue({ chatId, text, photoBuffer, fileId, group, requirePhoto });
   if (!res || !res.ok) return false;
   return res.fileId || true;
 }
@@ -684,6 +686,7 @@ function processTicker(t, now, activeSubscribers) {
       isPump,
       periodMins,
       cooldownKey,
+      baseCooldownKey,
       cooldownMs,
       quality: analysis.quality
     });
@@ -773,8 +776,9 @@ function processTicker(t, now, activeSubscribers) {
     const cleanSym = sym.replace("_SPOT", "");
     const timeStr = new Date().toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-    // Render once, but never hold a time-sensitive Telegram signal for a slow
-    // exchange candle endpoint. Text fallback wins after the strict budget.
+    // Render once for all matching subscribers. Exchange candle APIs commonly
+    // take several seconds under load, so allow the real upstream timeouts to
+    // finish instead of prematurely degrading the alert to text-only.
     let photoBuffer = null;
     if (serverChartRenderer && typeof serverChartRenderer.renderServerChartSnapshot === "function") {
       try {
@@ -821,6 +825,19 @@ function processTicker(t, now, activeSubscribers) {
       }
     }
 
+    // Pump/dump notifications are only useful with visual price confirmation.
+    // If candle acquisition or rendering failed, defer the alert so the next
+    // scan retries it; never emit a text-only substitute.
+    if (!Buffer.isBuffer(photoBuffer) || photoBuffer.length === 0) {
+      const retryAt = Date.now();
+      for (const entry of matchingSubs) {
+        cooldownTracker.set(entry.cooldownKey, retryAt - entry.cooldownMs + CHART_FAILED_RETRY_MS);
+        cooldownTracker.set(entry.baseCooldownKey, retryAt - 60_000 + CHART_FAILED_RETRY_MS);
+      }
+      console.warn(`[ALERT ENGINE] Pump/dump alert deferred for ${exCode}:${cleanSym}; chart is required`);
+      return;
+    }
+
     // Dispatch to all matching subscribers. Every subscriber gets a message formatted
     // strictly with their OWN account-configured period and percentage change.
     for (const entry of matchingSubs) {
@@ -845,7 +862,7 @@ function processTicker(t, now, activeSubscribers) {
       const groupToken = `pd:${t.key}:${entryIsPump ? "pump" : "dump"}:${entryPeriodMins}:${now}`;
       let delivered = false;
       try {
-        const res = await sendTelegramAlert(entry.sub.chatId, msg, photoBuffer, null, groupToken);
+        const res = await sendTelegramAlert(entry.sub.chatId, msg, photoBuffer, null, groupToken, true);
         delivered = !!res;
       } catch (err) {
         console.warn(`[ALERT ENGINE] Send failed for ${entry.sub.chatId}: ${err.message}`);
@@ -856,6 +873,7 @@ function processTicker(t, now, activeSubscribers) {
         // Telegram API on every 400ms tick.
         const retryAt = Date.now() - entry.cooldownMs + FAILED_SEND_RETRY_MS;
         cooldownTracker.set(entry.cooldownKey, retryAt);
+        cooldownTracker.set(entry.baseCooldownKey, Date.now());
         console.warn(`[ALERT ENGINE] Alert not delivered to ${entry.sub.chatId} for ${t.key}; retry in ${Math.round(FAILED_SEND_RETRY_MS / 1000)}s`);
       }
     }

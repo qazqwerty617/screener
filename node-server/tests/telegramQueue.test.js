@@ -78,6 +78,24 @@ test("one chart upload is reused as file_id for the rest of the group", async ()
   assert.equal(uploads.length, 1, "the second recipient must reuse the uploaded file_id");
 });
 
+test("a photo-required alert never falls back to a text message", async () => {
+  const calls = stubFetch(method => {
+    if (method === "sendPhoto") return { ok: false, error_code: 400, description: "photo unavailable" };
+    return { ok: true, result: { message_id: 9 } };
+  });
+
+  const res = await telegramQueue.enqueue({
+    chatId: "photo-only",
+    text: "pump alert",
+    photoBuffer: Buffer.from("fake-png-bytes"),
+    requirePhoto: true,
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(calls.some(call => call.method === "sendMessage"), false,
+    "a failed chart upload must retry as a photo or fail for a later alert retry");
+});
+
 test("enqueue rejects a missing chatId without touching the network", async () => {
   const calls = stubFetch(() => ({ ok: true }));
 

@@ -173,10 +173,21 @@ async function attemptDelivery(item) {
       if (parsed && parsed.description) {
         console.warn(`[TG QUEUE] sendPhoto rejected for ${item.chatId}: ${parsed.description}`);
       }
-      // Photo rejected for a non-rate reason — still try to deliver the text.
+      if (item.requirePhoto) {
+        if (isPermanentFailure(parsed)) {
+          return { ok: false, permanent: true, reason: parsed.description || `error_code ${parsed.error_code}` };
+        }
+        return { ok: false, retryAfterMs: 2000, reason: parsed?.description || "PHOTO_UPLOAD_FAILED" };
+      }
+      // Other notification types may still fall back to text.
     } catch (err) {
       console.warn(`[TG QUEUE] sendPhoto error for ${item.chatId}: ${err.message}`);
+      if (item.requirePhoto) return { ok: false, retryAfterMs: 2000, reason: err.message };
     }
+  }
+
+  if (item.requirePhoto) {
+    return { ok: false, permanent: true, reason: "PHOTO_REQUIRED" };
   }
 
   try {
@@ -290,6 +301,7 @@ async function runWorker() {
  * @param {Buffer} [opts.photoBuffer]   optional rendered chart
  * @param {string} [opts.fileId]        known Telegram file_id to reuse
  * @param {string} [opts.group]         shared token so one upload serves many chats
+ * @param {boolean} [opts.requirePhoto] never fall back to a text-only message
  * @returns {Promise<{ok: boolean, fileId: string|null, reason?: string}>}
  */
 function enqueue(opts) {
@@ -314,6 +326,7 @@ function enqueue(opts) {
       photoBuffer: opts.photoBuffer && Buffer.isBuffer(opts.photoBuffer) ? opts.photoBuffer : null,
       fileId: typeof opts.fileId === "string" && opts.fileId ? opts.fileId : null,
       group: opts.group ? String(opts.group) : null,
+      requirePhoto: opts.requirePhoto === true,
       attempts: 0,
       notBefore: 0,
       resolve

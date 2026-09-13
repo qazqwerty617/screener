@@ -314,3 +314,81 @@ test("functional: pump alerts never escape the subscriber's selected exchanges",
     alertEngine.stop();
   }
 });
+
+test("functional: a slow chart source never degrades a pump alert to text-only", async () => {
+  delete require.cache[require.resolve("../alertEngine")];
+  const alertEngine = require("../alertEngine");
+  const sentTelegram = [];
+  const key = "BN:SLOWCHARTUSDT";
+  const now = Date.now();
+  const candles = Array.from({ length: 12 }, (_, i) => ({
+    t: now - (11 - i) * 60_000,
+    o: 100 + i * 0.2,
+    h: 100.4 + i * 0.2,
+    l: 99.8 + i * 0.2,
+    c: 100.2 + i * 0.2,
+    v: 10_000,
+  }));
+  const ticker = { key, p: 103, v: 5_000_000 };
+
+  alertEngine.init({
+    tickers: new Map([[key, ticker]]),
+    userStore: {
+      getAllUsers: () => ({
+        "slow-chart-user": {
+          id: "slow-chart-user",
+          telegramChatId: "tg-slow-chart",
+          preferences: {
+            notifications: {
+              tgEnabled: true,
+              pumpDump: {
+                enabled: true,
+                periodMinutes: 1,
+                minPct: 1,
+                minVolume: 1000,
+                direction: "pump",
+                marketType: "futures",
+                exchanges: ["BN"],
+                cooldownSeconds: 60,
+              },
+            },
+          },
+        },
+      }),
+    },
+    telegramBot: {
+      sendAlert: async (chatId, text, photo) => {
+        sentTelegram.push({ chatId, text, photo });
+        return { ok: true };
+      },
+    },
+    fetchCandles: async () => {
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+      return candles;
+    },
+    sendUserAlert: () => {},
+    broadcastAlert: () => {},
+  });
+  alertEngine.stop();
+
+  try {
+    alertEngine.priceHistory.setSeries(key, [
+      { t: now - 60_000, p: 100 },
+      { t: now - 30_000, p: 101.5 },
+    ]);
+    alertEngine.processTicker(ticker, now);
+    alertEngine.processTicker(ticker, now + 300);
+
+    const deadline = Date.now() + 4_000;
+    while (!sentTelegram.length && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+
+    assert.equal(sentTelegram.length, 1);
+    assert.ok(Buffer.isBuffer(sentTelegram[0].photo) && sentTelegram[0].photo.length > 0,
+      "the alert must wait for and include its generated chart image");
+  } finally {
+    alertEngine.priceHistory.delete(key);
+    alertEngine.stop();
+  }
+});
