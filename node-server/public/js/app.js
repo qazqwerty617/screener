@@ -9673,7 +9673,7 @@ if (settingsBtn && settingsOverlay) {
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
       resetBtn.onclick = () => {
-        selectAppearanceTheme("aurora");
+        selectAppearanceTheme("obsidian");
 
         // 5. Reset compact & animation & volume
         if ($("set-compact-list")) $("set-compact-list").checked = false;

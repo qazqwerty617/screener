@@ -1,10 +1,13 @@
 (function (root) {
   'use strict';
   const themes = [
+    { id: 'obsidian', name: 'Obsidian Original', description: 'Оригинальная · фирменный фиолетовый', bg: '#0d0f14', panel: '#13151e', raised: '#181b26', hover: '#1e2235', text: '#d1d4dc', muted: '#6b7080', border: '#2b2e39', accent: '#7c3aed', onAccent: '#ffffff', up: '#26c97a', down: '#ff4560', wickUp: '#26c97a', wickDown: '#ff4560', volumeUp: '#26c97a', volumeDown: '#ff4560', grid: '#1c1f27', light: false },
     { id: 'aurora', name: 'Северное сияние', description: 'Ночной синий · мята и коралл', bg: '#101c28', panel: '#162635', raised: '#1e3344', hover: '#294255', text: '#e0edf3', muted: '#9fb4c3', border: '#354b5b', accent: '#58b6ce', onAccent: '#102029', up: '#63dbb5', down: '#f48b89', wickUp: '#91efd1', wickDown: '#ffb5ae', volumeUp: '#439d8e', volumeDown: '#be6b78', grid: '#253744', light: false },
     { id: 'silver', name: 'Серебро', description: 'Серо-белая · чистый графит', bg: '#edf0f3', panel: '#ffffff', raised: '#e2e6eb', hover: '#d3dae2', text: '#232b35', muted: '#596675', border: '#bdc6d0', accent: '#46576b', onAccent: '#ffffff', up: '#ffffff', down: '#505c6b', wickUp: '#66788a', wickDown: '#384756', volumeUp: '#a0afbd', volumeDown: '#586b7e', grid: '#d6dce3', light: true },
     { id: 'dune', name: 'Тёплый песок', description: 'Слоновая кость · нефрит и терракота', bg: '#f4efe4', panel: '#fffaf0', raised: '#eae1d1', hover: '#ded2be', text: '#393d33', muted: '#706b5c', border: '#cfc4af', accent: '#586a48', onAccent: '#ffffff', up: '#348578', down: '#bf654c', wickUp: '#256458', wickDown: '#944933', volumeUp: '#7da294', volumeDown: '#cd9277', grid: '#e0d7c8', light: true },
     { id: 'orchid', name: 'Орхидея', description: 'Глубокая слива · лаванда и золото', bg: '#201a2b', panel: '#2b2338', raised: '#382e49', hover: '#493959', text: '#efe4f5', muted: '#b8a3c6', border: '#51415f', accent: '#c4a2ec', onAccent: '#271b36', up: '#b9a0ed', down: '#e7ad65', wickUp: '#d4c1fa', wickDown: '#f4ce93', volumeUp: '#8268ae', volumeDown: '#a88254', grid: '#372d42', light: false },
+    { id: 'terminal', name: 'Терминал', description: 'Чёрный графит · лайм и янтарь', bg: '#090b0c', panel: '#111516', raised: '#192021', hover: '#24302d', text: '#e7eee9', muted: '#89968e', border: '#303a36', accent: '#9ac65b', onAccent: '#11170d', up: '#9bd66f', down: '#f1a85b', wickUp: '#c1ec9f', wickDown: '#ffd099', volumeUp: '#618c52', volumeDown: '#aa7549', grid: '#222a28', light: false },
+    { id: 'ice', name: 'Ледяной океан', description: 'Стальной синий · лёд и малина', bg: '#101721', panel: '#172231', raised: '#202f41', hover: '#2a3d53', text: '#e5f0fa', muted: '#93a9bc', border: '#34495e', accent: '#72b9e8', onAccent: '#0f2230', up: '#8dd8f2', down: '#ec7895', wickUp: '#b8ebfb', wickDown: '#ffadc0', volumeUp: '#568ea9', volumeDown: '#a9546d', grid: '#263748', light: false },
   ];
   const get = id => themes.find(theme => theme.id === id) || themes[0];
   function applyShell(id) {
@@ -31,6 +34,16 @@
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.AppearanceThemes = api;
   if (root.document) {
-    try { applyShell(root.localStorage.getItem('screener-appearance-theme')); } catch (_) { applyShell(); }
+    try {
+      let saved = root.localStorage.getItem('screener-appearance-theme');
+      // Aurora was briefly written automatically as the default. Restore the
+      // original palette once for those users, while retaining explicit themes.
+      if (!root.localStorage.getItem('screener-appearance-theme-v2') && (!saved || saved === 'aurora')) {
+        saved = 'obsidian';
+        root.localStorage.setItem('screener-appearance-theme', saved);
+      }
+      root.localStorage.setItem('screener-appearance-theme-v2', '1');
+      applyShell(saved);
+    } catch (_) { applyShell(); }
   }
 })(typeof window !== 'undefined' ? window : globalThis);
