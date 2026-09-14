@@ -52,6 +52,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           key: "AD:" + sym, ex: "AD", sym, base: sym.replace(/USDT$/, "").replace(/1000/g, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : +d.priceChangePercent,
           v: +d.quoteVolume, h, l, o, funding: fm ? +fm.lastFundingRate * 100 : 0, nextFunding: fm ? +fm.nextFundingTime : 0,
+          quoteTs: p > 0 ? Date.now() : undefined,
         });
         added++;
       }
@@ -103,6 +104,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const p = +d.c; // close price = latest price
             if (p > 0) {
               t.p = p;
+              t.quoteTs = Date.now();
               if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
               dirtyKeys.add(t.key);
             }

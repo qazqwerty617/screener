@@ -24,6 +24,8 @@ test("uses executable ask and bid and subtracts both taker fees", () => {
   assert.equal(row.gross, 1);
   assert.equal(row.fees, 0.105);
   assert.equal(row.net, 0.895);
+  assert.equal(row.roundTripFees, 0.21);
+  assert.equal(row.roundTripNet, 0.79);
   assert.equal(row.quality, "bbo");
 });
 
@@ -40,13 +42,63 @@ test("deduplicates ticker aliases that point to one object", () => {
 test("normalizes funding intervals before comparing venues", () => {
   const now = Date.now();
   const map = new Map([
-    ["HL:BTC", { ex: "HL", sym: "BTC", base: "BTC", p: 100, funding: 0.005, fundingInterval: 1, v: 1e6, quoteTs: now }],
-    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, funding: 0.02, fundingInterval: 8, v: 1e6, quoteTs: now }],
+    ["HL:BTC", { ex: "HL", sym: "BTC", base: "BTC", p: 100, funding: 0.005, fundingInterval: 1, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, funding: 0.02, fundingInterval: 8, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
   ]);
   const row = buildRows(map, now).funding[0];
   assert.equal(row.longEx, "BN");
   assert.equal(row.shortEx, "HL");
-  assert.equal(row.daily, 0.06);
+  assert.equal(row.hourly, 0.0025);
+});
+
+test("funding rows describe the next settlement and fee payback without long projections", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["BN:EDGEUSDT", { ex: "BN", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: -0.08, fundingInterval: 4, nextFunding: now + 3600000, v: 3e6, quoteTs: now }],
+    ["BB:EDGEUSDT", { ex: "BB", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: 0.04, fundingInterval: 8, nextFunding: now + 3600000 + 120000, v: 2e6, quoteTs: now }],
+  ]);
+
+  const row = buildRows(map, now).funding[0];
+  assert.equal(row.longEx, "BN");
+  assert.equal(row.shortEx, "BB");
+  assert.equal(row.hourly, 0.025);
+  assert.equal(row.nextEventEdge, 0.12);
+  assert.equal(row.nextEventLegs, "both");
+  assert.equal(row.roundTripFees, 0.21);
+  assert.equal(row.breakEvenHours, 8.4);
+  assert.equal(Object.hasOwn(row, "daily"), false);
+  assert.equal(Object.hasOwn(row, "monthly"), false);
+  assert.equal(Object.hasOwn(row, "apr"), false);
+});
+
+test("funding rows reject stale market prices and implausibly distant settlements", () => {
+  const now = Date.now();
+  const fresh = new Map([
+    ["BN:FRESHUSDT", { ex: "BN", sym: "FRESHUSDT", base: "FRESH", p: 100, funding: -0.08, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+    ["BB:FRESHUSDT", { ex: "BB", sym: "FRESHUSDT", base: "FRESH", p: 100, funding: 0.08, nextFunding: now + 3600000, v: 1e6, quoteTs: now - 181000 }],
+  ]);
+  assert.equal(buildRows(fresh, now).funding.length, 0);
+
+  for (const ticker of fresh.values()) {
+    ticker.quoteTs = now;
+    ticker.nextFunding = now + 25 * 3600000;
+  }
+  assert.equal(buildRows(fresh, now).funding.length, 0);
+});
+
+test("spread rows require fresh two-sided BBO from both venues", () => {
+  const now = Date.now();
+  const missingTimestamp = new Map([
+    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, bid: 99.9, ask: 100, v: 10e6 }],
+    ["BB:BTCUSDT", { ex: "BB", sym: "BTCUSDT", base: "BTC", p: 101, bid: 101, ask: 101.1, v: 20e6, quoteTs: now }],
+  ]);
+  const stale = new Map([
+    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, bid: 99.9, ask: 100, v: 10e6, quoteTs: now - 60000 }],
+    ["BB:BTCUSDT", { ex: "BB", sym: "BTCUSDT", base: "BTC", p: 101, bid: 101, ask: 101.1, v: 20e6, quoteTs: now }],
+  ]);
+
+  assert.equal(buildRows(missingTimestamp, now).spreads.length, 0);
+  assert.equal(buildRows(stale, now).spreads.length, 0);
 });
 
 test("filters out zero and dead liquidity pairs (<$5,000)", () => {

@@ -38,6 +38,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           p: mid, chg: o > 0 ? ((mid - o) / o) * 100 : 0,
           v: ctx ? +ctx.dayNtlVlm || 0 : 0,
           h: mid, l: mid, o,
+          quoteTs: Date.now(),
           funding: ctx ? +ctx.funding * 100 : 0,
           nextFunding: Date.now() + (3600000 - (Date.now() % 3600000)),
           oi: ctx ? +ctx.openInterest * mid : 0,
@@ -95,6 +96,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
               const t = tickers.get("HL:" + sym);
               if (t && mid) {
                 t.p = +mid;
+                t.quoteTs = Date.now();
                 if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
                 if (t.p > t.h) t.h = t.p;
                 if (t.l === 0 || t.p < t.l) t.l = t.p;

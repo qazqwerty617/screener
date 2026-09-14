@@ -19,8 +19,10 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
       // metadata. Preserve it on the ticker instead of guessing from an
       // ever-growing list of company names; the density scanner excludes it
       // while the rest of the terminal can continue displaying the market.
+      const contractRows = contracts && contracts.code === "00000" && Array.isArray(contracts.data) ? contracts.data : [];
+      const contractBySymbol = new Map(contractRows.map(item => [item.symbol, item]));
       const rwaSymbols = new Set(
-        (contracts && contracts.code === "00000" && Array.isArray(contracts.data) ? contracts.data : [])
+        contractRows
           .filter(item => String(item.isRwa).toUpperCase() === "YES")
           .map(item => item.symbol)
       );
@@ -31,12 +33,14 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         if (!d.symbol || !d.symbol.endsWith("USDT")) continue;
         bgSyms.push(d.symbol);
         const p = +d.lastPr, o = +d.open24h, h = +d.high24h, l = +d.low24h;
+        const contract = contractBySymbol.get(d.symbol);
         tickers.set("BG:" + d.symbol, {
           key: "BG:" + d.symbol, ex: "BG", sym: d.symbol, base: d.symbol.replace(/USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : 0,
           v: +d.usdtVolume, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
           oi: +d.openInterest * p || 0,
-          bid: +d.bidPr || 0, ask: +d.askPr || 0, quoteTs: Date.now(), fundingInterval: 8,
+          bid: +d.bidPr || 0, ask: +d.askPr || 0, quoteTs: Date.now(), fundingInterval: +contract?.fundInterval || 8,
+          takerFeePct: +contract?.takerFeeRate > 0 ? +contract.takerFeeRate * 100 : 0,
           isRwa: rwaSymbols.has(d.symbol),
         });
         added++;

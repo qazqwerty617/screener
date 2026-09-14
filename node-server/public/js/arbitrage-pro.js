@@ -3,13 +3,15 @@
 (function () {
   const $ = id => document.getElementById(id);
   const pro = {
-    row: null, isFunding: false, tf: 'live', mode: 'best', depth: null, klines: null,
-    depthLoading: false, requestId: 0, initialized: false, unsubs: [], drawQueued: false,
-    livePoints: [], liveTimer: null, historyTimer: null, lastBuyPrice: 0, lastSellPrice: 0,
-    hoverX: -1, hoverPoint: null
+    row: null, isFunding: false, tf: 'live', mode: 'best', view: 'spread', depth: null,
+    depthLoading: false, requestId: 0, historySeq: 0, initialized: false,
+    drawQueued: false, history: [], historyTimer: null, hoverX: -1,
   };
 
-  function pct(n, d = 3) { return `${Number(n) >= 0 ? '+' : ''}${Number(n || 0).toFixed(d)}%`; }
+  function pct(n, digits = 3) {
+    const value = Number(n);
+    return Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(digits)}%` : '—';
+  }
   function price(n) {
     n = Number(n) || 0;
     if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -25,91 +27,71 @@
     if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
     return `$${n.toFixed(0)}`;
   }
-  function debounce(fn, wait) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); }; }
-  function fundingDaily(r) {
-    if (pro.isFunding) return Number(r.daily) || 0;
-    return ((Number(r.sellFunding) || 0) / (Number(r.sellInterval) || 8) - (Number(r.buyFunding) || 0) / (Number(r.buyInterval) || 8)) * 24;
+  function debounce(fn, wait) {
+    let timer;
+    return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), wait); };
   }
-  function legs(r) {
+  function fundingHourly(row) {
+    if (pro.isFunding) return Number(row.hourly) || 0;
+    return ((Number(row.sellFunding) || 0) / (Number(row.sellInterval) || 8)
+      - (Number(row.buyFunding) || 0) / (Number(row.buyInterval) || 8));
+  }
+  function legs(row) {
     return pro.isFunding
-      ? { buyEx: r.longEx, buyName: r.longName, buySymbol: r.longSymbol, buyPrice: r.longPrice || 0, buyMult: r.longMultiplier || 1, sellEx: r.shortEx, sellName: r.shortName, sellSymbol: r.shortSymbol, sellPrice: r.shortPrice || 0, sellMult: r.shortMultiplier || 1 }
-      : { buyEx: r.buyEx, buyName: r.buyName, buySymbol: r.buySymbol, buyPrice: r.buyAsk, buyMult: r.buyMultiplier || 1, sellEx: r.sellEx, sellName: r.sellName, sellSymbol: r.sellSymbol, sellPrice: r.sellBid, sellMult: r.sellMultiplier || 1 };
+      ? { buyName: row.longName, buyPrice: row.longPrice || 0, sellName: row.shortName, sellPrice: row.shortPrice || 0 }
+      : { buyName: row.buyName, buyPrice: row.buyAsk, sellName: row.sellName, sellPrice: row.sellBid };
+  }
+  function snapshotPoint(row) {
+    const l = legs(row);
+    return {
+      t: Number(row.generatedAt) || Date.now(),
+      spread: Number(pro.isFunding ? row.hourly : row.net) || 0,
+      buyP: Number(l.buyPrice) || 0,
+      sellP: Number(l.sellPrice) || 0,
+      gross: Number(pro.isFunding ? row.basis : row.gross),
+      exit: pro.isFunding ? NaN : Number(row.exitNet),
+      buyExit: Number(row.buyBid) || Number(l.buyPrice) || 0,
+      sellExit: Number(row.sellAsk) || Number(l.sellPrice) || 0,
+    };
   }
 
   function init() {
     if (pro.initialized) return;
     pro.initialized = true;
-
-    const notionalEl = $('arb-notional');
-    if (notionalEl) notionalEl.addEventListener('input', debounce(loadDepth, 300));
-    const impactEl = $('arb-impact-limit');
-    if (impactEl) impactEl.addEventListener('change', renderDepth);
-
+    const notional = $('arb-notional');
+    if (notional) notional.addEventListener('input', debounce(loadDepth, 300));
+    if ($('arb-impact-limit')) $('arb-impact-limit').addEventListener('change', renderDepth);
     document.querySelectorAll('[data-arb-size]').forEach(btn => btn.addEventListener('click', () => {
-      if (notionalEl) notionalEl.value = btn.dataset.arbSize;
+      if (notional) notional.value = btn.dataset.arbSize;
       document.querySelectorAll('[data-arb-size]').forEach(x => x.classList.toggle('on', x === btn));
       loadDepth();
     }));
-
     document.querySelectorAll('[data-arb-tf]').forEach(btn => btn.addEventListener('click', () => {
       pro.tf = btn.dataset.arbTf;
       document.querySelectorAll('[data-arb-tf]').forEach(x => x.classList.toggle('on', x === btn));
-      const titleEl = $('arb-chart-title');
-      if (titleEl) titleEl.textContent = pro.tf === 'live' ? 'Исполнимый спред BBO · Live' : `Исполнимый спред BBO · ${pro.tf}`;
-      loadCharts();
+      renderCharts();
     }));
-
+    document.querySelectorAll('[data-arb-chart-view]').forEach(btn => btn.addEventListener('click', () => {
+      pro.view = btn.dataset.arbChartView;
+      document.querySelectorAll('[data-arb-chart-view]').forEach(x => x.classList.toggle('on', x === btn));
+      renderCharts();
+    }));
     document.querySelectorAll('[data-spread-mode]').forEach(btn => btn.addEventListener('click', () => {
+      if (btn.disabled) return;
       pro.mode = btn.dataset.spreadMode;
       document.querySelectorAll('[data-spread-mode]').forEach(x => x.classList.toggle('on', x === btn));
       renderCharts();
     }));
-
-    const detailCanvas = $('arb-detail-canvas');
-    if (detailCanvas) {
-      detailCanvas.addEventListener('mousemove', e => {
-        const rect = detailCanvas.getBoundingClientRect();
-        pro.hoverX = e.clientX - rect.left;
+    const canvas = $('arb-detail-canvas');
+    if (canvas) {
+      canvas.addEventListener('mousemove', event => {
+        const rect = canvas.getBoundingClientRect();
+        pro.hoverX = event.clientX - rect.left;
         scheduleCharts();
       });
-      detailCanvas.addEventListener('mouseleave', () => {
-        pro.hoverX = -1;
-        pro.hoverPoint = null;
-        scheduleCharts();
-      });
+      canvas.addEventListener('mouseleave', () => { pro.hoverX = -1; scheduleCharts(); });
     }
-  }
-
-  function recordLivePoint(t) {
-    const r = pro.row; if (!r) return;
-    const l = legs(r);
-    const coins = window.coins;
-    const bCoin = coins?.get(`${l.buyEx}:${l.buySymbol}`);
-    const sCoin = coins?.get(`${l.sellEx}:${l.sellSymbol}`);
-    const buyAsk = Number(bCoin?.ask) || Number(r.buyAsk) || Number(l.buyPrice);
-    const buyBid = Number(bCoin?.bid) || Number(r.buyBid) || buyAsk;
-    const sellBid = Number(sCoin?.bid) || Number(r.sellBid) || Number(l.sellPrice);
-    const sellAsk = Number(sCoin?.ask) || Number(r.sellAsk) || sellBid;
-
-    if (buyAsk > 0 && buyBid > 0 && sellBid > 0 && sellAsk > 0) {
-      const bAskNorm = buyAsk / (l.buyMult || 1);
-      const bBidNorm = buyBid / (l.buyMult || 1);
-      const sBidNorm = sellBid / (l.sellMult || 1);
-      const sAskNorm = sellAsk / (l.sellMult || 1);
-      const fees = pro.isFunding ? 0 : (r.fees || 0);
-      let spread = ((sBidNorm - bAskNorm) / bAskNorm) * 100 - fees;
-      const exit = ((bBidNorm - sAskNorm) / sAskNorm) * 100 - fees;
-      if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
-        const offset = pro.depth.netPct - r.net;
-        spread += offset;
-      }
-      const last = pro.livePoints.at(-1);
-      if (!last || last.buyP !== buyAsk || last.sellP !== sellBid || last.exit !== exit || (t - last.t >= 2000)) {
-        pro.livePoints.push({ t, buyP: buyAsk, sellP: sellBid, spread, exit, buyExit: buyBid, sellExit: sellAsk });
-        if (pro.livePoints.length > 2160) pro.livePoints.shift();
-        scheduleCharts();
-      }
-    }
+    window.addEventListener('resize', debounce(scheduleCharts, 100));
   }
 
   function open(row, isFunding) {
@@ -117,106 +99,103 @@
     pro.row = row;
     pro.isFunding = isFunding;
     pro.depth = null;
-    pro.klines = null;
     pro.mode = 'best';
+    pro.view = 'spread';
     pro.tf = 'live';
     pro.requestId++;
-    pro.livePoints = [];
-    pro.lastBuyPrice = 0;
-    pro.lastSellPrice = 0;
+    pro.historySeq++;
+    pro.history = [snapshotPoint(row)].filter(point => point.buyP > 0 && point.sellP > 0);
     pro.hoverX = -1;
-    pro.hoverPoint = null;
-
-    if (pro.liveTimer) clearInterval(pro.liveTimer);
-    pro.liveTimer = setInterval(() => recordLivePoint(Date.now()), 1000);
-
-    const drawer = $('arb-drawer');
-    if (drawer) drawer.scrollTop = 0;
-    const execEl = $('arb-execution');
-    if (execEl) execEl.style.display = isFunding ? 'none' : 'block';
-
-    document.querySelectorAll('[data-spread-mode]').forEach(x => x.classList.toggle('on', x.dataset.spreadMode === 'best'));
-    document.querySelectorAll('[data-arb-tf]').forEach(x => x.classList.toggle('on', x.dataset.arbTf === 'live'));
-
-    const l = legs(row);
-    if ($('arb-buy-chart-title')) $('arb-buy-chart-title').textContent = `${l.buyName} · ${row.base}`;
-    if ($('arb-sell-chart-title')) $('arb-sell-chart-title').textContent = `${l.sellName} · ${row.base}`;
-    if ($('arb-buy-chart-price')) $('arb-buy-chart-price').textContent = price(l.buyPrice);
-    if ($('arb-sell-chart-price')) $('arb-sell-chart-price').textContent = price(l.sellPrice);
-    if ($('arb-chart-current')) $('arb-chart-current').textContent = pct(isFunding ? row.basis : row.net);
-    if ($('arb-chart-funding')) $('arb-chart-funding').textContent = pct(fundingDaily(row), 4);
+    if ($('arb-drawer')) $('arb-drawer').scrollTop = 0;
+    if ($('arb-execution')) $('arb-execution').style.display = isFunding ? 'none' : 'block';
+    document.querySelectorAll('[data-spread-mode]').forEach(btn => {
+      btn.classList.toggle('on', btn.dataset.spreadMode === 'best');
+      if (btn.dataset.spreadMode === 'volume') btn.disabled = true;
+    });
+    document.querySelectorAll('[data-arb-tf]').forEach(btn => btn.classList.toggle('on', btn.dataset.arbTf === 'live'));
+    document.querySelectorAll('[data-arb-chart-view]').forEach(btn => btn.classList.toggle('on', btn.dataset.arbChartView === 'spread'));
     if ($('arb-chart-empty')) {
-      $('arb-chart-empty').textContent = 'Загружаем котировки и графики обеих бирж…';
-      $('arb-chart-empty').hidden = false;
+      $('arb-chart-empty').textContent = 'Собираем историю выбранной связки…';
+      $('arb-chart-empty').hidden = pro.history.length > 0;
     }
-
-    if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = 'Вход';
-    if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = 'Выход';
-
-    const titleEl = $('arb-chart-title');
-    if (titleEl) titleEl.textContent = 'Исполнимый спред BBO';
-
+    updateChartLabels();
+    renderCharts();
     loadServerHistory(row.key);
     if (pro.historyTimer) clearInterval(pro.historyTimer);
     pro.historyTimer = setInterval(() => { if (pro.row) loadServerHistory(pro.row.key); }, 2000);
-
-    loadCharts();
     if (!isFunding) loadDepth();
+  }
+
+  function close() {
+    if (pro.historyTimer) { clearInterval(pro.historyTimer); pro.historyTimer = null; }
+    pro.row = null;
+    pro.depth = null;
+    pro.history = [];
+    pro.requestId++;
+    pro.historySeq++;
+  }
+
+  function updateChartLabels() {
+    const row = pro.row;
+    if (!row) return;
+    const l = legs(row);
+    const isBbo = !pro.isFunding && row.quality === 'bbo';
+    const quality = $('arb-chart-quality');
+    if (quality) {
+      quality.textContent = pro.isFunding ? 'FUNDING' : (isBbo ? 'BBO' : 'MID');
+      quality.classList.toggle('indicative', !isBbo);
+    }
+    if ($('arb-chart-kicker')) $('arb-chart-kicker').textContent = pro.view === 'index' ? 'СИНХРОННОЕ ДВИЖЕНИЕ ЦЕН' : 'ИСТОРИЯ СВЯЗКИ';
+    if ($('arb-chart-title')) {
+      $('arb-chart-title').textContent = pro.view === 'index'
+        ? `${l.buyName} / ${l.sellName} · индекс 100`
+        : pro.isFunding ? 'Текущая разница ставок / час' : `${isBbo ? 'Исполнимый' : 'Ориентировочный'} спред · ${isBbo ? 'BBO' : 'Mid'}`;
+    }
+    const modes = document.querySelector('.arb-chart-modes');
+    if (modes) modes.hidden = pro.isFunding || pro.view === 'index';
   }
 
   async function loadServerHistory(key) {
     const requestId = pro.requestId;
+    const sequence = ++pro.historySeq;
     try {
       const response = await fetch(`/api/arbitrage/history?key=${encodeURIComponent(key)}`, { cache: 'no-store' });
-      if (!response.ok || requestId !== pro.requestId) return;
+      if (!response.ok || requestId !== pro.requestId || sequence !== pro.historySeq) return;
       const data = await response.json();
-      const points = (data.points || []).map(point => ({
-        t: Number(point[0]) || 0,
-        spread: Number(point[1]) || 0,
-        buyP: Number(point[2]) || 0,
-        sellP: Number(point[3]) || 0,
-        exit: Number.isFinite(Number(point[5])) ? Number(point[5]) : NaN,
-        buyExit: Number(point[6]) || 0,
-        sellExit: Number(point[7]) || 0,
-      })).filter(point => point.t > 0 && point.buyP > 0 && point.sellP > 0);
-
-      if (points.length) {
-        const liveTail = pro.livePoints.filter(point => point.t > points.at(-1).t);
-        pro.livePoints = points.concat(liveTail).slice(-2160);
-        if ($('arb-chart-empty')) $('arb-chart-empty').hidden = true;
-        renderCharts();
+      const byTime = new Map();
+      for (const raw of data.points || []) {
+        const point = {
+          t: Number(raw[0]) || 0, spread: Number(raw[1]), buyP: Number(raw[2]) || 0,
+          sellP: Number(raw[3]) || 0, gross: Number(raw[4]),
+          exit: pro.isFunding ? NaN : Number(raw[5]), buyExit: Number(raw[6]) || 0,
+          sellExit: Number(raw[7]) || 0,
+        };
+        if (point.t > 0 && Number.isFinite(point.spread) && point.buyP > 0 && point.sellP > 0) byTime.set(point.t, point);
       }
-    } catch (_) {}
-  }
-
-  function closeStreams() {
-    pro.unsubs.splice(0).forEach(fn => { try { fn(); } catch (_) { } });
-    if (pro.liveTimer) { clearInterval(pro.liveTimer); pro.liveTimer = null; }
-  }
-
-  function close() {
-    closeStreams();
-    if (pro.historyTimer) { clearInterval(pro.historyTimer); pro.historyTimer = null; }
-    pro.row = null;
-    pro.depth = null;
-    pro.klines = null;
-    pro.livePoints = [];
-    pro.requestId++;
+      const points = [...byTime.values()].sort((a, b) => a.t - b.t).slice(-2160);
+      if (!points.length) return;
+      pro.history = points;
+      if ($('arb-chart-empty')) $('arb-chart-empty').hidden = true;
+      renderCharts();
+    } catch (_) {
+      if (!pro.history.length && $('arb-chart-empty')) {
+        $('arb-chart-empty').hidden = false;
+        $('arb-chart-empty').textContent = 'История временно недоступна';
+      }
+    }
   }
 
   async function loadDepth() {
-    const r = pro.row; if (!r || pro.isFunding || pro.depthLoading) return;
+    const row = pro.row;
+    if (!row || pro.isFunding || pro.depthLoading) return;
     const requestId = pro.requestId;
     const notional = Math.max(10, Math.min(1000000, Number($('arb-notional')?.value) || 500));
     pro.depthLoading = true;
-    if ($('arb-depth-state')) {
-      $('arb-depth-state').textContent = 'СТАКАНЫ…';
-      $('arb-depth-state').className = '';
-    }
+    if ($('arb-depth-state')) { $('arb-depth-state').textContent = 'СТАКАНЫ…'; $('arb-depth-state').className = ''; }
     try {
-      const res = await fetch(`/api/arbitrage/depth?key=${encodeURIComponent(r.key)}&notional=${encodeURIComponent(notional)}`, { cache: 'no-store' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+      const response = await fetch(`/api/arbitrage/depth?key=${encodeURIComponent(row.key)}&notional=${encodeURIComponent(notional)}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
       if (pro.requestId !== requestId) return;
       pro.depth = data;
       renderDepth();
@@ -228,55 +207,36 @@
       if (pro.requestId !== requestId) return;
       pro.depth = null;
       renderDepth();
-      if ($('arb-depth-state')) {
-        $('arb-depth-state').textContent = 'СТАКАН НЕДОСТУПЕН';
-        $('arb-depth-state').className = 'error';
-      }
-    } finally {
-      pro.depthLoading = false;
-    }
+      if ($('arb-depth-state')) { $('arb-depth-state').textContent = 'СТАКАН НЕДОСТУПЕН'; $('arb-depth-state').className = 'error'; }
+    } finally { pro.depthLoading = false; }
   }
 
   function renderDepth() {
-    const d = pro.depth;
-    if (!d) {
-      ['arb-safe-volume', 'arb-depth-buy', 'arb-depth-sell', 'arb-depth-net', 'arb-depth-funded', 'arb-depth-pnl'].forEach(id => {
-        if ($(id)) $(id).textContent = '—';
-      });
+    const data = pro.depth;
+    const volumeButton = document.querySelector('[data-spread-mode="volume"]');
+    if (volumeButton) volumeButton.disabled = !data;
+    if (!data) {
+      ['arb-safe-volume', 'arb-depth-buy', 'arb-depth-sell', 'arb-depth-net', 'arb-depth-funded', 'arb-depth-pnl'].forEach(id => { if ($(id)) $(id).textContent = '—'; });
       if ($('arb-depth-fill')) $('arb-depth-fill').style.width = '0';
       if ($('arb-depth-marker')) $('arb-depth-marker').style.left = '0';
       return;
     }
     const impact = Number($('arb-impact-limit')?.value) || 0.1;
-    const band = d.bands.find(x => Number(x.impact) === impact) || d.bands[1];
+    const band = data.bands.find(item => Number(item.impact) === impact) || data.bands[1];
     const safe = Number(band?.notional) || 0;
-    const requested = Number(d.requestedNotional) || 0;
-
+    const requested = Number(data.requestedNotional) || 0;
     if ($('arb-safe-volume')) $('arb-safe-volume').textContent = money(safe);
-    if ($('arb-depth-buy')) $('arb-depth-buy').textContent = price(d.buy.average);
-    if ($('arb-depth-buy-impact')) $('arb-depth-buy-impact').textContent = `проскальзывание ${pct(d.buy.impactPct, 4)}`;
-    if ($('arb-depth-sell')) $('arb-depth-sell').textContent = price(d.sell.average);
-    if ($('arb-depth-sell-impact')) $('arb-depth-sell-impact').textContent = `проскальзывание ${pct(d.sell.impactPct, 4)}`;
-    if ($('arb-depth-net')) $('arb-depth-net').textContent = pct(d.netPct);
-    if ($('arb-depth-funded')) $('arb-depth-funded').textContent = pct(d.netAfterFundingDayPct);
-    if ($('arb-depth-pnl')) $('arb-depth-pnl').textContent = `${d.complete ? '≈' : 'до'} ${money(d.estimatedPnlAfterFundingDay)} PnL`;
-
+    if ($('arb-depth-buy')) $('arb-depth-buy').textContent = price(data.buy.average);
+    if ($('arb-depth-buy-impact')) $('arb-depth-buy-impact').textContent = `проскальзывание ${pct(data.buy.impactPct, 4)}`;
+    if ($('arb-depth-sell')) $('arb-depth-sell').textContent = price(data.sell.average);
+    if ($('arb-depth-sell-impact')) $('arb-depth-sell-impact').textContent = `проскальзывание ${pct(data.sell.impactPct, 4)}`;
+    if ($('arb-depth-net')) $('arb-depth-net').textContent = pct(data.netPct);
+    if ($('arb-depth-funded')) $('arb-depth-funded').textContent = pct(data.netAfterFundingHourPct);
+    if ($('arb-depth-pnl')) $('arb-depth-pnl').textContent = `${data.complete ? '≈' : 'до'} ${money(data.estimatedPnlAfterFundingHour)} PnL · текущая ставка`;
     const ratio = safe > 0 ? Math.min(1, requested / safe) : 1;
     if ($('arb-depth-fill')) $('arb-depth-fill').style.width = `${ratio * 100}%`;
     if ($('arb-depth-marker')) $('arb-depth-marker').style.left = `${Math.min(99, ratio * 100)}%`;
     renderCharts();
-  }
-
-  function flatCandles(flat) {
-    const out = [];
-    for (let i = 0; Array.isArray(flat) && i + 5 < flat.length; i += 6) {
-      let t = +flat[i];
-      if (t < 1e11) t *= 1000;
-      const c = { t, o: +flat[i + 1], h: +flat[i + 2], l: +flat[i + 3], c: +flat[i + 4], v: +flat[i + 5] };
-      if (c.t && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0) out.push(c);
-    }
-    out.sort((a, b) => a.t - b.t);
-    return out;
   }
 
   function scheduleCharts() {
@@ -284,356 +244,228 @@
     pro.drawQueued = true;
     requestAnimationFrame(() => { pro.drawQueued = false; renderCharts(); });
   }
-
-  function updateLeg(side, data, isTick) {
-    const list = pro.klines?.[side];
-    if (!list?.length || !Array.isArray(data)) return;
-    if (!isTick) {
-      let t = +data[0];
-      if (t < 1e11) t *= 1000;
-      const c = { t, o: +data[1], h: +data[2], l: +data[3], c: +data[4], v: +data[5] };
-      if (!(c.t && c.o > 0 && c.h > 0 && c.l > 0 && c.c > 0)) return;
-      const last = list.at(-1);
-      if (c.t === last.t) Object.assign(last, c);
-      else if (c.t > last.t) { list.push(c); if (list.length > 500) list.shift(); }
-    } else {
-      let t = +data[0];
-      if (t < 1e11) t *= 1000;
-      const p = +data[1], hi = +data[2] || p, lo = +data[3] || p;
-      if (!(t > 0 && p > 0)) return;
-      if (side === 'buy') pro.lastBuyPrice = p;
-      if (side === 'sell') pro.lastSellPrice = p;
-
-      recordLivePoint(t);
-
-      const tfMs = ({ "1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000 })[pro.tf] || 300000;
-      let last = list.at(-1);
-      if (t >= last.t + tfMs) {
-        last = { t: Math.floor(t / tfMs) * tfMs, o: +data[4] || p, h: hi, l: lo, c: p, v: 0 };
-        list.push(last); if (list.length > 500) list.shift();
-      } else if (t >= last.t) {
-        last.c = p; last.h = Math.max(last.h, hi, p); last.l = Math.min(last.l, lo, p);
-      } else return;
-    }
-    const priceEl = $(side === 'buy' ? 'arb-buy-chart-price' : 'arb-sell-chart-price');
-    if (priceEl && list.at(-1)) priceEl.textContent = price(list.at(-1).c);
-    scheduleCharts();
-  }
-
-  function subscribeCharts(l, tf) {
-    closeStreams();
-    if (pro.row) pro.liveTimer = setInterval(() => recordLivePoint(Date.now()), 1000);
-    if (!window.MarketData?.subscribe) return;
-    const subTf = tf === 'live' ? '1m' : tf;
-    [['buy', l.buyEx, l.buySymbol], ['sell', l.sellEx, l.sellSymbol]].forEach(([side, ex, sym]) => {
-      pro.unsubs.push(window.MarketData.subscribe({
-        ex, sym, tf: subTf,
-        onKline: data => updateLeg(side, data, false),
-        onTick: data => updateLeg(side, data, true)
-      }));
-    });
-  }
-
-  async function loadCharts() {
-    closeStreams();
-    const r = pro.row; if (!r) return;
-    const requestId = pro.requestId, tf = pro.tf, l = legs(r);
-    if ($('arb-chart-empty')) {
-      $('arb-chart-empty').hidden = false;
-      $('arb-chart-empty').textContent = 'Загружаем данные графиков…';
-    }
-
-    const fetchTf = tf === 'live' ? '1m' : tf;
-    const fetchLeg = (ex, sym) => fetch(`/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(fetchTf)}&lite=1`, { cache: 'no-store' })
-      .then(res => { if (!res.ok) throw new Error('klines'); return res.json(); });
-
-    const [br, sr] = await Promise.allSettled([fetchLeg(l.buyEx, l.buySymbol), fetchLeg(l.sellEx, l.sellSymbol)]);
-    if (pro.requestId !== requestId || pro.tf !== tf) return;
-
-    const prev = pro.klines;
-    const pick = (res, side) => {
-      const candles = res.status === 'fulfilled' ? flatCandles(res.value) : [];
-      if (candles.length > 1) return candles;
-      return prev && prev[side] && prev[side].length > 1 ? prev[side] : candles;
-    };
-
-    pro.klines = { buy: pick(br, 'buy'), sell: pick(sr, 'sell') };
-    const haveBoth = pro.klines.buy.length > 1 && pro.klines.sell.length > 1;
-
-    subscribeCharts(l, tf);
-    renderCharts();
-    recordLivePoint(Date.now());
-    const hasData = pro.livePoints.length > 1;
-    if ($('arb-chart-empty')) {
-      $('arb-chart-empty').hidden = hasData;
-      if (!hasData) $('arb-chart-empty').textContent = 'Собираем BBO-историю выбранной связки…';
-    }
+  function visiblePoints() {
+    if (!pro.history.length) return [];
+    const windowMs = { live: 5 * 60000, '5m': 5 * 60000, '15m': 15 * 60000, '1h': 3600000, '4h': 4 * 3600000 }[pro.tf] || 5 * 60000;
+    const latest = pro.history.at(-1).t;
+    const points = pro.history.filter(point => point.t >= latest - windowMs);
+    return points.length ? points : pro.history.slice(-1);
   }
 
   function renderCharts() {
-    const r = pro.row, k = pro.klines; if (!r) return;
-    const l = legs(r);
-    const windowMs = ({ live: 5 * 60000, '5m': 5 * 60000, '15m': 15 * 60000, '1h': 3600000, '4h': 4 * 3600000 })[pro.tf] || 5 * 60000;
-    const latest = pro.livePoints.at(-1)?.t || Date.now();
-    let points = pro.livePoints.filter(point => point.t >= latest - windowMs);
+    const row = pro.row;
+    if (!row) return;
+    updateChartLabels();
+    let points = visiblePoints();
     if (pro.mode === 'volume' && pro.depth && !pro.isFunding) {
-      const offset = pro.depth.netPct - r.net;
+      const offset = Number(pro.depth.netPct) - Number(row.net);
       points = points.map(point => ({ ...point, spread: point.spread + offset }));
     }
-
-    drawSpread($('arb-detail-canvas'), points, fundingDaily(r), pro.tf === 'live', r);
-
-    const drawLeg = (canvas, side, accent, priceKey) => {
-      if (!canvas) return;
-      const candles = k && k[side];
-      const liveLine = () => drawLiveLegChart(canvas, pro.livePoints.map(p => ({ t: p.t, c: p[priceKey] })), accent);
-      if (pro.tf === 'live') {
-        if (pro.livePoints.length > 1) liveLine();
-        else if (candles && candles.length > 1) drawCandles(canvas, candles, accent);
-      } else if (candles && candles.length > 1) {
-        drawCandles(canvas, candles, accent);
-      } else {
-        liveLine();
-      }
-    };
-    drawLeg($('arb-buy-chart'), 'buy', '#2bd98a', 'buyP');
-    drawLeg($('arb-sell-chart'), 'sell', '#ef647a', 'sellP');
+    const l = legs(row);
+    let series;
+    let percentAxis = true;
+    if (pro.view === 'index') {
+      const baseBuy = points.find(point => point.buyP > 0)?.buyP || 1;
+      const baseSell = points.find(point => point.sellP > 0)?.sellP || 1;
+      points = points.map(point => ({ ...point, buyIndex: point.buyP / baseBuy * 100, sellIndex: point.sellP / baseSell * 100 }));
+      percentAxis = false;
+      series = [
+        { key: 'buyIndex', label: l.buyName, color: '#2bd98a', width: 2 },
+        { key: 'sellIndex', label: l.sellName, color: '#ef647a', width: 2 },
+      ];
+    } else if (pro.isFunding) {
+      series = [
+        { key: 'spread', label: 'Funding/ч', color: '#2bd98a', width: 2.2, fill: true },
+        { key: 'gross', label: 'Базис', color: '#9b82e7', width: 1.5, dash: [4, 4] },
+      ];
+    } else {
+      series = [
+        { key: 'spread', label: 'Вход', color: '#2bd98a', width: 2.2, fill: true },
+        { key: 'exit', label: 'Выход', color: '#ef647a', width: 1.45 },
+      ];
+    }
+    drawMarketChart($('arb-detail-canvas'), points, series, percentAxis);
+    updateChartStats(points, series[0].key, percentAxis);
+    const last = points.at(-1);
+    if ($('arb-chart-buy-label')) {
+      $('arb-chart-buy-label').textContent = `${series[0].label} ${formatChartValue(last?.[series[0].key], percentAxis)}`;
+      if ($('arb-chart-buy-label').previousElementSibling) $('arb-chart-buy-label').previousElementSibling.style.background = series[0].color;
+    }
+    if ($('arb-chart-sell-label')) {
+      $('arb-chart-sell-label').textContent = `${series[1].label} ${formatChartValue(last?.[series[1].key], percentAxis)}`;
+      if ($('arb-chart-sell-label').previousElementSibling) $('arb-chart-sell-label').previousElementSibling.style.background = series[1].color;
+    }
+    if ($('arb-chart-current')) $('arb-chart-current').textContent = formatChartValue(last?.[series[0].key], percentAxis);
+    if ($('arb-chart-funding')) $('arb-chart-funding').textContent = pct(fundingHourly(row), 5);
+    if ($('arb-chart-empty')) $('arb-chart-empty').hidden = points.length > 0;
   }
 
-  function fit(canvas, height) {
+  function updateChartStats(points, key, percentAxis) {
+    const values = points.map(point => Number(point[key])).filter(Number.isFinite);
+    const min = values.length ? Math.min(...values) : NaN;
+    const max = values.length ? Math.max(...values) : NaN;
+    const avg = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : NaN;
+    if ($('arb-chart-min')) $('arb-chart-min').textContent = formatChartValue(min, percentAxis);
+    if ($('arb-chart-avg')) $('arb-chart-avg').textContent = formatChartValue(avg, percentAxis);
+    if ($('arb-chart-max')) $('arb-chart-max').textContent = formatChartValue(max, percentAxis);
+    if ($('arb-chart-positive')) {
+      const positive = percentAxis && values.length ? values.filter(value => value > 0).length / values.length * 100 : NaN;
+      $('arb-chart-positive').textContent = Number.isFinite(positive) ? `${positive.toFixed(0)}%` : '—';
+    }
+    if ($('arb-chart-age')) {
+      const ageMs = points.length ? Math.max(0, Date.now() - Number(points.at(-1).t || 0)) : NaN;
+      $('arb-chart-age').textContent = Number.isFinite(ageMs) ? (ageMs < 1000 ? '<1с' : `${Math.round(ageMs / 1000)}с`) : '—';
+    }
+    if ($('arb-chart-samples')) $('arb-chart-samples').textContent = String(values.length);
+  }
+  function formatChartValue(value, percentAxis) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return percentAxis ? pct(n, 3) : n.toFixed(3);
+  }
+  function fit(canvas, cssHeight) {
     if (!canvas) return { ctx: null, w: 0, h: 0, dpr: 1 };
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = Math.max(260, canvas.clientWidth || 500);
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(height * dpr);
+    const cssWidth = Math.max(280, canvas.clientWidth || 600);
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
     return { ctx: canvas.getContext('2d'), w: canvas.width, h: canvas.height, dpr };
   }
+  function downsample(points, key, limit = 700) {
+    if (points.length <= limit) return points;
+    const output = [points[0]];
+    const bucketSize = (points.length - 2) / (limit / 2 - 1);
+    for (let start = 1; start < points.length - 1; start += bucketSize) {
+      const from = Math.floor(start);
+      const to = Math.min(points.length - 1, Math.max(from + 1, Math.floor(start + bucketSize)));
+      const bucket = points.slice(from, to);
+      let min = bucket[0], max = bucket[0];
+      for (const point of bucket) {
+        if (Number(point[key]) < Number(min[key])) min = point;
+        if (Number(point[key]) > Number(max[key])) max = point;
+      }
+      if (min.t <= max.t) output.push(min, max); else output.push(max, min);
+    }
+    output.push(points.at(-1));
+    return output;
+  }
 
-  function drawSpread(canvas, points, funding, isLive = false, row = null) {
+  function drawMarketChart(canvas, rawPoints, series, percentAxis) {
     if (!canvas) return;
-    const { ctx, w, h, dpr } = fit(canvas, 270);
+    const { ctx, w, h, dpr } = fit(canvas, 286);
     if (!ctx) return;
     ctx.clearRect(0, 0, w, h);
-    if (!points || points.length < 2) return;
-    if (points.length > 900) {
-      const step = Math.ceil(points.length / 900);
-      points = points.filter((_, index) => index % step === 0 || index === points.length - 1);
+    if (!rawPoints.length) return;
+    const points = downsample(rawPoints, series[0].key);
+    const values = [];
+    for (const point of points) for (const item of series) {
+      const value = Number(point[item.key]);
+      if (Number.isFinite(value)) values.push(value);
     }
-    const entry = points.map(point => Number(point.spread)).filter(Number.isFinite);
-    const exit = points.map(point => Number(point.exit)).filter(Number.isFinite);
-    const domain = entry.concat(exit, [0]);
-    let sMn = Math.min(...domain), sMx = Math.max(...domain);
-    const span = (sMx - sMn) || Math.max(Math.abs(sMx) * 0.02, 0.05);
-    sMn -= span * 0.14; sMx += span * 0.14;
-    const sRange = sMx - sMn || 1;
+    if (!values.length) return;
+    if (percentAxis) values.push(0);
+    let min = Math.min(...values), max = Math.max(...values);
+    const rawSpan = max - min;
+    const fallback = percentAxis ? Math.max(Math.abs(max) * 0.04, 0.04) : Math.max(Math.abs(max) * 0.0004, 0.04);
+    const padding = (rawSpan || fallback) * 0.16;
+    min -= padding; max += padding;
+    const range = max - min || 1;
+    const pad = { l: 16 * dpr, r: 72 * dpr, t: 14 * dpr, b: 30 * dpr };
+    const firstTime = points[0].t, lastTime = points.at(-1).t;
+    const timeRange = Math.max(5000, lastTime - firstTime);
+    const x = time => pad.l + (time - firstTime) * (w - pad.l - pad.r) / timeRange;
+    const y = value => pad.t + (max - value) * (h - pad.t - pad.b) / range;
 
-    const pad = { l: 12 * dpr, r: 74 * dpr, t: 20 * dpr, b: 28 * dpr };
-    const tMin = points[0].t;
-    const tMax = isLive ? Math.max(Date.now(), points.at(-1).t) : points.at(-1).t;
-    const tRange = Math.max(5000, tMax - tMin);
-    const x = time => pad.l + (time - tMin) * (w - pad.l - pad.r) / tRange;
-    const ySpread = v => pad.t + (sMx - v) * (h - pad.t - pad.b) / sRange;
+    if (percentAxis) {
+      const zeroY = y(0);
+      const plotRight = w - pad.r;
+      ctx.fillStyle = 'rgba(43,217,138,.035)';
+      ctx.fillRect(pad.l, pad.t, plotRight - pad.l, Math.max(0, zeroY - pad.t));
+      ctx.fillStyle = 'rgba(239,100,122,.035)';
+      ctx.fillRect(pad.l, zeroY, plotRight - pad.l, Math.max(0, h - pad.b - zeroY));
+    }
 
-    ctx.font = `${8.5 * dpr}px Inter, sans-serif`;
+    ctx.font = `${8 * dpr}px Inter, sans-serif`;
     ctx.textAlign = 'right';
     for (let i = 0; i <= 4; i++) {
-      const v = sMx - sRange * i / 4, yy = ySpread(v);
-      ctx.strokeStyle = '#1e2430'; ctx.lineWidth = dpr;
+      const value = max - range * i / 4, yy = y(value);
+      ctx.strokeStyle = '#1d2430'; ctx.lineWidth = dpr;
       ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w - pad.r, yy); ctx.stroke();
-      ctx.fillStyle = '#747d8f'; ctx.fillText(`${v.toFixed(2)}%`, w - 8 * dpr, yy + 3 * dpr);
+      ctx.fillStyle = '#697385';
+      ctx.fillText(percentAxis ? `${value.toFixed(2)}%` : value.toFixed(2), w - 7 * dpr, yy + 3 * dpr);
     }
-
-    const zeroY = ySpread(0);
-    ctx.strokeStyle = '#51596a'; ctx.setLineDash([4 * dpr, 4 * dpr]); ctx.lineWidth = dpr;
-    ctx.beginPath(); ctx.moveTo(pad.l, zeroY); ctx.lineTo(w - pad.r, zeroY); ctx.stroke(); ctx.setLineDash([]);
-
-    const drawSeries = (field, color, width) => {
+    if (percentAxis) {
+      const zeroY = y(0);
+      ctx.strokeStyle = '#465064'; ctx.lineWidth = dpr; ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.beginPath(); ctx.moveTo(pad.l, zeroY); ctx.lineTo(w - pad.r, zeroY); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#8a94a6'; ctx.textAlign = 'left'; ctx.font = `700 ${7 * dpr}px Inter, sans-serif`;
+      ctx.fillText('0 · БЕЗУБЫТОК', pad.l + 5 * dpr, zeroY - 5 * dpr);
+    }
+    function pathFor(item) {
       let started = false;
       ctx.beginPath();
       for (const point of points) {
-        const value = Number(point[field]);
+        const value = Number(point[item.key]);
         if (!Number.isFinite(value)) continue;
-        if (started) ctx.lineTo(x(point.t), ySpread(value));
-        else { ctx.moveTo(x(point.t), ySpread(value)); started = true; }
+        if (started) ctx.lineTo(x(point.t), y(value)); else { ctx.moveTo(x(point.t), y(value)); started = true; }
       }
-      ctx.strokeStyle = color; ctx.lineWidth = width * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
-    };
-    drawSeries('exit', '#ef556a', 1.8);
-    drawSeries('spread', '#24d383', 2.2);
-
-    const spreadVal = points.map(point => Number(point.spread)).filter(Number.isFinite);
-    const trendWin = spreadVal.slice(0, -1).slice(-30);
-    const trend = trendWin.length ? spreadVal.at(-1) - trendWin.reduce((a, b) => a + b, 0) / trendWin.length : 0;
-    const eps = span * 0.015;
-    const trendTxt = trend > eps ? '▲ расширяется' : trend < -eps ? '▼ сужается' : '→ стабилен';
-    const trendCol = trend > eps ? '#2bd98a' : trend < -eps ? '#ef647a' : '#8b93a5';
-    const label = `${trendTxt}  ${trend >= 0 ? '+' : ''}${trend.toFixed(3)}%`;
-
-    ctx.font = `700 ${9.5 * dpr}px Inter, sans-serif`; ctx.textAlign = 'left';
-    const lw = ctx.measureText(label).width + 16 * dpr;
-    ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(10 * dpr, 6 * dpr, lw, 20 * dpr, 10 * dpr);
-    else ctx.rect(10 * dpr, 6 * dpr, lw, 20 * dpr);
-    ctx.fillStyle = 'rgba(10, 13, 18, 0.88)'; ctx.fill();
-    ctx.strokeStyle = trendCol; ctx.lineWidth = dpr; ctx.stroke();
-    ctx.fillStyle = trendCol; ctx.fillText(label, 18 * dpr, 19.5 * dpr);
-
-    ctx.font = `${8 * dpr}px Inter, sans-serif`; ctx.fillStyle = '#677181';
-    const timeFmt = isLive ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
-    [tMin, tMin + tRange / 2, tMax].forEach((tVal, idx) => {
-      ctx.fillText(new Date(tVal).toLocaleTimeString('ru-RU', timeFmt), pad.l + (idx / 2) * (w - pad.l - pad.r) - 20 * dpr, h - 6 * dpr);
+      return started;
+    }
+    const primary = series[0];
+    if (primary.fill && pathFor(primary)) {
+      const firstValid = points.find(point => Number.isFinite(Number(point[primary.key])));
+      const lastValid = [...points].reverse().find(point => Number.isFinite(Number(point[primary.key])));
+      const baseline = percentAxis && min <= 0 && max >= 0 ? y(0) : h - pad.b;
+      ctx.lineTo(x(lastValid.t), baseline); ctx.lineTo(x(firstValid.t), baseline); ctx.closePath();
+      const gradient = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
+      gradient.addColorStop(0, 'rgba(43,217,138,.16)'); gradient.addColorStop(1, 'rgba(43,217,138,0)');
+      ctx.fillStyle = gradient; ctx.fill();
+    }
+    for (const item of [...series].reverse()) {
+      if (!pathFor(item)) continue;
+      ctx.strokeStyle = item.color; ctx.lineWidth = item.width * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.setLineDash((item.dash || []).map(value => value * dpr)); ctx.stroke(); ctx.setLineDash([]);
+    }
+    const timeOptions = pro.tf === 'live' ? { hour: '2-digit', minute: '2-digit', second: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
+    ctx.font = `${8 * dpr}px Inter, sans-serif`; ctx.fillStyle = '#626c7d';
+    [0, 0.5, 1].forEach((ratio, index) => {
+      const time = firstTime + timeRange * ratio;
+      ctx.textAlign = index === 0 ? 'left' : index === 2 ? 'right' : 'center';
+      ctx.fillText(new Date(time).toLocaleTimeString('ru-RU', timeOptions), pad.l + ratio * (w - pad.l - pad.r), h - 8 * dpr);
     });
-
-    const tipX = x(points.at(-1).t);
-    const lastEntry = Number(points.at(-1).spread);
-    const lastExit = Number(points.at(-1).exit);
-    [[lastEntry, '#24d383'], [lastExit, '#ef556a']].forEach(([value, color]) => {
-      if (!Number.isFinite(value)) return;
-      const yy = ySpread(value);
-      ctx.beginPath(); ctx.arc(tipX, yy, 3.5 * dpr, 0, 2 * Math.PI); ctx.fillStyle = color; ctx.fill();
-      const badge = `${color === '#24d383' ? 'IN' : 'OUT'}  ${value >= 0 ? '+' : ''}${value.toFixed(3)}%`;
+    const lastPoint = points.at(-1);
+    const badges = series.map(item => ({ item, value: Number(lastPoint[item.key]) })).filter(item => Number.isFinite(item.value));
+    let previousY = -Infinity;
+    for (const badge of badges) {
+      const actualY = y(badge.value);
+      let badgeY = actualY;
+      if (Math.abs(badgeY - previousY) < 17 * dpr) badgeY = previousY + 17 * dpr;
+      badgeY = Math.max(8 * dpr, Math.min(h - pad.b - 8 * dpr, badgeY));
+      previousY = badgeY;
+      ctx.beginPath(); ctx.arc(x(lastPoint.t), actualY, 3 * dpr, 0, Math.PI * 2); ctx.fillStyle = badge.item.color; ctx.fill();
+      const label = formatChartValue(badge.value, percentAxis);
       ctx.font = `700 ${8 * dpr}px Inter, sans-serif`; ctx.textAlign = 'left';
-      const bw = ctx.measureText(badge).width + 10 * dpr;
-      ctx.fillStyle = color; ctx.fillRect(w - pad.r + 4 * dpr, yy - 8 * dpr, bw, 15 * dpr);
-      ctx.fillStyle = '#07100c'; ctx.fillText(badge, w - pad.r + 9 * dpr, yy + 2.5 * dpr);
-    });
-
-    // Interactive Hover Crosshair & Floating Tooltip
-    if (pro.hoverX > 0) {
-      const targetTime = tMin + ((pro.hoverX * dpr - pad.l) / (w - pad.l - pad.r)) * tRange;
-      let closest = points[0], minDiff = Infinity;
-      for (const pt of points) {
-        const diff = Math.abs(pt.t - targetTime);
-        if (diff < minDiff) { minDiff = diff; closest = pt; }
-      }
-      if (closest) {
-        const hx = x(closest.t), hy = ySpread(closest.spread);
-        ctx.strokeStyle = 'rgba(226, 232, 240, 0.45)';
-        ctx.lineWidth = dpr; ctx.setLineDash([3 * dpr, 3 * dpr]);
-        ctx.beginPath(); ctx.moveTo(hx, pad.t); ctx.lineTo(hx, h - pad.b); ctx.stroke();
-        ctx.setLineDash([]);
-
-        ctx.beginPath(); ctx.arc(hx, hy, 5 * dpr, 0, 2 * Math.PI);
-        ctx.fillStyle = '#a78bfa'; ctx.fill();
-        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5 * dpr; ctx.stroke();
-
-        // Tooltip badge
-        const ttDate = new Date(closest.t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        const ttText = `${ttDate}  Вход ${pct(closest.spread, 3)}  ·  Выход ${pct(closest.exit, 3)}`;
-        ctx.font = `600 ${9 * dpr}px Inter, sans-serif`;
-        const tw = ctx.measureText(ttText).width + 16 * dpr;
-        let tx = hx - tw / 2;
-        if (tx < pad.l) tx = pad.l;
-        if (tx + tw > w - pad.r) tx = w - pad.r - tw;
-
-        ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(tx, 30 * dpr, tw, 18 * dpr, 6 * dpr);
-        else ctx.rect(tx, 30 * dpr, tw, 18 * dpr);
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)'; ctx.fill();
-        ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = dpr; ctx.stroke();
-        ctx.fillStyle = '#f8fafc'; ctx.fillText(ttText, tx + 8 * dpr, 42.5 * dpr);
-      }
+      const width = ctx.measureText(label).width + 10 * dpr;
+      ctx.fillStyle = badge.item.color; ctx.fillRect(w - pad.r + 5 * dpr, badgeY - 7 * dpr, width, 14 * dpr);
+      ctx.fillStyle = '#07100c'; ctx.fillText(label, w - pad.r + 10 * dpr, badgeY + 2.5 * dpr);
     }
-
-    if ($('arb-chart-buy-label')) $('arb-chart-buy-label').textContent = `Вход ${pct(lastEntry)}`;
-    if ($('arb-chart-sell-label')) $('arb-chart-sell-label').textContent = Number.isFinite(lastExit) ? `Выход ${pct(lastExit)}` : 'Выход —';
-    if ($('arb-chart-current')) $('arb-chart-current').textContent = (isLive ? 'LIVE · ' : '') + pct(lastEntry);
-    if ($('arb-chart-funding')) $('arb-chart-funding').textContent = pct(funding, 4);
-  }
-
-  function drawLiveLegChart(canvas, ticks, accent) {
-    if (!canvas) return;
-    const { ctx, w, h, dpr } = fit(canvas, 135);
-    if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
-    const list = (ticks || []).slice(-120);
-    if (list.length < 2) return;
-    const vals = list.map(c => c.c);
-    let mn = Math.min(...vals), mx = Math.max(...vals);
-    if (mx === mn) { const bump = Math.abs(mx) * 0.001 || 0.5; mx += bump; mn -= bump; }
-    const range = (mx - mn) || 1;
-    const pad = 10 * dpr;
-
-    const tMin = list[0].t;
-    const tMax = Math.max(Date.now(), list.at(-1).t);
-    const tRange = Math.max(5000, tMax - tMin);
-    const x = time => pad + (time - tMin) * (w - pad * 2) / tRange;
-    const y = v => pad + (mx - v) * (h - pad * 2) / range;
-
-    ctx.strokeStyle = '#1d2330'; ctx.lineWidth = dpr;
-    for (let i = 1; i < 4; i++) {
-      const yy = h * i / 4;
-      ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+    if (pro.hoverX >= 0) {
+      const target = firstTime + (pro.hoverX * dpr - pad.l) / (w - pad.l - pad.r) * timeRange;
+      let closest = points[0];
+      for (const point of points) if (Math.abs(point.t - target) < Math.abs(closest.t - target)) closest = point;
+      const hx = x(closest.t);
+      ctx.strokeStyle = 'rgba(207,214,226,.42)'; ctx.lineWidth = dpr; ctx.setLineDash([3 * dpr, 3 * dpr]);
+      ctx.beginPath(); ctx.moveTo(hx, pad.t); ctx.lineTo(hx, h - pad.b); ctx.stroke(); ctx.setLineDash([]);
+      const parts = series.map(item => `${item.label} ${formatChartValue(closest[item.key], percentAxis)}`);
+      const time = new Date(closest.t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const label = `${time}  ·  ${parts.join('  ·  ')}`;
+      ctx.font = `600 ${8.5 * dpr}px Inter, sans-serif`;
+      const width = ctx.measureText(label).width + 16 * dpr;
+      let tx = Math.max(pad.l, Math.min(w - pad.r - width, hx - width / 2));
+      ctx.fillStyle = 'rgba(15,20,29,.96)'; ctx.strokeStyle = '#7050c8'; ctx.lineWidth = dpr;
+      ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(tx, 8 * dpr, width, 20 * dpr, 6 * dpr); else ctx.rect(tx, 8 * dpr, width, 20 * dpr);
+      ctx.fill(); ctx.stroke(); ctx.fillStyle = '#eef1f6'; ctx.textAlign = 'left'; ctx.fillText(label, tx + 8 * dpr, 21.5 * dpr);
     }
-
-    ctx.beginPath();
-    list.forEach((c, i) => i ? ctx.lineTo(x(c.t), y(c.c)) : ctx.moveTo(x(c.t), y(c.c)));
-    ctx.lineTo(x(tMax), y(vals.at(-1)));
-    ctx.strokeStyle = accent; ctx.lineWidth = 2 * dpr; ctx.stroke();
-
-    ctx.lineTo(x(tMax), h - pad);
-    ctx.lineTo(x(tMin), h - pad);
-    ctx.closePath();
-    const fill = ctx.createLinearGradient(0, pad, 0, h - pad);
-    fill.addColorStop(0, accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.25)' : 'rgba(239, 100, 122, 0.25)');
-    fill.addColorStop(1, 'transparent');
-    ctx.fillStyle = fill; ctx.fill();
-
-    const lastY = y(vals.at(-1));
-    ctx.strokeStyle = accent; ctx.globalAlpha = 0.45; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = dpr;
-    ctx.beginPath(); ctx.moveTo(pad, lastY); ctx.lineTo(w - pad, lastY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-
-    ctx.font = `${8 * dpr}px Inter, sans-serif`;
-    ctx.fillStyle = 'rgba(200, 208, 220, 0.6)'; ctx.textAlign = 'left';
-    ctx.fillText(price(mx), 4 * dpr, 12 * dpr);
-    ctx.fillText(price(mn), 4 * dpr, h - 4 * dpr);
-    ctx.fillStyle = accent; ctx.textAlign = 'right';
-    ctx.fillText(price(vals.at(-1)), w - 6 * dpr, lastY - 4 * dpr);
-
-    const lastX = x(tMax);
-    ctx.beginPath(); ctx.arc(lastX, lastY, 6 * dpr, 0, 2 * Math.PI);
-    ctx.fillStyle = accent === '#2bd98a' ? 'rgba(43, 217, 138, 0.35)' : 'rgba(239, 100, 122, 0.35)'; ctx.fill();
-    ctx.beginPath(); ctx.arc(lastX, lastY, 3 * dpr, 0, 2 * Math.PI);
-    ctx.fillStyle = accent; ctx.fill();
-  }
-
-  function drawCandles(canvas, candles, accent) {
-    if (!canvas) return;
-    const { ctx, w, h, dpr } = fit(canvas, 135);
-    if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
-    const list = (candles || []).slice(-80);
-    if (list.length < 2) return;
-    let mn = Math.min(...list.map(c => c.l)), mx = Math.max(...list.map(c => c.h));
-    if (mx === mn) { const bump = Math.abs(mx) * 0.001 || 0.5; mx += bump; mn -= bump; }
-    const range = mx - mn, pad = 8 * dpr;
-    const cw = (w - pad * 2) / list.length;
-    const y = v => pad + (mx - v) * (h - pad * 2) / range;
-
-    ctx.strokeStyle = '#1d2330'; ctx.lineWidth = dpr;
-    for (let i = 1; i < 4; i++) {
-      const yy = h * i / 4;
-      ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
-    }
-
-    list.forEach((c, i) => {
-      const xx = pad + i * cw + cw / 2, up = c.c >= c.o, col = up ? '#2bd98a' : '#ef647a';
-      ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(xx, y(c.h)); ctx.lineTo(xx, y(c.l)); ctx.stroke();
-      ctx.fillStyle = col;
-      const top = Math.min(y(c.o), y(c.c)), bh = Math.max(1.5 * dpr, Math.abs(y(c.o) - y(c.c)));
-      ctx.fillRect(xx - Math.max(1, cw * 0.3), top, Math.max(2, cw * 0.6), bh);
-    });
-
-    const last = list.at(-1), lastY = y(last.c);
-    ctx.strokeStyle = accent; ctx.globalAlpha = 0.45; ctx.setLineDash([3 * dpr, 3 * dpr]); ctx.lineWidth = dpr;
-    ctx.beginPath(); ctx.moveTo(pad, lastY); ctx.lineTo(w - pad, lastY); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
-    ctx.font = `${8 * dpr}px Inter, sans-serif`;
-    ctx.fillStyle = 'rgba(200, 208, 220, 0.6)'; ctx.textAlign = 'left';
-    ctx.fillText(price(mx), 4 * dpr, 12 * dpr);
-    ctx.fillText(price(mn), 4 * dpr, h - 4 * dpr);
-    ctx.fillStyle = accent; ctx.textAlign = 'right';
-    ctx.fillText(price(last.c), w - 6 * dpr, lastY - 4 * dpr);
-    ctx.fillStyle = accent; ctx.fillRect(w - 3 * dpr, 0, 3 * dpr, h);
   }
 
   window.ArbitragePro = { open, close };

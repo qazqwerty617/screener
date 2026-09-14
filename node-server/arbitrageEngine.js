@@ -15,6 +15,10 @@ const EXCHANGES = Object.freeze({
 });
 
 const ALIASES = Object.freeze({ XBT: "BTC", XDG: "DOGE", POL: "MATIC", LUNA2: "LUNA" });
+const MAX_EXECUTABLE_AGE_MS = 30000;
+const MAX_FUNDING_MARKET_AGE_MS = 3 * 60000;
+const FUNDING_EVENT_SYNC_MS = 5 * 60000;
+const MAX_FUNDING_EVENT_AHEAD_MS = 24 * 60 * 60000;
 
 const STOCK_ROOTS_ARBITRAGE = [
   "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "GOOGL", "META", "NFLX", "COIN",
@@ -146,13 +150,12 @@ function quoteFor(ticker, now, excludedBases = null) {
   if (ticker?.isRwa === true || String(ticker?.isRwa || "").toUpperCase() === "YES" || STOCK_ROOTS_ARBITRAGE.includes(base) || excludedBases?.has(base)) return null;
 
   const rawMid = finitePositive(ticker.p);
-  const rawBid = finitePositive(ticker.bid) || rawMid;
-  const rawAsk = finitePositive(ticker.ask) || rawMid;
-  if (!rawMid || !rawBid || !rawAsk || rawAsk < rawBid * 0.90) return null;
+  const rawBid = finitePositive(ticker.bid);
+  const rawAsk = finitePositive(ticker.ask);
+  if (!rawMid || (rawBid && rawAsk && rawAsk < rawBid * 0.90)) return null;
 
-  const quoteTs = Number(ticker.quoteTs) || now;
-  const ageMs = Math.max(0, now - quoteTs);
-  if (ageMs > 180000) return null; // 3m freshness
+  const quoteTs = finitePositive(ticker.quoteTs);
+  const ageMs = quoteTs ? Math.max(0, now - quoteTs) : Infinity;
 
   const volume = finitePositive(ticker.v);
   // Exclude dead phantom markets with zero or sub-$1000 24h volume
@@ -160,8 +163,8 @@ function quoteFor(ticker, now, excludedBases = null) {
 
   const factor = multiplier > 1 ? multiplier : 1;
   const mid = rawMid / factor;
-  const bid = rawBid / factor;
-  const ask = rawAsk / factor;
+  const bid = rawBid ? rawBid / factor : 0;
+  const ask = rawAsk ? rawAsk / factor : 0;
 
   return {
     ex: ticker.ex,
@@ -180,9 +183,11 @@ function quoteFor(ticker, now, excludedBases = null) {
     funding: Number.isFinite(Number(ticker.funding)) ? Number(ticker.funding) : 0,
     nextFunding: finitePositive(ticker.nextFunding),
     interval: finitePositive(ticker.fundingInterval) || EXCHANGES[ticker.ex]?.interval || 8,
+    takerFee: finitePositive(ticker.takerFeePct) || EXCHANGES[ticker.ex]?.fee || 0.055,
     quoteTs,
     ageMs,
-    executable: finitePositive(ticker.bid) > 0 && finitePositive(ticker.ask) > 0,
+    marketFresh: quoteTs > 0 && ageMs <= MAX_FUNDING_MARKET_AGE_MS,
+    executable: rawBid > 0 && rawAsk > 0 && quoteTs > 0 && ageMs <= MAX_EXECUTABLE_AGE_MS,
   };
 }
 
@@ -209,10 +214,10 @@ function tradeUrl(ex, sym) {
 }
 
 function spreadSample(base, buy, sell) {
-  if (!buy?.ask || !buy?.bid || !sell?.ask || !sell?.bid) return null;
+  if (!buy?.executable || !sell?.executable || !buy.ask || !buy.bid || !sell.ask || !sell.bid) return null;
   const gross = ((sell.bid - buy.ask) / buy.ask) * 100;
   const exitGross = ((buy.bid - sell.ask) / sell.ask) * 100;
-  const fees = (EXCHANGES[buy.ex]?.fee || 0.055) + (EXCHANGES[sell.ex]?.fee || 0.055);
+  const fees = buy.takerFee + sell.takerFee;
   return {
     key: routeKey("spread", base, buy.ex, sell.ex),
     base,
@@ -224,6 +229,18 @@ function spreadSample(base, buy, sell) {
     exitNet: exitGross - fees,
     fees,
   };
+}
+
+function nextFundingEvent(long, short, now) {
+  const deadline = now + MAX_FUNDING_EVENT_AHEAD_MS;
+  const longAt = long.nextFunding > now && long.nextFunding <= deadline ? long.nextFunding : 0;
+  const shortAt = short.nextFunding > now && short.nextFunding <= deadline ? short.nextFunding : 0;
+  if (!longAt && !shortAt) return { at: 0, edge: null, legs: "unknown" };
+  if (longAt && shortAt && Math.abs(longAt - shortAt) <= FUNDING_EVENT_SYNC_MS) {
+    return { at: Math.max(longAt, shortAt), edge: -long.funding + short.funding, legs: "both" };
+  }
+  if (longAt && (!shortAt || longAt < shortAt)) return { at: longAt, edge: -long.funding, legs: "long" };
+  return { at: shortAt, edge: short.funding, legs: "short" };
 }
 
 // Check if ratio between two prices represents an unhandled power-of-10 contract multiplier
@@ -292,70 +309,71 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
 
         const routeAB = spreadSample(base, a, b);
         const routeBA = spreadSample(base, b, a);
-        if (!routeAB || !routeBA) continue;
-        if (typeof onRouteSample === "function") {
-          onRouteSample(routeAB);
-          onRouteSample(routeBA);
+        if (routeAB && routeBA) {
+          if (typeof onRouteSample === "function") {
+            onRouteSample(routeAB);
+            onRouteSample(routeBA);
+          }
+          const selected = routeAB.net >= routeBA.net ? routeAB : routeBA;
+          const { buy, sell, gross, net, exitGross, exitNet, fees: fee } = selected;
+          const liquidity = Math.min(buy.volume || 0, sell.volume || 0);
+
+          // Keep only plausible, liquid routes; the public endpoint applies the user's minimum edge.
+          if (gross >= -0.5 && gross <= 30 && liquidity >= 5000 && !(gross > 10 && liquidity < 25000)) {
+            const freshness = Math.max(buy.ageMs, sell.ageMs);
+            const roundTripFees = fee * 2;
+            const roundTripNet = gross - roundTripFees;
+            const closeNowNet = gross + exitGross - roundTripFees;
+            const buyBookWidth = ((buy.ask - buy.bid) / buy.mid) * 100;
+            const sellBookWidth = ((sell.ask - sell.bid) / sell.mid) * 100;
+            const volBonus = Math.min(25, Math.max(0, Math.log10(liquidity / 1000)) * 6.5);
+            const netBonus = Math.min(45, Math.max(0, roundTripNet) * 15);
+            const freshPenalty = Math.min(18, (freshness / 1000) * 0.6);
+            const bookPenalty = Math.min(20, Math.max(0, buyBookWidth + sellBookWidth) * 6);
+            const score = Math.max(5, Math.min(99, 30 + netBonus + volBonus - freshPenalty - bookPenalty));
+            const rKey = routeKey("spread", base, buy.ex, sell.ex);
+
+            spreads.push({
+              key: rKey, base, symbol: `${base}/USDT`,
+              buyEx: buy.ex, buyName: EXCHANGES[buy.ex].name, buySymbol: buy.sym,
+              buyAsk: round(buy.rawAsk, 8), buyBid: round(buy.rawBid, 8), buyMultiplier: buy.multiplier,
+              sellEx: sell.ex, sellName: EXCHANGES[sell.ex].name, sellSymbol: sell.sym,
+              sellBid: round(sell.rawBid, 8), sellAsk: round(sell.rawAsk, 8), sellMultiplier: sell.multiplier,
+              gross: round(gross, 4), fees: round(fee, 4), net: round(net, 4),
+              roundTripFees: round(roundTripFees, 4), roundTripNet: round(roundTripNet, 4),
+              exitGross: round(exitGross, 4), exitNet: round(exitNet, 4), closeNowNet: round(closeNowNet, 4),
+              liquidity: round(liquidity, 2), openInterest: round(Math.min(buy.oi || 0, sell.oi || 0), 2),
+              buyFunding: round(buy.funding, 6), sellFunding: round(sell.funding, 6),
+              buyInterval: buy.interval, sellInterval: sell.interval,
+              ageMs: freshness, quality: "bbo", score: round(score, 1),
+              history: [],
+              buyUrl: tradeUrl(buy.ex, buy.sym), sellUrl: tradeUrl(sell.ex, sell.sym),
+            });
+          }
         }
-        const selected = routeAB.net >= routeBA.net ? routeAB : routeBA;
-        const { buy, sell, gross, net, exitGross, exitNet, fees: fee } = selected;
-
-        // Plausible gross spread range: -0.5% to +30% (spreads > 30% are ticker collisions on unverified tokens)
-        if (gross < -0.5 || gross > 30) continue;
-        const liquidity = Math.min(buy.volume || 0, sell.volume || 0);
-
-        // Require minimum tradable liquidity ($5,000) to eliminate phantom zero-volume rows
-        if (liquidity < 5000) continue;
-
-        // If spread is abnormally high (>10%), require solid liquidity to filter out stale illiquid pairs
-        if (gross > 10 && liquidity < 25000) continue;
-
-        const freshness = Math.max(buy.ageMs, sell.ageMs);
-        const quality = buy.executable && sell.executable ? "bbo" : "indicative";
-
-        // Balanced Edge Score (0 - 100)
-        const volBonus = Math.min(25, Math.max(0, Math.log10(liquidity / 1000)) * 6.5);
-        const netBonus = Math.min(45, Math.max(0, net) * 15);
-        const qualBonus = quality === "bbo" ? 10 : 0;
-        const freshPenalty = Math.min(15, (freshness / 1000) * 1.2);
-        const score = Math.max(5, Math.min(99,
-          25 + netBonus + volBonus + qualBonus - freshPenalty
-        ));
-
-        const rKey = routeKey("spread", base, buy.ex, sell.ex);
-
-        spreads.push({
-          key: rKey, base, symbol: `${base}/USDT`,
-          buyEx: buy.ex, buyName: EXCHANGES[buy.ex].name, buySymbol: buy.sym,
-          buyAsk: round(buy.rawAsk, 8), buyBid: round(buy.rawBid, 8), buyMultiplier: buy.multiplier,
-          sellEx: sell.ex, sellName: EXCHANGES[sell.ex].name, sellSymbol: sell.sym,
-          sellBid: round(sell.rawBid, 8), sellAsk: round(sell.rawAsk, 8), sellMultiplier: sell.multiplier,
-          gross: round(gross, 4), fees: round(fee, 4), net: round(net, 4),
-          exitGross: round(exitGross, 4), exitNet: round(exitNet, 4),
-          liquidity: round(liquidity, 2), openInterest: round(Math.min(buy.oi || 0, sell.oi || 0), 2),
-          buyFunding: round(buy.funding, 6), sellFunding: round(sell.funding, 6),
-          buyInterval: buy.interval, sellInterval: sell.interval,
-          ageMs: freshness, quality, score: round(score, 1),
-          history: [],
-          buyUrl: tradeUrl(buy.ex, buy.sym), sellUrl: tradeUrl(sell.ex, sell.sym),
-        });
 
         // Funding rate arbitrage comparison
         const long = a.funding / a.interval <= b.funding / b.interval ? a : b;
         const short = long === a ? b : a;
         const hourlyEdge = short.funding / short.interval - long.funding / long.interval;
-        const daily = hourlyEdge * 24;
         const basis = ((short.mid - long.mid) / long.mid) * 100;
 
         // Discard absurd basis differences (>15%) which create uncontrollable price risk
-        if (Math.abs(hourlyEdge) <= 1.5 && Math.abs(basis) <= 15) {
+        if (long.marketFresh && short.marketFresh && hourlyEdge > 0 && Math.abs(hourlyEdge) <= 1.5 && Math.abs(basis) <= 15) {
           const fundingLiquidity = Math.min(long.volume || 0, short.volume || 0);
           if (fundingLiquidity >= 5000) {
+            const event = nextFundingEvent(long, short, now);
+            if (!event.at || !Number.isFinite(event.edge)) continue;
+            const roundTripFees = 2 * (long.takerFee + short.takerFee);
+            const breakEvenHours = hourlyEdge > 0 ? roundTripFees / hourlyEdge : Infinity;
             const fundingVolBonus = Math.min(25, Math.max(0, Math.log10(fundingLiquidity / 1000)) * 6.5);
-            const dailyBonus = Math.min(50, Math.max(0, daily) * 35);
+            const hourlyBonus = Math.min(40, hourlyEdge * 400);
+            const eventBonus = Math.min(18, Math.max(0, event.edge || 0) * 60);
             const basisPenalty = Math.min(20, Math.abs(basis) * 3.5);
+            const paybackPenalty = Math.min(18, breakEvenHours / 24);
+            const freshnessPenalty = Math.min(12, Math.max(long.ageMs, short.ageMs) / 15000);
             const fundingScore = Math.max(5, Math.min(99,
-              25 + dailyBonus + fundingVolBonus + (long.executable && short.executable ? 8 : 0) - basisPenalty
+              24 + hourlyBonus + eventBonus + fundingVolBonus + (long.executable && short.executable ? 8 : 0) - basisPenalty - paybackPenalty - freshnessPenalty
             ));
             const fKey = routeKey("funding", base, long.ex, short.ex);
 
@@ -367,10 +385,13 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
               shortEx: short.ex, shortName: EXCHANGES[short.ex].name, shortSymbol: short.sym,
               shortFunding: round(short.funding, 6), shortInterval: short.interval,
               shortPrice: round(short.rawMid, 8), shortMultiplier: short.multiplier,
-              hourly: round(hourlyEdge, 6), daily: round(daily, 4), monthly: round(daily * 30, 3), apr: round(daily * 365, 2),
+              hourly: round(hourlyEdge, 6),
+              longNextFunding: long.nextFunding || 0, shortNextFunding: short.nextFunding || 0,
+              nextEventAt: event.at, nextEventEdge: event.edge == null ? null : round(event.edge, 6), nextEventLegs: event.legs,
+              roundTripFees: round(roundTripFees, 4), breakEvenHours: round(breakEvenHours, 2),
               basis: round(basis, 4), liquidity: round(fundingLiquidity, 2),
               openInterest: round(Math.min(long.oi || 0, short.oi || 0), 2),
-              nextFunding: Math.min(long.nextFunding || Infinity, short.nextFunding || Infinity),
+              nextFunding: event.at,
               ageMs: Math.max(long.ageMs, short.ageMs), quality: long.executable && short.executable ? "bbo" : "indicative",
               score: round(fundingScore, 1),
               history: [],
@@ -383,8 +404,8 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
   }
 
   // Sort by score (quality, volume and spread combined) and net yield
-  spreads.sort((a, b) => b.score - a.score || b.net - a.net || b.liquidity - a.liquidity);
-  funding.sort((a, b) => b.score - a.score || b.daily - a.daily || b.liquidity - a.liquidity);
+  spreads.sort((a, b) => b.score - a.score || b.roundTripNet - a.roundTripNet || b.liquidity - a.liquidity);
+  funding.sort((a, b) => b.score - a.score || (b.nextEventEdge || 0) - (a.nextEventEdge || 0) || b.hourly - a.hourly || b.liquidity - a.liquidity);
 
   // Attach sparkline points only for top active rows to avoid memory churn
   if (history) {
@@ -441,7 +462,7 @@ function createArbitrageEngine(tickers, exStatus, options = {}) {
       );
     }
     for (const row of snapshot.funding.slice(0, rankedHistoryLimit)) {
-      record(row.key, generatedAt, row.daily, row.longPrice, row.shortPrice, row.basis);
+      record(row.key, generatedAt, row.hourly, row.longPrice, row.shortPrice, row.basis);
     }
     for (const [key, points] of history) {
       if (!points.length || generatedAt - points[points.length - 1][0] > 12 * 3600000) history.delete(key);

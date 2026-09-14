@@ -29,8 +29,13 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
         tickers.set("KC:" + d.symbol, {
           key: "KC:" + d.symbol, ex: "KC", sym: d.symbol, base: d.symbol.replace(/USDTM$/, ""),
           p, chg: Number.isFinite(changeRate) ? changeRate * 100 : (o > 0 && p > 0 ? ((p - o) / o) * 100 : 0),
+          quoteTs: p > 0 ? Date.now() : undefined,
           v: Number.isFinite(v) ? v : 0, h: h > 0 ? h : p, l: l > 0 ? l : p, o,
           funding: +d.fundingFeeRate * 100 || 0, nextFunding: d.nextFundingRateTime ? Date.now() + d.nextFundingRateTime : 0,
+          fundingInterval: +(d.currentFundingRateGranularity || d.fundingRateGranularity) > 0
+            ? +(d.currentFundingRateGranularity || d.fundingRateGranularity) / 3600000
+            : 8,
+          takerFeePct: +d.takerFeeRate > 0 ? +d.takerFeeRate * 100 : 0,
           oi: d.openInterest ? +d.openInterest * p * multiplier : 0,
           cs: multiplier
         });
@@ -86,7 +91,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
                 t.p = (bid + ask) / 2;
               } else {
                 const lp = +(tick.price || 0);
-                if (lp > 0) t.p = lp;
+                if (lp > 0) { t.p = lp; t.quoteTs = Date.now(); }
               }
 
               if (tick.turnover) t.v = +tick.turnover;
@@ -110,7 +115,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
                 t.p = (bid + ask) / 2;
               } else {
                 const lp = +(tick.price || tick.lastTradePrice || 0);
-                if (lp > 0) t.p = lp;
+                if (lp > 0) { t.p = lp; t.quoteTs = Date.now(); }
               }
 
               if (tick.volValue || tick.turnover) t.v = +(tick.volValue || tick.turnover);
@@ -129,6 +134,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
                 const lp = +(tick.price || 0);
                 if (lp > 0) {
                   t.p = lp;
+                  t.quoteTs = Date.now();
                   if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
                   dirtyKeys.add(t.key);
                 }
@@ -186,6 +192,10 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
           t.o = o > 0 ? o : t.o;
           t.v = Number.isFinite(v) ? v : t.v;
           if (d.fundingFeeRate !== undefined) t.funding = +d.fundingFeeRate * 100;
+          if (d.nextFundingRateTime) t.nextFunding = Date.now() + +d.nextFundingRateTime;
+          const fundingGranularity = +(d.currentFundingRateGranularity || d.fundingRateGranularity);
+          if (fundingGranularity > 0) t.fundingInterval = fundingGranularity / 3600000;
+          if (+d.takerFeeRate > 0) t.takerFeePct = +d.takerFeeRate * 100;
           if (d.openInterest) {
             const multiplier = +(d.multiplier || 1);
             t.oi = +d.openInterest * t.p * multiplier;

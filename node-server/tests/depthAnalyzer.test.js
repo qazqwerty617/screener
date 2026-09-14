@@ -23,17 +23,18 @@ test("safe capacity stops when average slippage reaches the limit", () => {
   assert.ok(cap.notional > 199 && cap.notional < 202);
 });
 
-test("depth analysis subtracts fees and adds normalized daily funding", () => {
+test("depth analysis subtracts entry fees and adds only the current hourly funding edge", () => {
   const result = analyzeBooks({
     asks: [[100, 2], [101, 10]],
     bids: [[102, 2], [101, 10]],
     notional: 500,
     feesPct: 0.1,
-    fundingDailyPct: 0.2,
+    fundingHourlyPct: 0.02,
   });
   assert.equal(result.complete, true);
   assert.ok(result.buy.average > 100);
   assert.ok(result.sell.average < 102);
-  assert.equal(Number((result.netAfterFundingDayPct - result.netPct).toFixed(6)), 0.2);
+  assert.equal(Number((result.netAfterFundingHourPct - result.netPct).toFixed(6)), 0.02);
+  assert.equal(Object.hasOwn(result, "netAfterFundingDayPct"), false);
   assert.equal(result.bands.length, 5);
 });

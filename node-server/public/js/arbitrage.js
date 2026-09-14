@@ -9,10 +9,11 @@
   };
   const $ = id => document.getElementById(id);
   const state = {
-    active: false, initialized: false, loading: false, mode: "spreads", data: null,
+    active: false, initialized: false, loading: false, mode: "spreads", data: null, dexData: null,
     selectedExchanges: new Set(Object.keys(EX)), favorites: new Set(JSON.parse(localStorage.getItem("arbFavorites") || "[]")),
     trail: new Map(), timer: null, detailKey: null, detailRow: null,
-    transferByKey: new Map(), transferRequested: new Set(), transferLoading: false,
+    transferByKey: new Map(), transferRequested: new Set(), transferUpdatedAt: new Map(), transferLoading: false,
+    minByMode: { spreads: "0", funding: "0", dex: "0" },
   };
 
   function esc(value) {
@@ -37,6 +38,16 @@
   function pct(n, digits = 3) {
     const val = Number(n || 0);
     return `${val >= 0 ? "+" : ""}${val.toFixed(digits)}%`;
+  }
+  function pctMaybe(n, digits = 3) {
+    return n == null || !Number.isFinite(Number(n)) ? "—" : pct(n, digits);
+  }
+  function durationHours(value) {
+    const hours = Number(value);
+    if (!Number.isFinite(hours) || hours <= 0) return "—";
+    if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}м`;
+    if (hours < 48) return `${hours.toFixed(hours < 10 ? 1 : 0)}ч`;
+    return `${(hours / 24).toFixed(1)}д`;
   }
   function countdown(ts) {
     const ms = Math.max(0, Number(ts || 0) - Date.now());
@@ -86,6 +97,7 @@
   function reset() {
     if ($("arb-search")) $("arb-search").value = "";
     if ($("arb-min-net")) $("arb-min-net").value = "0";
+    state.minByMode = { spreads: "0", funding: "0", dex: "0" };
     if ($("arb-min-volume")) $("arb-min-volume").value = "0";
     if ($("arb-bbo-only")) $("arb-bbo-only").checked = true;
     if ($("arb-transfer-only")) $("arb-transfer-only").checked = false;
@@ -97,13 +109,31 @@
   }
 
   function setMode(mode) {
+    if (!["spreads", "funding", "dex"].includes(mode)) return;
+    const previousMode = state.mode;
+    const minInput = $("arb-min-net");
+    if (minInput) state.minByMode[previousMode] = minInput.value || "0";
     state.mode = mode;
+    if (minInput) minInput.value = state.minByMode[mode] || "0";
     document.querySelectorAll("[data-arb-mode]").forEach(x => x.classList.toggle("on", x.dataset.arbMode === mode));
     if ($("arb-spreads-table")) $("arb-spreads-table").hidden = mode !== "spreads";
     if ($("arb-funding-table")) $("arb-funding-table").hidden = mode !== "funding";
-    if ($("arb-result-title")) $("arb-result-title").textContent = mode === "spreads" ? "Все фьючерсные спреды" : "Дельта-нейтральный фандинг";
-    if ($("arb-result-sub")) $("arb-result-sub").textContent = mode === "spreads" ? "Покупка ask → продажа bid → комиссии" : "Ставки приведены к часу для корректного сравнения";
+    if ($("arb-dex-table")) $("arb-dex-table").hidden = mode !== "dex";
+    if ($("arb-result-title")) $("arb-result-title").textContent = mode === "spreads" ? "Исполнимые фьючерсные спреды" : mode === "funding" ? "Ближайшие funding-события" : "CEX ↔ DEX · только точные контракты";
+    if ($("arb-result-sub")) $("arb-result-sub").textContent = mode === "spreads"
+      ? "Свежий BBO обеих ног · комиссии полного round-trip"
+      : mode === "funding" ? "Текущие ставки и ближайшие расчёты без 30-дневных прогнозов"
+      : "Пулы всех найденных DEX · chain + contract exact · цена пула индикативная";
+    if ($("arb-min-label")) $("arb-min-label").textContent = mode === "funding" ? "Мин. выплата" : "Мин. net";
+    const netOption = $("arb-sort")?.querySelector('option[value="net"]');
+    const grossOption = $("arb-sort")?.querySelector('option[value="gross"]');
+    if (netOption) netOption.textContent = mode === "spreads" ? "Net при схождении" : mode === "funding" ? "Ближ. выплата" : "DEX net";
+    if (grossOption) grossOption.textContent = mode === "funding" ? "Edge / час" : "Валовый спред";
+    if ($("arb-method-note")) $("arb-method-note").innerHTML = mode === "dex"
+      ? '<i class="bbo"></i> Exact = сеть и адрес контракта совпали · перед сделкой запросите wallet quote'
+      : '<i class="bbo"></i> D — депозит · W — вывод · зелёный маршрут имеет общую открытую сеть';
     render();
+    if (mode !== previousMode) fetchData(true);
   }
 
   async function fetchData(force) {
@@ -118,11 +148,20 @@
         limit: "600"
       });
       if (force) q.set("_", Date.now());
+      if (state.mode === "dex") {
+        if (force) q.set("force", "1");
+        const dexResponse = await fetch(`/api/arbitrage/dex?${q}`, { cache: "no-store" });
+        if (!dexResponse.ok) throw new Error(`HTTP ${dexResponse.status}`);
+        state.dexData = await dexResponse.json();
+        if ($("arb-dex-badge")) $("arb-dex-badge").textContent = state.dexData.total ?? state.dexData.rows?.length ?? 0;
+        render();
+        return;
+      }
       const res = await fetch(`/api/arbitrage/snapshot?${q}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       state.data = await res.json();
       updateTrails(state.data.spreads, "net", state.data.generatedAt);
-      updateTrails(state.data.funding, "daily", state.data.generatedAt);
+      updateTrails(state.data.funding, "hourly", state.data.generatedAt);
       render();
       fetchTransferStatuses();
     } catch (err) {
@@ -152,15 +191,24 @@
   }
 
   function render() {
+    if (state.mode === "dex") {
+      if (!state.dexData) return;
+      const rows = filteredRows();
+      renderDex(rows);
+      if ($("arb-empty")) $("arb-empty").hidden = rows.length > 0;
+      if ($("arb-shown")) $("arb-shown").textContent = `Показано ${rows.length} из ${state.dexData.total ?? rows.length}`;
+      return;
+    }
     if (!state.data) return;
     const data = state.data;
-    const positive = (data.spreads || []).filter(x => x.net > 0);
+    const positive = (data.spreads || []).filter(x => x.roundTripNet > 0);
     if ($("arb-kpi-count")) $("arb-kpi-count").textContent = positive.length.toLocaleString("ru-RU");
-    const best = positive[0];
-    if ($("arb-kpi-net")) $("arb-kpi-net").textContent = best ? pct(best.net) : "—";
+    const best = positive.reduce((winner, row) => !winner || row.roundTripNet > winner.roundTripNet ? row : winner, null);
+    if ($("arb-kpi-net")) $("arb-kpi-net").textContent = best ? pct(best.roundTripNet) : "—";
     if ($("arb-kpi-route")) $("arb-kpi-route").textContent = best ? `${best.base} · ${best.buyName} → ${best.sellName}` : "рынок эффективен";
-    const bestFunding = (data.funding || [])[0];
-    if ($("arb-kpi-funding")) $("arb-kpi-funding").textContent = bestFunding ? pct(bestFunding.daily) : "—";
+    const bestFunding = (data.funding || []).reduce((winner, row) => row.nextEventEdge == null ? winner : (!winner || row.nextEventEdge > winner.nextEventEdge ? row : winner), null);
+    if ($("arb-kpi-funding")) $("arb-kpi-funding").textContent = bestFunding ? pct(bestFunding.nextEventEdge, 4) : "—";
+    if ($("arb-kpi-funding-sub")) $("arb-kpi-funding-sub").textContent = bestFunding ? `${bestFunding.base} · ${countdown(bestFunding.nextEventAt)}` : "нет расписания";
     if ($("arb-kpi-streams")) $("arb-kpi-streams").textContent = Number(data.marketCount || 0).toLocaleString("ru-RU");
     if ($("arb-update-age")) {
       const age = Math.max(0, Date.now() - Number(data.generatedAt || 0));
@@ -176,6 +224,14 @@
   }
 
   function filteredRows() {
+    if (state.mode === "dex") {
+      const sort = $("arb-sort")?.value || "score";
+      const rows = [...(state.dexData?.rows || [])];
+      if (sort === "liquidity") rows.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+      else if (sort === "gross") rows.sort((a, b) => b.grossPct - a.grossPct);
+      else rows.sort((a, b) => b.netPct - a.netPct);
+      return rows.slice(0, 400);
+    }
     let rows = [...(state.mode === "spreads" ? state.data.spreads : state.data.funding)];
     if ($("arb-bbo-only")?.checked) rows = rows.filter(x => x.quality === "bbo");
     if ($("arb-favorites-only")?.checked) rows = rows.filter(x => state.favorites.has(x.base));
@@ -185,9 +241,11 @@
     if (sort === "freshness") {
       rows.sort((a, b) => a.ageMs - b.ageMs);
     } else if (sort === "net") {
-      rows.sort((a, b) => (state.mode === "spreads" ? b.net - a.net : b.daily - a.daily));
+      rows.sort((a, b) => state.mode === "spreads"
+        ? b.roundTripNet - a.roundTripNet
+        : Number(b.nextEventEdge || 0) - Number(a.nextEventEdge || 0));
     } else if (sort === "gross") {
-      rows.sort((a, b) => (state.mode === "spreads" ? b.gross - a.gross : b.basis - a.basis));
+      rows.sort((a, b) => state.mode === "spreads" ? b.gross - a.gross : b.hourly - a.hourly);
     } else if (sort === "liquidity") {
       rows.sort((a, b) => b.liquidity - a.liquidity);
     } else {
@@ -198,7 +256,7 @@
 
   function pairCell(r) {
     const multiplier = r.buyMultiplier || r.longMultiplier || 1;
-    const subLabel = multiplier > 1 ? `x${multiplier.toLocaleString()}` : "PERPETUAL";
+    const subLabel = state.mode === "dex" ? "CONTRACT VERIFIED" : multiplier > 1 ? `x${multiplier.toLocaleString()}` : "PERPETUAL";
     return `<div class="arb-pair"><span class="arb-coin">${esc(r.base.slice(0, 4))}</span><div><strong>${esc(r.base)}/USDT</strong><small>${esc(subLabel)}</small></div></div>`;
   }
   function legCell(ex, name, value, sub) {
@@ -235,19 +293,29 @@
   async function fetchTransferStatuses() {
     if (!state.data || state.transferLoading) return;
     const source = state.mode === "spreads" ? state.data.spreads : state.data.funding;
-    const keys = source.slice(0, 400).map(row => row.key).filter(key => !state.transferRequested.has(key));
+    const now = Date.now();
+    const keys = source.slice(0, 400).map(row => row.key)
+      .filter(key => !state.transferRequested.has(key) && now - (state.transferUpdatedAt.get(key) || 0) >= 60_000);
     if (!keys.length) return;
     keys.forEach(key => state.transferRequested.add(key));
     state.transferLoading = true;
     try {
       const batches = [];
       for (let index = 0; index < keys.length; index += 80) batches.push(keys.slice(index, index + 80));
+      const authToken = (typeof window.getStoredAuthToken === "function" ? window.getStoredAuthToken() : localStorage.getItem("obsidian_auth_token")) || "";
       const payloads = await Promise.all(batches.map(async batch => {
-        const response = await fetch(`/api/arbitrage/transfers?routes=${encodeURIComponent(batch.join(","))}`, { cache: "no-store" });
+        const response = await fetch(`/api/arbitrage/transfers?routes=${encodeURIComponent(batch.join(","))}`, {
+          cache: "no-store",
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
       }));
-      for (const data of payloads) for (const route of data.routes || []) state.transferByKey.set(route.key, route);
+      for (const data of payloads) for (const route of data.routes || []) {
+        state.transferByKey.set(route.key, route);
+        state.transferUpdatedAt.set(route.key, Date.now());
+      }
+      keys.forEach(key => state.transferRequested.delete(key));
       render();
       if (state.detailRow) renderTransferDetail(state.detailRow);
     } catch (error) {
@@ -266,9 +334,10 @@
         <td><button class="arb-star ${state.favorites.has(r.base) ? "on" : ""}" data-fav="${esc(r.base)}">★</button></td>
         <td>${pairCell(r)}</td>
         <td>${routeCell(routeLeg(r.buyEx, r.buyName, price(r.buyAsk), "ASK · LONG", "buy"), routeLeg(r.sellEx, r.sellName, price(r.sellBid), "BID · SHORT", "sell"))}</td>
-        <td class="arb-num ${fundingEdge(r) >= 0 ? "arb-positive" : "arb-cost"}">${pct(fundingEdge(r), 3)}</td>
+        <td class="arb-num ${fundingHourly(r) >= 0 ? "arb-positive" : "arb-cost"}">${pct(fundingHourly(r), 4)}</td>
         <td class="arb-num arb-net">${pct(r.net)}</td>
-        <td class="arb-num arb-exit">${pct(r.exitNet)}</td>
+        <td class="arb-num ${r.roundTripNet >= 0 ? "arb-net" : "arb-cost"}">${pct(r.roundTripNet)}</td>
+        <td class="arb-num ${r.closeNowNet >= 0 ? "arb-positive" : "arb-exit"}">${pct(r.closeNowNet)}</td>
         <td>${transferCell(r)}</td>
         <td class="arb-num">${money(r.liquidity)}</td>
         <td>${sparkCell(r, "net")}</td>
@@ -285,18 +354,43 @@
         <td><button class="arb-star ${state.favorites.has(r.base) ? "on" : ""}" data-fav="${esc(r.base)}">★</button></td>
         <td>${pairCell(r)}</td>
         <td>${routeCell(routeLeg(r.longEx, r.longName, pct(r.longFunding, 4), `LONG · ${r.longInterval}ч`, "buy"), routeLeg(r.shortEx, r.shortName, pct(r.shortFunding, 4), `SHORT · ${r.shortInterval}ч`, "sell"))}</td>
-        <td class="arb-num arb-net">${pct(r.daily)}</td>
-        <td class="arb-num">${pct(r.monthly, 2)}</td>
-        <td class="arb-num">${pct(r.apr, 1)}</td>
+        <td class="arb-num ${Number(r.nextEventEdge) >= 0 ? "arb-net" : "arb-cost"}" title="Текущая оценка ближайшего расчёта; ставка может измениться">${pctMaybe(r.nextEventEdge, 4)}</td>
+        <td class="arb-num arb-positive">${pct(r.hourly, 5)}</td>
+        <td class="arb-num" title="Если текущая разница ставок сохранится">${durationHours(r.breakEvenHours)}</td>
         <td class="arb-num ${Math.abs(r.basis) > 1 ? "arb-cost" : "arb-muted"}">${pct(r.basis)}</td>
         <td>${transferCell(r)}</td>
-        <td class="arb-countdown" data-until="${r.nextFunding || 0}">${countdown(r.nextFunding)}</td>
+        <td class="arb-num">${money(r.liquidity)}</td>
+        <td class="arb-countdown" data-until="${r.nextEventAt || 0}">${countdown(r.nextEventAt)}</td>
         <td>${scoreCell(r)}</td>
       </tr>`).join("");
   }
 
-  function fundingEdge(r) {
-    return ((Number(r.sellFunding) || 0) / (Number(r.sellInterval) || 8) - (Number(r.buyFunding) || 0) / (Number(r.buyInterval) || 8)) * 24;
+  function shortContract(address) {
+    const value = String(address || "");
+    return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+  }
+
+  function renderDex(rows) {
+    const body = $("arb-dex-body");
+    if (!body) return;
+    body.innerHTML = rows.filter(r => r.contractMatch === "exact").map(r => `
+      <tr>
+        <td>${pairCell(r)}</td>
+        <td><div class="arb-dex-route"><strong>${esc(r.buyVenue)}</strong><i>→</i><strong>${esc(r.sellVenue)}</strong><small>${r.direction === "cex_to_dex" ? "купить CEX · продать DEX" : "купить DEX · продать CEX"}</small></div></td>
+        <td><span class="arb-chain-badge">${esc(r.network)}</span><small class="arb-dex-source">${esc(r.dexName)}</small></td>
+        <td><a class="arb-contract" href="${esc(r.pairUrl)}" target="_blank" rel="noopener noreferrer" title="${esc(r.contractAddress)}"><b>EXACT</b>${esc(shortContract(r.contractAddress))}</a></td>
+        <td class="arb-num">${price(r.cexPrice)}</td>
+        <td class="arb-num">${price(r.dexPrice)}</td>
+        <td class="arb-num arb-positive">${pct(r.grossPct)}</td>
+        <td class="arb-num arb-cost">−${Number(r.estimatedCostsPct || 0).toFixed(3)}%</td>
+        <td class="arb-num arb-net">${pct(r.netPct)}</td>
+        <td class="arb-num">${money(r.liquidityUsd)}</td>
+        <td class="arb-num">${money(r.volume24hUsd)}</td>
+      </tr>`).join("");
+  }
+
+  function fundingHourly(r) {
+    return (Number(r.sellFunding) || 0) / (Number(r.sellInterval) || 8) - (Number(r.buyFunding) || 0) / (Number(r.buyInterval) || 8);
   }
 
   function tableClick(e) {
@@ -366,8 +460,8 @@
     if ($("arb-detail-score")) $("arb-detail-score").textContent = Math.round(r.score);
     if ($("arb-detail-summary")) {
       $("arb-detail-summary").textContent = isFunding
-        ? `LONG ${r.longName} и SHORT ${r.shortName}: оценка ${pct(r.daily)} в сутки при текущих ставках.`
-        : `Купить на ${r.buyName} и продать на ${r.sellName}: чистый спред ${pct(r.net)} после комиссий.`;
+        ? `LONG ${r.longName} и SHORT ${r.shortName}: ближайшая оценочная выплата ${pctMaybe(r.nextEventEdge, 4)} через ${countdown(r.nextEventAt)}. Ставки могут измениться.`
+        : `LONG ${r.buyName} и SHORT ${r.sellName}: ${pct(r.roundTripNet)} после комиссий открытия и закрытия при схождении цен.`;
     }
     if ($("arb-detail-legs")) {
       $("arb-detail-legs").innerHTML = isFunding
@@ -376,8 +470,8 @@
     }
     if ($("arb-detail-breakdown")) {
       $("arb-detail-breakdown").innerHTML = isFunding
-        ? breakdown([["Ставка в сутки", pct(r.daily)], ["Оценка за 30 дней", pct(r.monthly, 2)], ["APR без реинвестирования", pct(r.apr, 1)], ["Ценовой базис", pct(r.basis)], ["Ликвидность 24ч", money(r.liquidity)]])
-        : breakdown([["Валовый вход", pct(r.gross)], ["Taker-комиссии", `−${r.fees.toFixed(3)}%`], ["Чистый вход", pct(r.net)], ["Обратный выход сейчас", pct(r.exitNet)], ["Funding / сутки", pct(fundingEdge(r), 4)], ["Ликвидность 24ч", money(r.liquidity)], ["Качество котировки", r.quality.toUpperCase()]]);
+        ? breakdown([["Ближайшая выплата", pctMaybe(r.nextEventEdge, 4)], ["Текущий edge / час", pct(r.hourly, 5)], ["Round-trip taker", `−${Number(r.roundTripFees || 0).toFixed(3)}%`], ["Окупаемость fees", `${durationHours(r.breakEvenHours)} · если ставка сохранится`], ["Ценовой базис", pct(r.basis)], ["LONG до расчёта", countdown(r.longNextFunding)], ["SHORT до расчёта", countdown(r.shortNextFunding)], ["Ликвидность 24ч", money(r.liquidity)]])
+        : breakdown([["Валовый вход", pct(r.gross)], ["Комиссии открытия", `−${r.fees.toFixed(3)}%`], ["Вход после fees", pct(r.net)], ["Полный round-trip fees", `−${r.roundTripFees.toFixed(3)}%`], ["Net при схождении", pct(r.roundTripNet)], ["Закрыть сейчас", pct(r.closeNowNet)], ["Funding edge / час", pct(fundingHourly(r), 5)], ["Объём 24ч", money(r.liquidity)], ["Свежесть BBO", `${Math.round(r.ageMs)} мс`]]);
     }
     const urls = isFunding
       ? [[r.longUrl, `Открыть LONG · ${r.longName}`], [r.shortUrl, `Открыть SHORT · ${r.shortName}`]]

@@ -16,20 +16,33 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         if (!detailResp?.success || !Array.isArray(detailResp.data)) return;
         for (const item of detailResp.data) {
           if (item.symbol && item.contractSize) {
-            detailMap.set(item.symbol, +item.contractSize);
+            detailMap.set(item.symbol, {
+              contractSize: +item.contractSize,
+              takerFeePct: +(item.takerFeeRate || 0) * 100,
+            });
             const existing = tickers.get("MX:" + item.symbol);
-            if (existing) existing.cs = +item.contractSize;
+            if (existing) {
+              existing.cs = +item.contractSize;
+              if (+item.takerFeeRate > 0) existing.takerFeePct = +item.takerFeeRate * 100;
+            }
           }
         }
       }).catch(() => {});
-      const data = await apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 15000, 2);
+      const [data, fundingResp] = await Promise.all([
+        apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 15000, 2),
+        apiFetch("https://contract.mexc.com/api/v1/contract/funding_rate", 15000, 1).catch(() => null),
+      ]);
       if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) throw new Error("MEXC API error");
+      const fundingMap = new Map((fundingResp?.data || []).map(item => [item.symbol, item]));
 
       mxSyms = [];
       let added = 0;
       for (const d of data.data) {
         if (!d.symbol || !d.symbol.endsWith("_USDT")) continue;
-        const p = +d.lastPrice, changeRate = +d.riseFallRate;
+        const bid = +(d.bid1 || 0), ask = +(d.ask1 || 0);
+        const hasBbo = bid > 0 && ask > 0;
+        const p = hasBbo ? (bid + ask) / 2 : +d.lastPrice;
+        const changeRate = +d.riseFallRate;
         const o = p && Number.isFinite(changeRate) ? p / (1 + changeRate) : 0;
         const h = +d.high24Price, l = +(d.lower24Price || 0);
         let oi = 0;
@@ -37,11 +50,19 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           oi = (+d.holdVol / +d.volume24) * +d.amount24;
         }
         mxSyms.push(d.symbol);
-        const cs = detailMap.get(d.symbol) || 1;
+        const detail = detailMap.get(d.symbol);
+        const fm = fundingMap.get(d.symbol);
+        const cs = detail?.contractSize || 1;
         const tObj = {
           key: "MX:" + d.symbol, ex: "MX", sym: d.symbol, base: d.symbol.replace(/_USDT$/, ""),
-          p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changeRate * 100,
-          v: +d.amount24, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
+          p, bid: hasBbo ? bid : undefined, ask: hasBbo ? ask : undefined,
+          quoteTs: p > 0 ? Date.now() : undefined,
+          chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changeRate * 100,
+          v: +d.amount24, h, l, o,
+          funding: +(fm?.fundingRate ?? d.fundingRate ?? 0) * 100,
+          nextFunding: +(fm?.nextSettleTime || d.nextFundingTime || 0),
+          fundingInterval: +(fm?.collectCycle || 0) || 8,
+          takerFeePct: detail?.takerFeePct || 0,
           oi,
           cs
         };
@@ -65,15 +86,27 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
   function startRestPolling() {
     const poll = async () => {
       try {
-        const data = await apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 5000, 0);
+        const [data, fundingResp] = await Promise.all([
+          apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 5000, 0),
+          apiFetch("https://contract.mexc.com/api/v1/contract/funding_rate", 5000, 0).catch(() => null),
+        ]);
         if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) return;
+        const fundingMap = new Map((fundingResp?.data || []).map(item => [item.symbol, item]));
         
         for (const tick of data.data) {
           const t = tickers.get("MX:" + tick.symbol);
           if (!t) continue;
           
-          const p = +tick.lastPrice;
-          if (p > 0 && !t._wsMid) t.p = p; // only REST fallback if no WS mid-price
+          const bid = +(tick.bid1 || 0), ask = +(tick.ask1 || 0);
+          if (bid > 0 && ask > 0) {
+            t.bid = bid;
+            t.ask = ask;
+            t.p = (bid + ask) / 2;
+            t.quoteTs = Date.now();
+          } else {
+            const p = +tick.lastPrice;
+            if (p > 0 && !t._wsMid) { t.p = p; t.quoteTs = Date.now(); } // only REST fallback if no WS mid-price
+          }
           if (tick.amount24) t.v = +tick.amount24;
           if (tick.holdVol && tick.volume24 && tick.amount24 && +tick.volume24 !== 0) {
             t.oi = (+tick.holdVol / +tick.volume24) * +tick.amount24;
@@ -82,7 +115,12 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (tick.lower24Price) t.l = +tick.lower24Price;
           if (tick.riseFallRate && t.p > 0) t.o = t.p / (1 + +tick.riseFallRate);
           if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
-          if (tick.fundingRate) t.funding = +tick.fundingRate * 100;
+          const fm = fundingMap.get(tick.symbol);
+          if (fm?.fundingRate !== undefined) t.funding = +fm.fundingRate * 100;
+          else if (tick.fundingRate !== undefined) t.funding = +tick.fundingRate * 100;
+          if (fm?.nextSettleTime) t.nextFunding = +fm.nextSettleTime;
+          else if (tick.nextFundingTime) t.nextFunding = +tick.nextFundingTime;
+          if (+fm?.collectCycle > 0) t.fundingInterval = +fm.collectCycle;
           
           dirtyKeys.add(t.key);
         }

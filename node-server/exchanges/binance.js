@@ -10,16 +10,22 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
 
   async function fetchRestInfo() {
     try {
-      const [info, arr, premium] = await Promise.all([
+      const [info, arr, premium, fundingInfo] = await Promise.all([
         apiFetch("https://fapi.binance.com/fapi/v1/exchangeInfo", 10000, 1),
         apiFetch("https://fapi.binance.com/fapi/v1/ticker/24hr", 10000, 1),
         apiFetch("https://fapi.binance.com/fapi/v1/premiumIndex", 10000, 1),
+        apiFetch("https://fapi.binance.com/fapi/v1/fundingInfo", 10000, 1).catch(() => []),
       ]);
 
       const premiumMap = new Map();
       if (Array.isArray(premium)) {
         for (const p of premium) premiumMap.set(p.symbol, { r: +p.lastFundingRate * 100, T: +p.nextFundingTime });
       }
+      const fundingIntervalMap = new Map(
+        (Array.isArray(fundingInfo) ? fundingInfo : [])
+          .filter(item => item?.symbol && +item.fundingIntervalHours > 0)
+          .map(item => [item.symbol, +item.fundingIntervalHours])
+      );
 
       if (info && Array.isArray(info.symbols)) {
         tradingSet = new Set(
@@ -42,13 +48,14 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
             if (+d.quoteVolume > 0) existing.v = +d.quoteVolume;
             if (prem.r) existing.funding = prem.r;
             if (prem.T) existing.nextFunding = prem.T;
+            existing.fundingInterval = fundingIntervalMap.get(d.symbol) || existing.fundingInterval || 8;
             if (+d.count) existing.trades = +d.count;
           } else {
             tickers.set("BN:" + d.symbol, {
               key: "BN:" + d.symbol, ex: "BN", sym: d.symbol, base: d.symbol.replace(/USDT$/, ""),
               p, chg: (() => { const v = parseFloat(d.priceChangePercent); return (!isNaN(v) && v !== 0) ? v : (o > 0 && p > 0 ? ((p - o) / o) * 100 : 0); })(),
               v: +d.quoteVolume || 0, h: h || p, l: l || p, o: o || p, funding: prem.r, nextFunding: prem.T, trades: +d.count || 0,
-              bid: +d.bidPrice || 0, ask: +d.askPrice || 0, quoteTs: Date.now(), fundingInterval: 8,
+              bid: +d.bidPrice || 0, ask: +d.askPrice || 0, quoteTs: Date.now(), fundingInterval: fundingIntervalMap.get(d.symbol) || 8,
             });
           }
           dirtyKeys.add("BN:" + d.symbol);

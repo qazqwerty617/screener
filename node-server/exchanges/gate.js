@@ -34,9 +34,12 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         tickers.set("GT:" + contract.name, {
           key: "GT:" + contract.name, ex: "GT", sym: contract.name, base: contract.name.replace(/_USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changePct,
+          quoteTs: p > 0 ? Date.now() : undefined,
           v: +(ticker24h?.volume_24h_quote || ticker24h?.volume_24h_settle || 0), h, l, o,
           funding: +(ticker24h?.funding_rate || contract.funding_rate || 0) * 100,
           nextFunding: +(ticker24h?.funding_rate_next_apply || contract.funding_next_apply || 0) * 1000,
+          fundingInterval: +contract.funding_interval > 0 ? +contract.funding_interval / 3600 : 8,
+          takerFeePct: +contract.taker_fee_rate > 0 ? +contract.taker_fee_rate * 100 : 0,
           oi,
           cs: +contract.quanto_multiplier || 1
         });

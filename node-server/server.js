@@ -69,6 +69,8 @@ const serverLevels = require("./serverLevels");
 const wallScanner = require("./wallScanner");
 const { createArbitrageEngine } = require("./arbitrageEngine");
 const { createTransferStatusService } = require("./arbitrageTransferStatus");
+const { createDexArbitrageService } = require("./dexArbitrageEngine");
+const { fetchAuthenticatedCatalogue } = require("./authenticatedTransferCatalogs");
 const { normalizeExchanges, analyzeMove } = require("./public/js/pumpLogic");
 let alertEngine = null;
 try {
@@ -322,6 +324,60 @@ const arbitrageEngine = createArbitrageEngine(tickers, exStatus, {
   assetAllowed: (base, ticker) => wallScanner.isTradableBase(base, ticker?.sym, ticker),
 });
 const arbitrageTransfers = createTransferStatusService(apiFetch);
+const dexArbitrage = createDexArbitrageService(
+  apiFetch,
+  arbitrageTransfers,
+  () => arbitrageEngine.getSnapshot().spreads,
+);
+const authenticatedTransferCache = new Map();
+const AUTH_TRANSFER_TTL_MS = 15 * 60_000;
+const AUTH_TRANSFER_RETRY_MS = 60_000;
+const AUTH_TRANSFER_CACHE_MAX = 1_000;
+
+function pruneAuthenticatedTransferCache() {
+  if (authenticatedTransferCache.size <= AUTH_TRANSFER_CACHE_MAX) return;
+  const oldest = [...authenticatedTransferCache.entries()]
+    .sort((a, b) => Number(a[1]?.at || 0) - Number(b[1]?.at || 0))
+    .slice(0, authenticatedTransferCache.size - 800);
+  oldest.forEach(([cacheKey]) => authenticatedTransferCache.delete(cacheKey));
+}
+
+async function loadAuthenticatedTransferCatalogs(req) {
+  const user = getJournalUser(req);
+  const candidates = [];
+  if (user) {
+    for (const exchange of ["BN", "BB", "OX"]) {
+      const credentials = findLinkedJournalCredentials(user.id, exchange);
+      if (credentials) candidates.push({ cacheKey: `${user.id}:${exchange}`, exchange, credentials });
+    }
+  }
+  if (process.env.MEXC_API_KEY && process.env.MEXC_API_SECRET) {
+    candidates.push({ cacheKey: "global:MX", exchange: "MX", credentials: { apiKey: process.env.MEXC_API_KEY, apiSecret: process.env.MEXC_API_SECRET } });
+  }
+  const now = Date.now();
+  await Promise.allSettled(candidates.map(async item => {
+    const current = authenticatedTransferCache.get(item.cacheKey);
+    const ageLimit = current?.catalog?.size ? AUTH_TRANSFER_TTL_MS : AUTH_TRANSFER_RETRY_MS;
+    if (current?.pending) return current.pending;
+    if (current?.at && now - current.at < ageLimit) return;
+    const pending = getFetchImpl().then(fetchImpl => fetchAuthenticatedCatalogue(item.exchange, item.credentials, fetchImpl))
+      .then(catalog => {
+        authenticatedTransferCache.set(item.cacheKey, { at: Date.now(), catalog });
+      })
+      .catch(error => {
+        authenticatedTransferCache.set(item.cacheKey, { at: Date.now(), catalog: current?.catalog || null, error: String(error.message || error) });
+      });
+    authenticatedTransferCache.set(item.cacheKey, { ...current, at: current?.at || 0, pending });
+    return pending;
+  }));
+  pruneAuthenticatedTransferCache();
+  const overlays = new Map();
+  for (const item of candidates) {
+    const catalog = authenticatedTransferCache.get(item.cacheKey)?.catalog;
+    if (catalog?.size) overlays.set(item.exchange, catalog);
+  }
+  return overlays;
+}
 const correlationEngine = require("./correlationEngine");
 correlationEngine.init(tickers, (type, data) => {
   if (clients.size > 0) {
@@ -2828,8 +2884,8 @@ app.get("/api/arbitrage/snapshot", (req, res) => {
   };
   const matches = row => (!search || row.base.includes(search) || row.symbol.includes(search)) &&
     row.liquidity >= minVolume && includesExchange(row);
-  const spreads = full.spreads.filter(row => matches(row) && row.net >= minNet).slice(0, limit);
-  const funding = full.funding.filter(row => matches(row) && row.daily >= minNet).slice(0, limit);
+  const spreads = full.spreads.filter(row => matches(row) && row.roundTripNet >= minNet).slice(0, limit);
+  const funding = full.funding.filter(row => matches(row) && Number(row.nextEventEdge || 0) >= minNet).slice(0, limit);
   res.setHeader("Cache-Control", "no-store");
   res.json({
     generatedAt: full.generatedAt,
@@ -2840,9 +2896,9 @@ app.get("/api/arbitrage/snapshot", (req, res) => {
     spreads,
     funding,
     methodology: {
-      spread: "buy ask -> sell bid -> taker fees",
-      funding: "hour-normalized funding differential; APR is an estimate, not a guarantee",
-      quoteQuality: "bbo means executable best bid/ask; indicative uses the latest midpoint",
+      spread: "fresh buy ask -> sell bid; roundTripNet includes estimated taker fees for opening and closing both legs",
+      funding: "next scheduled funding event at current exchange estimates; rates can change before settlement and are never projected for 30 days",
+      quoteQuality: "spread rows require fresh executable best bid/ask from both venues",
     },
   });
 });
@@ -2867,11 +2923,28 @@ app.get("/api/arbitrage/transfers", async (req, res) => {
     return { key, base, buyEx, sellEx };
   });
   try {
-    const statuses = await arbitrageTransfers.getRoutes(routes);
-    res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
-    res.json({ generatedAt: Date.now(), publicExchanges: ["BG", "GT", "KC", "HT"], routes: statuses });
+    const authenticatedCatalogs = await loadAuthenticatedTransferCatalogs(req);
+    const statuses = await arbitrageTransfers.getRoutes(routes, authenticatedCatalogs);
+    res.setHeader("Cache-Control", authenticatedCatalogs.size ? "private, no-store" : "public, max-age=60, stale-while-revalidate=300");
+    res.json({ generatedAt: Date.now(), publicExchanges: ["BN", "BG", "GT", "KC", "HT"], routes: statuses });
   } catch (error) {
     res.status(502).json({ error: "Transfer status unavailable", detail: String(error?.message || error).slice(0, 160) });
+  }
+});
+
+app.get("/api/arbitrage/dex", async (req, res) => {
+  try {
+    const snapshot = await dexArbitrage.getSnapshot({
+      search: String(req.query.search || "").slice(0, 32),
+      minNet: Math.max(0, Math.min(20, Number(req.query.minNet) || 0)),
+      minLiquidityUsd: Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0)),
+      limit: Math.max(25, Math.min(500, Number(req.query.limit) || 250)),
+      force: req.query.force === "1",
+    });
+    res.setHeader("Cache-Control", "public, max-age=10, stale-while-revalidate=20");
+    res.json(snapshot);
+  } catch (error) {
+    res.status(502).json({ error: "DEX market data unavailable", detail: String(error?.message || error).slice(0, 160) });
   }
 });
 

@@ -60,7 +60,7 @@ function capacityAtImpact(levels, side, impactPct) {
   return { qty, notional: qty * top };
 }
 
-function analyzeBooks({ asks, bids, notional, feesPct = 0, fundingDailyPct = 0 }) {
+function analyzeBooks({ asks, bids, notional, feesPct = 0, fundingHourlyPct = 0 }) {
   if (!asks.length || !bids.length) throw new Error("Order book is empty");
   const buyTop = asks[0][0];
   const sellTop = bids[0][0];
@@ -89,10 +89,10 @@ function analyzeBooks({ asks, bids, notional, feesPct = 0, fundingDailyPct = 0 }
     grossPct,
     feesPct,
     netPct,
-    fundingDailyPct,
-    netAfterFundingDayPct: netPct + fundingDailyPct,
+    fundingHourlyPct,
+    netAfterFundingHourPct: netPct + fundingHourlyPct,
     estimatedPnl: executableQty * buy.avg * netPct / 100,
-    estimatedPnlAfterFundingDay: executableQty * buy.avg * (netPct + fundingDailyPct) / 100,
+    estimatedPnlAfterFundingHour: executableQty * buy.avg * (netPct + fundingHourlyPct) / 100,
     bands,
   };
 }
@@ -197,13 +197,13 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
       fetchBook(row.buyEx, row.buySymbol),
       fetchBook(row.sellEx, row.sellSymbol),
     ]);
-    const fundingDailyPct = (row.sellFunding / (row.sellInterval || 8) - row.buyFunding / (row.buyInterval || 8)) * 24;
+    const fundingHourlyPct = row.sellFunding / (row.sellInterval || 8) - row.buyFunding / (row.buyInterval || 8);
     return {
       key,
       generatedAt: Date.now(),
       buyEx: row.buyEx,
       sellEx: row.sellEx,
-      ...analyzeBooks({ asks: buyBook.asks, bids: sellBook.bids, notional, feesPct: row.fees, fundingDailyPct }),
+      ...analyzeBooks({ asks: buyBook.asks, bids: sellBook.bids, notional, feesPct: row.fees, fundingHourlyPct }),
     };
   }
 

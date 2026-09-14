@@ -101,7 +101,13 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (r.status === "fulfilled" && r.value?.data?.[0]) {
             const d = r.value.data[0];
             const t = tickers.get("OX:" + d.instId);
-            if (t) { t.funding = +d.fundingRate * 100; t.nextFunding = +d.nextFundingTime; dirtyKeys.add(t.key); }
+            if (t) {
+              t.funding = +d.fundingRate * 100;
+              t.nextFunding = +d.nextFundingTime;
+              const intervalMs = +d.nextFundingTime - +d.fundingTime;
+              if (intervalMs > 0) t.fundingInterval = intervalMs / 3600000;
+              dirtyKeys.add(t.key);
+            }
           }
         }
       } catch (_) {}

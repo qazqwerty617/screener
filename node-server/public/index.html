@@ -40,7 +40,7 @@
          `media="print"` + onload swap is the standard non-blocking stylesheet
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=4" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/arbitrage-pro.css?v=4" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/arbitrage-pro.css?v=6" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1121,19 +1121,20 @@
         <!-- Cross-exchange futures and funding arbitrage -->
         <div id="arbitrage-view" class="arb-view" style="display:none">
             <header class="arb-page-head">
-                <div><span class="arb-eyebrow"><i class="arb-live-dot"></i>LIVE BBO · 11 БИРЖ</span><h1>Арбитраж <em>Obsidian</em></h1><p>Исполнимые межбиржевые спреды, комиссии, фандинг и доступность переводов в одном потоке.</p></div>
+                <div><span class="arb-eyebrow"><i class="arb-live-dot"></i>LIVE BBO · CEX + DEX</span><h1>Арбитраж <em>Obsidian</em></h1><p>Исполнимые межбиржевые спреды, фандинг, переводы и DEX-пулы с точной проверкой контрактов.</p></div>
                 <div class="arb-feed-state"><span id="arb-update-age">обновление…</span><strong><i></i> Рынок онлайн</strong></div>
             </header>
             <section class="arb-kpis">
-                <article><span>Чистых возможностей</span><strong id="arb-kpi-count">—</strong><small>после двух комиссий</small></article>
-                <article><span>Лучший чистый спред</span><strong class="positive" id="arb-kpi-net">—</strong><small id="arb-kpi-route">ожидание данных</small></article>
-                <article><span>Лучший funding edge</span><strong class="cyan" id="arb-kpi-funding">—</strong><small>оценка за сутки</small></article>
+                <article><span>Исполнимых возможностей</span><strong id="arb-kpi-count">—</strong><small>свежий BBO · полный round-trip</small></article>
+                <article><span>Лучший net при схождении</span><strong class="positive" id="arb-kpi-net">—</strong><small id="arb-kpi-route">ожидание данных</small></article>
+                <article><span>Ближайшая выплата</span><strong class="cyan" id="arb-kpi-funding">—</strong><small id="arb-kpi-funding-sub">текущая оценка бирж</small></article>
                 <article><span>Рынков в сравнении</span><strong id="arb-kpi-streams">—</strong><small>единая нормализация</small></article>
             </section>
             <div class="arb-modebar">
                 <div class="arb-modes" role="tablist">
                     <button class="on" data-arb-mode="spreads" role="tab">Спреды <b id="arb-spread-badge">0</b></button>
                     <button data-arb-mode="funding" role="tab">Фандинг <b id="arb-funding-badge">0</b></button>
+                    <button data-arb-mode="dex" role="tab">CEX ↔ DEX <b id="arb-dex-badge">0</b></button>
                 </div>
                 <div class="arb-update-state"><span></span><b>ask → bid · taker включён</b></div>
             </div>
@@ -1141,7 +1142,7 @@
                 <main class="arb-results">
                     <div class="arb-filterbar">
                         <label class="arb-search"><span>⌕</span><input id="arb-search" type="search" placeholder="Монета: BTC, ETH…" autocomplete="off"></label>
-                        <label class="arb-compact-field"><span>Мин. спред</span><input id="arb-min-net" type="number" min="-1" max="20" step="0.01" value="0"></label>
+                        <label class="arb-compact-field"><span id="arb-min-label">Мин. net</span><input id="arb-min-net" type="number" min="-1" max="20" step="0.01" value="0"></label>
                         <label class="arb-compact-field"><span>Объём 24ч</span><select id="arb-min-volume"><option value="0">Любой</option><option value="10000" selected>$10K+</option><option value="50000">$50K+</option><option value="100000">$100K+</option><option value="1000000">$1M+</option><option value="10000000">$10M+</option></select></label>
                         <label class="arb-compact-field"><span>Сортировка</span><select id="arb-sort"><option value="net">Спред входа</option><option value="gross">Валовый</option><option value="liquidity">Ликвидность</option><option value="score">Edge Score</option><option value="freshness">Свежесть</option></select></label>
                         <label class="arb-check"><input id="arb-bbo-only" type="checkbox" checked><i></i><span>Только BBO</span></label>
@@ -1154,11 +1155,12 @@
                         <div><strong id="arb-result-title">Исполнимые фьючерсные спреды</strong><span id="arb-result-sub">Две стороны BBO, комиссии и доступность сетей</span></div>
                     </div>
                     <div class="arb-table-scroll">
-                        <table class="arb-table" id="arb-spreads-table"><thead><tr><th></th><th>Монета</th><th>Связка · исполнимые цены</th><th>Фандинг 24ч</th><th>Спред входа</th><th>Спред выхода</th><th>Депозит / вывод</th><th>Ликвидность</th><th>График</th><th>Edge</th></tr></thead><tbody id="arb-spreads-body"></tbody></table>
-                        <table class="arb-table" id="arb-funding-table" hidden><thead><tr><th></th><th>Монета</th><th>Связка · ставки</th><th>За сутки</th><th>30 дней</th><th>APR</th><th>Базис</th><th>Депозит / вывод</th><th>До выплаты</th><th>Edge</th></tr></thead><tbody id="arb-funding-body"></tbody></table>
+                        <table class="arb-table" id="arb-spreads-table"><thead><tr><th></th><th>Монета</th><th>Связка · свежий BBO</th><th>Funding edge / ч</th><th>Вход после fees</th><th>Net при схождении</th><th>Закрыть сейчас</th><th>Депозит / вывод</th><th>Объём 24ч</th><th>График</th><th>Edge</th></tr></thead><tbody id="arb-spreads-body"></tbody></table>
+                        <table class="arb-table" id="arb-funding-table" hidden><thead><tr><th></th><th>Монета</th><th>Связка · текущие ставки</th><th>Ближайшая выплата</th><th>Edge / ч</th><th>Окупаемость fees</th><th>Базис</th><th>Депозит / вывод</th><th>Объём 24ч</th><th>До события</th><th>Edge</th></tr></thead><tbody id="arb-funding-body"></tbody></table>
+                        <table class="arb-table arb-dex-table" id="arb-dex-table" hidden><thead><tr><th>Монета</th><th>Маршрут</th><th>Сеть</th><th>Точный контракт</th><th>CEX цена</th><th>DEX цена</th><th>Gross</th><th>Оценка costs</th><th>Net</th><th>Ликвидность пула</th><th>Объём 24ч</th></tr></thead><tbody id="arb-dex-body"></tbody></table>
                         <div class="arb-empty" id="arb-empty" hidden><span>⌁</span><strong>Возможности не найдены</strong><p>Ослабьте фильтры или дождитесь следующего движения рынка.</p></div>
                     </div>
-                    <footer class="arb-table-foot"><span id="arb-shown">Показано 0</span><span><i class="bbo"></i> D — депозит · W — вывод · зелёный маршрут имеет общую открытую сеть</span></footer>
+                    <footer class="arb-table-foot"><span id="arb-shown">Показано 0</span><span id="arb-method-note"><i class="bbo"></i> D — депозит · W — вывод · зелёный маршрут имеет общую открытую сеть</span></footer>
                 </main>
             </section>
         </div>
@@ -1173,20 +1175,21 @@
                 <div class="arb-volume-presets"><button data-arb-size="100">$100</button><button class="on" data-arb-size="500">$500</button><button data-arb-size="1000">$1K</button><button data-arb-size="5000">$5K</button><button data-arb-size="10000">$10K</button></div>
                 <div class="arb-safe-volume"><div><span>Рекомендуемый максимум</span><strong id="arb-safe-volume">—</strong></div><div><span>Допустимое проскальзывание</span><select id="arb-impact-limit"><option value="0.05">0.05%</option><option value="0.1" selected>0.10%</option><option value="0.25">0.25%</option><option value="0.5">0.50%</option><option value="1">1.00%</option></select></div></div>
                 <div class="arb-depth-meter"><span id="arb-depth-fill"></span><i id="arb-depth-marker"></i></div>
-                <div class="arb-depth-grid"><div><span>Средний BUY</span><strong id="arb-depth-buy">—</strong><small id="arb-depth-buy-impact">—</small></div><div><span>Средний SELL</span><strong id="arb-depth-sell">—</strong><small id="arb-depth-sell-impact">—</small></div><div><span>Чистый спред</span><strong id="arb-depth-net">—</strong><small>после комиссий</small></div><div><span>+ фандинг / сутки</span><strong id="arb-depth-funded">—</strong><small id="arb-depth-pnl">—</small></div></div>
-            </section>
-            <section class="arb-detail-chart">
-                <div class="arb-chart-toolbar"><strong id="arb-chart-title">Исполнимый спред BBO</strong><div class="arb-chart-modes"><button class="on" data-spread-mode="best">Лучшие цены</button><button data-spread-mode="volume">На мой объём</button></div><div class="arb-chart-tfs"><button class="on" data-arb-tf="live">Live</button><button data-arb-tf="5m">5м</button><button data-arb-tf="15m">15м</button><button data-arb-tf="1h">1ч</button><button data-arb-tf="4h">4ч</button></div></div>
-                <div class="arb-chart-legend"><span><i class="buy-leg"></i><b id="arb-chart-buy-label">Вход</b></span><span><i class="sell-leg"></i><b id="arb-chart-sell-label">Выход</b></span><span>Сейчас <b id="arb-chart-current">—</b></span><span><i class="funding"></i>Funding/day <b id="arb-chart-funding">—</b></span></div>
-                <canvas id="arb-detail-canvas"></canvas><div class="arb-chart-empty" id="arb-chart-empty">Загружаем историю обеих бирж…</div>
+                <div class="arb-depth-grid"><div><span>Средний BUY</span><strong id="arb-depth-buy">—</strong><small id="arb-depth-buy-impact">—</small></div><div><span>Средний SELL</span><strong id="arb-depth-sell">—</strong><small id="arb-depth-sell-impact">—</small></div><div><span>Чистый вход</span><strong id="arb-depth-net">—</strong><small>после комиссий открытия</small></div><div><span>+ funding / ч</span><strong id="arb-depth-funded">—</strong><small id="arb-depth-pnl">при текущих ставках</small></div></div>
             </section>
             <section class="arb-leg-grid" id="arb-detail-legs"></section>
-            <section class="arb-token-charts">
-                <article><header><div><span>LONG · ПОКУПКА</span><strong id="arb-buy-chart-title">—</strong></div><b id="arb-buy-chart-price">—</b></header><canvas id="arb-buy-chart"></canvas></article>
-                <article><header><div><span>SHORT · ПРОДАЖА</span><strong id="arb-sell-chart-title">—</strong></div><b id="arb-sell-chart-price">—</b></header><canvas id="arb-sell-chart"></canvas></article>
+            <section class="arb-detail-chart arb-market-chart">
+                <div class="arb-chart-toolbar">
+                    <div class="arb-chart-tabs"><button class="on" data-arb-chart-view="spread">Спред</button><button data-arb-chart-view="index">Индекс цен</button></div>
+                    <div class="arb-chart-tfs"><button class="on" data-arb-tf="live">Live</button><button data-arb-tf="5m">5м</button><button data-arb-tf="15m">15м</button><button data-arb-tf="1h">1ч</button><button data-arb-tf="4h">4ч</button></div>
+                </div>
+                <div class="arb-chart-heading"><div><span id="arb-chart-kicker">ИСТОРИЯ СВЯЗКИ</span><strong id="arb-chart-title">Исполнимый спред · BBO</strong></div><b id="arb-chart-quality">BBO</b></div>
+                <div class="arb-chart-legend"><span><i class="buy-leg"></i><b id="arb-chart-buy-label">Вход</b></span><span><i class="sell-leg"></i><b id="arb-chart-sell-label">Выход</b></span><span class="arb-chart-now">Сейчас <b id="arb-chart-current">—</b></span><span><i class="funding"></i>Funding/ч <b id="arb-chart-funding">—</b></span></div>
+                <div class="arb-chart-stage"><canvas id="arb-detail-canvas"></canvas><div class="arb-chart-empty" id="arb-chart-empty">Собираем историю выбранной связки…</div></div>
+                <div class="arb-chart-bottom"><div class="arb-chart-stats"><span>МИН <b id="arb-chart-min">—</b></span><span>СРЕДНИЙ <b id="arb-chart-avg">—</b></span><span>МАКС <b id="arb-chart-max">—</b></span><span>В ПЛЮСЕ <b id="arb-chart-positive">—</b></span><span>СВЕЖЕСТЬ <b id="arb-chart-age">—</b></span><span>ТОЧЕК <b id="arb-chart-samples">0</b></span></div><div class="arb-chart-modes"><button class="on" data-spread-mode="best">BBO</button><button data-spread-mode="volume">На объём</button></div></div>
             </section>
             <section class="arb-breakdown" id="arb-detail-breakdown"></section>
-            <div class="arb-warning"><b>Контроль риска</b><p>Фандинг может измениться до выплаты. Проверяйте объём стакана, проскальзывание, лимиты позиции и синхронно открывайте обе ноги.</p></div>
+            <div class="arb-warning"><b>Контроль риска</b><p>Funding — текущая оценка биржи и может измениться до расчёта. Окупаемость предполагает неизменную ставку. Проверяйте стакан, проскальзывание, базис, маржу и синхронно открывайте обе ноги.</p></div>
             <div class="arb-detail-actions" id="arb-detail-actions"></div>
         </aside>
 
@@ -3573,8 +3576,8 @@
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
     <script defer src="/js/app.js?v=2094"></script>
-    <script defer src="/js/arbitrage.js?v=2011"></script>
-    <script defer src="/js/arbitrage-pro.js?v=2011"></script>
+    <script defer src="/js/arbitrage.js?v=2014"></script>
+    <script defer src="/js/arbitrage-pro.js?v=2015"></script>
     <script defer src="/js/backtest.js?v=2012"></script>
     <script defer src="/js/journal.js?v=2017"></script>
 </body>

@@ -52,6 +52,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           key: "HT:" + sym, ex: "HT", sym, base: sym.split("-")[0],
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : 0,
           v, h, l, o, funding: fm ? +fm.funding_rate * 100 : 0, nextFunding: fm ? +fm.next_funding_time : 0,
+          quoteTs: p > 0 ? Date.now() : undefined,
           cs
         });
         htSyms.push(sym);
@@ -83,7 +84,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
                       const sym = tick.symbol || tick.contract_code;
                       const t = tickers.get("HT:" + sym);
                       if (t) {
-                          if (tick.close) t.p = +tick.close;
+                          if (tick.close) { t.p = +tick.close; t.quoteTs = Date.now(); }
                           if (tick.trade_turnover) t.v = +tick.trade_turnover; // USDT Turnover
                           else if (tick.amount && t.p) t.v = +tick.amount * t.p;
                           if (tick.high) t.h = +tick.high;
@@ -117,13 +118,13 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           
           const tick = d.tick;
           if (d.ch.includes(".trade.detail")) {
-            if (tick.data?.[0]?.price) t.p = +tick.data[0].price; // Accurate Trade Price
+            if (tick.data?.[0]?.price) { t.p = +tick.data[0].price; t.quoteTs = Date.now(); } // Accurate Trade Price
           } else {
             if (tick.trade_turnover) t.v = +tick.trade_turnover;
             else if (tick.amount && t.p) t.v = +tick.amount * t.p;
             if (tick.high) t.h = +tick.high;
             if (tick.low) t.l = +tick.low;
-            if (!t.p && tick.close) t.p = +tick.close;
+            if (tick.close) { if (!t.p) t.p = +tick.close; t.quoteTs = Date.now(); }
           }
           if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
           dirtyKeys.add(t.key);

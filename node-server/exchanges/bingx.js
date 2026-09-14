@@ -28,6 +28,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           key: "BX:" + ticker.symbol, ex: "BX", sym: ticker.symbol, base: ticker.symbol.replace(/-USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : +(ticker.priceChangePercent || 0),
           v: +(ticker.quoteVolume || ticker.volume || 0), h, l, o, funding: 0, nextFunding: 0,
+          quoteTs: p > 0 ? Date.now() : undefined,
         });
         added++;
       }
@@ -119,7 +120,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           const t = tickers.get("BX:" + tick.symbol);
           if (!t) continue;
           const p = +(tick.lastPrice || 0);
-          if (p > 0) t.p = p;
+          if (p > 0) { t.p = p; t.quoteTs = Date.now(); }
           if (tick.quoteVolume) t.v = +tick.quoteVolume;
           if (tick.highPrice) t.h = +tick.highPrice;
           if (tick.lowPrice) t.l = +tick.lowPrice;
@@ -131,6 +132,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (fm) {
             t.funding = +fm.lastFundingRate * 100;
             t.nextFunding = +fm.nextFundingTime;
+            if (+fm.fundingIntervalHours > 0) t.fundingInterval = +fm.fundingIntervalHours;
           }
           if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
           dirtyKeys.add(t.key);
