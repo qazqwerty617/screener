@@ -51,6 +51,11 @@ function registerPaymentRoutes(app, { userStore, paymentGateway }) {
     max: 180,
     key: req => `${req.ip}:${req.authUser && req.authUser.id}`
   });
+  const promoLimit = createSlidingWindowLimiter({
+    windowMs: 10 * 60 * 1000,
+    max: 30,
+    key: req => `${req.ip}:${req.authUser && req.authUser.id}`
+  });
   const webhookLimit = createSlidingWindowLimiter({
     windowMs: 60 * 1000,
     max: 180,
@@ -89,11 +94,27 @@ function registerPaymentRoutes(app, { userStore, paymentGateway }) {
       const planId = typeof body.planId === "string" ? body.planId : "";
       const method = typeof body.method === "string" ? body.method : "";
       const replaceActive = body.replaceActive === true;
-      if (planId.length > 32 || method.length > 32) {
+      const promoCode = typeof body.promoCode === "string" ? body.promoCode.trim() : "";
+      if (planId.length > 32 || method.length > 32 || promoCode.length > 32) {
         return res.status(400).json({ error: "Некорректные параметры счёта.", code: "INVALID_INPUT" });
       }
-      const invoice = await paymentGateway.createInvoice(req.authUser.id, planId, method, { replaceActive });
+      const invoice = await paymentGateway.createInvoice(req.authUser.id, planId, method, { replaceActive, promoCode });
       res.status(201).json({ ok: true, invoice });
+    } catch (error) {
+      sendError(res, error);
+    }
+  });
+
+  app.post("/api/pay/promo/validate", paymentHeaders, authenticate, promoLimit, (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+      const planId = typeof body.planId === "string" ? body.planId : "";
+      const promoCode = typeof body.promoCode === "string" ? body.promoCode.trim() : "";
+      if (planId.length > 32 || promoCode.length > 32) {
+        return res.status(400).json({ error: "Некорректный промокод.", code: "INVALID_INPUT" });
+      }
+      const promo = paymentGateway.getPromoQuote(promoCode, planId, req.authUser.id);
+      res.json({ ok: true, promo });
     } catch (error) {
       sendError(res, error);
     }

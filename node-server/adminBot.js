@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const userStore = require("./userStore");
+const { createPromoStore, PromoError } = require("./promoStore");
 
 function getAdminBotToken() { return String(process.env.ADMIN_BOT_TOKEN || "").trim(); }
 function getAdminChatId() { return String(process.env.ADMIN_CHAT_ID || "").trim(); }
@@ -10,6 +11,7 @@ function getMainBotToken() { return String(process.env.TELEGRAM_BOT_TOKEN || "")
 
 // Files for persistent admin data
 const PROMOS_FILE = path.join(__dirname, "promos.json");
+const promoStore = createPromoStore({ filePath: process.env.PROMOS_FILE || PROMOS_FILE });
 const PAYMENTS_FILE = path.join(process.env.PAYMENT_DATA_DIR || __dirname, "payments.json");
 const SUPPORT_FILE = path.join(__dirname, "support.json");
 const SETTINGS_FILE = path.join(__dirname, "admin_settings.json");
@@ -30,10 +32,7 @@ function saveJSON(fp, data) {
   } catch (e) {}
 }
 
-let promos = loadJSON(PROMOS_FILE, [
-  { code: "OBSIDIAN30", type: "percent", value: 30, active: true, usedCount: 47, limit: 100, expiresAt: "2026-09-01T00:00:00.000Z" },
-  { code: "PROSTART", type: "days", value: 7, active: true, usedCount: 12, limit: 50, expiresAt: "2026-10-01T00:00:00.000Z" }
-]);
+let promos = promoStore.list();
 let payments = loadJSON(PAYMENTS_FILE, []);
 let supportTickets = loadJSON(SUPPORT_FILE, []);
 let bugReports = loadJSON(BUG_REPORTS_FILE, []);
@@ -746,6 +745,7 @@ function buildPaymentsMenu() {
 
 // 11. PROMO CODES MENU
 function buildPromosMenu() {
+  promos = promoStore.list();
   const activeCount = promos.filter(p => p.active).length;
   const usedToday = promos.reduce((s, p) => s + (p.usesToday || 0), 0);
   const totalUses = promos.reduce((s, p) => s + (p.usedCount || 0), 0);
@@ -1188,8 +1188,8 @@ async function handleAdminMessageText(msg) {
       const parts = text.split(" ").filter(Boolean);
       const code = (parts[0] || "").toUpperCase().trim();
       const typeStr = (parts[1] || "percent").toLowerCase().trim();
-      const value = parseInt(parts[2], 10) || 10;
-      const limit = parseInt(parts[3], 10) || 100;
+      const value = Number(parts[2]);
+      const limit = Number(parts[3]);
 
       if (!code || code.length < 3) {
         await sendAdminMessage(
@@ -1199,20 +1199,20 @@ async function handleAdminMessageText(msg) {
         return;
       }
 
-      const type = (typeStr === "days" || typeStr === "day" || typeStr === "дней") ? "days" : "percent";
-      const newPromo = {
-        code,
-        type,
-        value,
-        active: true,
-        usedCount: 0,
-        limit,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
-      };
-
-      promos.unshift(newPromo);
-      saveJSON(PROMOS_FILE, promos);
+      const type = (typeStr === "days" || typeStr === "day" || typeStr === "дней") ? "days"
+        : typeStr === "percent" ? "percent" : "";
+      let newPromo;
+      try {
+        newPromo = promoStore.create({ code, type, value, limit });
+        promos = promoStore.list();
+      } catch (error) {
+        const message = error instanceof PromoError ? error.message : "Не удалось сохранить промокод.";
+        await sendAdminMessage(
+          `❌ ${message}\n\nФормат: <code>КОД percent|days ЗНАЧЕНИЕ ЛИМИТ</code>`,
+          { inline_keyboard: [[{ text: "🎟 В меню промокодов", callback_data: "adm:promos:main" }]] }
+        );
+        return;
+      }
       logAdminAction("Администратор #1", `Создан промокод ${code}`, { type, value, limit });
 
       const typeTitle = type === "days" ? `+${value} дн. PRO подписки` : `${value}% скидка`;
@@ -2013,6 +2013,7 @@ async function handleAdminCallbackQuery(query) {
         { inline_keyboard: [[{ text: "← Отмена", callback_data: "adm:promos:main" }]] }
       );
     } else if (action === "list") {
+      promos = promoStore.list();
       const filterType = param1 || "active";
       let list = promos;
       if (filterType === "active") list = promos.filter(p => p.active);
@@ -2034,15 +2035,15 @@ async function handleAdminCallbackQuery(query) {
       await editAdminMessage(messageId, text, { inline_keyboard: buttons });
     } else if (action === "toggle") {
       const code = param1;
-      const promo = promos.find(p => p.code === code);
+      const promo = promoStore.toggle(code);
       if (promo) {
-        promo.active = !promo.active;
-        saveJSON(PROMOS_FILE, promos);
+        promos = promoStore.list();
         await answerCallback(query.id, promo.active ? "Промокод включен ✅" : "Промокод отключен ❌");
       }
       const prMenu = buildPromosMenu();
       await editAdminMessage(messageId, prMenu.text, prMenu.keyboard);
     } else if (action === "stats") {
+      promos = promoStore.list();
       const totalPromos = promos.length;
       const totalUses = promos.reduce((s, p) => s + (p.usedCount || 0), 0);
       const text =

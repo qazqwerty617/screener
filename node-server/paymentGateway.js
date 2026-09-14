@@ -4,9 +4,17 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const defaultUserStore = require("./userStore");
+const { createPromoStore, PromoError } = require("./promoStore");
 
 const TRC20_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const TRON_ADDRESS_REGEX = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
+const EVM_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
+const BSC_USDT_CONTRACT = "0x55d398326f99059ff775485246999027b3197955";
+const DEFAULT_BEP20_WALLET = "0xe0b42e5c4fa2170bb347074ec6f96fec600ef84b";
+const DEFAULT_BSC_RPC_URL = "https://bsc-rpc.publicnode.com";
+const BSC_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const BSC_CHAIN_ID = "0x38";
+const BSC_CONFIRMATIONS = 15;
 const INVOICE_ID_REGEX = /^inv_[A-Za-z0-9_-]{32}$/;
 const CRYPTO_PAY_INVOICE_ID_REGEX = /^\d{1,24}$/;
 const INVOICE_TTL_MS = 50 * 60 * 1000;
@@ -100,6 +108,8 @@ function createPaymentGateway(options = {}) {
   const dataDir = options.dataDir || safeString(env.PAYMENT_DATA_DIR, 2048) || __dirname;
   const paymentsFile = options.paymentsFile || path.join(dataDir, "payments.json");
   const invoicesFile = options.invoicesFile || path.join(dataDir, "payment_invoices.json");
+  const promosFile = options.promosFile || safeString(env.PROMOS_FILE, 2048) || path.join(__dirname, "promos.json");
+  const promoStore = options.promoStore || createPromoStore({ filePath: promosFile, now: clock });
 
   if (typeof fetchImpl !== "function") throw new Error("A Fetch API implementation is required");
 
@@ -110,12 +120,20 @@ function createPaymentGateway(options = {}) {
     : "https://pay.crypt.bot/api";
   const webhookPathSecret = safeString(env.CRYPTO_PAY_WEBHOOK_SECRET, 512);
   const tronGridApiKey = safeString(env.TRONGRID_API_KEY, 512);
+  const bscRpcUrl = safeString(env.BSC_RPC_URL, 2048) || DEFAULT_BSC_RPC_URL;
 
   const wallets = {
-    trc20: safeString(env.PAYMENT_TRC20_WALLET, 128)
+    trc20: safeString(env.PAYMENT_TRC20_WALLET, 128),
+    bep20: safeString(env.PAYMENT_BEP20_WALLET, 128) || DEFAULT_BEP20_WALLET
   };
   if (wallets.trc20 && !TRON_ADDRESS_REGEX.test(wallets.trc20)) {
     throw new Error("PAYMENT_TRC20_WALLET is not a valid TRON address");
+  }
+  if (wallets.bep20 && !EVM_ADDRESS_REGEX.test(wallets.bep20)) {
+    throw new Error("PAYMENT_BEP20_WALLET is not a valid BSC address");
+  }
+  if (bscRpcUrl && !/^https:\/\//i.test(bscRpcUrl)) {
+    throw new Error("BSC_RPC_URL must use HTTPS");
   }
   if (webhookPathSecret && webhookPathSecret.length < 32) {
     throw new Error("CRYPTO_PAY_WEBHOOK_SECRET must contain at least 32 characters");
@@ -167,6 +185,7 @@ function createPaymentGateway(options = {}) {
     if (invoice && userActiveInvoices.get(invoice.userId) === invoice.id) {
       userActiveInvoices.delete(invoice.userId);
     }
+    if (invoice && invoice.promo) promoStore.release(invoice.id);
   }
 
   function rebuildActiveState() {
@@ -215,6 +234,7 @@ function createPaymentGateway(options = {}) {
   function getAvailableMethods() {
     const methods = [];
     if (TRON_ADDRESS_REGEX.test(wallets.trc20)) methods.push("trc20");
+    if (EVM_ADDRESS_REGEX.test(wallets.bep20) && bscRpcUrl) methods.push("bep20");
     if (cryptoPayToken) methods.push("cryptobot");
     return methods;
   }
@@ -231,9 +251,9 @@ function createPaymentGateway(options = {}) {
     };
   }
 
-  function allocateFloatingCents(network, basePriceUsd) {
+  function allocateFloatingCents(network, baseAmountMinor) {
     for (let cents = 1; cents <= 99; cents++) {
-      const amountMinor = basePriceUsd * 100 + cents;
+      const amountMinor = baseAmountMinor + cents;
       const amountStr = minorToDecimal(amountMinor);
       const key = `${network}:${amountStr}`;
       if (!amountReservations.has(key)) return { amountMinor, amountStr, key };
@@ -256,6 +276,7 @@ function createPaymentGateway(options = {}) {
       createdAt: invoice.createdAt,
       expiresAt: invoice.expiresAt
     };
+    if (invoice.promo) output.promo = { ...invoice.promo };
     if (invoice.address) output.address = invoice.address;
     if (invoice.qrData) output.qrData = invoice.qrData;
     if (invoice.payUrl) output.payUrl = invoice.payUrl;
@@ -292,8 +313,68 @@ function createPaymentGateway(options = {}) {
       },
       body: JSON.stringify(body || {})
     });
-    if (!data || data.ok !== true) throw new Error(`Crypto Pay rejected ${method}`);
+    if (!data || data.ok !== true) {
+      const providerCode = safeString(data && data.error && (data.error.name || data.error), 96);
+      const suffix = providerCode ? ` (${providerCode})` : "";
+      throw new PaymentError("PROVIDER_REJECTED", `Crypto Pay отклонил запрос${suffix}.`, 502);
+    }
     return data.result;
+  }
+
+  let rpcSequence = 0;
+  async function bscRpcRequest(method, params = []) {
+    if (!bscRpcUrl) throw new PaymentError("METHOD_UNAVAILABLE", "Сеть BNB Smart Chain не настроена.", 503);
+    let data;
+    try {
+      data = await fetchJson(bscRpcUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcSequence, method, params })
+      });
+    } catch (_) {
+      throw new PaymentError("PROVIDER_UNAVAILABLE", "Проверка сети BNB Smart Chain временно недоступна.", 502);
+    }
+    if (!data || data.error || !Object.prototype.hasOwnProperty.call(data, "result")) {
+      throw new PaymentError("PROVIDER_UNAVAILABLE", "Проверка сети BNB Smart Chain временно недоступна.", 502);
+    }
+    return data.result;
+  }
+
+  function parseRpcQuantity(value) {
+    if (typeof value !== "string" || !/^0x[0-9a-f]+$/i.test(value)) return null;
+    const parsed = Number.parseInt(value.slice(2), 16);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  async function getVerifiedBscHead() {
+    const chainId = String(await bscRpcRequest("eth_chainId")).toLowerCase();
+    if (chainId !== BSC_CHAIN_ID) {
+      throw new PaymentError("WRONG_NETWORK", "RPC подключён не к BNB Smart Chain Mainnet.", 503);
+    }
+    const latest = parseRpcQuantity(await bscRpcRequest("eth_blockNumber"));
+    if (latest === null) throw new PaymentError("PROVIDER_UNAVAILABLE", "Сеть BNB Smart Chain вернула некорректный блок.", 502);
+    return latest;
+  }
+
+  function getPromoQuote(code, planId, userId) {
+    if (!gatewayUserStore.findUser(userId)) throw new PaymentError("USER_NOT_FOUND", "Пользователь не найден.", 404);
+    const tariff = TARIF_PRICES[planId];
+    if (!tariff) throw new PaymentError("INVALID_PLAN", "Неизвестный тариф.", 400);
+    let quote;
+    try { quote = promoStore.quote(code, tariff.usd * 100, tariff.days); } catch (error) {
+      if (error instanceof PromoError) throw error;
+      throw new PaymentError("PROMO_STORAGE_ERROR", "Промокоды временно недоступны.", 503);
+    }
+    return {
+      code: quote.code,
+      type: quote.type,
+      value: quote.value,
+      originalAmountStr: minorToDecimal(quote.originalAmountMinor),
+      amountStr: minorToDecimal(quote.amountMinor),
+      discountPercent: quote.discountPercent,
+      bonusDays: quote.bonusDays,
+      totalDays: quote.totalDays
+    };
   }
 
   async function createInvoice(userId, planId = "1m", method = "trc20", options = {}) {
@@ -309,10 +390,12 @@ function createPaymentGateway(options = {}) {
       throw new PaymentError("METHOD_UNAVAILABLE", "Этот способ оплаты не настроен.", 503);
     }
 
+    const requestedPromoCode = safeString(options.promoCode, 32).toUpperCase();
     const existingId = userActiveInvoices.get(user.id);
     const existing = existingId ? invoices.get(existingId) : null;
     if (existing && ["pending", "processing"].includes(existing.status) && existing.expiresAt > clock()) {
-      if (existing.planId === planId && existing.method === method) return presentInvoice(existing);
+      const existingPromoCode = existing.promo && existing.promo.code || "";
+      if (existing.planId === planId && existing.method === method && existingPromoCode === requestedPromoCode) return presentInvoice(existing);
       if (options.replaceActive !== true) {
         throw new PaymentError(
           "ACTIVE_INVOICE_EXISTS",
@@ -358,6 +441,7 @@ function createPaymentGateway(options = {}) {
       planId,
       planTitle: tariff.title,
       days: tariff.days,
+      originalAmountMinor: tariff.usd * 100,
       baseAmountMinor: tariff.usd * 100,
       method,
       status: "pending",
@@ -367,6 +451,35 @@ function createPaymentGateway(options = {}) {
       nextVerificationAt: 0
     };
 
+    if (requestedPromoCode) {
+      let quote;
+      try {
+        quote = promoStore.reserve(
+          requestedPromoCode,
+          invoice.id,
+          invoice.userId,
+          invoice.expiresAt + PAYMENT_GRACE_MS,
+          invoice.originalAmountMinor,
+          tariff.days
+        );
+      } catch (error) {
+        if (error instanceof PromoError) throw error;
+        throw new PaymentError("PROMO_STORAGE_ERROR", "Промокоды временно недоступны.", 503);
+      }
+      invoice.baseAmountMinor = quote.amountMinor;
+      invoice.days = quote.totalDays;
+      invoice.promo = {
+        code: quote.code,
+        type: quote.type,
+        value: quote.value,
+        discountPercent: quote.discountPercent,
+        bonusDays: quote.bonusDays,
+        originalAmountStr: minorToDecimal(quote.originalAmountMinor),
+        amountStr: minorToDecimal(quote.amountMinor)
+      };
+    }
+
+    try {
     if (method === "cryptobot") {
       let providerInvoice;
       try {
@@ -404,14 +517,28 @@ function createPaymentGateway(options = {}) {
       invoice.amountMinor = invoice.baseAmountMinor;
       invoice.amountStr = minorToDecimal(invoice.amountMinor);
       invoice.payUrl = payUrl;
-    } else {
-      const allocation = allocateFloatingCents("trc20", tariff.usd);
+    } else if (method === "trc20") {
+      const allocation = allocateFloatingCents("trc20", invoice.baseAmountMinor);
       invoice.amountMinor = allocation.amountMinor;
       invoice.amountStr = allocation.amountStr;
       invoice.reservationKey = allocation.key;
       invoice.address = wallets.trc20;
       invoice.qrData = `tron:${wallets.trc20}?amount=${allocation.amountStr}&token=USDT`;
       amountReservations.set(allocation.key, invoice.id);
+    } else if (method === "bep20") {
+      const startBlock = await getVerifiedBscHead();
+      const allocation = allocateFloatingCents("bep20", invoice.baseAmountMinor);
+      invoice.amountMinor = allocation.amountMinor;
+      invoice.amountStr = allocation.amountStr;
+      invoice.reservationKey = allocation.key;
+      invoice.address = wallets.bep20;
+      invoice.qrData = wallets.bep20;
+      invoice.bscStartBlock = startBlock;
+      amountReservations.set(allocation.key, invoice.id);
+    }
+    } catch (error) {
+      releaseInvoiceReservation(invoice);
+      throw error;
     }
 
     invoices.set(invoice.id, invoice);
@@ -479,6 +606,57 @@ function createPaymentGateway(options = {}) {
     return false;
   }
 
+  async function verifyBscInvoice(invoice) {
+    const latestBlock = await getVerifiedBscHead();
+    const confirmedBlock = latestBlock - BSC_CONFIRMATIONS;
+    if (!Number.isSafeInteger(invoice.bscStartBlock) || confirmedBlock < invoice.bscStartBlock) return false;
+    const recipientTopic = `0x${"0".repeat(24)}${invoice.address.slice(2).toLowerCase()}`;
+    const filter = {
+      address: BSC_USDT_CONTRACT,
+      fromBlock: `0x${invoice.bscStartBlock.toString(16)}`,
+      toBlock: `0x${confirmedBlock.toString(16)}`,
+      topics: [BSC_TRANSFER_TOPIC, null, recipientTopic]
+    };
+    const logs = await bscRpcRequest("eth_getLogs", [filter]);
+    if (!Array.isArray(logs)) return false;
+
+    const expectedRaw = BigInt(invoice.amountMinor) * 10_000_000_000_000_000n;
+    const createdMs = Date.parse(invoice.createdAt);
+    for (const log of logs) {
+      if (!log || log.removed === true) continue;
+      if (String(log.address || "").toLowerCase() !== BSC_USDT_CONTRACT) continue;
+      if (!Array.isArray(log.topics) || String(log.topics[0] || "").toLowerCase() !== BSC_TRANSFER_TOPIC) continue;
+      if (String(log.topics[2] || "").toLowerCase() !== recipientTopic) continue;
+      if (typeof log.data !== "string" || !/^0x[0-9a-f]{64}$/i.test(log.data)) continue;
+      if (BigInt(log.data) !== expectedRaw) continue;
+      const blockNumber = parseRpcQuantity(log.blockNumber);
+      if (blockNumber === null || blockNumber < invoice.bscStartBlock || blockNumber > confirmedBlock) continue;
+      const txHash = String(log.transactionHash || "").toLowerCase();
+      if (!/^0x[0-9a-f]{64}$/.test(txHash)) continue;
+
+      const [block, receipt] = await Promise.all([
+        bscRpcRequest("eth_getBlockByNumber", [log.blockNumber, false]),
+        bscRpcRequest("eth_getTransactionReceipt", [txHash])
+      ]);
+      if (!block || !receipt || String(receipt.status).toLowerCase() !== "0x1") continue;
+      if (parseRpcQuantity(receipt.blockNumber) !== blockNumber) continue;
+      const timestampSeconds = parseRpcQuantity(block.timestamp);
+      const timestamp = timestampSeconds === null ? NaN : timestampSeconds * 1000;
+      if (!Number.isFinite(timestamp) || timestamp < createdMs || timestamp > invoice.expiresAt + PAYMENT_GRACE_MS) continue;
+
+      await completeSuccessfulPayment(invoice, {
+        txId: `bsc:${txHash}`,
+        amountMinor: invoice.amountMinor,
+        currency: "USDT BEP-20",
+        method: "bep20",
+        provider: "bsc-rpc",
+        confirmedAt: new Date(timestamp).toISOString()
+      });
+      return true;
+    }
+    return false;
+  }
+
   function validateCryptoPayInvoice(providerInvoice, invoice) {
     if (!providerInvoice || String(providerInvoice.invoice_id || "") !== invoice.cryptoPayInvoiceId) return false;
     if (providerInvoice.status !== "paid") return false;
@@ -533,6 +711,7 @@ function createPaymentGateway(options = {}) {
       try {
         let verified = false;
         if (invoice.method === "trc20") verified = await verifyTronInvoice(invoice);
+        else if (invoice.method === "bep20") verified = await verifyBscInvoice(invoice);
         else if (invoice.method === "cryptobot") verified = await verifyCryptoPayInvoice(invoice);
         if (!verified && clock() >= invoice.expiresAt + PAYMENT_GRACE_MS) {
           invoice.finalVerificationAt = clock();
@@ -633,6 +812,14 @@ function createPaymentGateway(options = {}) {
         invoice.days
       );
       if (!grantResult || !grantResult.user) throw new Error("Subscription grant failed");
+      // The paid invoice is authoritative. Promo accounting must be idempotent,
+      // but a damaged/missing promo ledger must never strand a customer after
+      // their on-chain/provider payment and subscription grant succeeded.
+      if (invoice.promo) {
+        try { promoStore.consume(invoice.id); } catch (error) {
+          console.error("[PAYMENT PROMO] Failed to record activation:", error.message);
+        }
+      }
 
       const paymentRecord = {
         id: `pay_${crypto.randomBytes(18).toString("base64url")}`,
@@ -648,6 +835,7 @@ function createPaymentGateway(options = {}) {
         txId,
         days: invoice.days,
         planTitle: invoice.planTitle,
+        promo: invoice.promo ? { ...invoice.promo } : null,
         confirmedAt: evidence.confirmedAt,
         date: new Date(clock()).toISOString()
       };
@@ -745,7 +933,7 @@ function createPaymentGateway(options = {}) {
   }
 
   function getOfficialWallets() {
-    return Object.freeze({ trc20: wallets.trc20 || null });
+    return Object.freeze({ trc20: wallets.trc20 || null, bep20: wallets.bep20 || null });
   }
 
   return {
@@ -758,6 +946,7 @@ function createPaymentGateway(options = {}) {
     verifyWebhookPathSecret,
     getUserPayments,
     getAllPayments,
+    getPromoQuote,
     setMasterTronAddress,
     getOfficialWallets,
     getPublicConfig,

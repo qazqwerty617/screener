@@ -6863,6 +6863,81 @@ body {
     color: #94a3b8;
 }
 
+.pay-promo-box {
+    margin-bottom: 16px;
+}
+
+.pay-promo-box > label {
+    display: block;
+    margin-bottom: 7px;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.pay-promo-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+}
+
+.pay-promo-row input {
+    min-width: 0;
+    padding: 11px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    outline: none;
+    background: rgba(255, 255, 255, 0.035);
+    color: #fff;
+    font: 650 12px/1.2 inherit;
+    text-transform: uppercase;
+}
+
+.pay-promo-row input:focus {
+    border-color: #a855f7;
+    box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.13);
+}
+
+.pay-promo-row button {
+    padding: 0 14px;
+    border: 1px solid rgba(168, 85, 247, 0.45);
+    border-radius: 10px;
+    background: rgba(124, 58, 237, 0.14);
+    color: #d8b4fe;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.pay-promo-row button:disabled,
+.pay-continue-btn:disabled {
+    cursor: wait;
+    opacity: 0.6;
+}
+
+.pay-promo-feedback {
+    min-height: 16px;
+    margin-top: 6px;
+    color: #94a3b8;
+    font-size: 11px;
+}
+
+.pay-promo-feedback.success,
+.pay-invoice-promo {
+    color: #26c97a;
+}
+
+.pay-promo-feedback.error {
+    color: #fb7185;
+}
+
+.pay-invoice-promo {
+    display: block;
+    margin-top: 8px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
 .pay-method-selector {
     margin-bottom: 20px;
 }

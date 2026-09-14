@@ -10,6 +10,7 @@ const { createPaymentGateway, PaymentError } = require("../paymentGateway");
 const { getBearerToken } = require("../paymentRoutes");
 
 const TEST_WALLET = "TJeoZg35n1k11zLuLSuhbPZGiiqF2PmBN9";
+const TEST_BEP20_WALLET = "0xe0b42e5c4fa2170bb347074ec6f96fec600ef84b";
 
 function jsonResponse(value, status = 200) {
   return {
@@ -55,7 +56,7 @@ test("payment methods fail closed when their server configuration is absent", as
     startCleanupTimer: false,
     notifyPayment: false
   });
-  assert.deepEqual(gateway.getAvailableMethods(), []);
+  assert.deepEqual(gateway.getAvailableMethods(), ["bep20"]);
   await assert.rejects(
     gateway.createInvoice("USR-A", "1m", "trc20"),
     error => error instanceof PaymentError && error.code === "METHOD_UNAVAILABLE"
@@ -331,6 +332,132 @@ test("Crypto Pay webhook requires HMAC and re-fetches the paid invoice server-si
 
   await gateway.handleCryptoBotWebhook(update, signature);
   assert.equal(store.grants.length, 1);
+});
+
+test("percentage promos change the server-side price and are consumed only after payment", async t => {
+  const dir = createTempDir(t);
+  const promosFile = path.join(dir, "promos.json");
+  fs.writeFileSync(promosFile, JSON.stringify([{
+    code: "SAVE25", type: "percent", value: 25, active: true, usedCount: 0, limit: 2,
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString()
+  }]));
+  const store = createUserStore();
+  const now = Date.now();
+  let transaction = null;
+  const gateway = createPaymentGateway({
+    dataDir: dir,
+    promosFile,
+    env: { PAYMENT_TRC20_WALLET: TEST_WALLET },
+    userStore: store,
+    now: () => now,
+    fetchImpl: async () => jsonResponse({ data: transaction ? [transaction] : [] }),
+    startCleanupTimer: false,
+    notifyPayment: false
+  });
+
+  const quote = gateway.getPromoQuote("save25", "1m", "USR-PROMO");
+  assert.deepEqual(quote, {
+    code: "SAVE25", type: "percent", value: 25, originalAmountStr: "30.00",
+    amountStr: "22.50", discountPercent: 25, bonusDays: 0, totalDays: 30
+  });
+  const invoice = await gateway.createInvoice("USR-PROMO", "1m", "trc20", { promoCode: "save25" });
+  assert.equal(invoice.amountStr, "22.51");
+  assert.equal(invoice.promo.code, "SAVE25");
+  assert.equal(JSON.parse(fs.readFileSync(promosFile, "utf8"))[0].usedCount, 0);
+
+  const internal = gateway._test.getInvoice(invoice.id);
+  transaction = {
+    transaction_id: "e".repeat(64), to: TEST_WALLET, type: "Transfer",
+    block_timestamp: now + 10_000,
+    value: String(BigInt(internal.amountMinor) * 10_000n),
+    token_info: { address: TRC20_USDT_CONTRACT_FOR_TEST(), symbol: "USDT", decimals: 6 }
+  };
+  assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-PROMO")).status, "success");
+  const savedPromo = JSON.parse(fs.readFileSync(promosFile, "utf8"))[0];
+  assert.equal(savedPromo.usedCount, 1);
+  assert.deepEqual(store.grants[0], { userId: "USR-PROMO", paymentKey: `invoice:${invoice.id}`, days: 30 });
+});
+
+test("day promos keep the price and extend the granted subscription", async t => {
+  const dir = createTempDir(t);
+  const promosFile = path.join(dir, "promos.json");
+  fs.writeFileSync(promosFile, JSON.stringify([{
+    code: "BONUS7", type: "days", value: 7, active: true, usedCount: 0, limit: 10,
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString()
+  }]));
+  const store = createUserStore();
+  let localInvoiceId = "";
+  const gateway = createPaymentGateway({
+    dataDir: dir,
+    promosFile,
+    env: { CRYPTO_PAY_API_TOKEN: "test-token", CRYPTO_PAY_WEBHOOK_SECRET: "s".repeat(40) },
+    userStore: store,
+    fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (String(url).endsWith("/createInvoice")) {
+        localInvoiceId = body.payload;
+        assert.equal(body.amount, "30.00");
+        return jsonResponse({ ok: true, result: { invoice_id: 901, bot_invoice_url: "https://t.me/CryptoBot?start=901" } });
+      }
+      if (String(url).endsWith("/getInvoices")) {
+        return jsonResponse({ ok: true, result: { items: [{ invoice_id: 901, status: "paid", payload: localInvoiceId, asset: "USDT", amount: "30.00" }] } });
+      }
+      throw new Error("unexpected method");
+    },
+    startCleanupTimer: false,
+    notifyPayment: false
+  });
+  const invoice = await gateway.createInvoice("USR-BONUS", "1m", "cryptobot", { promoCode: "bonus7" });
+  assert.equal(invoice.promo.bonusDays, 7);
+  assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-BONUS")).status, "success");
+  assert.equal(store.grants[0].days, 37);
+});
+
+test("BEP20 verifies exact official-token transfer on BSC with finality", async t => {
+  const now = Date.now();
+  const store = createUserStore();
+  let expectedRaw = null;
+  let blockNumberCalls = 0;
+  const calls = [];
+  const gateway = createPaymentGateway({
+    dataDir: createTempDir(t),
+    env: { PAYMENT_BEP20_WALLET: TEST_BEP20_WALLET, BSC_RPC_URL: "https://bsc.test.invalid" },
+    userStore: store,
+    now: () => now,
+    fetchImpl: async (_url, options) => {
+      const request = JSON.parse(options.body);
+      calls.push(request);
+      if (request.method === "eth_chainId") return jsonResponse({ jsonrpc: "2.0", id: request.id, result: "0x38" });
+      if (request.method === "eth_blockNumber") {
+        blockNumberCalls++;
+        return jsonResponse({ jsonrpc: "2.0", id: request.id, result: blockNumberCalls === 1 ? "0x3e8" : "0x3f7" });
+      }
+      if (request.method === "eth_getLogs") return jsonResponse({ jsonrpc: "2.0", id: request.id, result: [{
+        address: "0x55d398326f99059ff775485246999027b3197955",
+        blockNumber: "0x3e8", transactionHash: `0x${"f".repeat(64)}`, removed: false,
+        topics: [
+          "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+          `0x${"0".repeat(24)}${"1".repeat(40)}`,
+          `0x${"0".repeat(24)}${TEST_BEP20_WALLET.slice(2)}`
+        ],
+        data: `0x${expectedRaw.toString(16).padStart(64, "0")}`
+      }] });
+      if (request.method === "eth_getBlockByNumber") return jsonResponse({ jsonrpc: "2.0", id: request.id, result: { timestamp: `0x${Math.floor((now + 10_000) / 1000).toString(16)}` } });
+      if (request.method === "eth_getTransactionReceipt") return jsonResponse({ jsonrpc: "2.0", id: request.id, result: { status: "0x1", blockNumber: "0x3e8" } });
+      throw new Error(`unexpected RPC method ${request.method}`);
+    },
+    startCleanupTimer: false,
+    notifyPayment: false
+  });
+  const invoice = await gateway.createInvoice("USR-BSC", "1m", "bep20");
+  const internal = gateway._test.getInvoice(invoice.id);
+  expectedRaw = BigInt(internal.amountMinor) * 10_000_000_000_000_000n;
+  assert.equal(invoice.address, TEST_BEP20_WALLET);
+  assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-BSC")).status, "success");
+  assert.equal(store.grants.length, 1);
+  const logCall = calls.find(call => call.method === "eth_getLogs");
+  assert.equal(logCall.params[0].address, "0x55d398326f99059ff775485246999027b3197955");
+  assert.equal(logCall.params[0].toBlock, "0x3e8");
 });
 
 test("Bearer parser accepts only a strict Authorization header", () => {

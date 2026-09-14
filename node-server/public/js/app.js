@@ -13574,6 +13574,7 @@ window.addEventListener("resize", () => {
   // optional chart modules so an unrelated widget cannot disable upgrades.
   let paySelectedPlan = "1m";
   let paySelectedMethod = "trc20";
+  let payAppliedPromoCode = "";
   let currentPayInvoice = null;
   let payPollTimer = null;
   let payCountdownTimer = null;
@@ -13586,9 +13587,15 @@ window.addEventListener("resize", () => {
   window.closePayModal = closePayModal;
   window.selectPayTariff = selectPayTariff;
   window.selectPayMethod = selectPayMethod;
+  window.applyPayPromo = applyPayPromo;
   window.backToTariffs = backToTariffs;
   window.startPayInvoice = startPayInvoice;
   window.copyPayField = copyPayField;
+  $("pay-promo-input")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    applyPayPromo();
+  });
   bindProAccessControls();
   bindProFeatureGate();
 
@@ -15879,7 +15886,7 @@ async function refreshAvailablePaymentMethods() {
     const response = await fetch("/api/pay/config", { cache: "no-store" });
     const data = await response.json();
     const methods = Array.isArray(data.methods) ? data.methods : [];
-    for (const method of ["trc20", "cryptobot"]) {
+    for (const method of ["trc20", "bep20", "cryptobot"]) {
       const button = $(method === "cryptobot" ? "pay-method-cb" : `pay-method-${method}`);
       if (button) button.style.display = methods.includes(method) ? "" : "none";
     }
@@ -17187,11 +17194,12 @@ function selectPayTariff(planId) {
     if (el.dataset.plan === planId) el.classList.add("selected");
     else el.classList.remove("selected");
   });
+  if (payAppliedPromoCode) applyPayPromo();
 }
 
 function selectPayMethod(method) {
   paySelectedMethod = method;
-  const methods = ["trc20", "cb"];
+  const methods = ["trc20", "bep20", "cb"];
   methods.forEach(m => {
     const btn = $(`pay-method-${m}`);
     if (btn) {
@@ -17202,6 +17210,63 @@ function selectPayMethod(method) {
       }
     }
   });
+}
+
+async function applyPayPromo() {
+  const input = $("pay-promo-input");
+  const button = $("pay-promo-apply");
+  const feedback = $("pay-promo-feedback");
+  const token = localStorage.getItem("obsidian_auth_token");
+  const promoCode = String(input && input.value || payAppliedPromoCode || "").trim().toUpperCase();
+  if (input) input.value = promoCode;
+  if (!promoCode) {
+    payAppliedPromoCode = "";
+    if (feedback) {
+      feedback.textContent = "";
+      feedback.className = "pay-promo-feedback";
+    }
+    return;
+  }
+  if (!token) {
+    if (typeof openAuthModal === "function") openAuthModal();
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Проверяем…";
+  }
+  try {
+    const response = await fetch("/api/pay/promo/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ planId: paySelectedPlan, promoCode }),
+      signal: controller.signal
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok || !data.promo) throw new Error(data.error || "Промокод не принят");
+    payAppliedPromoCode = data.promo.code;
+    if (feedback) {
+      feedback.textContent = data.promo.type === "percent"
+        ? `✓ Скидка ${data.promo.discountPercent}%: $${data.promo.originalAmountStr} → $${data.promo.amountStr}`
+        : `✓ Бонус +${data.promo.bonusDays} дней: всего ${data.promo.totalDays} дней`;
+      feedback.className = "pay-promo-feedback success";
+    }
+  } catch (error) {
+    payAppliedPromoCode = "";
+    if (feedback) {
+      feedback.textContent = error && error.name === "AbortError" ? "Проверка заняла слишком долго. Повторите ещё раз." : (error.message || "Промокод не принят");
+      feedback.className = "pay-promo-feedback error";
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Применить";
+    }
+  }
 }
 
 function backToTariffs() {
@@ -17228,6 +17293,8 @@ async function startPayInvoice(replaceActive = false) {
     btn.textContent = "Создание счёта...";
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const res = await fetch("/api/pay/create", {
       method: "POST",
@@ -17235,7 +17302,8 @@ async function startPayInvoice(replaceActive = false) {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${token}`
       },
-      body: JSON.stringify({ planId: paySelectedPlan, method: paySelectedMethod, replaceActive })
+      body: JSON.stringify({ planId: paySelectedPlan, method: paySelectedMethod, replaceActive, promoCode: payAppliedPromoCode }),
+      signal: controller.signal
     });
     const data = await res.json();
 
@@ -17254,8 +17322,11 @@ async function startPayInvoice(replaceActive = false) {
     currentPayInvoice = data.invoice;
     renderPayInvoiceStep(currentPayInvoice);
   } catch (err) {
-    alert("Ошибка соединения при создании счёта");
+    alert(err && err.name === "AbortError"
+      ? "Crypto Pay или сеть не ответили за 15 секунд. Попробуйте ещё раз."
+      : "Ошибка соединения при создании счёта");
   } finally {
+    clearTimeout(timeout);
     if (btn) {
       btn.disabled = false;
       btn.textContent = "Продолжить к оплате →";
@@ -17278,14 +17349,28 @@ function renderPayInvoiceStep(inv) {
   const cbLink = $("pay-cryptobot-link");
   const addressBox = $("pay-address-box");
   const addressLabel = $("pay-address-label");
+  const promoLabel = $("pay-invoice-promo");
 
   if (amountDisplay) amountDisplay.textContent = `$${inv.amountStr} USDT`;
   if (addressDisplay) addressDisplay.textContent = inv.address || "";
 
   const netTitles = {
     trc20: "TRON (USDT TRC-20)",
+    bep20: "BNB Smart Chain (USDT BEP-20)",
     cryptobot: "Telegram CryptoBot"
   };
+
+  if (promoLabel) {
+    if (inv.promo) {
+      promoLabel.style.display = "block";
+      promoLabel.textContent = inv.promo.type === "percent"
+        ? `Промокод ${inv.promo.code}: скидка ${inv.promo.discountPercent}%`
+        : `Промокод ${inv.promo.code}: +${inv.promo.bonusDays} дней подписки`;
+    } else {
+      promoLabel.style.display = "none";
+      promoLabel.textContent = "";
+    }
+  }
 
   if (inv.method === "cryptobot" && inv.payUrl) {
     if (cbBtnBox) cbBtnBox.style.display = "block";

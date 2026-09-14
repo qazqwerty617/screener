@@ -33,7 +33,7 @@
          otherwise show while fonts.css is still being parsed. -->
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/js/app.js?v=2096" as="script" />
+    <link rel="preload" href="/js/app.js?v=2097" as="script" />
     <link rel="stylesheet" href="/css/fonts.css?v=3" />
     <link rel="stylesheet" href="/css/app.css?v=1016" />
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
@@ -3479,6 +3479,15 @@
                     </div>
                 </div>
 
+                <div class="pay-promo-box">
+                    <label for="pay-promo-input">Промокод</label>
+                    <div class="pay-promo-row">
+                        <input id="pay-promo-input" type="text" maxlength="32" autocomplete="off" placeholder="Введите код скидки">
+                        <button type="button" id="pay-promo-apply" onclick="applyPayPromo();">Применить</button>
+                    </div>
+                    <div id="pay-promo-feedback" class="pay-promo-feedback" aria-live="polite"></div>
+                </div>
+
                 <div class="pay-method-selector">
                     <label class="pay-method-title">Выберите крипто-сеть или способ оплаты:</label>
                     <div class="pay-methods-grid">
@@ -3487,6 +3496,14 @@
                             <div class="pay-method-info">
                                 <strong>USDT TRC-20 (TRON)</strong>
                                 <span>Адрес формируется сервером</span>
+                            </div>
+                        </button>
+
+                        <button type="button" class="pay-method-btn" id="pay-method-bep20" onclick="selectPayMethod('bep20');">
+                            <span class="pay-method-icon">🟡</span>
+                            <div class="pay-method-info">
+                                <strong>USDT BEP-20 (BNB Smart Chain)</strong>
+                                <span>Автопроверка официального контракта USDT</span>
                             </div>
                         </button>
 
@@ -3520,6 +3537,7 @@
                             <button type="button" class="pay-copy-icon-btn" onclick="copyPayField('pay-display-amount');" title="Скопировать сумму">📋</button>
                         </div>
                         <span class="pay-box-sub-warn">⚠️ Отправляйте ТОЧНУЮ сумму с центами для автоматической привязки платежа</span>
+                        <span id="pay-invoice-promo" class="pay-invoice-promo" style="display: none;"></span>
                     </div>
 
                     <div class="pay-address-box" id="pay-address-box">
@@ -3560,7 +3578,7 @@
     <script defer src="/js/formationEngine.js?v=2013"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
-    <script defer src="/js/app.js?v=2096"></script>
+    <script defer src="/js/app.js?v=2097"></script>
     <script defer src="/js/arbitrage.js?v=2015"></script>
     <script defer src="/js/arbitrage-pro.js?v=2016"></script>
     <script defer src="/js/backtest.js?v=2012"></script>
