@@ -112,6 +112,9 @@ function pruneJournalSyncCache() {
   }
 }
 setInterval(pruneJournalSyncCache, 5 * 60 * 1000).unref?.();
+// Expire stale PRO subscriptions on startup and every hour
+userStore.expireProSubscriptions();
+setInterval(() => userStore.expireProSubscriptions(), 60 * 60 * 1000).unref?.();
 const serverFormationsMap = new Map(); // "EX:SYM:TF" -> levels[]
 const cachedTfMaps = Object.create(null); // tf -> { "EX:SYM": levels[] }
 const cachedFormationMaps = {

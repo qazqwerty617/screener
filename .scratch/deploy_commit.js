@@ -3,17 +3,39 @@ const path = require('path');
 const cp = require('child_process');
 const os = require('os');
 
-const COMMIT = process.argv[2] || '107fe87';
-const BASE_COMMIT = process.argv[3] || 'f1b7698';
+const COMMIT = process.argv[2] || '41d64c7';
+const BASE_COMMIT = process.argv[3] || '107fe87';
 const BUNDLE_PATH = path.join(__dirname, `bundle-${COMMIT}.bundle`);
 const REMOTE_TMP_BUNDLE = `/tmp/bundle-${COMMIT}.bundle`;
 
+// Load .env for credentials
+function loadDotEnv(envPath) {
+  const result = {};
+  try {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+      const idx = trimmed.indexOf('=');
+      const key = trimmed.slice(0, idx).trim();
+      const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+      result[key] = val;
+    }
+  } catch (_) {}
+  return result;
+}
+
+const rootEnv = loadDotEnv(path.join(__dirname, '..', '.env'));
+const HOST_IP = rootEnv.DEPLOY_HOST || '169.58.138.33';
+const USER = rootEnv.DEPLOY_USER || 'root';
+const PASSWORD = rootEnv.DEPLOY_PASSWORD || '';
+
 const askpass = path.join(os.tmpdir(), 'askpass_deploy.bat');
-fs.writeFileSync(askpass, '@echo AQwaffwedcv\n');
+fs.writeFileSync(askpass, `@echo ${PASSWORD}\n`);
 const env = { ...process.env, SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', DISPLAY: '1' };
 
 function sshCmd(cmd) {
-  return cp.spawnSync('ssh', ['-o', 'StrictHostKeyChecking=no', 'root@169.58.138.33', cmd], {
+  return cp.spawnSync('ssh', ['-o', 'StrictHostKeyChecking=no', `${USER}@${HOST_IP}`, cmd], {
     env,
     encoding: 'utf8',
     maxBuffer: 10 * 1024 * 1024
@@ -31,7 +53,7 @@ async function run() {
   const bundleContent = fs.readFileSync(BUNDLE_PATH);
   const uploadRes = cp.spawnSync('ssh', [
     '-o', 'StrictHostKeyChecking=no',
-    'root@169.58.138.33',
+    `${USER}@${HOST_IP}`,
     `cat > ${REMOTE_TMP_BUNDLE}`
   ], {
     env,
@@ -61,10 +83,11 @@ async function run() {
 
     echo "--- Running test suite on updated code ---"
     cd /root/nother/node-server
-    node --test tests/appearanceRuntimeSettings.test.js tests/appearanceThemes.test.js
+    node --test tests/serverHotPaths.test.js tests/giftPromo.test.js tests/paymentUi.test.js
 
     echo "--- Restarting PM2 server ---"
     pm2 restart server --update-env
+    sleep 3
     pm2 status
 
     echo "--- Cleaning up bundle ---"
@@ -80,6 +103,9 @@ async function run() {
   if (runRes.status !== 0) {
     throw new Error(`Remote deployment failed with code ${runRes.status}`);
   }
+
+  // Clean up local bundle
+  try { fs.unlinkSync(BUNDLE_PATH); } catch (_) {}
 }
 
 try {

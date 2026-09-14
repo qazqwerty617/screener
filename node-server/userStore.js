@@ -384,7 +384,16 @@ function sanitizeUser(user) {
   if (!user) return null;
   const { passwordHash, salt, passwordAlgorithm, appliedPaymentIds, ...safe } = user;
   if (!safe.plan) safe.plan = "free";
-  if (safe.plan === "pro") {
+  // Auto-downgrade expired PRO subscriptions
+  if (safe.plan === "pro" && user.proExpiresAt && Number.isFinite(user.proExpiresAt) && user.proExpiresAt <= Date.now()) {
+    safe.plan = "free";
+    safe.proDaysLeft = null;
+    // Persist the downgrade in the source user object
+    user.plan = "free";
+    user.hadPro = true;
+    delete user.proExpiresAt;
+    saveJSONDebounced(USERS_FILE, users);
+  } else if (safe.plan === "pro") {
     if (!user.proExpiresAt) {
       safe.proDaysLeft = "∞";
     } else {
@@ -1436,6 +1445,26 @@ function updateUserPreferences(userIdOrQuery, prefs) {
   return target.preferences;
 }
 
+/** Proactive sweep: downgrade all users whose PRO subscription has expired. */
+function expireProSubscriptions() {
+  const now = Date.now();
+  let count = 0;
+  for (const userId of Object.keys(users)) {
+    const u = users[userId];
+    if (u.plan === "pro" && u.proExpiresAt && Number.isFinite(u.proExpiresAt) && u.proExpiresAt <= now) {
+      u.plan = "free";
+      u.hadPro = true;
+      delete u.proExpiresAt;
+      count++;
+    }
+  }
+  if (count > 0) {
+    saveJSONDebounced(USERS_FILE, users);
+    console.log(`[userStore] expireProSubscriptions: downgraded ${count} expired PRO user(s)`);
+  }
+  return count;
+}
+
 module.exports = {
   registerUser,
   loginUser,
@@ -1476,5 +1505,6 @@ module.exports = {
   markNotificationRead,
   getUserPreferences,
   updateUserPreferences,
-  broadcastUserUpdate
+  broadcastUserUpdate,
+  expireProSubscriptions
 };
