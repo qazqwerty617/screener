@@ -4,5 +4,10 @@
   "regAlerts": true,
   "suppAlerts": true,
   "dailyReport": true,
-  "tz": "MSK (UTC+3)"
+  "tz": "MSK (UTC+3)",
+  "alertExchanges": ["BN"],
+  "alertMinPct": 5.0,
+  "alertPeriodMinutes": 1,
+  "alertDirection": "both",
+  "alertMarketType": "futures"
 }

@@ -1,0 +1,300 @@
+diff --git a/node-server/public/js/app.js b/node-server/public/js/app.js
+index 583761c..fa74d0f 100644
+--- a/node-server/public/js/app.js
++++ b/node-server/public/js/app.js
+@@ -1836,6 +1836,49 @@ function calcOI(data) {
+   return oi;
+ }
+ 
++function drawIndicatorCandles(targetCtx, values, start, count, xForIndex, candleWidth, yForValue) {
++  if (!targetCtx || !Array.isArray(values) || count <= 0) return;
++  const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
++  const upColor = theme?.up || "#26c97a";
++  const downColor = theme?.down || "#ff4560";
++  const upBorder = theme?.wickUp || upColor;
++  const downBorder = theme?.wickDown || downColor;
++  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
++  const bodyWidth = Math.max(1 / dpr, Math.min(7, Math.max(1 / dpr, candleWidth - 2)));
++
++  targetCtx.save();
++  for (let i = 0; i < count; i++) {
++    const index = start + i;
++    const close = Number(values[index]);
++    if (!Number.isFinite(close)) continue;
++    const previous = Number(values[index - 1]);
++    const open = Number.isFinite(previous) ? previous : close;
++    const yOpen = yForValue(open);
++    const yClose = yForValue(close);
++    if (!Number.isFinite(yOpen) || !Number.isFinite(yClose)) continue;
++
++    const rising = close >= open;
++    const rawX = xForIndex(i);
++    const centerX = (Math.round(rawX * dpr) + .5) / dpr;
++    const top = Math.min(yOpen, yClose);
++    const height = Math.max(1 / dpr, Math.abs(yClose - yOpen));
++    const left = Math.round((rawX - bodyWidth / 2) * dpr) / dpr;
++
++    targetCtx.strokeStyle = rising ? upBorder : downBorder;
++    targetCtx.lineWidth = 1 / dpr;
++    targetCtx.beginPath();
++    targetCtx.moveTo(centerX, yOpen);
++    targetCtx.lineTo(centerX, yClose);
++    targetCtx.stroke();
++
++    targetCtx.fillStyle = hexToRgba(rising ? upColor : downColor, 82);
++    targetCtx.fillRect(left, top, bodyWidth, height);
++    targetCtx.strokeStyle = rising ? upBorder : downBorder;
++    targetCtx.strokeRect(left + .5 / dpr, top + .5 / dpr, Math.max(1 / dpr, bodyWidth - 1 / dpr), Math.max(1 / dpr, height - 1 / dpr));
++  }
++  targetCtx.restore();
++}
++
+ function getSmcData(candles) {
+   if (!candles || candles.length < 20) return null;
+   const lastT = candles[candles.length - 1].t;
+@@ -3554,19 +3597,12 @@ function drawChart() {
+         vCtx.fillText("50", PW - 6, y50 - 2);
+         vCtx.fillText("30", PW - 6, y30 - 2);
+ 
+-        // Draw RSI Curve
+-        vCtx.beginPath();
+-        vCtx.strokeStyle = "#a78bfa";
+-        vCtx.lineWidth = 2;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = rsi[s + i];
+-          if (val != null) {
+-            const x = (s + i - viewStart) * candleW + candleW / 2;
+-            const y = yStart + padTop + plotH * (1 - Math.max(0, Math.min(100, val)) / 100);
+-            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+-          }
+-        }
+-        vCtx.stroke();
++        drawIndicatorCandles(
++          vCtx, rsi, s, vis.length,
++          i => (s + i - viewStart) * candleW + candleW / 2,
++          candleW,
++          val => yStart + padTop + plotH * (1 - Math.max(0, Math.min(100, val)) / 100)
++        );
+ 
+         // Big clear label
+         const rsiColor = lastVal >= 70 ? "#22c55e" : lastVal <= 30 ? "#ef4444" : "#a78bfa";
+@@ -3590,33 +3626,12 @@ function drawChart() {
+         const padBot = 8;
+         const plotH = indicatorSubH - padTop - padBot;
+ 
+-        // Area fill
+-        vCtx.beginPath();
+-        let firstX = 0, lastX = 0;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = atr[s + i];
+-          const x = (s + i - viewStart) * candleW + candleW / 2;
+-          const y = yStart + padTop + plotH * (1 - Math.min(1, Math.max(0, (val || 0) / maxAtr)));
+-          if (i === 0) { firstX = x; vCtx.moveTo(x, yStart + indicatorSubH); vCtx.lineTo(x, y); }
+-          else vCtx.lineTo(x, y);
+-          lastX = x;
+-        }
+-        vCtx.lineTo(lastX, yStart + indicatorSubH);
+-        vCtx.closePath();
+-        vCtx.fillStyle = "rgba(251, 146, 60, 0.08)";
+-        vCtx.fill();
+-
+-        // Stroke
+-        vCtx.beginPath();
+-        vCtx.strokeStyle = "#fb923c"; // ATR Orange
+-        vCtx.lineWidth = 2;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = atr[s + i];
+-          const x = (s + i - viewStart) * candleW + candleW / 2;
+-          const y = yStart + padTop + plotH * (1 - Math.min(1, Math.max(0, (val || 0) / maxAtr)));
+-          if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+-        }
+-        vCtx.stroke();
++        drawIndicatorCandles(
++          vCtx, atr, s, vis.length,
++          i => (s + i - viewStart) * candleW + candleW / 2,
++          candleW,
++          val => yStart + padTop + plotH * (1 - Math.min(1, Math.max(0, (val || 0) / maxAtr)))
++        );
+ 
+         vCtx.fillStyle = "#fb923c";
+         vCtx.font = "bold 11px Inter";
+@@ -3732,35 +3747,12 @@ function drawChart() {
+         vCtx.stroke();
+         vCtx.setLineDash([]);
+ 
+-        // Area fill
+-        vCtx.beginPath();
+-        let firstX = 0, lastX = 0;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = cvd[s + i];
+-          const x = (s + i - viewStart) * candleW + candleW / 2;
+-          const y = yStart + padTop + plotH * (1 - (val - minCvd) / cvdRange);
+-          if (i === 0) { firstX = x; vCtx.moveTo(x, yZero); vCtx.lineTo(x, y); }
+-          else vCtx.lineTo(x, y);
+-          lastX = x;
+-        }
+-        vCtx.lineTo(lastX, yZero);
+-        vCtx.closePath();
+-        vCtx.fillStyle = lastVal >= 0 ? "rgba(34, 197, 94, 0.12)" : "rgba(239, 68, 68, 0.12)";
+-        vCtx.fill();
+-
+-        // Stroke line
+-        vCtx.beginPath();
+-        vCtx.strokeStyle = "#ec4899"; // CVD Pink
+-        vCtx.lineWidth = 2;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = cvd[s + i];
+-          if (val != null) {
+-            const x = (s + i - viewStart) * candleW + candleW / 2;
+-            const y = yStart + padTop + plotH * (1 - (val - minCvd) / cvdRange);
+-            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+-          }
+-        }
+-        vCtx.stroke();
++        drawIndicatorCandles(
++          vCtx, cvd, s, vis.length,
++          i => (s + i - viewStart) * candleW + candleW / 2,
++          candleW,
++          val => yStart + padTop + plotH * (1 - (val - minCvd) / cvdRange)
++        );
+ 
+         vCtx.fillStyle = "#ec4899";
+         vCtx.font = "bold 11px Inter";
+@@ -3792,38 +3784,12 @@ function drawChart() {
+         const padBot = 8;
+         const plotH = indicatorSubH - padTop - padBot;
+ 
+-        // Area gradient fill under OI curve
+-        vCtx.beginPath();
+-        let firstX = 0, lastX = 0;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = oiData[s + i];
+-          const x = (s + i - viewStart) * candleW + candleW / 2;
+-          const y = yStart + padTop + plotH * (1 - (val - minOi) / oiRange);
+-          if (i === 0) { firstX = x; vCtx.moveTo(x, yStart + indicatorSubH); vCtx.lineTo(x, y); }
+-          else vCtx.lineTo(x, y);
+-          lastX = x;
+-        }
+-        vCtx.lineTo(lastX, yStart + indicatorSubH);
+-        vCtx.closePath();
+-        const oiGrad = vCtx.createLinearGradient(0, yStart + padTop, 0, yStart + indicatorSubH);
+-        oiGrad.addColorStop(0, "rgba(56, 189, 248, 0.22)");
+-        oiGrad.addColorStop(1, "rgba(56, 189, 248, 0.01)");
+-        vCtx.fillStyle = oiGrad;
+-        vCtx.fill();
+-
+-        // Stroke line
+-        vCtx.beginPath();
+-        vCtx.strokeStyle = "#38bdf8"; // Sky blue
+-        vCtx.lineWidth = 2;
+-        for (let i = 0; i < vis.length; i++) {
+-          const val = oiData[s + i];
+-          if (val != null) {
+-            const x = (s + i - viewStart) * candleW + candleW / 2;
+-            const y = yStart + padTop + plotH * (1 - (val - minOi) / oiRange);
+-            if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
+-          }
+-        }
+-        vCtx.stroke();
++        drawIndicatorCandles(
++          vCtx, oiData, s, vis.length,
++          i => (s + i - viewStart) * candleW + candleW / 2,
++          candleW,
++          val => yStart + padTop + plotH * (1 - (val - minOi) / oiRange)
++        );
+ 
+         vCtx.fillStyle = "#38bdf8";
+         vCtx.font = "bold 11px Inter";
+@@ -18193,6 +18159,11 @@ if (document.readyState === "loading") {
+   };
+ 
+   const pdLogic = window.PumpLogic;
++  const pdBrowserSessionStartedAt = Date.now();
++
++  function pdIsFreshSessionAlert(alert) {
++    return !!pdLogic?.isFreshSessionAlert?.(alert, pdBrowserSessionStartedAt, Date.now());
++  }
+ 
+   function pdNormalizeExchanges(values, fallback = DEFAULT_PD_SETTINGS.exchanges) {
+     if (!pdLogic) return Array.isArray(values) ? values : [...fallback];
+@@ -18414,6 +18385,7 @@ if (document.readyState === "loading") {
+   // Real-Time Server Push Handler for Pump/Dump (Zero-latency WebSocket delivery)
+   window.handleServerPumpDumpAlert = function (data) {
+     if (!data || !pdSettings || !pdSettings.enabled || data.pct <= -75 || data.pct >= 250 || !Number.isFinite(data.pct)) return;
++    if (!pdIsFreshSessionAlert(data)) return;
+ 
+     // Account isolation: if targeted to a specific user, reject if not matching current user
+     const curUserId = (window.currentUser && window.currentUser.id) ? window.currentUser.id : null;
+@@ -18494,28 +18466,16 @@ if (document.readyState === "loading") {
+           if (data && Array.isArray(data.alerts)) {
+             // The response can have been created just before settings changed.
+             // Apply the current account filter again at the final client seam.
+-            const validAlerts = data.alerts.filter(alert => pdAlertMatchesSettings(alert));
++            const validAlerts = data.alerts.filter(alert => pdAlertMatchesSettings(alert) && pdIsFreshSessionAlert(alert));
+             if (!pdIsSeeded) {
+-              // First run: quietly seed top existing moves into the feed without blast spamming
++              // Everything already active when the page opens belongs to the
++              // server/Telegram history. Baseline every result without adding
++              // cards, sounds or toasts to this browser session.
+               pdIsSeeded = true;
+-              const topInit = validAlerts.slice(0, 5);
+-              for (const alert of topInit) {
++              for (const alert of data.alerts) {
+                 if (pdSignalCooldownGate) {
+                   pdSignalCooldownGate.mark(`${alert.ex}:${alert.sym}`, alert.pct > 0 ? "pump" : "dump", now);
+                 }
+-                pdAddCard({
+-                  ex: alert.ex,
+-                  sym: alert.sym,
+-                  pct: alert.pct,
+-                  price: alert.price,
+-                  pctStr: (alert.pct >= 0 ? "+" : "") + alert.pct.toFixed(2) + "%",
+-                  dirLabel: alert.pct > 0 ? "PUMP" : "DUMP",
+-                  exFull: typeof getFullExchangeName === "function" ? getFullExchangeName(alert.ex) : alert.ex,
+-                  timeStr: new Date(alert.ts || now).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+-                  dateStr: `${String(new Date(alert.ts || now).getDate()).padStart(2, "0")}.${String(new Date(alert.ts || now).getMonth() + 1).padStart(2, "0")}`,
+-                  periodLabel: `${bars}м`,
+-                  volStr: alert.vol >= 1e9 ? (alert.vol / 1e9).toFixed(2) + "B" : alert.vol >= 1e6 ? (alert.vol / 1e6).toFixed(1) + "M" : alert.vol > 0 ? (alert.vol / 1e3).toFixed(0) + "K" : "—"
+-                });
+               }
+             } else {
+               // Real-time: alert individually as each new coin breaks threshold
+@@ -18660,36 +18620,8 @@ if (document.readyState === "loading") {
+       } catch (_) {}
+     }
+ 
+-    // 4. Asynchronous Telegram Alert (Non-blocking)
+-    if (pdSettings.tgEnabled && typeof sendTelegramAlert === "function") {
+-      (async () => {
+-        try {
+-          const cleanSym = sym.toUpperCase();
+-          let photoDataUrl = null;
+-          if (typeof captureChartSnapshot === "function") {
+-            try {
+-              const snapPromise = captureChartSnapshot(cleanSym, typeof price === "number" ? price : parseFloat(price) || 0, 0, "5m", ex);
+-              const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 2500));
+-              photoDataUrl = await Promise.race([snapPromise, timeoutPromise]);
+-            } catch (_) {
+-              photoDataUrl = null;
+-            }
+-          }
+-          const tgMsg =
+-            `─── <b>[${dirLabel}] ${sym}</b> ───\n` +
+-            `• <b>Биржа:</b> ${exFull}\n` +
+-            `• <b>Изменение:</b> <b>${pctStr}</b> за ${periodLabel}\n` +
+-            `• <b>Цена:</b> $${priceStr}\n` +
+-            `• <b>Объём 24ч:</b> $${volStr}\n` +
+-            `• <b>Время:</b> ${dateStr} ${timeStr}\n` +
+-            `─────────────────────────\n` +
+-            `⚡ <b>Obsidian Radar</b>`;
+-          sendTelegramAlert(tgMsg, photoDataUrl);
+-        } catch (tgErr) {
+-          console.warn("[PD TG DISPATCH ERROR]", tgErr);
+-        }
+-      })().catch(() => {});
+-    }
++    // Telegram delivery is server-owned so it keeps running while the browser
++    // is closed and cannot duplicate the same alert from a client tab.
+   }
+ 
+   // ── Alert Card Panel ─────────────────────────────────────────────────────

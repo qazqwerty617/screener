@@ -74,11 +74,11 @@ function createPromoStore(options = {}) {
     if (!PROMO_CODE_REGEX.test(normalizeCode(promo.code))) {
       throw new PromoError("PROMO_INVALID", "Промокод не найден или отключён.", 404);
     }
-    if (!['percent', 'days'].includes(promo.type)) {
+    if (!['percent', 'days', 'gift_days'].includes(promo.type)) {
       throw new PromoError("PROMO_INVALID", "Промокод настроен некорректно.", 400);
     }
     const value = Number(promo.value);
-    if (!Number.isInteger(value) || value < 1 || (promo.type === "percent" && value > 95) || (promo.type === "days" && value > 3650)) {
+    if (!Number.isInteger(value) || value < 1 || (promo.type === "percent" && value > 95) || ((promo.type === "days" || promo.type === "gift_days") && value > 3650)) {
       throw new PromoError("PROMO_INVALID", "Промокод настроен некорректно.", 400);
     }
     if (promo.expiresAt && Date.parse(promo.expiresAt) <= clock()) {
@@ -119,7 +119,52 @@ function createPromoStore(options = {}) {
     }
     const promos = read();
     const promo = validatePromo(promos.find(item => normalizeCode(item && item.code) === cleanCode));
+    if (promo.type === "gift_days") {
+      throw new PromoError("PROMO_GIFT_TYPE", "Этот промокод предназначен для активации в профиле без оплаты.", 400);
+    }
     return buildQuote(promo, baseAmountMinor, baseDays);
+  }
+
+  function redeemGift(code, userId) {
+    const cleanCode = normalizeCode(code);
+    if (!PROMO_CODE_REGEX.test(cleanCode)) {
+      throw new PromoError("PROMO_INVALID", "Введите корректный промокод.", 400);
+    }
+    if (!userId || typeof userId !== "string") {
+      throw new PromoError("USER_REQUIRED", "Необходима авторизация для активации промокода.", 401);
+    }
+    const promos = read();
+    const promo = promos.find(item => normalizeCode(item && item.code) === cleanCode);
+    if (!promo) {
+      throw new PromoError("PROMO_INVALID", "Промокод не найден или отключён.", 404);
+    }
+    validatePromo(promo);
+    if (promo.type !== "gift_days") {
+      throw new PromoError("PROMO_CHECKOUT_TYPE", "Этот промокод применяется при оформлении подписки в окне PRO.", 400);
+    }
+    const usedUsers = Array.isArray(promo.usedUsers) ? promo.usedUsers : [];
+    if (usedUsers.includes(userId)) {
+      throw new PromoError("PROMO_ALREADY_USED", "Вы уже активировали этот промокод.", 409);
+    }
+    const limit = Number(promo.limit);
+    if (Number.isFinite(limit) && limit > 0 && Number(promo.usedCount || 0) >= Math.floor(limit)) {
+      throw new PromoError("PROMO_LIMIT_REACHED", "Лимит активаций промокода исчерпан.", 409);
+    }
+
+    promo.usedCount = Number(promo.usedCount || 0) + 1;
+    promo.usedUsers = [...usedUsers, userId];
+    if (!Array.isArray(promo.redemptions)) promo.redemptions = [];
+    promo.redemptions.unshift({ userId, redeemedAt: new Date(clock()).toISOString() });
+    if (promo.redemptions.length > 5000) promo.redemptions = promo.redemptions.slice(0, 5000);
+    write(promos);
+
+    return {
+      code: promo.code,
+      type: promo.type,
+      days: Number(promo.value),
+      usedCount: promo.usedCount,
+      limit: promo.limit
+    };
   }
 
   function reserve(code, invoiceId, userId, expiresAt, baseAmountMinor, baseDays) {
@@ -173,17 +218,20 @@ function createPromoStore(options = {}) {
       const copy = { ...promo };
       delete copy.reservations;
       delete copy.usedInvoices;
+      delete copy.usedUsers;
+      delete copy.redemptions;
       return copy;
     });
   }
 
   function create(input) {
     const code = normalizeCode(input && input.code);
-    const type = input && input.type === "days" ? "days" : input && input.type === "percent" ? "percent" : "";
+    const rawType = input && input.type;
+    const type = rawType === "days" ? "days" : (rawType === "gift_days" || rawType === "gift") ? "gift_days" : rawType === "percent" ? "percent" : "";
     const value = Number(input && input.value);
     const limit = Number(input && input.limit);
     if (!PROMO_CODE_REGEX.test(code)) throw new PromoError("PROMO_INVALID", "Код должен содержать 3–32 латинских символа, цифры, - или _.");
-    if (!type || !Number.isInteger(value) || value < 1 || (type === "percent" && value > 95) || (type === "days" && value > 3650)) {
+    if (!type || !Number.isInteger(value) || value < 1 || (type === "percent" && value > 95) || ((type === "days" || type === "gift_days") && value > 3650)) {
       throw new PromoError("PROMO_INVALID", type === "percent" ? "Скидка должна быть от 1% до 95%." : "Количество дней должно быть от 1 до 3650.");
     }
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000_000) throw new PromoError("PROMO_INVALID", "Лимит должен быть от 1 до 1 000 000.");
@@ -191,6 +239,8 @@ function createPromoStore(options = {}) {
     if (promos.some(item => normalizeCode(item && item.code) === code)) throw new PromoError("PROMO_EXISTS", "Такой промокод уже существует.", 409);
     const promo = {
       code, type, value, active: true, usedCount: 0, limit,
+      usedUsers: [],
+      redemptions: [],
       createdAt: new Date(clock()).toISOString(),
       expiresAt: input.expiresAt || new Date(clock() + 90 * 24 * 60 * 60 * 1000).toISOString()
     };
@@ -209,7 +259,7 @@ function createPromoStore(options = {}) {
     return { ...promo };
   }
 
-  return { quote, reserve, release, consume, list, create, toggle };
+  return { quote, reserve, release, consume, redeemGift, list, create, toggle };
 }
 
 module.exports = { createPromoStore, PromoError, PROMO_CODE_REGEX, normalizeCode };

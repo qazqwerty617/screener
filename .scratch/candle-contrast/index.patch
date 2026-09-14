@@ -1,0 +1,38 @@
+diff --git a/node-server/public/index.html b/node-server/public/index.html
+index 6447a3a..d9fc9d5 100644
+--- a/node-server/public/index.html
++++ b/node-server/public/index.html
+@@ -33,9 +33,9 @@
+          otherwise show while fonts.css is still being parsed. -->
+     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
+     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
+-    <link rel="preload" href="/js/app.js?v=2090" as="script" />
++    <link rel="preload" href="/js/app.js?v=2091" as="script" />
+     <link rel="stylesheet" href="/css/fonts.css?v=3" />
+-    <link rel="stylesheet" href="/css/app.css?v=1014" />
++    <link rel="stylesheet" href="/css/app.css?v=1015" />
+     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
+          `media="print"` + onload swap is the standard non-blocking stylesheet
+          pattern: the browser fetches it at low priority without blocking paint. -->
+@@ -72,7 +72,7 @@
+                 ]
+             }
+         </script>
+-    <script src="/js/appearanceThemes.js?v=3"></script>
++    <script src="/js/appearanceThemes.js?v=4"></script>
+ </head>
+ 
+ <body>
+@@ -3582,10 +3582,10 @@
+     <script defer src="/js/formationEngine.js?v=2014"></script>
+     <script defer src="/js/tradeOverlay.js?v=2015"></script>
+     <script defer src="/js/pumpLogic.js?v=2"></script>
+-    <script defer src="/js/app.js?v=2090"></script>
++    <script defer src="/js/app.js?v=2091"></script>
+     <script defer src="/js/arbitrage.js?v=2013"></script>
+     <script defer src="/js/arbitrage-pro.js?v=2014"></script>
+-    <script defer src="/js/backtest.js?v=2010"></script>
++    <script defer src="/js/backtest.js?v=2011"></script>
+     <script defer src="/js/journal.js?v=2017"></script>
+ </body>
+ 

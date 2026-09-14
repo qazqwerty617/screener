@@ -1,0 +1,65 @@
+diff --git a/node-server/public/index.html b/node-server/public/index.html
+index 2f5a530..6447a3a 100644
+--- a/node-server/public/index.html
++++ b/node-server/public/index.html
+@@ -33,9 +33,9 @@
+          otherwise show while fonts.css is still being parsed. -->
+     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
+     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
+-    <link rel="preload" href="/js/app.js?v=2089" as="script" />
++    <link rel="preload" href="/js/app.js?v=2090" as="script" />
+     <link rel="stylesheet" href="/css/fonts.css?v=3" />
+-    <link rel="stylesheet" href="/css/app.css?v=1013" />
++    <link rel="stylesheet" href="/css/app.css?v=1014" />
+     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
+          `media="print"` + onload swap is the standard non-blocking stylesheet
+          pattern: the browser fetches it at low priority without blocking paint. -->
+@@ -72,7 +72,7 @@
+                 ]
+             }
+         </script>
+-    <script src="/js/appearanceThemes.js?v=2"></script>
++    <script src="/js/appearanceThemes.js?v=3"></script>
+ </head>
+ 
+ <body>
+@@ -2551,6 +2551,30 @@
+                                 <div class="custom-color-picker" data-picker-id="screener-bg"></div>
+                             </div>
+                         </div>
++                        <div class="settings-group">
++                            <label>Отдельные разделы</label>
++                            <div class="s-row">
++                                <span>Карта: фон / панели</span>
++                                <div class="dual-pickers">
++                                    <div class="custom-color-picker" data-picker-id="view-map-bg" title="Фон карты"></div>
++                                    <div class="custom-color-picker" data-picker-id="view-map-panel" title="Панели карты"></div>
++                                </div>
++                            </div>
++                            <div class="s-row">
++                                <span>Арбитраж: фон / панели</span>
++                                <div class="dual-pickers">
++                                    <div class="custom-color-picker" data-picker-id="view-arbitrage-bg" title="Фон арбитража"></div>
++                                    <div class="custom-color-picker" data-picker-id="view-arbitrage-panel" title="Панели арбитража"></div>
++                                </div>
++                            </div>
++                            <div class="s-row">
++                                <span>Формации: фон / карточки</span>
++                                <div class="dual-pickers">
++                                    <div class="custom-color-picker" data-picker-id="view-formations-bg" title="Фон формаций"></div>
++                                    <div class="custom-color-picker" data-picker-id="view-formations-panel" title="Карточки формаций"></div>
++                                </div>
++                            </div>
++                        </div>
+                         <div class="settings-group">
+                             <label>Текст шкал (цены/время)</label>
+                             <div class="s-row">
+@@ -3558,7 +3582,7 @@
+     <script defer src="/js/formationEngine.js?v=2014"></script>
+     <script defer src="/js/tradeOverlay.js?v=2015"></script>
+     <script defer src="/js/pumpLogic.js?v=2"></script>
+-    <script defer src="/js/app.js?v=2089"></script>
++    <script defer src="/js/app.js?v=2090"></script>
+     <script defer src="/js/arbitrage.js?v=2013"></script>
+     <script defer src="/js/arbitrage-pro.js?v=2014"></script>
+     <script defer src="/js/backtest.js?v=2010"></script>

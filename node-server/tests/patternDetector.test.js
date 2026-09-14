@@ -8,6 +8,18 @@ function candle(i, o, h, l, c, v = 1000) {
   return { t: 1_700_000_000_000 + i * 60_000, o, h, l, c, v };
 }
 
+test('precomputed retests remain available up to the configurable 35-candle age', () => {
+  const candles = Array.from({ length: 60 }, (_, i) => candle(i, 100, 101, 99, 100));
+  const formations = { horizontals: [], trendlines: [], retests: [
+    { price: 100.2, direction: 'up', touches: 3, lastTouchAge: 28 },
+    { price: 100.3, direction: 'up', touches: 3, lastTouchAge: 36 }
+  ], approachingRetests: [{ price: 100.4, direction: 'up', touches: 3, isApproachingRetest: true }] };
+  const signals = scanCandles({ ex: 'BN', sym: 'TESTUSDT', base: 'TEST', tf: '1h' }, candles, {}, formations).filter(signal => signal.type === 'retest');
+  assert.equal(signals.length, 2);
+  assert.ok(signals.some(signal => signal.meta.lastTouchAge === 28));
+  assert.ok(signals.some(signal => signal.meta.status === 'approaching'));
+});
+
 test("scanCandles handles a recent confirmed retest and returns finite signals", () => {
   const candles = [];
   for (let i = 0; i < 40; i++) candles.push(candle(i, 99, 99.4, 98.7, 99));

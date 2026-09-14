@@ -23,7 +23,7 @@ hostname = _env.get("DEPLOY_HOST", os.environ.get("DEPLOY_HOST", ""))
 username = _env.get("DEPLOY_USER", os.environ.get("DEPLOY_USER", "root"))
 password = _env.get("DEPLOY_PASSWORD", os.environ.get("DEPLOY_PASSWORD", ""))
 remote_bases = ["/root/nother", "/root/cryptoscreen"]
-local_base = os.path.abspath(".")
+local_base = os.path.dirname(os.path.abspath(__file__))
 local_env_path = os.path.join(local_base, "node-server", ".env")
 
 ignore_dirs = {".git", ".vscode", "node_modules", "scratch", "knowledge", "__pycache__", "snapshots", "backups"}
@@ -32,7 +32,7 @@ ignore_files = {
     "remote_inspect.py", "deploy.py", "check_remote.py", "check_remote2.py",
     "sessions.json", "users.json", "auth_logs.json", "payments.json",
     "promos.json", "support.json", "bug_reports.json", "admin_audit.json",
-    "admin_settings.json"
+    "admin_settings.json", "journal_credentials.json"
 }
 
 def sftp_mkdir_p(sftp, remote_directory):

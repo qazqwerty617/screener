@@ -22,7 +22,10 @@ function extractFn(name) {
 
 const scoreFormationSignal = extractFn("scoreFormationSignal");
 
-const COIN_COOLDOWN_MS = 15 * 60 * 1000;
+const cooldownSource = /function getFormationCoinCooldownMs\(settings\) \{[\s\S]*?\n  \}/.exec(SERVER_SRC);
+assert.ok(cooldownSource);
+const getFormationCoinCooldownMs = new Function(`${cooldownSource[0]}; return getFormationCoinCooldownMs;`)();
+const COIN_COOLDOWN_MS = getFormationCoinCooldownMs({ cooldownSeconds: 300 });
 const MIN_GAP_MS = 45 * 1000;
 
 function sig(tf, type, touches, dist, price = 100, sym = "TESTUSDT") {
@@ -45,7 +48,7 @@ function dispatch(signals, state, now, cooldownSec = 300) {
     if (dist > 1.2 || touches < 2) continue;
 
     const coinKey = `U1:${s.ex}:${s.sym}`;
-    const coinWindow = Math.max(COIN_COOLDOWN_MS, cooldownSec * 1000);
+    const coinWindow = getFormationCoinCooldownMs({ cooldownSeconds: cooldownSec });
     if (now - (state.coin.get(coinKey) || 0) < coinWindow) continue;
 
     if (now - (state.paced.get("U1") || 0) < MIN_GAP_MS) continue;
@@ -108,20 +111,19 @@ test("repeat scans inside the window stay silent, then resume", () => {
 
   assert.equal(dispatch(build(), state, t0).length, 1, "first scan speaks");
   assert.equal(dispatch(build(), state, t0 + 1000).length, 0, "1s later: silent");
-  assert.equal(dispatch(build(), state, t0 + 5 * 60000).length, 0, "5min later: silent");
-  assert.equal(dispatch(build(), state, t0 + 14 * 60000).length, 0, "14min later: silent");
-  assert.equal(dispatch(build(), state, t0 + 16 * 60000).length, 1, "16min later: speaks again");
+  assert.equal(dispatch(build(), state, t0 + 4 * 60000).length, 0, "4min later: silent");
+  assert.equal(dispatch(build(), state, t0 + 5 * 60000).length, 1, "configured 5min elapsed: speaks again");
 });
 
 test("a user cooldown longer than the coin window is respected", () => {
   const state = newState();
   const t0 = Date.now();
-  const cooldownSec = 3600; // 60 minutes, longer than the 15-minute coin gate
+  const cooldownSec = 3600;
   assert.equal(dispatch([sig("5m", "level", 3, 0.2)], state, t0, cooldownSec).length, 1);
   assert.equal(
     dispatch([sig("5m", "level", 3, 0.2)], state, t0 + 20 * 60000, cooldownSec).length,
     0,
-    "the longer user cooldown must win over the 15-minute default"
+    "the selected one-hour cooldown must be respected"
   );
 });
 

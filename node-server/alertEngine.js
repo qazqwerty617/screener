@@ -351,45 +351,52 @@ function getAllAlertSubscribers() {
   const subscribers = [];
   const seenChatIds = new Set();
 
+  const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
+
   const getUsersFn = userStoreModule && (typeof userStoreModule.getAllUsersRaw === "function" ? userStoreModule.getAllUsersRaw : (typeof userStoreModule.getAllUsers === "function" ? userStoreModule.getAllUsers : null));
   if (getUsersFn) {
     const allUsers = getUsersFn.call(userStoreModule) || {};
     for (const u of Object.values(allUsers)) {
       if (!u || u.blocked) continue;
-      const chatId = u.telegramChatId || u.telegramId;
+      const chatId = String(u.telegramChatId || u.telegramId || "").trim();
       if (!chatId) continue;
 
+      const isAdminUser = adminChatId && (chatId === adminChatId || String(u.id) === "admin" || u.role === "admin");
       const prefs = u.preferences || {};
       const notifPrefs = prefs.notifications || u.notificationSettings || {};
       const pdUserPrefs = notifPrefs.pumpDump || notifPrefs.pumpAlerts || prefs.pumpAlerts || prefs.pumpDump || u.pumpAlerts || {};
 
-      // `tgAlertsEnabled` is the field userStore actually persists (see
-      // linkTelegramBot / setTelegramAlertsEnabledByChatId). The previous read of
-      // `isTelegramAlertsEnabled` never existed on any user record, so this
-      // expression was always true and pump/dump was effectively opt-out.
-      const tgEnabled = pdUserPrefs.tgEnabled !== undefined
-        ? !!pdUserPrefs.tgEnabled
-        : (notifPrefs.tgEnabled !== undefined
-            ? !!notifPrefs.tgEnabled
-            : (u.tgAlertsEnabled === true));
+      // If user is admin, alerts in telegram are always active
+      const tgEnabled = isAdminUser
+        ? true
+        : (pdUserPrefs.tgEnabled !== undefined
+            ? !!pdUserPrefs.tgEnabled
+            : (notifPrefs.tgEnabled !== undefined
+                ? !!notifPrefs.tgEnabled
+                : (u.tgAlertsEnabled === true)));
 
       if (!tgEnabled) continue;
+
+      const userMinPct = Number(pdUserPrefs.minPct) || (isAdminUser ? 5.0 : 3.0);
+      const userPeriod = Number(pdUserPrefs.periodMinutes) || (isAdminUser ? 1 : 5);
 
       const pumpDump = {
         ...DEFAULT_USER_ALERT_SETTINGS.pumpDump,
         ...pdUserPrefs,
         enabled: pdUserPrefs.enabled !== undefined ? !!pdUserPrefs.enabled : true,
+        minPct: userMinPct,
+        periodMinutes: userPeriod,
         exchanges: pdUserPrefs.exchanges === undefined
-          ? ["all"]
+          ? (isAdminUser ? ["BN"] : ["all"])
           : normalizeExchanges(pdUserPrefs.exchanges)
       };
 
       const priceAlerts = Array.isArray(u.priceAlerts) ? u.priceAlerts : (Array.isArray(prefs.priceAlerts) ? prefs.priceAlerts : []);
 
-      seenChatIds.add(String(chatId));
+      seenChatIds.add(chatId);
       subscribers.push({
         userId: u.id,
-        chatId: String(chatId),
+        chatId: chatId,
         pumpDump,
         priceAlerts,
         formationAlerts: notifPrefs.formationAlerts || prefs.formationAlerts || DEFAULT_USER_ALERT_SETTINGS.formationAlerts
@@ -397,22 +404,62 @@ function getAllAlertSubscribers() {
     }
   }
 
-  const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
   if (adminChatId && !seenChatIds.has(adminChatId)) {
+    // Read admin alert preferences: prioritize admin user record, then admin_settings.json
+    let adminExchanges = ["BN"];
+    let adminMinPct = 5.0;
+    let adminPeriod = 1;
+    let adminDirection = "both";
+    let adminMarket = "futures";
+
+    // Check if any registered user has matching admin credentials
+    if (getUsersFn) {
+      try {
+        const allUsers = getUsersFn.call(userStoreModule) || {};
+        for (const u of Object.values(allUsers)) {
+          if (String(u.telegramChatId || u.telegramId || "").trim() === adminChatId || String(u.id) === "admin") {
+            const uPrefs = u.preferences?.pumpAlerts || u.preferences?.notifications?.pumpDump || {};
+            if (uPrefs.minPct !== undefined) adminMinPct = Number(uPrefs.minPct) || 5.0;
+            if (uPrefs.periodMinutes !== undefined) adminPeriod = Number(uPrefs.periodMinutes) || 1;
+            if (uPrefs.exchanges) adminExchanges = normalizeExchanges(uPrefs.exchanges);
+            if (uPrefs.direction) adminDirection = uPrefs.direction;
+            if (uPrefs.marketType) adminMarket = uPrefs.marketType;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Also read from admin_settings.json
+    try {
+      const _fs = require("fs"), _path = require("path");
+      const _raw = JSON.parse(_fs.readFileSync(_path.join(__dirname, "admin_settings.json"), "utf8"));
+      if (Array.isArray(_raw.alertExchanges) && _raw.alertExchanges.length > 0) {
+        adminExchanges = normalizeExchanges(_raw.alertExchanges);
+      }
+      if (_raw.alertMinPct !== undefined) adminMinPct = Number(_raw.alertMinPct) || 5.0;
+      if (_raw.alertPeriodMinutes !== undefined) adminPeriod = Number(_raw.alertPeriodMinutes) || 1;
+      if (_raw.alertDirection !== undefined) adminDirection = _raw.alertDirection;
+      if (_raw.alertMarketType !== undefined) adminMarket = _raw.alertMarketType;
+    } catch (_) { /* keep defaults */ }
+
     subscribers.push({
       userId: "admin",
       chatId: adminChatId,
       pumpDump: {
         ...DEFAULT_USER_ALERT_SETTINGS.pumpDump,
         enabled: true,
-        minPct: 2.0,
-        periodMinutes: 5,
-        exchanges: ["all", "BN", "BB", "OX", "BG", "GT", "MX", "HL", "BX", "KC", "HT"]
+        minPct: adminMinPct,
+        periodMinutes: adminPeriod,
+        exchanges: adminExchanges,
+        direction: adminDirection,
+        marketType: adminMarket
       },
       priceAlerts: [],
       formationAlerts: { enabled: true }
     });
   }
+
 
   cachedSubscribers = subscribers;
   lastSubscribersFetch = now;

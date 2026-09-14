@@ -354,4 +354,54 @@ test("retest requires confirmed 2+ touches before breakout and rejects single-sw
   assert.equal(foundB.outcome, "confirmed");
 });
 
+test("trendline does not register touches when intermediate swing wick does not reach the line", () => {
+  const candles = baseCandles(90);
+  // Anchor 1 at idx 15, low 90
+  candles[15] = { ...candles[15], l: 90, c: 92, o: 92 };
+  candles[14].l = 92; candles[16].l = 92;
+  // Anchor 2 at idx 65, low 95 (slope = (95 - 90) / 50 = 0.1 per bar)
+  candles[65] = { ...candles[65], l: 95, c: 97, o: 97 };
+  candles[64].l = 97; candles[66].l = 97;
+
+  // Intermediate swing low at idx 40: line price is 90 + 0.1 * 25 = 92.5
+  // But candle 40 low is 93.8 (1.3 above line, ~1.4% gap)
+  candles[40] = { ...candles[40], l: 93.8, c: 96, o: 96 };
+  candles[39].l = 95; candles[41].l = 95;
+
+  candles[candles.length - 1].c = 98;
+  const tls = engine.detectTrendlines(candles, 2);
+  const tl = tls.find(t => t.direction === "down" || !t.isHigh);
+  assert.ok(tl, "Support trendline should be detected between anchors");
+  assert.equal(tl.touches, 2, "Intermediate swing that stopped 1.4% short must NOT count as a touch");
+  assert.ok(!tl.swingIndices.includes(40), "Index 40 must not be in swingIndices");
+});
+
+test("descending resistance trendline rejects touches that stop short and accepts exact kiss", () => {
+  const candles = baseCandles(90);
+  // Anchor 1 at idx 10, high 105
+  candles[10] = { ...candles[10], h: 105, c: 100.5, o: 100.5 };
+  candles[9].h = 100.4; candles[11].h = 100.4;
+  // Anchor 2 at idx 35, high 104 (slope = (104 - 105) / 25 = -0.04 per bar)
+  candles[35] = { ...candles[35], h: 104, c: 100.5, o: 100.5 };
+  candles[34].h = 100.4; candles[36].h = 100.4;
+
+  // Intermediate bar at idx 60: line is 105 - 0.04 * 50 = 103.0
+  // Candle 60 stops 0.20 short: high = 102.80 (~0.2% gap)
+  candles[60] = { ...candles[60], h: 102.80, c: 100.5, o: 100.5 };
+  candles[59].h = 100.4; candles[61].h = 100.4;
+
+  // True touch at idx 80: line is 105 - 0.04 * 70 = 102.20
+  // Candle 80 high = 102.20 (exact kiss)
+  candles[80] = { ...candles[80], h: 102.20, c: 100.5, o: 100.5 };
+  candles[79].h = 100.4; candles[81].h = 100.4;
+
+  candles[candles.length - 1].c = 100.5;
+  const tls = engine.detectTrendlines(candles, 2);
+  const tl = tls.find(t => t.direction === "up" || t.isHigh);
+  assert.ok(tl, "Descending resistance trendline should be detected");
+  assert.ok(!tl.swingIndices.includes(60), "Candle 60 with gap must NOT be registered as a touch");
+  assert.ok(tl.swingIndices.includes(80), "Candle 80 with exact kiss must be registered as a touch");
+});
+
+
 

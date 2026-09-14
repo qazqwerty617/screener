@@ -140,7 +140,7 @@
 
   function countTouches(candles, level, startIdx, resistance, range) {
     const lastPrice = candles[candles.length - 1]?.c || level;
-    const touchTol = Math.max(lastPrice * 0.0005, range * 0.04);
+    const touchTol = Math.min(Math.max(range * 0.035, lastPrice * 0.0005), lastPrice * 0.0012);
     const pullbackMin = Math.max(lastPrice * 0.0030, range * 0.35);
     const minSpacing = candles.length < 50 ? 6 : 8;
 
@@ -204,9 +204,9 @@
   function _detectHorizontals(ctx, minTouches) {
     if (!ctx) return [];
     const { candles, n, lastPrice, range, prof, highs, lows } = ctx;
-    const touchTol = Math.max(range * 0.05, lastPrice * 0.0005);
-    const eps = Math.max(1e-7, lastPrice * 0.0001);
-    const minT = minTouches > 1 ? minTouches : 1;
+    const touchTol = Math.min(Math.max(range * 0.035, lastPrice * 0.0005), lastPrice * 0.0012);
+    const eps = Math.max(1e-7, lastPrice * 0.00001);
+    const minT = Number.isFinite(minTouches) ? Math.max(1, minTouches) : 2;
     const maxDist = prof.maxDistPct || 0.10;
     const minSpacing = n < 50 ? 6 : 8;
     const pullbackMin = Math.max(range * 0.35, lastPrice * 0.0030);
@@ -341,8 +341,8 @@
           price: +outerPrice.toFixed(6),
           endPrice: +outerPrice.toFixed(6),
           direction: resistance ? "up" : "down",
-          swingIdx: p.idx,
-          swingTime: candles[p.idx].t,
+          swingIdx: firstTouch,
+          swingTime: candles[firstTouch].t,
           touchIndices: validTouches,
           touchTimes: validTouches.map(ti => candles[ti].t),
           touches: validTouches.length,
@@ -469,8 +469,14 @@
     const slopeLimit = range * 0.25;
     const maxLookback = prof.maxLook ? prof.maxLook * 2 : 300;
     const maxDist = prof.maxDistPct || 0.10;
-    const touchTol = Math.max(range * 0.04, lastPrice * 0.0005);
-    const eps = Math.max(1e-7, lastPrice * 0.0001);
+    let cMin = Infinity, cMax = -Infinity;
+    for (let k = 0; k < n; k++) {
+      if (candles[k].h > cMax) cMax = candles[k].h;
+      if (candles[k].l < cMin) cMin = candles[k].l;
+    }
+    const chartSpan = Math.max(1e-9, cMax - cMin);
+    const touchTol = Math.min(chartSpan * 0.010, range * 0.12, lastPrice * 0.00018);
+    const eps = Math.max(1e-7, lastPrice * 0.00001);
     const pullbackMin = Math.max(range * 0.08, lastPrice * 0.0008);
 
     function linesIntersectSameSide(l1, l2) {
@@ -914,6 +920,7 @@
       cascades: _detectCascades(ctx, mt),
       trendlines: _detectTrendlines(ctx, mt),
       retests: _detectRetests(ctx, false),
+      approachingRetests: _detectRetests(ctx, true),
     };
   }
 
@@ -922,9 +929,9 @@
   return {
     normalize,
     scanAll,
-    detectCascades: (raw, min) => _detectCascades(buildCtx(raw), min || 2),
-    detectHorizontals: (raw, min) => _detectHorizontals(buildCtx(raw), min || 2),
-    detectTrendlines: (raw, min) => _detectTrendlines(buildCtx(raw), min || 2),
+    detectCascades: (raw, min) => _detectCascades(buildCtx(raw), Number.isFinite(min) ? min : 2),
+    detectHorizontals: (raw, min) => _detectHorizontals(buildCtx(raw), Number.isFinite(min) ? min : 2),
+    detectTrendlines: (raw, min) => _detectTrendlines(buildCtx(raw), Number.isFinite(min) ? min : 2),
     detectRetests: raw => _detectRetests(buildCtx(raw), false),
     detectApproachingRetests: raw => _detectRetests(buildCtx(raw), true),
   };

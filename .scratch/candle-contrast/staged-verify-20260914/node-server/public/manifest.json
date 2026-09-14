@@ -1,0 +1,30 @@
+{
+  "name": "Obsidian Screener",
+  "short_name": "Obsidian Screener",
+  "description": "Скринер криптовалют, быстрые графики, карта плотностей, арбитраж и торговые сигналы в реальном времени",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#12141a",
+  "theme_color": "#12141a",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

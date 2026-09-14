@@ -118,8 +118,30 @@ const cachedFormationMaps = {
   cascades: Object.create(null),
   levels: Object.create(null),
   trendline: Object.create(null),
-  retest: Object.create(null)
+  retest: Object.create(null),
+  approaching: Object.create(null)
 };
+const formationUpdatedAt = Object.create(null);
+
+function updateFormationSnapshot(coinKey, tf, formations) {
+  const types = { cascades: 'cascades', levels: 'horizontals', trendline: 'trendlines', retest: 'retests', approaching: 'approachingRetests' };
+  for (const [type, field] of Object.entries(types)) {
+    const bucket = cachedFormationMaps[type][tf] ||= Object.create(null);
+    const levels = formations[field] || [];
+    if (levels.length) bucket[coinKey] = levels;
+    else delete bucket[coinKey];
+  }
+  const cascades = formations.cascades || [];
+  const bucket = cachedTfMaps[tf] ||= Object.create(null);
+  if (cascades.length) {
+    bucket[coinKey] = cascades;
+    serverFormationsMap.set(`${coinKey}:${tf}`, cascades);
+  } else {
+    delete bucket[coinKey];
+    serverFormationsMap.delete(`${coinKey}:${tf}`);
+  }
+  (formationUpdatedAt[tf] ||= Object.create(null))[coinKey] = Date.now();
+}
 
 // ── Persistent disk cache for 24/7 instant formations availability across restarts ──
 const FORMATION_CACHE_FILE = path.join(__dirname, "formation_maps_cache.json");
@@ -138,13 +160,17 @@ function loadFormationMaps() {
     }
     let restoredCoins = 0;
     if (raw.cachedFormationMaps && typeof raw.cachedFormationMaps === "object") {
-      for (const type of ["cascades", "levels", "trendline", "retest"]) {
+      for (const type of ["cascades", "levels", "trendline", "retest", "approaching"]) {
         const typeObj = raw.cachedFormationMaps[type];
         if (!typeObj || typeof typeObj !== "object") continue;
         if (!cachedFormationMaps[type]) cachedFormationMaps[type] = Object.create(null);
         for (const tf in typeObj) {
           if (!cachedFormationMaps[type][tf]) cachedFormationMaps[type][tf] = Object.create(null);
           Object.assign(cachedFormationMaps[type][tf], typeObj[tf]);
+          const stamps = formationUpdatedAt[tf] ||= Object.create(null);
+          for (const coinKey of Object.keys(typeObj[tf])) {
+            stamps[coinKey] = Number(raw.formationUpdatedAt?.[tf]?.[coinKey]) || Number(raw.savedAt) || 0;
+          }
         }
       }
     }
@@ -175,8 +201,10 @@ function saveFormationMaps(force = false) {
         cascades: cachedFormationMaps.cascades,
         levels: cachedFormationMaps.levels,
         trendline: cachedFormationMaps.trendline,
-        retest: cachedFormationMaps.retest
+        retest: cachedFormationMaps.retest,
+        approaching: cachedFormationMaps.approaching
       },
+      formationUpdatedAt,
       cachedTfMaps
     };
     const json = JSON.stringify(payload);
@@ -215,7 +243,8 @@ function pruneFormationCaches() {
     }
   }
   const buckets = [cachedTfMaps, cachedFormationMaps.cascades, cachedFormationMaps.levels,
-                   cachedFormationMaps.trendline, cachedFormationMaps.retest];
+                   cachedFormationMaps.trendline, cachedFormationMaps.retest, cachedFormationMaps.approaching,
+                   formationUpdatedAt];
   for (const bucket of buckets) {
     for (const tf in bucket) {
       const byCoin = bucket[tf];
@@ -3611,6 +3640,24 @@ app.post("/api/user/pump-alerts", express.json({ limit: "5mb" }), (req, res) => 
   }
   const updated = userStore.updateUserPreferences(user.id, currentPrefs);
   console.log(`[USER PREFS] Updated pumpAlerts for user ${user.id}:`, JSON.stringify(settings));
+
+  const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
+  const isUserAdmin = (user.telegramChatId && user.telegramChatId === adminChatId) || user.role === "admin" || user.id === "USR-284895";
+  if (isUserAdmin) {
+    try {
+      const _fs = require("fs"), _path = require("path");
+      const sPath = _path.join(__dirname, "admin_settings.json");
+      let adminJson = {};
+      try { adminJson = JSON.parse(_fs.readFileSync(sPath, "utf8")); } catch (_) {}
+      if (settings.minPct !== undefined) adminJson.alertMinPct = Number(settings.minPct) || 5.0;
+      if (settings.periodMinutes !== undefined) adminJson.alertPeriodMinutes = Number(settings.periodMinutes) || 1;
+      if (settings.exchanges !== undefined) adminJson.alertExchanges = normalizeExchanges(settings.exchanges);
+      if (settings.direction !== undefined) adminJson.alertDirection = settings.direction;
+      if (settings.marketType !== undefined) adminJson.alertMarketType = settings.marketType;
+      _fs.writeFileSync(sPath, JSON.stringify(adminJson, null, 2), "utf8");
+    } catch (_) {}
+  }
+
   res.json({ success: true, preferences: updated });
 });
 
@@ -3875,6 +3922,25 @@ app.post("/api/user/set-plan", requireAdminApi, (req, res) => {
   res.json({ success: true, user: updated });
 });
 
+app.get("/api/admin/promos", requireAdminApi, (req, res) => {
+  const { createPromoStore } = require("./promoStore");
+  const store = createPromoStore();
+  res.json({ ok: true, promos: store.list() });
+});
+
+app.post("/api/admin/promos/create", requireAdminApi, express.json(), (req, res) => {
+  const { createPromoStore, PromoError } = require("./promoStore");
+  const store = createPromoStore();
+  try {
+    const promo = store.create(req.body);
+    res.status(201).json({ ok: true, promo });
+  } catch (error) {
+    res.status(error instanceof PromoError ? (error.status || 400) : 500).json({
+      error: error.message || "Failed to create promo"
+    });
+  }
+});
+
 app.post("/api/bug-report", express.json({
   limit: "15mb",
   verify(req, _res, buffer) {
@@ -4108,6 +4174,26 @@ registerPaymentRoutes(app, { userStore, paymentGateway });
 // race to set `Content-Encoding`, and it carries library defaults (level -1,
 // threshold 1024) — so this route silently opted out of the tuned global options
 // while doing all the same work. The global middleware already covers it.
+app.get("/api/formations/snapshot", (req, res) => {
+  setPublicCors(req, res);
+  res.setHeader("Cache-Control", "public, max-age=3");
+  const tf = String(req.query.tf || "15m");
+  if (!["1m", "5m", "15m", "1h", "4h", "1d", "3d", "1w"].includes(tf)) {
+    return res.status(400).json({ error: "Unsupported formation timeframe" });
+  }
+  const now = Date.now();
+  const maxAge = ["1d", "3d", "1w"].includes(tf) ? 2 * 60 * 60 * 1000 : 30 * 60 * 1000;
+  const stamps = formationUpdatedAt[tf] || {};
+  const validKeys = Object.keys(stamps).filter(key => stamps[key] <= now && now - stamps[key] <= maxAge);
+  const maps = {};
+  for (const type of Object.keys(cachedFormationMaps)) {
+    const source = cachedFormationMaps[type][tf] || {};
+    maps[type] = Object.fromEntries(validKeys.filter(key => source[key]?.length).map(key => [key, source[key]]));
+  }
+  res.json({ tf, maps, updatedAt: validKeys.reduce((latest, key) => Math.max(latest, stamps[key]), 0),
+    scanned: validKeys.length, coverage: ["5m", "15m", "1h"].includes(tf) ? "all-assets" : "top-300" });
+});
+
 app.get("/api/formations/map", (req, res) => {
   setPublicCors(req, res);
   res.setHeader("Cache-Control", "public, max-age=3");
@@ -4647,7 +4733,7 @@ server.listen(PORT, () => {
     const kKey = cacheKey(ex, sym, tf, true);
     try {
       const kCached = klinesCache.get(kKey);
-      if (kCached && kCached.data && Array.isArray(kCached.data) && kCached.data.length >= 30) {
+      if (kCached && now - kCached.at < getTfTtlMs(tf) && kCached.data && Array.isArray(kCached.data) && kCached.data.length >= 30) {
         kCached.used = now;
         const candles = [];
         for (let i = 0; i < kCached.data.length; i += 6) {
@@ -4668,7 +4754,7 @@ server.listen(PORT, () => {
 
     const backoffUntil = exchangeBackoffs.get(ex) || 0;
     if (backoffUntil > now) {
-      return cached ? cached.candles : [];
+      return [];
     }
 
     try {
@@ -4690,7 +4776,7 @@ server.listen(PORT, () => {
         exchangeBackoffs.set(ex, now + 60000);
       }
     }
-    return cached ? cached.candles : [];
+    return [];
   }
 
   async function scanAllPatterns() {
@@ -4785,47 +4871,13 @@ server.listen(PORT, () => {
               const curPrice = (t && t.p > 0) ? t.p : (lastCandle ? lastCandle.c : 0);
 
               // ── Unified single-pass formation scan (1 normalize + 1 swings + 1 ATR) ──
-              const formations = serverLevels.scanAll(candles, 2);
-              const { cascades: detectedCascades, horizontals: detectedHorizontals,
-                      trendlines: detectedTrendlines, retests: detectedRetests } = formations;
+              const formations = serverLevels.scanAll(candles, 1);
 
-              if (!cachedFormationMaps.cascades[tf]) cachedFormationMaps.cascades[tf] = Object.create(null);
-              if (!cachedFormationMaps.levels[tf]) cachedFormationMaps.levels[tf] = Object.create(null);
-              if (!cachedFormationMaps.trendline[tf]) cachedFormationMaps.trendline[tf] = Object.create(null);
-              if (!cachedFormationMaps.retest[tf]) cachedFormationMaps.retest[tf] = Object.create(null);
-              if (!cachedTfMaps[tf]) cachedTfMaps[tf] = Object.create(null);
-
-              if (detectedCascades.length > 0) {
-                cachedFormationMaps.cascades[tf][coinKey] = detectedCascades;
-                cachedTfMaps[tf][coinKey] = detectedCascades;
-                serverFormationsMap.set(`${coinKey}:${tf}`, detectedCascades);
-              } else {
-                delete cachedFormationMaps.cascades[tf][coinKey];
-                delete cachedTfMaps[tf][coinKey];
-                serverFormationsMap.delete(`${coinKey}:${tf}`);
-              }
-
-              if (detectedHorizontals.length > 0) {
-                cachedFormationMaps.levels[tf][coinKey] = detectedHorizontals;
-              } else {
-                delete cachedFormationMaps.levels[tf][coinKey];
-              }
-
-              if (detectedTrendlines.length > 0) {
-                cachedFormationMaps.trendline[tf][coinKey] = detectedTrendlines;
-              } else {
-                delete cachedFormationMaps.trendline[tf][coinKey];
-              }
-
-              if (detectedRetests.length > 0) {
-                cachedFormationMaps.retest[tf][coinKey] = detectedRetests;
-              } else {
-                delete cachedFormationMaps.retest[tf][coinKey];
-              }
+              updateFormationSnapshot(coinKey, tf, formations);
 
               // ── Pattern signals ──
               const meta = { ex, sym, base, tf };
-              const signals = patternDetector.scanCandles(meta, candles);
+              const signals = patternDetector.scanCandles(meta, candles, {}, formations);
 
               if (signals && signals.length > 0) {
                 const mapKey = `${coinKey}:${tf}`;
@@ -4900,8 +4952,9 @@ server.listen(PORT, () => {
     }
   }
 
-  // ── Periodic 4h Formations Scanner (Top liquid coins, cached for instant UI view) ──
+  // Additional UI timeframes run without visitors, under a bounded venue budget.
   let isScanning4h = false;
+  const extraFormationScanAt = new Map();
   async function scan4hPatterns() {
     if (isScanning4h) return;
     isScanning4h = true;
@@ -4922,45 +4975,36 @@ server.listen(PORT, () => {
       }
       const fullList = assignScanVenues(perCoin);
       const list4h = fullList.slice(0, 300);
-      const tf = "4h";
-      if (!cachedFormationMaps.cascades[tf]) cachedFormationMaps.cascades[tf] = Object.create(null);
-      if (!cachedFormationMaps.levels[tf]) cachedFormationMaps.levels[tf] = Object.create(null);
-      if (!cachedFormationMaps.trendline[tf]) cachedFormationMaps.trendline[tf] = Object.create(null);
-      if (!cachedFormationMaps.retest[tf]) cachedFormationMaps.retest[tf] = Object.create(null);
-      if (!cachedTfMaps[tf]) cachedTfMaps[tf] = Object.create(null);
-
-      for (let i = 0; i < list4h.length; i += 3) {
-        const batch = list4h.slice(i, i + 3);
-        await Promise.all(batch.map(async (t) => {
-          const colonIdx = t.key.indexOf(':');
-          if (colonIdx <= 0) return;
-          const ex = t.key.substring(0, colonIdx);
-          const sym = t.key.substring(colonIdx + 1);
-          const coinKey = `${ex}:${sym}`;
-          try {
-            const candles = await getCachedCandlesForScanner(ex, sym, tf);
-            if (!candles || candles.length < 25) return;
-            const formations = serverLevels.scanAll(candles, 2);
-            const { cascades: detectedCascades, horizontals: detectedHorizontals,
-                    trendlines: detectedTrendlines, retests: detectedRetests } = formations;
-            if (detectedCascades.length > 0) {
-              cachedFormationMaps.cascades[tf][coinKey] = detectedCascades;
-              cachedTfMaps[tf][coinKey] = detectedCascades;
-              serverFormationsMap.set(`${coinKey}:${tf}`, detectedCascades);
-            }
-            if (detectedHorizontals.length > 0) cachedFormationMaps.levels[tf][coinKey] = detectedHorizontals;
-            if (detectedTrendlines.length > 0) cachedFormationMaps.trendline[tf][coinKey] = detectedTrendlines;
-            if (detectedRetests.length > 0) cachedFormationMaps.retest[tf][coinKey] = detectedRetests;
-          } catch (_) {}
-        }));
-        if (i + 3 < list4h.length) await new Promise(r => setTimeout(r, 200));
+      for (const tf of ["4h", "1m", "1d", "3d", "1w"]) {
+        const refreshMs = tf === "1m" ? 60000 : tf === "4h" ? 600000 : 1800000;
+        if (Date.now() - (extraFormationScanAt.get(tf) || 0) < refreshMs) continue;
+        for (let i = 0; i < list4h.length; i += 3) {
+          const batch = list4h.slice(i, i + 3);
+          await Promise.all(batch.map(async (t) => {
+            const colonIdx = t.key.indexOf(':');
+            if (colonIdx <= 0) return;
+            const ex = t.key.substring(0, colonIdx);
+            const sym = t.key.substring(colonIdx + 1);
+            const coinKey = `${ex}:${sym}`;
+            try {
+              const candles = await getCachedCandlesForScanner(ex, sym, tf);
+              if (!candles || candles.length < 25) return;
+              const formations = serverLevels.scanAll(candles, 1);
+              updateFormationSnapshot(coinKey, tf, formations);
+              const signals = patternDetector.scanCandles({ ex, sym, base: t.base, tf }, candles, {}, formations);
+              if (signals?.length) checkAndDispatchServerFormationAlerts(signals, t.p, { [tf]: candles });
+            } catch (_) {}
+          }));
+          if (i + 3 < list4h.length) await new Promise(r => setTimeout(r, 200));
+        }
+        if (list4h.length) extraFormationScanAt.set(tf, Date.now());
       }
       saveFormationMaps(false);
     } catch (e) {
       console.warn("[PATTERNS 4H] Error:", e.message);
     } finally {
       isScanning4h = false;
-      setTimeout(scan4hPatterns, 10 * 60 * 1000);
+      setTimeout(scan4hPatterns, 60000);
     }
   }
 
@@ -4972,7 +5016,9 @@ server.listen(PORT, () => {
   // "alerts arrive in batches" behaviour. With it, a coin produces one alert:
   // the strongest formation found, then silence for this window.
   const serverFormationCoinCooldown = new Map();
-  const FORMATION_COIN_COOLDOWN_MS = 15 * 60 * 1000;
+  function getFormationCoinCooldownMs(settings) {
+    return Math.max(60000, Math.min(86400000, (Number(settings?.cooldownSeconds) || 300) * 1000));
+  }
   // Pacing per subscriber. The per-coin gate alone is not enough: a full cycle
   // scans 1500 tickers, and measurements on live data show 25-95% of them carry
   // some formation, so even one alert per coin still queues 150-550 messages
@@ -5200,7 +5246,7 @@ server.listen(PORT, () => {
       const dist = signal.meta?.dist !== undefined ? Number(signal.meta.dist) : 0.5;
 
       // Filter out signals that are too far away or not enough touches
-      if (dist > 1.0 || touches < 2) continue;
+      if (dist > 15 || touches < 2) continue;
 
       let typeName = "";
       if (signal.type === "trendline") {
@@ -5218,8 +5264,8 @@ server.listen(PORT, () => {
           ? (Math.abs(actualPrice - signal.price) / actualPrice) * 100
           : Infinity;
         const retestAge = Number(signal.meta?.lastTouchAge);
-        if (liveDist > 1.0 || !Number.isFinite(retestAge) || retestAge > 20) continue;
-        typeName = "Подтвержденный ретест (Ретест)";
+        if (liveDist > 1.0 || !Number.isFinite(retestAge) || retestAge > 35) continue;
+        typeName = signal.meta?.status === 'approaching' ? "Приближение к ретесту" : "Подтвержденный ретест (Ретест)";
       } else {
         continue;
       }
@@ -5234,6 +5280,7 @@ server.listen(PORT, () => {
         price: signal.price,
         targetPrice: signal.price,
         curPrice: actualPrice,
+        vol24: Number(tickers.get(`${signal.ex}:${signal.sym}`)?.v) || 0,
         touches,
         distPct: dist.toFixed(2),
         direction: signal.direction,
@@ -5261,13 +5308,14 @@ server.listen(PORT, () => {
 
       const isMasterAdmin = chatId === String(process.env.ADMIN_CHAT_ID || "").trim() || chatId === String(process.env.TELEGRAM_ADMIN_ID || "").trim();
       const tgEnabled = prefs.tgEnabled !== undefined ? !!prefs.tgEnabled : (isMasterAdmin ? true : false);
-      if (!tgEnabled) continue;
+      if (!tgEnabled || prefs.enabled === false) continue;
 
       subscribers.push({
         userId: u.id,
         chatId,
         settings: {
           tgEnabled,
+          minVolume: Math.max(0, Number(prefs.minVolume ?? prefs.minVol24h) || 0),
           cooldownSeconds: Number(prefs.cooldownSeconds) || 300,
           exchanges: Array.isArray(prefs.exchanges) && prefs.exchanges.length > 0 ? prefs.exchanges : ["all"],
           blacklist: Array.isArray(prefs.blacklist) ? prefs.blacklist : [],
@@ -5291,6 +5339,7 @@ server.listen(PORT, () => {
             enabled: prefs.retest?.enabled !== undefined ? !!prefs.retest.enabled : true,
             timeframes: Array.isArray(prefs.retest?.timeframes) && prefs.retest.timeframes.length > 0 ? prefs.retest.timeframes : ["5m", "15m", "1h", "4h"],
             direction: prefs.retest?.direction || "all",
+            stage: prefs.retest?.stage || "confirmed",
             maxAgeCandles: Math.max(1, Math.min(35, Number(prefs.retest?.maxAgeCandles) || 20))
           }
         }
@@ -5302,12 +5351,13 @@ server.listen(PORT, () => {
     // only get here via an authenticated write (see setFormationChatPrefs).
     for (const [cId, entry] of formationAlertsByChatId) {
       const s = entry.settings;
-      if (!seenChatIds.has(cId) && s && s.tgEnabled !== false) {
+      if (!seenChatIds.has(cId) && s && s.enabled !== false && s.tgEnabled !== false) {
         subscribers.push({
           userId: `chat_${cId}`,
           chatId: cId,
           settings: {
             tgEnabled: true,
+            minVolume: Math.max(0, Number(s.minVolume ?? s.minVol24h) || 0),
             cooldownSeconds: Number(s.cooldownSeconds) || 300,
             exchanges: Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"],
             blacklist: Array.isArray(s.blacklist) ? s.blacklist : [],
@@ -5331,6 +5381,7 @@ server.listen(PORT, () => {
               enabled: s.retest?.enabled !== undefined ? !!s.retest.enabled : true,
               timeframes: Array.isArray(s.retest?.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"],
               direction: s.retest?.direction || "all",
+              stage: s.retest?.stage || "confirmed",
               maxAgeCandles: Math.max(1, Math.min(35, Number(s.retest?.maxAgeCandles) || 20))
             }
           }
@@ -5376,13 +5427,14 @@ server.listen(PORT, () => {
       const dist = meta?.dist !== undefined ? Number(meta.dist) : 0.5;
 
       // Filter out distant signals before checking subscriber settings
-      if (dist > 1.2 || touches < 2) continue;
+      if (dist > 15 || touches < 2) continue;
 
       const matchingSubsForSignal = [];
 
       for (const sub of subscribers) {
         const { chatId, settings: s, userId } = sub;
         if (!s || !s.tgEnabled) continue;
+        if ((Number(tickers.get(`${ex}:${sym}`)?.v) || 0) < (Number(s.minVolume) || 0)) continue;
 
         // Check In-Play filter: skip if user wants only active movers and this coin is not in the set
         if (s.inPlayOnly) {
@@ -5455,6 +5507,8 @@ server.listen(PORT, () => {
           }
         } else if (type === "retest") {
           if (!s.retest?.enabled) continue;
+          const stage = meta?.status === 'approaching' ? 'approaching' : 'confirmed';
+          if (s.retest.stage !== 'both' && (s.retest.stage || 'confirmed') !== stage) continue;
           const allowedTfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"];
           if (!allowedTfs.includes(tf)) continue;
           const liveDist = actualPrice > 0 ? (Math.abs(actualPrice - price) / actualPrice) * 100 : Infinity;
@@ -5476,7 +5530,7 @@ server.listen(PORT, () => {
         // the same formation twice.
         const coinKey = `${userId}:${normalizeCoinKey({ base, key: `${ex}:${sym}` })}`;
         const lastCoinSent = serverFormationCoinCooldown.get(coinKey) || 0;
-        const coinWindowMs = Math.max(FORMATION_COIN_COOLDOWN_MS, (Number(s.cooldownSeconds) || 300) * 1000);
+        const coinWindowMs = getFormationCoinCooldownMs(s);
         if (now - lastCoinSent < coinWindowMs) continue;
 
         // Global pacing per subscriber: one alert at a time, not a queue of them.

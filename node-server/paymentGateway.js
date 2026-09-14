@@ -377,6 +377,29 @@ function createPaymentGateway(options = {}) {
     };
   }
 
+  function redeemGiftPromo(code, userId) {
+    if (!gatewayUserStore.findUser(userId)) throw new PaymentError("USER_NOT_FOUND", "Пользователь не найден.", 404);
+    let promoResult;
+    try {
+      promoResult = promoStore.redeemGift(code, userId);
+    } catch (error) {
+      if (error instanceof PromoError) throw error;
+      throw new PaymentError("PROMO_STORAGE_ERROR", "Промокоды временно недоступны.", 503);
+    }
+
+    const grantResult = gatewayUserStore.grantGiftDays(userId, promoResult.code, promoResult.days);
+    if (!grantResult || !grantResult.applied) {
+      throw new PaymentError("PROMO_ALREADY_USED", "Вы уже активировали этот промокод.", 409);
+    }
+
+    return {
+      ok: true,
+      code: promoResult.code,
+      days: promoResult.days,
+      user: grantResult.user
+    };
+  }
+
   async function createInvoice(userId, planId = "1m", method = "trc20", options = {}) {
     cleanupExpiredInvoices();
     const user = gatewayUserStore.findUser(userId);
@@ -947,6 +970,7 @@ function createPaymentGateway(options = {}) {
     getUserPayments,
     getAllPayments,
     getPromoQuote,
+    redeemGiftPromo,
     setMasterTronAddress,
     getOfficialWallets,
     getPublicConfig,

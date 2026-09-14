@@ -30,29 +30,38 @@
   let filterTag = "ALL";
   let calendarMonth = new Date();
   let currentViewingTrade = null;
+  let journalSession = '';
+  let journalOwner = '';
+
+  function journalToken() {
+    return (typeof window.getStoredAuthToken === 'function' ? window.getStoredAuthToken() : localStorage.getItem('obsidian_auth_token')) || '';
+  }
+
+  function ensureJournalSession() {
+    const token = journalToken();
+    if (token !== journalSession) {
+      journalSession = token;
+      journalOwner = '';
+      trades = [];
+      apiKeys = {};
+      configuredExchanges = new Set();
+      currentViewingTrade = null;
+    }
+    return token;
+  }
+
+  function scopedTradeStorageKey() {
+    return ensureJournalSession() && journalOwner ? `cryptoscreen_journal_trades_v5:${journalOwner}` : '';
+  }
 
   function loadStorage() {
     try {
-      // Purge any old v2 demo trades from localStorage
-      localStorage.removeItem("cryptoscreen_journal_trades_v2");
-      let raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || "[]");
-        trades = Array.isArray(legacy) ? legacy.filter(t => {
-          const tags = Array.isArray(t.tags) ? t.tags.join(" ") : "";
-          const note = String(t.note || "");
-          return !/API/i.test(tags) && !/Binance Futures PnL|OKX fill|Ордер\s*#/i.test(note);
-        }) : [];
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(trades));
-        raw = localStorage.getItem(STORAGE_KEY);
-      }
-      if (raw) {
-        trades = JSON.parse(raw);
-      } else {
-        trades = [];
-      }
-      const rawKeys = localStorage.getItem(API_KEYS_KEY);
-      if (rawKeys) apiKeys = JSON.parse(rawKeys);
+      // Legacy unscoped records are retained, but cannot safely be assigned to
+      // whichever account happens to log in next. Never auto-import their keys.
+      const key = scopedTradeStorageKey();
+      const parsed = key ? JSON.parse(localStorage.getItem(key) || '[]') : [];
+      trades = Array.isArray(parsed) ? parsed : [];
+      apiKeys = {};
     } catch (e) {
       trades = [];
     }
@@ -60,19 +69,17 @@
 
   function saveTrades() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(trades));
+      const key = scopedTradeStorageKey();
+      if (key) localStorage.setItem(key, JSON.stringify(trades));
     } catch (e) {}
   }
 
   function saveApiKeys() {
-    try {
-      if (Object.keys(apiKeys).length) localStorage.setItem(API_KEYS_KEY, JSON.stringify(apiKeys));
-      else localStorage.removeItem(API_KEYS_KEY);
-    } catch (e) {}
+    // API secrets are submitted explicitly and stored only on the server.
   }
 
   function journalAuthHeaders(json = false) {
-    const token = localStorage.getItem("obsidian_auth_token") || "";
+    const token = (typeof window.getStoredAuthToken === "function" ? window.getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || "";
     return { ...(json ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   }
 
@@ -153,6 +160,23 @@
     updateSwitchInputs(code);
   }
 
+  function markApiDisconnected(ex) {
+    const code = normalizeExchangeCode(ex);
+    const statusEl = document.getElementById(`j-api-status-${code}`);
+    if (statusEl) {
+      statusEl.textContent = "Не подключено";
+      statusEl.className = "j-api-status disconnected";
+    }
+    const gearBtn = document.getElementById(`j-api-gear-${code}`);
+    if (gearBtn) {
+      gearBtn.style.display = "none";
+    }
+    const panel = document.getElementById(`j-api-settings-${code}`);
+    if (panel) {
+      panel.style.display = "none";
+    }
+  }
+
   function toggleExchangeSettings(ex) {
     const code = normalizeExchangeCode(ex);
     const panel = document.getElementById(`j-api-settings-${code}`);
@@ -194,24 +218,28 @@
   }
 
   async function hydrateServerCredentials() {
-    if (!localStorage.getItem("obsidian_auth_token")) return;
+    const token = ensureJournalSession();
+    if (!token) return;
     try {
       const response = await fetch("/api/journal/credentials", { cache: "no-store", headers: journalAuthHeaders() });
       if (!response.ok) return;
       const data = await response.json();
-      configuredExchanges = new Set((data.exchanges || []).map(item => item.exchange));
-      configuredExchanges.forEach(markApiConnected);
-
-      for (const [ex, keys] of Object.entries(apiKeys)) {
-        if (!keys?.key || configuredExchanges.has(ex)) continue;
-        const migration = await fetch(`/api/journal/credentials/${encodeURIComponent(ex)}`, {
-          method: "PUT", headers: journalAuthHeaders(true),
-          body: JSON.stringify({ apiKey: keys.key, apiSecret: keys.secret, passphrase: keys.passphrase || "" })
-        });
-        if (migration.ok) { configuredExchanges.add(ex); delete apiKeys[ex]; markApiConnected(ex); }
+      if (journalToken() !== token || !data.ownerId) return;
+      if (journalOwner !== data.ownerId) {
+        journalOwner = data.ownerId;
+        loadStorage();
+        updateUI();
       }
-      for (const ex of configuredExchanges) delete apiKeys[ex];
-      saveApiKeys();
+      configuredExchanges = new Set((data.exchanges || []).map(item => item.exchange));
+      ["BN", "BB", "OX", "BG"].forEach(ex => {
+        if (configuredExchanges.has(ex)) {
+          markApiConnected(ex);
+        } else if (!apiKeys[ex]?.key) {
+          markApiDisconnected(ex);
+        }
+      });
+
+      window.TradeOverlay?.refresh(true);
     } catch (_) {}
   }
 
@@ -2759,6 +2787,8 @@
   let autoSyncInterval = null;
 
   async function syncExchangeApi(silent = false, targetEx = null) {
+    const token = ensureJournalSession();
+    if (!token) return;
     const btnSync = document.getElementById("journal-btn-api");
     if (btnSync && !silent) btnSync.textContent = "Синхронизация...";
 
@@ -2774,6 +2804,7 @@
     let totalAdded = 0;
 
     for (const ex of targetKeys) {
+      if (journalToken() !== token) return;
       const keys = apiKeys[ex];
       if (!configuredExchanges.has(ex) && (!keys || !keys.key)) continue;
 
@@ -2795,6 +2826,7 @@
         clearTimeout(timer);
 
         const data = await res.json();
+        if (journalToken() !== token) return;
         if (data.success && Array.isArray(data.trades)) {
           configuredExchanges.add(ex);
           if (apiKeys[ex]) { delete apiKeys[ex]; saveApiKeys(); }
@@ -2823,6 +2855,7 @@
           }
         }
       } catch (e) {
+        if (journalToken() !== token) return;
         if (statusEl) {
           statusEl.textContent = "Сохранено";
           statusEl.className = "j-api-status connected";
@@ -2887,6 +2920,7 @@
   }
 
   function updateUI() {
+    ensureJournalSession();
     const filteredTrades = getFilteredTrades();
     const stats = calculateStats(filteredTrades);
 
@@ -3159,6 +3193,8 @@
   }
 
   async function saveApiKey(ex) {
+    const token = ensureJournalSession();
+    if (!token) return alert('Сначала войдите в свой аккаунт.');
     const keyEl = document.getElementById(`j-api-key-${ex}`);
     const secretEl = document.getElementById(`j-api-secret-${ex}`);
     const passEl = document.getElementById(`j-api-pass-${ex}`);
@@ -3180,6 +3216,7 @@
         body: JSON.stringify({ apiKey: kVal, apiSecret: sVal, passphrase: pVal })
       });
       const data = await response.json();
+      if (journalToken() !== token) return;
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       configuredExchanges.add(ex);
       delete apiKeys[ex]; saveApiKeys(); markApiConnected(ex);
@@ -3235,6 +3272,13 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     initJournal();
+    setInterval(() => {
+      if (journalToken() !== journalSession) {
+        ensureJournalSession();
+        updateUI();
+        hydrateServerCredentials();
+      }
+    }, 1000);
     // Immediate background sync when window regains focus after trading
     window.addEventListener("focus", () => {
       if (configuredExchanges.size > 0 || Object.keys(apiKeys).length > 0) {

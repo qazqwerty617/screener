@@ -1,0 +1,13 @@
+{
+  "startWallTs": 1786119359957,
+  "endWallTs": 1786130641208,
+  "durationSeconds": 11281,
+  "sampleCount": 188,
+  "memory": {
+    "startHeapUsedMB": 4.91,
+    "endHeapUsedMB": 28.93,
+    "peakHeapUsedMB": 82.5
+  },
+  "systemStatus": "RUNNING_HEALTHY",
+  "metricsSamplesCount": 188
+}

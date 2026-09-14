@@ -1,0 +1,328 @@
+[
+  {
+    "id": "7569cf0c239ffb3f",
+    "timestamp": "2026-08-24T22:24:15.855Z",
+    "event": "REGISTER",
+    "userId": "USR-925289",
+    "username": "testpro",
+    "email": "testpro@obsidian.pro",
+    "authMethod": "login",
+    "ip": "::ffff:86.54.28.87"
+  },
+  {
+    "id": "4d5133d57045035f",
+    "timestamp": "2026-08-24T21:21:51.290Z",
+    "event": "REGISTER",
+    "userId": "USR-378891",
+    "username": "admin",
+    "email": "admin@obsidian.pro",
+    "authMethod": "login",
+    "ip": "::ffff:86.54.28.87"
+  },
+  {
+    "id": "cbabc1310836f435",
+    "timestamp": "2026-08-24T21:11:52.081Z",
+    "event": "REGISTER",
+    "userId": "USR-877991",
+    "username": "TestTrader",
+    "email": "test@obsidian.pro",
+    "authMethod": "login",
+    "ip": "::ffff:86.54.28.87"
+  },
+  {
+    "id": "c4d19eddba542440",
+    "timestamp": "2026-08-20T11:46:45.115Z",
+    "event": "SET_PLAN",
+    "userId": "USR-284895",
+    "plan": "pro",
+    "days": 2
+  },
+  {
+    "id": "da7192ce3da22403",
+    "timestamp": "2026-08-19T11:57:56.413Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "fddbaf5264f6cf42",
+    "timestamp": "2026-08-19T11:50:42.071Z",
+    "event": "REGISTER",
+    "userId": "USR-132439",
+    "username": "123233",
+    "email": "gkmerkfr@gmail.com",
+    "authMethod": "login",
+    "ip": "::ffff:31.148.240.154"
+  },
+  {
+    "id": "cb71d8baa98bd8e2",
+    "timestamp": "2026-08-19T11:50:07.071Z",
+    "event": "REGISTER",
+    "userId": "USR-837572",
+    "username": "12323",
+    "email": "gkmrkfr@gmail.com",
+    "authMethod": "login",
+    "ip": "::ffff:31.148.240.154"
+  },
+  {
+    "id": "a4cd54de85efba0b",
+    "timestamp": "2026-08-18T14:48:03.672Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "6866971c81f96ce5",
+    "timestamp": "2026-08-18T14:47:07.771Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "2db82d212f3395a4",
+    "timestamp": "2026-08-18T14:47:07.753Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "561bf340c706d5eb",
+    "timestamp": "2026-08-18T14:47:02.526Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "136df72003fda140",
+    "timestamp": "2026-08-18T14:46:59.582Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "d641aaecced43455",
+    "timestamp": "2026-08-18T14:46:59.571Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "509038d6b4fe5bb0",
+    "timestamp": "2026-08-18T14:46:57.778Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "c7c99771e060e4cc",
+    "timestamp": "2026-08-18T14:39:37.396Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "d0b7a0f931004ba0",
+    "timestamp": "2026-08-17T21:53:31.306Z",
+    "event": "SET_PLAN",
+    "userId": "USR-284895",
+    "plan": "pro",
+    "days": 7
+  },
+  {
+    "id": "3db0701c36116384",
+    "timestamp": "2026-08-17T21:53:25.563Z",
+    "event": "SET_PLAN",
+    "userId": "USR-284895",
+    "plan": "pro",
+    "days": 90
+  },
+  {
+    "id": "6d858e8af841e85f",
+    "timestamp": "2026-08-17T21:53:17.105Z",
+    "event": "SET_PLAN",
+    "userId": "USR-284895",
+    "plan": "pro",
+    "days": 30
+  },
+  {
+    "id": "1a124a2a45264eed",
+    "timestamp": "2026-08-17T21:46:28.468Z",
+    "event": "SET_PLAN",
+    "userId": "USR-284895",
+    "plan": "free",
+    "days": 30
+  },
+  {
+    "id": "d7aa911eff61e51b",
+    "timestamp": "2026-08-17T13:07:54.165Z",
+    "event": "BLOCK_USER",
+    "userId": "USR-316357",
+    "reason": "Нарушение правил",
+    "days": null
+  },
+  {
+    "id": "37bc5cd400ee4a5b",
+    "timestamp": "2026-08-17T13:07:54.142Z",
+    "event": "REVOKE_SESSIONS",
+    "userId": "USR-316357",
+    "count": 1
+  },
+  {
+    "id": "3b2be2800782d615",
+    "timestamp": "2026-08-17T13:07:49.598Z",
+    "event": "SET_PLAN",
+    "userId": "USR-316357",
+    "plan": "free",
+    "days": 30
+  },
+  {
+    "id": "7e1cf954c29a8368",
+    "timestamp": "2026-08-17T10:39:29.859Z",
+    "event": "SET_PLAN",
+    "userId": "USR-316357",
+    "plan": "pro",
+    "days": 30
+  },
+  {
+    "id": "409cea676737b873",
+    "timestamp": "2026-08-17T10:38:30.733Z",
+    "event": "REGISTER",
+    "userId": "USR-316357",
+    "username": "Arty",
+    "email": "qwerty@gmail.com",
+    "authMethod": "login",
+    "ip": "::ffff:77.88.202.59"
+  },
+  {
+    "id": "b775513e2338941a",
+    "timestamp": "2026-08-16T16:30:27.596Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "af1cac2a82a50674",
+    "timestamp": "2026-08-16T12:57:18.191Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "13a03fa234ecbf7b",
+    "timestamp": "2026-08-16T12:11:29.755Z",
+    "event": "SET_PLAN",
+    "userId": "USR-203443",
+    "plan": "pro",
+    "days": 30
+  },
+  {
+    "id": "1dd895c390d79095",
+    "timestamp": "2026-08-16T12:09:22.236Z",
+    "event": "REGISTER",
+    "userId": "USR-203443",
+    "username": "Stas",
+    "email": "sbrat2791@gmail.com",
+    "authMethod": "login",
+    "ip": "::ffff:178.150.1.121"
+  },
+  {
+    "id": "72ba848950421264",
+    "timestamp": "2026-08-15T17:35:59.859Z",
+    "event": "SET_PLAN",
+    "userId": "USR-165585",
+    "plan": "pro",
+    "days": 30
+  },
+  {
+    "id": "3646b80cfdcbdb21",
+    "timestamp": "2026-08-15T17:13:46.049Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "f0744c4b238bb918",
+    "timestamp": "2026-08-15T17:12:26.387Z",
+    "event": "REGISTER",
+    "userId": "USR-689407",
+    "username": "вкыарфпваия",
+    "email": "dwfdwfs@gmail.com",
+    "authMethod": "login",
+    "ip": "::ffff:178.150.1.121"
+  },
+  {
+    "id": "cd27290c119c801a",
+    "timestamp": "2026-08-15T16:45:15.310Z",
+    "event": "LOGIN_TELEGRAM",
+    "userId": "USR-284895",
+    "username": "@qazqwerty618",
+    "telegramId": "8482582995",
+    "ip": ""
+  },
+  {
+    "id": "fa05723917526a39",
+    "timestamp": "2026-08-15T16:45:05.112Z",
+    "event": "UPDATE_PROFILE",
+    "userId": "USR-284895",
+    "newUsername": "@qazqwerty618"
+  },
+  {
+    "id": "12f8d8716f9adcfd",
+    "timestamp": "2026-08-15T16:44:56.292Z",
+    "event": "UPDATE_PROFILE",
+    "userId": "USR-284895",
+    "newUsername": "@qazqwerty618"
+  },
+  {
+    "id": "a045a3029aed4517",
+    "timestamp": "2026-08-15T16:44:20.000Z",
+    "event": "SET_PLAN",
+    "userId": "USR-949724",
+    "plan": "pro",
+    "days": 2
+  },
+  {
+    "id": "3ca05e104dcad80b",
+    "timestamp": "2026-08-15T16:41:05.187Z",
+    "event": "REGISTER",
+    "userId": "USR-949724",
+    "username": "vdffdsdsdsf",
+    "email": "sdfsdfsf@gmail.com",
+    "authMethod": "login",
+    "ip": "::ffff:178.150.1.121"
+  },
+  {
+    "id": "9300e99d810bae2d",
+    "timestamp": "2026-08-15T16:29:28.319Z",
+    "event": "REGISTER_TELEGRAM",
+    "userId": "USR-165585",
+    "username": "@Illiakriv",
+    "telegramId": "340517348",
+    "chatId": "340517348",
+    "ip": ""
+  }
+]

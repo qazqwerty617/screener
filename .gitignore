@@ -59,6 +59,7 @@ scratch_digest.py
 node-server/backups/
 node-server/security_banned_ips.json
 node-server/formation_cooldowns.json
+node-server/formation_maps_cache.json*
 *.heapsnapshot
 go-scanner/scanner
 __pycache__/

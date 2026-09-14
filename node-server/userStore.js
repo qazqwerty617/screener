@@ -22,6 +22,9 @@ function scheduleExcelExport(data) {
     excelExportTimer = null;
     try { excelExporter.generateUsersExcel(data || users); } catch (_) {}
   }, 5 * 60 * 1000);
+  if (excelExportTimer && typeof excelExportTimer.unref === "function") {
+    excelExportTimer.unref();
+  }
 }
 
 function saveJSON(filePath, data) {
@@ -128,6 +131,8 @@ function flushPendingWritesSync() {
   pendingWrites.clear();
 }
 process.once("exit", flushPendingWritesSync);
+process.on("SIGTERM", flushPendingWritesSync);
+process.on("SIGINT", flushPendingWritesSync);
 
 function loadJSON(filePath, fallback = {}) {
   try {
@@ -731,6 +736,23 @@ function getUserByToken(token, { ip = "" } = {}) {
     // Debounced: this runs on the request path, once per authenticated call.
     saveJSONDebounced(SESSIONS_FILE, sessions);
   }
+  // Disk-reload fallback: if session not in memory (e.g. after PM2 restart race),
+  // re-read sessions.json from disk once and try again.
+  if (!session) {
+    try {
+      const diskSessions = loadJSON(SESSIONS_FILE, {});
+      if (diskSessions[tokenHash]) {
+        sessions[tokenHash] = diskSessions[tokenHash];
+        session = sessions[tokenHash];
+        sessionKey = tokenHash;
+      } else if (diskSessions[token]) {
+        sessions[tokenHash] = diskSessions[token];
+        session = sessions[tokenHash];
+        sessionKey = tokenHash;
+        saveJSONDebounced(SESSIONS_FILE, sessions);
+      }
+    } catch (_) {}
+  }
   if (!session) return null;
   const now = Date.now();
   const createdAt = Date.parse(session.createdAt || "");
@@ -883,16 +905,7 @@ function getUserStats() {
 
 function setUserPlan(userIdOrTgId, planName, days = 30) {
   const cleanPlan = String(planName || "").toLowerCase() === "pro" ? "pro" : "free";
-  let target = users[userIdOrTgId];
-  if (!target) {
-    const query = String(userIdOrTgId).trim().toUpperCase();
-    for (const u of Object.values(users)) {
-      if (u.id.toUpperCase() === query || u.telegramId === query || (u.email && u.email.toUpperCase() === query)) {
-        target = u;
-        break;
-      }
-    }
-  }
+  let target = users[userIdOrTgId] || findUser(userIdOrTgId);
   if (!target) return null;
   target.plan = cleanPlan;
   if (cleanPlan === "pro") {
@@ -910,6 +923,7 @@ function setUserPlan(userIdOrTgId, planName, days = 30) {
   }
   saveJSON(USERS_FILE, users);
   logAuthEvent({ event: "SET_PLAN", userId: target.id, plan: cleanPlan, days });
+  broadcastUserUpdate(target.id);
   return sanitizeUser(target);
 }
 
@@ -957,6 +971,39 @@ function grantPlanForPayment(userId, paymentKey, days) {
   return { user: sanitizeUser(target), applied: true };
 }
 
+function grantGiftDays(userIdOrTgId, promoCode, days) {
+  let target = users[userIdOrTgId] || findUser(userIdOrTgId);
+  if (!target) return null;
+  const cleanCode = String(promoCode || "").trim().toUpperCase();
+  const validDays = Number(days);
+  if (!Number.isInteger(validDays) || validDays < 1 || validDays > 3650) {
+    throw new Error("Invalid promo days duration");
+  }
+
+  if (!Array.isArray(target.redeemedPromos)) target.redeemedPromos = [];
+  if (cleanCode && target.redeemedPromos.includes(cleanCode)) {
+    return { user: sanitizeUser(target), applied: false, alreadyUsed: true };
+  }
+
+  const wasLifetime = target.plan === "pro" && !target.proExpiresAt;
+  target.plan = "pro";
+  if (validDays >= 8000 || wasLifetime) {
+    delete target.proExpiresAt;
+  } else {
+    const currentExpiry = (Number.isFinite(target.proExpiresAt) && target.proExpiresAt > Date.now())
+      ? target.proExpiresAt
+      : Date.now();
+    target.proExpiresAt = currentExpiry + validDays * 24 * 60 * 60 * 1000;
+  }
+
+  if (cleanCode) target.redeemedPromos.push(cleanCode);
+
+  saveJSON(USERS_FILE, users);
+  logAuthEvent({ event: "GIFT_PROMO_REDEEM", userId: target.id, promoCode: cleanCode, days: validDays });
+  broadcastUserUpdate(target.id);
+  return { user: sanitizeUser(target), applied: true, days: validDays };
+}
+
 function grantBulkProTime(days = 1, audience = "pro") {
   const validDays = Number.isInteger(+days) && +days > 0 ? +days : 1;
   const msToAdd = validDays * 24 * 60 * 60 * 1000;
@@ -1000,6 +1047,7 @@ function subtractProTime(userIdOrTgId, days = 1) {
 
   saveJSON(USERS_FILE, users);
   logAuthEvent({ event: "SUBTRACT_PLAN", userId: target.id, days });
+  broadcastUserUpdate(target.id);
   return sanitizeUser(target);
 }
 
@@ -1030,20 +1078,23 @@ function subtractBulkProTime(days = 1, audience = "pro") {
 
 function findUser(query) {
   if (!query) return null;
-  const q = String(query).trim().toLowerCase().replace(/^@/, "");
+  const raw = String(query).trim();
+  const q = raw.toLowerCase().replace(/^@/, "");
   const qUpper = q.toUpperCase();
 
   // 1. Direct ID match
+  if (users[raw]) return users[raw];
   if (users[qUpper]) return users[qUpper];
   if (users[q]) return users[q];
 
   for (const u of Object.values(users)) {
     if (
       (u.id && u.id.toUpperCase() === qUpper) ||
-      (u.username && u.username.toLowerCase() === q || u.username === `@${q}`) ||
+      (u.username && (u.username.toLowerCase() === q || u.username.toLowerCase() === `@${q}`)) ||
       (u.telegramId && String(u.telegramId) === q) ||
+      (u.telegramChatId && String(u.telegramChatId) === q) ||
       (u.email && u.email.toLowerCase() === q) ||
-      (u.telegramUsername && u.telegramUsername.toLowerCase() === q)
+      (u.telegramUsername && (u.telegramUsername.toLowerCase() === q || u.telegramUsername.toLowerCase() === `@${q}`))
     ) {
       return u;
     }
@@ -1062,12 +1113,28 @@ function searchUsers(query) {
       (u.id && u.id.toUpperCase().includes(qUpper)) ||
       (u.username && u.username.toLowerCase().includes(q)) ||
       (u.telegramId && String(u.telegramId).includes(q)) ||
+      (u.telegramChatId && String(u.telegramChatId).includes(q)) ||
       (u.email && u.email.toLowerCase().includes(q)) ||
       (u.telegramUsername && u.telegramUsername.toLowerCase().includes(q))
     ) {
       results.push(u);
     }
   }
+
+  results.sort((a, b) => {
+    const aOnline = isUserOnline(a.id) ? 1 : 0;
+    const bOnline = isUserOnline(b.id) ? 1 : 0;
+    if (bOnline !== aOnline) return bOnline - aOnline;
+
+    const aPro = (a.plan === "pro" && (!a.proExpiresAt || a.proExpiresAt > Date.now())) ? 1 : 0;
+    const bPro = (b.plan === "pro" && (!b.proExpiresAt || b.proExpiresAt > Date.now())) ? 1 : 0;
+    if (bPro !== aPro) return bPro - aPro;
+
+    const aTime = Date.parse(a.lastActive || a.lastLogin || a.createdAt || "") || 0;
+    const bTime = Date.parse(b.lastActive || b.lastLogin || b.createdAt || "") || 0;
+    return bTime - aTime;
+  });
+
   return results;
 }
 
@@ -1198,6 +1265,20 @@ function unregisterActiveSocket(userId, ws) {
         }
       }
     }
+  }
+}
+
+function broadcastUserUpdate(userId) {
+  if (!userId) return;
+  const target = users[userId];
+  if (!target) return;
+  const set = activeSocketsByUserId.get(target.id);
+  if (!set || set.size === 0) return;
+  const payload = JSON.stringify({ type: "user_updated", user: sanitizeUser(target) });
+  for (const ws of set) {
+    try {
+      if (ws && ws.readyState === 1) ws.send(payload);
+    } catch (_) {}
   }
 }
 
@@ -1370,6 +1451,7 @@ module.exports = {
   getUserStats,
   setUserPlan,
   grantPlanForPayment,
+  grantGiftDays,
   grantBulkProTime,
   subtractProTime,
   subtractBulkProTime,
@@ -1393,5 +1475,6 @@ module.exports = {
   addNotificationToUser,
   markNotificationRead,
   getUserPreferences,
-  updateUserPreferences
+  updateUserPreferences,
+  broadcastUserUpdate
 };

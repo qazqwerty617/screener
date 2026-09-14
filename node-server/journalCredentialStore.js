@@ -56,7 +56,7 @@ function createJournalCredentialStore(options = {}) {
     const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
     cipher.setAAD(Buffer.from(`${userId}:${exchange}:v1`));
     const body = Buffer.concat([cipher.update(JSON.stringify(credentials), "utf8"), cipher.final()]);
-    return { iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), body: body.toString("base64"), updatedAt: Date.now() };
+    return { iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64"), body: body.toString("base64"), updatedAt: Date.now(), ownershipVersion: 2 };
   }
 
   function decrypt(userId, exchange, record) {
@@ -65,6 +65,32 @@ function createJournalCredentialStore(options = {}) {
     decipher.setAuthTag(Buffer.from(record.tag, "base64"));
     return JSON.parse(Buffer.concat([decipher.update(Buffer.from(record.body, "base64")), decipher.final()]).toString("utf8"));
   }
+
+  // Older server versions silently copied keys between accounts. Preserve the
+  // encrypted records, but fail closed for ambiguous legacy ownership. Persist
+  // quarantine so deleting one copy cannot reactivate a remaining leaked copy.
+  const credentialGroups = new Map();
+  let quarantineChanged = false;
+  for (const [userId, entries] of Object.entries(data.users)) {
+    for (const [exchange, record] of Object.entries(entries)) {
+      try {
+        const credentials = decrypt(userId, exchange, record);
+        const fingerprint = crypto.createHmac("sha256", key).update(`${exchange}\0${credentials.apiKey}`).digest("hex");
+        if (!credentialGroups.has(fingerprint)) credentialGroups.set(fingerprint, []);
+        credentialGroups.get(fingerprint).push(record);
+      } catch (_) { /* Invalid authenticated records are already denied by get. */ }
+    }
+  }
+  for (const records of credentialGroups.values()) {
+    if (records.length < 2) continue;
+    for (const record of records) {
+      if (record.ownershipVersion !== 2 && !record.quarantined) {
+        record.quarantined = true;
+        quarantineChanged = true;
+      }
+    }
+  }
+  if (quarantineChanged) atomicWrite(filePath, data);
 
   function save(userId, exchangeInput, credentials) {
     const exchange = canonicalExchange(exchangeInput);
@@ -84,7 +110,7 @@ function createJournalCredentialStore(options = {}) {
   function get(userId, exchangeInput) {
     const exchange = canonicalExchange(exchangeInput);
     const record = exchange && data.users[userId]?.[exchange];
-    if (!record) return null;
+    if (!record || record.quarantined) return null;
     try { return decrypt(userId, exchange, record); }
     catch (error) {
       console.error(`[journal-credentials] decrypt failed for ${userId}/${exchange}:`, error.message);

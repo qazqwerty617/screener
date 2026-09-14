@@ -36,8 +36,11 @@ html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:
 .excb{padding:2px 8px;font-size:10px;border-radius:3px;border:1px solid var(--bd);background:transparent;font-family:inherit;cursor:pointer;transition:all .12s;color:var(--t2)}
 .excb:hover{color:var(--t1)}.excb.on{border-color:var(--ac);color:var(--ac);background:rgba(240,185,11,.08)}
 #cwrap{flex:1;position:relative;overflow:hidden;background:var(--bg)}
-#chart-canvas{width:100%;height:100%;display:block}
-#vol-canvas{position:absolute;bottom:0;left:0;width:100%;height:80px;pointer-events:none}
+#chart-canvas{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1}
+#overlay-canvas{position:absolute;top:0;left:0;width:100%;height:100%;z-index:3;pointer-events:none}
+#vol-canvas{position:absolute;bottom:0;left:0;width:100%;height:80px;z-index:2;pointer-events:none}
+/* GPU layers for canvases */
+#chart-canvas,#overlay-canvas,#vol-canvas{will-change:contents;image-rendering:pixelated}
 #ohlc{position:absolute;top:7px;left:8px;z-index:10;display:flex;align-items:center;gap:10px;font-size:11px;pointer-events:none}
 .oi{display:flex;gap:3px}.oi .ol{color:var(--t3)}.oi .ov{color:var(--t1);font-weight:500}
 #rp{width:240px;background:var(--bg3);border-left:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0}
@@ -54,8 +57,10 @@ html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:
 .ef[data-ex="OX"].on{background:var(--ox);border-color:var(--ox);color:#000}
 .clh{display:grid;grid-template-columns:68px 70px 50px 40px 40px;padding:3px 8px;border-bottom:1px solid var(--bd);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.4px;flex-shrink:0}
 .clh>div{text-align:right}.clh>div:first-child{text-align:left}
-#coin-list{flex:1;overflow-y:auto}
-.cr{display:grid;grid-template-columns:68px 70px 50px 40px 40px;padding:4px 8px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.025);font-size:11px;align-items:center;transition:background .08s}
+#coin-list{flex:1;overflow-y:auto;position:relative}
+#coin-list-inner{position:relative;width:100%}
+/* Virtual list rows — GPU accelerated */
+.cr{display:grid;grid-template-columns:68px 70px 50px 40px 40px;padding:4px 8px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.025);font-size:11px;align-items:center;contain:layout style paint;will-change:background-color;position:absolute;left:0;right:0}
 .cr:hover{background:var(--bgh)}.cr.sel{background:rgba(240,185,11,.07)}
 .ct{display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--t1)}
 .dot{width:4px;height:4px;border-radius:50%;flex-shrink:0}
@@ -71,9 +76,6 @@ html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:
 .sp{width:28px;height:28px;border:2px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .lt{font-size:11px;color:var(--t2)}
-@keyframes fu{0%{background:rgba(38,166,154,.28)}100%{background:transparent}}
-@keyframes fd{0%{background:rgba(239,83,80,.28)}100%{background:transparent}}
-.fu{animation:fu .5s ease forwards}.fd{animation:fd .5s ease forwards}
 </style>
 </head>
 <body>
@@ -84,6 +86,7 @@ html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:
   <div>OX: <span id="dbg-ox" style="color:#a0a0a0">ожидание...</span></div>
   <div>Монет: <span id="dbg-coins" style="color:#e2e4ea">0</span></div>
   <div>Обновлений: <span id="dbg-upd" style="color:#26a69a">0</span></div>
+  <div>FPS: <span id="dbg-fps" style="color:#f0b90b">–</span></div>
 </div>
 <div id="app">
 <div id="nav">
@@ -121,6 +124,7 @@ html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:
     </div>
     <div id="cwrap">
       <canvas id="chart-canvas"></canvas>
+      <canvas id="overlay-canvas"></canvas>
       <canvas id="vol-canvas"></canvas>
       <div id="ohlc">
         <div class="oi"><span class="ol">O</span><span class="ov" id="oo">–</span></div>
@@ -150,90 +154,282 @@ html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:
     <div class="clh">
       <div>ТИКЕР</div><div>ЦЕНА</div><div>ИЗМ 24Ч</div><div>ОБЪЁМ</div><div>ВОЛАТ</div>
     </div>
-    <div id="coin-list"></div>
+    <div id="coin-list"><div id="coin-list-inner"></div></div>
   </div>
 </div>
 </div>
 <script>
 'use strict';
+
+// ── Helpers ──
+const $=id=>document.getElementById(id);
+const fP=n=>{if(!n||isNaN(n))return'–';if(n>=10000)return n.toLocaleString('en',{maximumFractionDigits:0});if(n>=100)return n.toFixed(2);if(n>=1)return n.toFixed(3);return n.toFixed(5);};
+const fV=n=>{if(!n||isNaN(n))return'–';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return n.toFixed(0);};
+const fC=n=>{if(n==null||isNaN(n))return'–';return(n>=0?'+':'')+n.toFixed(2)+'%';};
+const fmtChg2=n=>{if(n==null||isNaN(n))return'–';return(n>=0?'+':'')+n.toFixed(2)+'%';};
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+// ── Timeframe mappings ──
 const TFB={'1m':'1m','5m':'5m','15m':'15m','1h':'1h','4h':'4h','1d':'1d','3d':'3d','1w':'1w'};
 const TFBB={'1m':'1','5m':'5','15m':'15','1h':'60','4h':'240','1d':'D','3d':'3','1w':'W'};
 const TFOK={'1m':'1m','5m':'5m','15m':'15m','1h':'1H','4h':'4H','1d':'1D','3d':'3D','1w':'1W'};
 
+// ── State ──
 const coins=new Map(),dirty=new Set(),rowEls=new Map();
 let activeEx='BN',activeSym='BTCUSDT',activeTf='4h',listEx='ALL',searchQ='',filterM='all';
 let candles=[],chartW=0,chartH=0,volH=80;
 let offsetX=0,candleW=9,isDrag=false,dragX=0,dragOff=0,mX=-1,mY=-1;
 let bbSyms=[],okSyms=[],bnReady=false,bbReady=false,okReady=false;
-let needRebuild=false,lastSort=0,lastRender=0;
+let needRebuild=false,lastSort=0;
 let bnKlWs=null,bbKlWs=null,okKlWs=null;
 let totalUpdates=0;
 
+// ── Dirty flags for rendering layers ──
+let chartDirty=true;   // candles + volume need redraw
+let overlayDirty=true;  // crosshair needs redraw
+
+// ── FPS counter ──
+let fpsFrames=0,fpsLast=performance.now();
+const dbgFps=$('dbg-fps');
+
+// ── Debug panel ──
 const dbgBn=$('dbg-bn'),dbgBb=$('dbg-bb'),dbgOx=$('dbg-ox'),dbgCoins=$('dbg-coins'),dbgUpd=$('dbg-upd');
 setInterval(()=>{dbgCoins.textContent=coins.size;dbgUpd.textContent=totalUpdates;},500);
 
-const $=id=>document.getElementById(id);
-const fP=n=>{if(!n||isNaN(n))return'–';if(n>=10000)return n.toLocaleString('en',{maximumFractionDigits:0});if(n>=100)return n.toFixed(2);if(n>=1)return n.toFixed(3);return n.toFixed(5);};
-const fV=n=>{if(!n||isNaN(n))return'–';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return n.toFixed(0);};
-const fC=n=>{if(n==null||isNaN(n))return'–';return(n>=0?'+':'')+n.toFixed(2)+'%';};
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+// ═══════════════════════════════════════════════
+// ██  3-LAYER CANVAS ARCHITECTURE
+// ═══════════════════════════════════════════════
+// Layer 1: chart-canvas  — candles + grid (redraws only on zoom/pan/new data)
+// Layer 2: vol-canvas    — volume bars (redraws with candles)
+// Layer 3: overlay-canvas — crosshair + price label (redraws on mousemove, very cheap)
 
-// ── Chart ──
-const canvas=$('chart-canvas'),ctx=canvas.getContext('2d');
+const canvas=$('chart-canvas'),ctx=canvas.getContext('2d',{alpha:false});
 const volCv=$('vol-canvas'),vCtx=volCv.getContext('2d');
+const overlayCv=$('overlay-canvas'),oCtx=overlayCv.getContext('2d');
 
-function resizeChart(){const w=$('cwrap');chartW=w.clientWidth;chartH=w.clientHeight;canvas.width=chartW;canvas.height=chartH;volCv.width=chartW;volCv.height=volH;if(candles.length)drawChart();}
+// ── Cached chart geometry (recalculated only when needed) ──
+let chartGeom=null;
 
-function drawChart(){
+function calcGeom(vis){
+  const PT=28,PB=6,PR=72;
+  const PW=chartW-PR;
+  const PH=(chartH-volH)-PT-PB;
+  let mn=Infinity,mx=-Infinity,mv=0;
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.l<mn)mn=c.l;
+    if(c.h>mx)mx=c.h;
+    if(c.v>mv)mv=c.v;
+  }
+  const pr=mx-mn||1;
+  const ps=PH/(pr*1.06);
+  const po=PT+PH-(mn-pr*0.03)*ps;
+  return{PT,PB,PR,PW,PH,mn,mx,mv,pr,ps,po};
+}
+
+function resizeChart(){
+  const w=$('cwrap');
+  chartW=w.clientWidth;chartH=w.clientHeight;
+  canvas.width=chartW;canvas.height=chartH;
+  volCv.width=chartW;volCv.height=volH;
+  overlayCv.width=chartW;overlayCv.height=chartH;
+  chartDirty=true;
+  overlayDirty=true;
+}
+
+// ── Layer 1+2: Draw candles + volume (ONLY when chartDirty) ──
+function drawCandles(){
   if(!candles.length||!chartW||!chartH)return;
-  ctx.clearRect(0,0,chartW,chartH);vCtx.clearRect(0,0,chartW,volH);
-  const PT=28,PB=6,PR=72,PW=chartW-PR,PH=(chartH-volH)-PT-PB;
-  const n=Math.floor(PW/candleW);
+
+  // Clear both layers
+  ctx.fillStyle='#0d0e11';
+  ctx.fillRect(0,0,chartW,chartH);
+  vCtx.clearRect(0,0,chartW,volH);
+
+  const n=Math.floor((chartW-72)/candleW);
   const s=Math.max(0,candles.length-n-Math.floor(offsetX));
   const e=Math.min(candles.length,s+n);
   const vis=candles.slice(s,e);
   if(!vis.length)return;
-  let mn=Infinity,mx=-Infinity,mv=0;
-  vis.forEach(c=>{if(c.l<mn)mn=c.l;if(c.h>mx)mx=c.h;if(c.v>mv)mv=c.v;});
-  const pr=mx-mn||1,ps=PH/(pr*1.06),po=PT+PH-(mn-pr*0.03)*ps;
-  // grid
-  ctx.strokeStyle='#181d2a';ctx.lineWidth=1;
-  for(let i=0;i<=6;i++){const y=PT+(PH/6)*i;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(PW,y);ctx.stroke();ctx.fillStyle='#4a5060';ctx.font='9px Inter';ctx.textAlign='right';ctx.fillText(fP(mx*1.03-(pr*1.06/6)*i),chartW-2,y+3);}
-  // candles+vol
-  const hw=Math.max(1,(candleW-2)/2);
-  vis.forEach((c,i)=>{
-    const x=i*candleW+candleW/2,up=c.c>=c.o,cl=up?'#26a69a':'#ef5350';
-    const yH=po-c.h*ps,yL=po-c.l*ps,yO=po-c.o*ps,yC=po-c.c*ps;
-    const bT=Math.min(yO,yC),bH=Math.max(1,Math.abs(yC-yO));
-    ctx.strokeStyle=cl;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,yH);ctx.lineTo(x,yL);ctx.stroke();
-    ctx.fillStyle=cl;ctx.fillRect(x-hw,bT,hw*2,bH);
-    const vh=(c.v/mv)*(volH-4);
-    vCtx.fillStyle=up?'rgba(38,166,154,.55)':'rgba(239,83,80,.55)';
-    vCtx.fillRect(x-hw,volH-vh,hw*2,vh);
-  });
-  // crosshair
-  if(mX>=0&&mX<=PW&&mY>=PT&&mY<=chartH-volH-PB){
-    ctx.strokeStyle='rgba(120,126,144,.3)';ctx.lineWidth=1;ctx.setLineDash([3,4]);
-    ctx.beginPath();ctx.moveTo(mX,PT);ctx.lineTo(mX,chartH-volH);ctx.stroke();
-    ctx.beginPath();ctx.moveTo(0,mY);ctx.lineTo(chartW,mY);ctx.stroke();
-    ctx.setLineDash([]);
-    const price=(po-mY)/ps;
-    ctx.fillStyle='#f0b90b';ctx.fillRect(chartW-PR,mY-9,PR,18);
-    ctx.fillStyle='#000';ctx.font='bold 9px Inter';ctx.textAlign='center';
-    ctx.fillText(fP(price),chartW-PR/2,mY+4);ctx.textAlign='left';
-    const bi=Math.floor(mX/candleW);
-    if(bi<vis.length){const c=vis[bi];$('oo').textContent=fP(c.o);$('oh').textContent=fP(c.h);$('ol').textContent=fP(c.l);$('oc').textContent=fP(c.c);$('ovl').textContent=fV(c.v);}
+
+  const g=calcGeom(vis);
+  chartGeom={...g,vis,s,e};
+
+  // ── Grid (batch draw) ──
+  ctx.strokeStyle='#181d2a';
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  for(let i=0;i<=6;i++){
+    const y=g.PT+(g.PH/6)*i;
+    ctx.moveTo(0,y);
+    ctx.lineTo(g.PW,y);
   }
-  // last price
+  ctx.stroke();
+
+  // Grid labels
+  ctx.fillStyle='#4a5060';
+  ctx.font='9px Inter';
+  ctx.textAlign='right';
+  for(let i=0;i<=6;i++){
+    const y=g.PT+(g.PH/6)*i;
+    ctx.fillText(fP(g.mx*1.03-(g.pr*1.06/6)*i),chartW-2,y+3);
+  }
+
+  // ── Candles — batch by color to minimize state changes ──
+  const hw=Math.max(1,(candleW-2)/2);
+
+  // Pass 1: Green wicks
+  ctx.strokeStyle='#26a69a';ctx.lineWidth=1;ctx.beginPath();
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.c<c.o)continue;
+    const x=i*candleW+candleW/2;
+    ctx.moveTo(x,g.po-c.h*g.ps);
+    ctx.lineTo(x,g.po-c.l*g.ps);
+  }
+  ctx.stroke();
+
+  // Pass 2: Red wicks
+  ctx.strokeStyle='#ef5350';ctx.beginPath();
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.c>=c.o)continue;
+    const x=i*candleW+candleW/2;
+    ctx.moveTo(x,g.po-c.h*g.ps);
+    ctx.lineTo(x,g.po-c.l*g.ps);
+  }
+  ctx.stroke();
+
+  // Pass 3: Green bodies
+  ctx.fillStyle='#26a69a';
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.c<c.o)continue;
+    const x=i*candleW+candleW/2;
+    const yO=g.po-c.o*g.ps,yC=g.po-c.c*g.ps;
+    ctx.fillRect(x-hw,Math.min(yO,yC),hw*2,Math.max(1,Math.abs(yC-yO)));
+  }
+
+  // Pass 4: Red bodies
+  ctx.fillStyle='#ef5350';
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.c>=c.o)continue;
+    const x=i*candleW+candleW/2;
+    const yO=g.po-c.o*g.ps,yC=g.po-c.c*g.ps;
+    ctx.fillRect(x-hw,Math.min(yO,yC),hw*2,Math.max(1,Math.abs(yC-yO)));
+  }
+
+  // ── Volume bars — batch by color ──
+  vCtx.fillStyle='rgba(38,166,154,.55)';
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.c<c.o)continue;
+    const x=i*candleW+candleW/2;
+    const vh=(c.v/g.mv)*(volH-4);
+    vCtx.fillRect(x-hw,volH-vh,hw*2,vh);
+  }
+  vCtx.fillStyle='rgba(239,83,80,.55)';
+  for(let i=0;i<vis.length;i++){
+    const c=vis[i];
+    if(c.c>=c.o)continue;
+    const x=i*candleW+candleW/2;
+    const vh=(c.v/g.mv)*(volH-4);
+    vCtx.fillRect(x-hw,volH-vh,hw*2,vh);
+  }
+
+  // ── Last price line ──
   const lc=candles[candles.length-1];
-  if(lc){const ly=po-lc.c*ps;if(ly>PT&&ly<chartH-volH-PB){const up=lc.c>=lc.o;ctx.strokeStyle=up?'#26a69a':'#ef5350';ctx.lineWidth=1;ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(PW,ly);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=up?'#26a69a':'#ef5350';ctx.fillRect(chartW-PR,ly-8,PR,16);ctx.fillStyle='#fff';ctx.font='bold 9px Inter';ctx.textAlign='center';ctx.fillText(fP(lc.c),chartW-PR/2,ly+4);ctx.textAlign='left';}}
+  if(lc){
+    const ly=g.po-lc.c*g.ps;
+    if(ly>g.PT&&ly<chartH-volH-g.PB){
+      const up=lc.c>=lc.o;
+      ctx.strokeStyle=up?'#26a69a':'#ef5350';
+      ctx.lineWidth=1;ctx.setLineDash([3,4]);
+      ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(g.PW,ly);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle=up?'#26a69a':'#ef5350';
+      ctx.fillRect(chartW-g.PR,ly-8,g.PR,16);
+      ctx.fillStyle='#fff';ctx.font='bold 9px Inter';ctx.textAlign='center';
+      ctx.fillText(fP(lc.c),chartW-g.PR/2,ly+4);
+      ctx.textAlign='left';
+    }
+  }
 }
 
-canvas.addEventListener('mousemove',e=>{const r=canvas.getBoundingClientRect();mX=e.clientX-r.left;mY=e.clientY-r.top;if(isDrag){const dx=e.clientX-dragX;offsetX=clamp(dragOff-dx/candleW,0,candles.length-20);}requestAnimationFrame(drawChart);});
-canvas.addEventListener('mouseleave',()=>{mX=-1;mY=-1;requestAnimationFrame(drawChart);});
-canvas.addEventListener('mousedown',e=>{isDrag=true;dragX=e.clientX;dragOff=offsetX;});
-canvas.addEventListener('mouseup',()=>isDrag=false);
-canvas.addEventListener('wheel',e=>{e.preventDefault();candleW=clamp(candleW-e.deltaY*0.04,3,24);requestAnimationFrame(drawChart);},{passive:false});
+// ── Layer 3: Draw crosshair overlay (VERY CHEAP — only lines + labels) ──
+function drawOverlay(){
+  oCtx.clearRect(0,0,chartW,chartH);
+  if(!chartGeom||mX<0||mY<0)return;
+
+  const g=chartGeom;
+  if(mX>g.PW||mY<g.PT||mY>chartH-volH-g.PB)return;
+
+  // Crosshair lines
+  oCtx.strokeStyle='rgba(120,126,144,.3)';
+  oCtx.lineWidth=1;
+  oCtx.setLineDash([3,4]);
+  oCtx.beginPath();
+  oCtx.moveTo(mX,g.PT);oCtx.lineTo(mX,chartH-volH);
+  oCtx.moveTo(0,mY);oCtx.lineTo(chartW,mY);
+  oCtx.stroke();
+  oCtx.setLineDash([]);
+
+  // Price label at cursor
+  const price=(g.po-mY)/g.ps;
+  oCtx.fillStyle='#f0b90b';
+  oCtx.fillRect(chartW-g.PR,mY-9,g.PR,18);
+  oCtx.fillStyle='#000';
+  oCtx.font='bold 9px Inter';
+  oCtx.textAlign='center';
+  oCtx.fillText(fP(price),chartW-g.PR/2,mY+4);
+  oCtx.textAlign='left';
+
+  // OHLC update for hovered candle
+  const bi=Math.floor(mX/candleW);
+  if(bi>=0&&bi<g.vis.length){
+    const c=g.vis[bi];
+    $('oo').textContent=fP(c.o);
+    $('oh').textContent=fP(c.h);
+    $('ol').textContent=fP(c.l);
+    $('oc').textContent=fP(c.c);
+    $('ovl').textContent=fV(c.v);
+  }
+}
+
+// ── Mouse events on chart wrapper (pointer-events pass through overlay) ──
+const cwrap=$('cwrap');
+cwrap.addEventListener('mousemove',e=>{
+  const r=canvas.getBoundingClientRect();
+  mX=e.clientX-r.left;mY=e.clientY-r.top;
+  if(isDrag){
+    const dx=e.clientX-dragX;
+    offsetX=clamp(dragOff-dx/candleW,0,candles.length-20);
+    chartDirty=true; // pan → redraw candles
+  }
+  overlayDirty=true; // always redraw crosshair
+},{passive:true});
+
+cwrap.addEventListener('mouseleave',()=>{
+  mX=-1;mY=-1;
+  overlayDirty=true;
+},{passive:true});
+
+cwrap.addEventListener('mousedown',e=>{
+  isDrag=true;dragX=e.clientX;dragOff=offsetX;
+  overlayCv.style.pointerEvents='auto'; // capture mouse on overlay during drag
+});
+
+window.addEventListener('mouseup',()=>{
+  isDrag=false;
+  overlayCv.style.pointerEvents='none';
+});
+
+cwrap.addEventListener('wheel',e=>{
+  e.preventDefault();
+  candleW=clamp(candleW-e.deltaY*0.04,3,24);
+  chartDirty=true;
+},{passive:false});
 
 // ── WebSocket helper ──
 function mkWs(url,onMsg,onClose,onOpen){
@@ -244,6 +440,10 @@ function mkWs(url,onMsg,onClose,onOpen){
   ws.onerror=()=>ws.close();
   return ws;
 }
+
+// ═══════════════════════════════════════════════
+// ██  EXCHANGE DATA (unchanged logic)
+// ═══════════════════════════════════════════════
 
 // ── Binance Futures ──
 async function initBinance(){
@@ -261,24 +461,24 @@ async function initBinance(){
     bnReady=true;needRebuild=true;checkReady();
     dbgBn.textContent=`REST OK (${coins.size} монет)`;dbgBn.style.color='#26a69a';
   }catch(e){console.error('BN REST',e);dbgBn.textContent='REST ОШИБКА: '+e.message;dbgBn.style.color='#ef5350';}
-  // Real-time WebSocket — all tickers every ~200ms
   mkWs('wss://fstream.binance.com/ws/!miniTicker@arr',
     msg=>{
       const batch=JSON.parse(msg.data);
-      batch.forEach(d=>{
-        if(!d.s.endsWith('USDT'))return;
-        const key='BN:'+d.s,c=coins.get(key);if(!c)return;
+      for(let i=0;i<batch.length;i++){
+        const d=batch[i];
+        if(!d.s.endsWith('USDT'))continue;
+        const key='BN:'+d.s,c=coins.get(key);if(!c)continue;
         c.prev=c.p;c.p=+d.c;c.chg=+d.P;c.v=+d.q;c.h=+d.h;c.l=+d.l;
         dirty.add(key);totalUpdates++;
-      });
+      }
       dbgBn.textContent=`WS живой (${totalUpdates} upd)`;
     },
     ()=>setTimeout(initBinanceWs,3000)
   );
 }
-function initBinanceWs(){mkWs('wss://fstream.binance.com/ws/!miniTicker@arr',msg=>{const batch=JSON.parse(msg.data);batch.forEach(d=>{if(!d.s.endsWith('USDT'))return;const key='BN:'+d.s,c=coins.get(key);if(!c)return;c.prev=c.p;c.p=+d.c;c.chg=+d.P;c.v=+d.q;c.h=+d.h;c.l=+d.l;dirty.add(key);});},()=>setTimeout(initBinanceWs,3000));}
+function initBinanceWs(){mkWs('wss://fstream.binance.com/ws/!miniTicker@arr',msg=>{const batch=JSON.parse(msg.data);for(let i=0;i<batch.length;i++){const d=batch[i];if(!d.s.endsWith('USDT'))continue;const key='BN:'+d.s,c=coins.get(key);if(!c)continue;c.prev=c.p;c.p=+d.c;c.chg=+d.P;c.v=+d.q;c.h=+d.h;c.l=+d.l;dirty.add(key);}},()=>setTimeout(initBinanceWs,3000));}
 
-// ── Bybit Futures (Linear Perpetuals) ──
+// ── Bybit Futures ──
 async function initBybit(){
   $('lt').textContent='Bybit Futures...';
   try{
@@ -326,7 +526,7 @@ function connectBybitTicker(){
   );
 }
 
-// ── OKX Futures (USDT-M Swaps) ──
+// ── OKX Futures ──
 async function initOKX(){
   $('lt').textContent='OKX Futures...';
   try{
@@ -380,9 +580,9 @@ function connectOKXTicker(){
 
 // ── Chart klines ──
 async function fetchCandles(ex,sym,tf){
-  candles=[];
+  candles=[];chartGeom=null;
   try{
-    let url,data;
+    let data;
     if(ex==='BN'){
       const r=await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${TFB[tf]}&limit=300`);
       data=await r.json();
@@ -396,7 +596,9 @@ async function fetchCandles(ex,sym,tf){
       data=await r.json();
       if(data.data) candles=data.data.slice().reverse().map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
     }
-    updateOHLC();requestAnimationFrame(drawChart);
+    updateOHLC();
+    chartDirty=true;
+    overlayDirty=true;
   }catch(e){console.error('klines',e);}
 }
 
@@ -409,7 +611,7 @@ function connectKlineWs(ex,sym,tf){
       const k=JSON.parse(msg.data).k;
       const c={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v};
       if(candles.length&&candles[candles.length-1].t===c.t)candles[candles.length-1]=c;else candles.push(c);
-      updateOHLC();requestAnimationFrame(drawChart);
+      updateOHLC();chartDirty=true;
     },()=>{});
   }else if(ex==='BB'){
     bbKlWs=mkWs('wss://stream.bybit.com/v5/public/linear',msg=>{
@@ -418,7 +620,7 @@ function connectKlineWs(ex,sym,tf){
       const arr=d.data;if(!arr?.length)return;
       const k=arr[0];const c={t:k.start,o:+k.open,h:+k.high,l:+k.low,c:+k.close,v:+k.volume};
       if(candles.length&&candles[candles.length-1].t===c.t)candles[candles.length-1]=c;else candles.push(c);
-      updateOHLC();requestAnimationFrame(drawChart);
+      updateOHLC();chartDirty=true;
     },()=>{},ws=>ws.send(JSON.stringify({op:'subscribe',args:[`kline.${TFBB[tf]}.${sym}`]})));
   }else if(ex==='OX'){
     const ch='candle'+TFOK[tf];
@@ -428,7 +630,7 @@ function connectKlineWs(ex,sym,tf){
       if(!d.data||d.arg?.channel!==ch)return;
       const k=d.data[0];const c={t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]};
       if(candles.length&&candles[candles.length-1].t===c.t)candles[candles.length-1]=c;else candles.push(c);
-      updateOHLC();requestAnimationFrame(drawChart);
+      updateOHLC();chartDirty=true;
     },()=>{},ws=>{
       ws.send(JSON.stringify({op:'subscribe',args:[{channel:ch,instId:sym}]}));
       setInterval(()=>{if(ws.readyState===1)ws.send('ping');},25000);
@@ -442,25 +644,165 @@ function updateOHLC(){
   $('oo').textContent=fP(c.o);$('oh').textContent=fP(c.h);$('ol').textContent=fP(c.l);$('oc').textContent=fP(c.c);$('ovl').textContent=fV(c.v);
 }
 
-// ── Render engine (dirty flag + RAF, ~30fps max) ──
-let sortedList=[];
+// ═══════════════════════════════════════════════
+// ██  VIRTUAL LIST — only renders visible rows
+// ═══════════════════════════════════════════════
 
-function startRender(){requestAnimationFrame(renderLoop);}
+const ROW_H=27; // height of each row in px
+const coinListEl=$('coin-list');
+const coinListInner=$('coin-list-inner');
+let sortedList=[];
+let visiblePool=[]; // recycled DOM elements
+let poolSize=0;
+let scrollTop=0;
+
+// Create a pool element (reusable row)
+function createPoolRow(){
+  const el=document.createElement('div');
+  el.className='cr';
+  el.innerHTML='<div class="ct"><div class="dot"></div><span class="cb"></span><span class="cn"></span></div><div class="cp"></div><div class="cc"></div><div class="cv"></div><div class="cvt"></div>';
+  const cells={
+    tick:el.querySelector('.cn'),dot:el.querySelector('.dot'),badge:el.querySelector('.cb'),
+    price:el.querySelector('.cp'),chg:el.querySelector('.cc'),
+    vol:el.querySelector('.cv'),vlt:el.querySelector('.cvt')
+  };
+  el.addEventListener('click',()=>{
+    const idx=parseInt(el.dataset.idx,10);
+    if(idx>=0&&idx<sortedList.length)selectCoin(sortedList[idx]);
+  });
+  return{el,cells,coinKey:null};
+}
+
+function ensurePool(needed){
+  while(visiblePool.length<needed){
+    const pr=createPoolRow();
+    coinListInner.appendChild(pr.el);
+    visiblePool.push(pr);
+  }
+  // Hide excess
+  for(let i=needed;i<visiblePool.length;i++){
+    visiblePool[i].el.style.display='none';
+  }
+}
+
+function bindRow(poolRow,coin,idx){
+  const rr=poolRow,c=coin;
+  rr.coinKey=c.key;
+  rr.el.dataset.idx=idx;
+  rr.el.style.display='';
+  rr.el.style.top=(idx*ROW_H)+'px';
+
+  // Badge
+  rr.cells.badge.className='cb '+c.ex;
+  rr.cells.badge.textContent=c.ex;
+  rr.cells.dot.style.background=c.ex==='BN'?'var(--bn)':c.ex==='BB'?'var(--bb)':'var(--ox)';
+  rr.cells.tick.textContent=c.base;
+
+  // Price
+  const priceStr=fP(c.p);
+  rr.cells.price.textContent=priceStr;
+  rr.cells.price.style.color=c.p>c.prev?'var(--gr)':c.p<c.prev?'var(--rd)':'var(--t1)';
+
+  // Change
+  const chgStr=fmtChg2(c.chg);
+  rr.cells.chg.textContent=chgStr;
+  rr.cells.chg.className='cc '+(c.chg>=0?'pos':'neg');
+
+  // Volume
+  rr.cells.vol.textContent=fV(c.v);
+
+  // Volatility
+  rr.cells.vlt.textContent=c.vlt?c.vlt.toFixed(1)+'%':'–';
+
+  // Selected state
+  const activeKey=`${activeEx}:${activeSym}`;
+  if(c.key===activeKey)rr.el.classList.add('sel');else rr.el.classList.remove('sel');
+}
+
+// Flash animation using Web Animations API — NO forced reflow!
+function flashRow(poolRow,up){
+  poolRow.el.animate([
+    {backgroundColor:up?'rgba(38,166,154,.28)':'rgba(239,83,80,.28)'},
+    {backgroundColor:'transparent'}
+  ],{duration:400,easing:'ease-out'});
+}
+
+function renderVirtualList(){
+  const containerH=coinListEl.clientHeight;
+  scrollTop=coinListEl.scrollTop;
+  const startIdx=Math.floor(scrollTop/ROW_H);
+  const visCount=Math.ceil(containerH/ROW_H)+2; // +2 buffer
+  const endIdx=Math.min(startIdx+visCount,sortedList.length);
+
+  // Set total height for scrollbar
+  coinListInner.style.height=(sortedList.length*ROW_H)+'px';
+
+  const needed=endIdx-startIdx;
+  ensurePool(needed);
+
+  for(let i=0;i<needed;i++){
+    const dataIdx=startIdx+i;
+    const coin=sortedList[dataIdx];
+    const poolRow=visiblePool[i];
+    const prevKey=poolRow.coinKey;
+    bindRow(poolRow,coin,dataIdx);
+
+    // Flash only if same coin got price update
+    if(prevKey===coin.key&&dirty.has(coin.key)&&coin.p!==coin.prev){
+      flashRow(poolRow,coin.p>coin.prev);
+    }
+  }
+}
+
+coinListEl.addEventListener('scroll',()=>{
+  renderVirtualList();
+},{passive:true});
+
+// ═══════════════════════════════════════════════
+// ██  MAIN RENDER LOOP — 60fps, smart dirty flags
+// ═══════════════════════════════════════════════
 
 function renderLoop(ts){
   requestAnimationFrame(renderLoop);
-  if(dirty.size===0&&!needRebuild)return;
-  if(ts-lastRender<33)return; // cap at 30fps
-  lastRender=ts;
-  if(needRebuild||(ts-lastSort>800)){
-    rebuildList();lastSort=ts;needRebuild=false;dirty.clear();
-  }else{
-    for(const key of dirty)updateRow(key);
+
+  // FPS counter
+  fpsFrames++;
+  if(ts-fpsLast>=1000){
+    dbgFps.textContent=fpsFrames+'fps';
+    fpsFrames=0;fpsLast=ts;
+  }
+
+  // Layer 1+2: Candles — only if dirty
+  if(chartDirty){
+    drawCandles();
+    chartDirty=false;
+    overlayDirty=true; // overlay depends on chartGeom
+  }
+
+  // Layer 3: Overlay — only if dirty
+  if(overlayDirty){
+    drawOverlay();
+    overlayDirty=false;
+  }
+
+  // Coin list — handle dirty updates + periodic resort
+  if(dirty.size>0||needRebuild){
+    // Full rebuild (sort + re-render) — throttled to every 2 seconds
+    if(needRebuild||(ts-lastSort>2000)){
+      rebuildSortedList();
+      lastSort=ts;
+      needRebuild=false;
+    }
+    // Update visible rows with dirty data
+    renderVirtualList();
+    // Update header if active coin changed
+    const activeKey=`${activeEx}:${activeSym}`;
+    if(dirty.has(activeKey))updateSymInfo();
     dirty.clear();
   }
 }
 
-function rebuildList(){
+function rebuildSortedList(){
   let list=Array.from(coins.values());
   if(listEx!=='ALL')list=list.filter(c=>c.ex===listEx);
   if(searchQ){const q=searchQ.toLowerCase();list=list.filter(c=>c.base.toLowerCase().includes(q));}
@@ -468,63 +810,9 @@ function rebuildList(){
   else if(filterM==='losers')list=list.filter(c=>c.chg<0);
   list.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
   sortedList=list.slice(0,300);
-  const cl=$('coin-list');
-  sortedList.forEach((c,i)=>{
-    let rr=rowEls.get(c.key);
-    if(!rr){rr=createRow(c);rowEls.set(c.key,rr);}
-    fillRow(c,rr);
-    if(cl.children[i]!==rr.el)cl.insertBefore(rr.el,cl.children[i]||null);
-  });
-  while(cl.children.length>sortedList.length)cl.removeChild(cl.lastChild);
   $('cnt').textContent=`(${list.length})`;
   updateHeader();
 }
-
-function createRow(c){
-  const el=document.createElement('div');
-  el.className='cr';
-  el.innerHTML=`<div class="ct"><div class="dot"></div><span class="cb ${c.ex}">${c.ex}</span><span class="cn"></span></div><div class="cp"></div><div class="cc"></div><div class="cv"></div><div class="cvt"></div>`;
-  const cells={
-    tick:el.querySelector('.cn'),dot:el.querySelector('.dot'),
-    price:el.querySelector('.cp'),
-    chg:el.querySelector('.cc'),
-    vol:el.querySelector('.cv'),vlt:el.querySelector('.cvt')
-  };
-  cells.tick.textContent=c.base;
-  cells.dot.style.background=c.ex==='BN'?'var(--bn)':c.ex==='BB'?'var(--bb)':'var(--ox)';
-  el.addEventListener('click',()=>selectCoin(c));
-  return{el,cells};
-}
-
-function fillRow(c,rr){
-  const isPos=c.chg>=0;
-  const priceStr=fP(c.p);
-  if(rr.cells.price.textContent!==priceStr){rr.cells.price.textContent=priceStr;rr.cells.price.style.color=c.p>c.prev?'var(--gr)':c.p<c.prev?'var(--rd)':'var(--t1)';}
-  const chgStr=fmtChg2(c.chg);
-  if(rr.cells.chg.textContent!==chgStr){rr.cells.chg.textContent=chgStr;rr.cells.chg.className='cc '+(isPos?'pos':'neg');}
-  const volStr=fV(c.v);
-  if(rr.cells.vol.textContent!==volStr)rr.cells.vol.textContent=volStr;
-  const vltStr=c.vlt?c.vlt.toFixed(1)+'%':'–';
-  if(rr.cells.vlt.textContent!==vltStr)rr.cells.vlt.textContent=vltStr;
-  const activeKey=`${activeEx}:${activeSym}`;
-  if(c.key===activeKey)rr.el.classList.add('sel');else rr.el.classList.remove('sel');
-}
-
-function updateRow(key){
-  const c=coins.get(key),rr=rowEls.get(key);
-  if(!c||!rr)return;
-  fillRow(c,rr);
-  if(c.p!==c.prev){
-    const fc=c.p>c.prev?'fu':'fd';
-    rr.el.classList.remove('fu','fd');
-    void rr.el.offsetWidth;
-    rr.el.classList.add(fc);
-    rr.el.addEventListener('animationend',()=>rr.el.classList.remove(fc),{once:true});
-  }
-  if(key===`${activeEx}:${activeSym}`)updateSymInfo();
-}
-
-const fmtChg2=n=>{if(n==null||isNaN(n))return'–';return(n>=0?'+':'')+n.toFixed(2)+'%';};
 
 function updateSymInfo(){
   const key=`${activeEx}:${activeSym}`;
@@ -545,21 +833,18 @@ function updateHeader(){
 }
 
 function selectCoin(c){
-  const prevKey=`${activeEx}:${activeSym}`;
-  const prevRr=rowEls.get(prevKey);if(prevRr)prevRr.el.classList.remove('sel');
-  
   activeEx=c.ex;activeSym=c.sym;
-  const rr=rowEls.get(c.key);if(rr)rr.el.classList.add('sel');
-  
-  // update chart exchange buttons
+
+  // Update chart exchange buttons
   document.querySelectorAll('.excb').forEach(b=>{b.classList.toggle('on',b.dataset.cex===c.ex);});
-  // update kline sym with correct format
-  const klSym=c.ex==='OX'?c.sym:c.sym;
-  
-  updateSymInfo();candles=[];
-  ctx.clearRect(0,0,chartW,chartH);vCtx.clearRect(0,0,chartW,volH);
+
+  updateSymInfo();candles=[];chartGeom=null;
+  chartDirty=true;overlayDirty=true;
   fetchCandles(c.ex,c.sym,activeTf);
   connectKlineWs(c.ex,c.sym,activeTf);
+
+  // Re-render list to update selection highlight
+  renderVirtualList();
 }
 
 function checkReady(){
@@ -571,7 +856,8 @@ document.querySelectorAll('.tfb').forEach(b=>{
   b.addEventListener('click',()=>{
     document.querySelectorAll('.tfb').forEach(x=>x.classList.remove('on'));
     b.classList.add('on');activeTf=b.dataset.tf;
-    candles=[];fetchCandles(activeEx,activeSym,activeTf);connectKlineWs(activeEx,activeSym,activeTf);
+    candles=[];chartGeom=null;chartDirty=true;
+    fetchCandles(activeEx,activeSym,activeTf);connectKlineWs(activeEx,activeSym,activeTf);
   });
 });
 
@@ -579,10 +865,10 @@ document.querySelectorAll('.excb').forEach(b=>{
   b.addEventListener('click',()=>{
     document.querySelectorAll('.excb').forEach(x=>x.classList.remove('on'));
     b.classList.add('on');activeEx=b.dataset.cex;
-    // find BTC symbol of this exchange
     const first=Array.from(coins.values()).find(c=>c.ex===activeEx&&(c.sym==='BTCUSDT'||c.sym==='BTC-USDT-SWAP'));
     if(first){activeSym=first.sym;updateSymInfo();}
-    candles=[];fetchCandles(activeEx,activeSym,activeTf);connectKlineWs(activeEx,activeSym,activeTf);
+    candles=[];chartGeom=null;chartDirty=true;
+    fetchCandles(activeEx,activeSym,activeTf);connectKlineWs(activeEx,activeSym,activeTf);
   });
 });
 
@@ -606,10 +892,9 @@ window.addEventListener('resize',resizeChart);
 // ── Init ──
 (async function init(){
   resizeChart();
-  // fetch candles first (Binance default), then init all exchanges
   fetchCandles(activeEx,activeSym,activeTf);
   connectKlineWs(activeEx,activeSym,activeTf);
-  startRender();
+  requestAnimationFrame(renderLoop);
   Promise.allSettled([initBinance(),initBybit(),initOKX()]);
 })();
 </script>

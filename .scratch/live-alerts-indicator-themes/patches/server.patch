@@ -1,0 +1,12 @@
+diff --git a/node-server/server.js b/node-server/server.js
+index fb81a32..a7e5598 100644
+--- a/node-server/server.js
++++ b/node-server/server.js
+@@ -3775,6 +3775,7 @@ app.get("/api/market/pump-alerts", (req, res) => {
+       quality: Math.round(analysis.quality * 1000) / 1000,
+       efficiency: Math.round(analysis.efficiency * 1000) / 1000,
+       pastPrice: analysis.referencePrice,
++      referenceTs: analysis.referenceTime,
+       ts: now
+     });
+   }

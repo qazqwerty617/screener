@@ -9,6 +9,20 @@ function getAdminBotToken() { return String(process.env.ADMIN_BOT_TOKEN || "").t
 function getAdminChatId() { return String(process.env.ADMIN_CHAT_ID || "").trim(); }
 function getMainBotToken() { return String(process.env.TELEGRAM_BOT_TOKEN || "").trim(); }
 
+/** Find the admin's own user account by matching ADMIN_CHAT_ID to telegramId */
+function getAdminOwnUser() {
+  const adminTgId = getAdminChatId();
+  if (!adminTgId) return null;
+  const allUsers = userStore.getAllUsersRaw ? Object.values(userStore.getAllUsersRaw()) : [];
+  return allUsers.find(u => String(u.telegramId) === adminTgId || String(u.telegramChatId) === adminTgId) || null;
+}
+
+/** Check if a userId belongs to the admin */
+function isAdminUser(userId) {
+  const admin = getAdminOwnUser();
+  return admin && admin.id === userId;
+}
+
 // Files for persistent admin data
 const PROMOS_FILE = path.join(__dirname, "promos.json");
 const promoStore = createPromoStore({ filePath: process.env.PROMOS_FILE || PROMOS_FILE });
@@ -279,6 +293,9 @@ function buildMainMenu() {
       [
         { text: "⚡ Быстрые действия", callback_data: "adm:quick:main" },
         { text: "🔄 Обновить", callback_data: "adm:menu" }
+      ],
+      [
+        { text: "⭐ Мой аккаунт PRO", callback_data: "adm:me:view" }
       ]
     ]
   };
@@ -349,6 +366,37 @@ function buildUsersMenu() {
   return { text, keyboard };
 }
 
+function formatUserButtonLabel(u) {
+  const isOnline = typeof userStore.isUserOnline === "function" ? userStore.isUserOnline(u.id) : false;
+  const isPro = u.plan === "pro";
+  const onl = isOnline ? "🟢" : "⚪";
+  let planTag = "⚪ [FREE]";
+  if (isPro) {
+    if (!u.proExpiresAt) planTag = "💎 [∞]";
+    else {
+      const d = Math.max(0, Math.ceil((u.proExpiresAt - Date.now()) / 86400000));
+      planTag = `💎 [${d}д]`;
+    }
+  }
+  const name = (u.username || "Трейдер").slice(0, 16);
+  const meTag = isAdminUser(u.id) ? " [ВЫ]" : "";
+  return `${onl} ${name} ${planTag} (${u.id})${meTag}`;
+}
+
+function formatUserSearchResults(results, text) {
+  let listText = `<b>🔎 Результаты поиска по «${text}» (${results.length}):</b>\n\n`;
+  results.slice(0, 6).forEach((u, i) => {
+    const isOnline = typeof userStore.isUserOnline === "function" ? userStore.isUserOnline(u.id) : false;
+    const isPro = u.plan === "pro";
+    const onlineText = isOnline ? "🟢 Онлайн" : "⚪ Офлайн";
+    const planText = isPro ? (u.proExpiresAt ? `💎 PRO (${Math.max(0, Math.ceil((u.proExpiresAt - Date.now()) / 86400000))} дн.)` : "💎 PRO (Бессрочно)") : "⚪ FREE";
+    const tg = u.telegramUsername ? `@${u.telegramUsername.replace(/^@/, "")}` : (u.telegramId ? `ID: ${u.telegramId}` : "—");
+    listText += `${i + 1}. <b>${u.username || "Трейдер"}</b> (<code>#${u.id}</code>)\n   ├ ${onlineText} | ${planText}\n   └ Telegram: ${tg}\n\n`;
+  });
+  const buttons = results.slice(0, 6).map(u => [{ text: formatUserButtonLabel(u), callback_data: `adm:user:view:${u.id}` }]);
+  return { listText, buttons };
+}
+
 // 3. USER CARD
 function buildUserCard(user) {
   if (!user) return { text: "❌ Пользователь не найден.", keyboard: { inline_keyboard: [[{ text: "← Назад", callback_data: "adm:users:main" }]] } };
@@ -360,11 +408,11 @@ function buildUserCard(user) {
   const statusEmoji = user.blocked ? "🔴" : (isOnline ? "🟢" : "⚪");
   const statusText = user.blocked ? "Заблокирован" : (isOnline ? "Онлайн (сейчас на сайте)" : "Не в сети");
   
-  const planEmoji = isPro ? "💎" : "⚪";
-  const planName = isPro ? "Платный" : "FREE";
-  
   const expireDate = isPro ? (user.proExpiresAt ? formatDate(user.proExpiresAt) : "Бессрочно") : "—";
-  const daysLeft = isPro ? (user.proExpiresAt ? Math.max(0, Math.ceil((user.proExpiresAt - Date.now()) / (1000 * 60 * 60 * 24))) + " дн." : "∞") : "—";
+  const daysLeft = isPro ? (user.proExpiresAt ? Math.max(0, Math.ceil((user.proExpiresAt - Date.now()) / (1000 * 60 * 60 * 24))) + " дн." : "∞") : "— (FREE)";
+  
+  const planEmoji = isPro ? "💎" : "⚪";
+  const planName = isPro ? (user.proExpiresAt ? `Платный (PRO, ${daysLeft})` : "Платный (PRO, Бессрочно)") : "Бесплатный (FREE)";
 
   const regDate = formatDate(user.createdAt);
   const lastActiveIso = user.lastActive || user.lastLogin || user.createdAt;
@@ -387,8 +435,10 @@ function buildUserCard(user) {
   const tgIdStr = user.telegramId || user.telegramChatId || "—";
   const tagsStr = (Array.isArray(user.tags) && user.tags.length > 0) ? `\n<b>Метки:</b> ${user.tags.join(", ")}` : "";
 
+  const meLabel = isAdminUser(user.id) ? " <b>[ВЫ]</b>" : "";
+
   const text =
-    `<b>👤 Пользователь #${user.id}</b>\n\n` +
+    `<b>👤 Пользователь #${user.id}</b>${meLabel}\n\n` +
     `<b>Логин:</b> ${user.username || "—"}\n` +
     `<b>Telegram:</b> ${tgHandle}\n` +
     `<b>Telegram ID:</b> <code>${tgIdStr}</code>\n` +
@@ -396,7 +446,7 @@ function buildUserCard(user) {
     `<b>Статус:</b> ${statusEmoji} ${statusText}\n` +
     `<b>Тариф:</b> ${planEmoji} ${planName}\n` +
     `<b>Подписка до:</b> ${expireDate}\n` +
-    `<b>Осталось:</b> ${daysLeft}\n\n` +
+    `<b>Осталось дней:</b> ${daysLeft}\n\n` +
     `<b>Регистрация:</b> ${regDate} (${formatTimeAgo(user.createdAt)})\n` +
     `<b>Последняя активность:</b> ${lastActiveText}\n` +
     `<b>Последний визит/вход:</b> ${lastLoginText}\n` +
@@ -443,17 +493,20 @@ function buildUserCard(user) {
 // 4. USER SUBSCRIPTION MENU
 function buildUserSubMenu(user) {
   const isPro = user.plan === "pro";
-  const planName = isPro ? "Платный" : "FREE";
   const startDate = formatDate(user.createdAt);
   const expireDate = isPro ? (user.proExpiresAt ? formatDate(user.proExpiresAt) : "Бессрочно") : "—";
-  const daysLeft = isPro ? (user.proExpiresAt ? Math.max(0, Math.ceil((user.proExpiresAt - Date.now()) / (1000 * 60 * 60 * 24))) + " дн." : "∞") : "—";
+  const daysLeft = isPro ? (user.proExpiresAt ? Math.max(0, Math.ceil((user.proExpiresAt - Date.now()) / (1000 * 60 * 60 * 24))) + " дн." : "∞") : "0 дн. (FREE)";
+  const planName = isPro ? (user.proExpiresAt ? `💎 Платный (PRO, ${daysLeft})` : "💎 Платный (PRO, Бессрочно)") : "⚪ Бесплатный (FREE)";
+  const isOnline = typeof userStore.isUserOnline === "function" ? userStore.isUserOnline(user.id) : false;
+  const statusStr = isOnline ? "🟢 Онлайн (на сайте)" : "⚪ Не в сети";
 
   const text =
-    `<b>💎 Подписка пользователя #${user.id}</b>\n\n` +
+    `<b>💎 Подписка: ${user.username || "—"}</b>\n` +
+    `<code>#${user.id}</code> | ${statusStr}\n\n` +
     `<b>Тариф:</b> ${planName}\n` +
     `<b>Начало:</b> ${startDate}\n` +
-    `<b>До:</b> ${expireDate}\n` +
-    `<b>Осталось:</b> ${daysLeft}`;
+    `<b>Подписка до:</b> ${expireDate}\n` +
+    `<b>Осталось дней:</b> <b>${daysLeft}</b>`;
 
   const keyboard = {
     inline_keyboard: [
@@ -1041,25 +1094,27 @@ async function handleAdminMessageText(msg) {
   if (currentState) {
     if (currentState.action === "search_user") {
       adminState.delete(chatId);
-      const user = userStore.findUser(text);
-      if (user) {
-        const card = buildUserCard(user);
+      const results = userStore.searchUsers(text);
+      if (results.length === 1) {
+        const card = buildUserCard(results[0]);
         await sendAdminMessage(card.text, card.keyboard);
         return;
+      } else if (results.length > 1) {
+        const { listText, buttons } = formatUserSearchResults(results, text);
+        buttons.push([{ text: "← Назад", callback_data: "adm:users:main" }]);
+        await sendAdminMessage(listText, { inline_keyboard: buttons });
+        return;
       } else {
-        const results = userStore.searchUsers(text);
-        if (results.length > 0) {
-          let listText = `<b>🔎 Результаты поиска по «${text}» (${results.length}):</b>\n\n`;
-          const buttons = results.slice(0, 6).map(u => [{ text: `👤 ${u.username} (${u.id})`, callback_data: `adm:user:view:${u.id}` }]);
-          buttons.push([{ text: "← Назад", callback_data: "adm:users:main" }]);
-          await sendAdminMessage(listText, { inline_keyboard: buttons });
-          return;
-        } else {
-          await sendAdminMessage(`❌ Пользователь по запросу <code>${text}</code> не найден.`, {
-            inline_keyboard: [[{ text: "🔎 Попробовать снова", callback_data: "adm:users:search_prompt" }, { text: "🏠 Главное меню", callback_data: "adm:menu" }]]
-          });
+        const single = userStore.findUser(text);
+        if (single) {
+          const card = buildUserCard(single);
+          await sendAdminMessage(card.text, card.keyboard);
           return;
         }
+        await sendAdminMessage(`❌ Пользователь по запросу <code>${text}</code> не найден.`, {
+          inline_keyboard: [[{ text: "🔎 Попробовать снова", callback_data: "adm:users:search_prompt" }, { text: "🏠 Главное меню", callback_data: "adm:menu" }]]
+        });
+        return;
       }
     } else if (currentState.action === "msg_user") {
       adminState.delete(chatId);
@@ -1199,7 +1254,8 @@ async function handleAdminMessageText(msg) {
         return;
       }
 
-      const type = (typeStr === "days" || typeStr === "day" || typeStr === "дней") ? "days"
+      const type = (typeStr === "gift" || typeStr === "gift_days" || typeStr === "free" || typeStr === "freedays" || typeStr === "подарок") ? "gift_days"
+        : (typeStr === "days" || typeStr === "day" || typeStr === "дней") ? "days"
         : typeStr === "percent" ? "percent" : "";
       let newPromo;
       try {
@@ -1208,14 +1264,16 @@ async function handleAdminMessageText(msg) {
       } catch (error) {
         const message = error instanceof PromoError ? error.message : "Не удалось сохранить промокод.";
         await sendAdminMessage(
-          `❌ ${message}\n\nФормат: <code>КОД percent|days ЗНАЧЕНИЕ ЛИМИТ</code>`,
+          `❌ ${message}\n\nФормат: <code>КОД gift|days|percent ЗНАЧЕНИЕ ЛИМИТ</code>\nПример: <code>FREE7 gift 7 100</code>`,
           { inline_keyboard: [[{ text: "🎟 В меню промокодов", callback_data: "adm:promos:main" }]] }
         );
         return;
       }
       logAdminAction("Администратор #1", `Создан промокод ${code}`, { type, value, limit });
 
-      const typeTitle = type === "days" ? `+${value} дн. PRO подписки` : `${value}% скидка`;
+      const typeTitle = type === "gift_days" ? `🎁 ${value} бесплатных дней PRO (активация в профиле)`
+        : type === "days" ? `+${value} бонусных дней при покупке`
+        : `${value}% скидка при оплате`;
       await sendAdminMessage(
         `<b>🎉 Промокод <code>${code}</code> успешно создан!</b>\n\n` +
         `<b>Тип:</b> ${typeTitle}\n` +
@@ -1319,17 +1377,10 @@ async function handleAdminMessageText(msg) {
     }
   }
 
-  // Direct Smart Search if query matches an existing user
-  const directMatch = userStore.findUser(text);
-  if (directMatch) {
-    const card = buildUserCard(directMatch);
-    await sendAdminMessage(card.text, card.keyboard);
-    return;
-  }
-
   if (text === "/start" || text === "/menu") {
     const menu = buildMainMenu();
     await sendAdminMessage(menu.text, menu.keyboard);
+    return;
   } else if (text === "/help") {
     await sendAdminMessage(
       `<b>◆ OBSIDIAN ADMIN PANEL</b>\n\n` +
@@ -1337,16 +1388,28 @@ async function handleAdminMessageText(msg) {
       `Используйте меню ниже для полного управления терминалом.`,
       buildMainMenu().keyboard
     );
+    return;
+  }
+
+  // Direct Smart Search:
+  const searchRes = userStore.searchUsers(text);
+  if (searchRes.length === 1) {
+    const card = buildUserCard(searchRes[0]);
+    await sendAdminMessage(card.text, card.keyboard);
+    return;
+  } else if (searchRes.length > 1) {
+    const { listText, buttons } = formatUserSearchResults(searchRes, text);
+    buttons.push([{ text: "🏠 Главное меню", callback_data: "adm:menu" }]);
+    await sendAdminMessage(listText, { inline_keyboard: buttons });
+    return;
   } else {
-    const searchRes = userStore.searchUsers(text);
-    if (searchRes.length > 0) {
-      let listText = `<b>🔎 Результаты поиска по «${text}» (${searchRes.length}):</b>\n\n`;
-      const buttons = searchRes.slice(0, 6).map(u => [{ text: `👤 ${u.username} (${u.id})`, callback_data: `adm:user:view:${u.id}` }]);
-      buttons.push([{ text: "🏠 Главное меню", callback_data: "adm:menu" }]);
-      await sendAdminMessage(listText, { inline_keyboard: buttons });
-    } else {
-      await sendAdminMessage(`⚠️ Команда или пользователь <code>${text}</code> не найдены.`, buildMainMenu().keyboard);
+    const directMatch = userStore.findUser(text);
+    if (directMatch) {
+      const card = buildUserCard(directMatch);
+      await sendAdminMessage(card.text, card.keyboard);
+      return;
     }
+    await sendAdminMessage(`⚠️ Команда или пользователь <code>${text}</code> не найдены.`, buildMainMenu().keyboard);
   }
 }
 
@@ -1373,6 +1436,21 @@ async function handleAdminCallbackQuery(query) {
   if (domain === "menu") {
     const menu = buildMainMenu();
     await editAdminMessage(messageId, menu.text, menu.keyboard);
+  }
+
+  // 1b. MY ACCOUNT — shortcut to admin's own user card
+  else if (domain === "me") {
+    const adminUser = getAdminOwnUser();
+    if (adminUser) {
+      const card = buildUserCard(adminUser);
+      await editAdminMessage(messageId, card.text, card.keyboard);
+    } else {
+      await editAdminMessage(
+        messageId,
+        `<b>⚠️ Ваш Telegram ID (${getAdminChatId()}) не привязан ни к одному аккаунту на сайте.</b>\n\nВойдите через Telegram на сайте, чтобы привязать аккаунт.`,
+        { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "adm:menu" }]] }
+      );
+    }
   }
   
   // 2. USERS & USER CARDS
@@ -1415,6 +1493,14 @@ async function handleAdminCallbackQuery(query) {
         title = "🟢 Сейчас онлайн";
       } else if (filterType === "pro") {
         filtered = allUsers.filter(u => u.plan === "pro");
+        filtered.sort((a, b) => {
+          const aOnline = (typeof userStore.isUserOnline === "function" && userStore.isUserOnline(a.id)) ? 1 : 0;
+          const bOnline = (typeof userStore.isUserOnline === "function" && userStore.isUserOnline(b.id)) ? 1 : 0;
+          if (bOnline !== aOnline) return bOnline - aOnline;
+          const aTime = Date.parse(a.lastActive || a.lastLogin || a.createdAt || "") || 0;
+          const bTime = Date.parse(b.lastActive || b.lastLogin || b.createdAt || "") || 0;
+          return bTime - aTime;
+        });
         title = "💎 С подпиской PRO";
       } else if (filterType === "free") {
         filtered = allUsers.filter(u => u.plan === "free");
@@ -1445,16 +1531,18 @@ async function handleAdminCallbackQuery(query) {
           const actIso = u.lastActive || u.lastLogin || u.createdAt;
           const logIso = u.lastLogin || u.lastActive || u.createdAt;
           const actTime = isOnline ? "онлайн" : formatTimeAgo(actIso);
-          const planBadge = u.plan === "pro" ? "💎" : "⚪";
+          let planBadge = "⚪";
+          if (u.plan === "pro") {
+            const d = u.proExpiresAt ? `${Math.max(0, Math.ceil((u.proExpiresAt - Date.now()) / 86400000))}д` : "∞";
+            planBadge = `💎 (${d})`;
+          }
           const ipStr = u.lastIp ? ` | IP: ${u.lastIp}` : "";
-          listText += `${i + 1}. ${statusDot} <b>${u.username}</b> (<code>#${u.id}</code>) ${planBadge}\n   └ Акт: ${actTime} | Вход: ${formatDateTime(logIso)}${ipStr}\n`;
+          listText += `${i + 1}. ${statusDot} <b>${u.username || "Трейдер"}</b> (<code>#${u.id}</code>) ${planBadge}\n   └ Акт: ${actTime} | Вход: ${formatDateTime(logIso)}${ipStr}\n`;
         });
       }
 
       const buttons = filtered.slice(0, 8).map(u => {
-        const isOnline = typeof userStore.isUserOnline === "function" ? userStore.isUserOnline(u.id) : false;
-        const icon = isOnline ? "🟢" : (u.plan === "pro" ? "💎" : "👤");
-        return [{ text: `${icon} ${u.username} (${u.id})`, callback_data: `adm:user:view:${u.id}` }];
+        return [{ text: formatUserButtonLabel(u), callback_data: `adm:user:view:${u.id}` }];
       });
       buttons.push([{ text: "🔄 Обновить список", callback_data: `adm:users:list:${filterType}` }]);
       buttons.push([{ text: "← Назад", callback_data: "adm:users:main" }, { text: "🏠 Главное меню", callback_data: "adm:menu" }]);
@@ -1636,10 +1724,11 @@ async function handleAdminCallbackQuery(query) {
       const newExpireMs = (user.proExpiresAt && user.proExpiresAt > Date.now() ? user.proExpiresAt : Date.now()) + days * 24 * 60 * 60 * 1000;
       const newExpire = formatDate(newExpireMs);
 
+      const uName = user ? (user.username || "Трейдер") : `Пользователь #${userId}`;
       const text =
         `<b>⚠️ Подтвердите действие</b>\n\n` +
-        `Добавить пользователю #${userId}\n` +
-        `<b>${days === 9999 ? "Навсегда" : days + " дней подписки"}</b>?\n\n` +
+        `Пользователь: <b>${uName}</b> (<code>#${userId}</code>)\n` +
+        `Действие: <b>${days === 9999 ? "Навсегда" : "+" + days + " дней подписки"}</b>\n\n` +
         `Сейчас до: ${currentExpire}\n` +
         `Станет до: ${days === 9999 ? "Бессрочно" : newExpire}`;
 
@@ -1655,12 +1744,15 @@ async function handleAdminCallbackQuery(query) {
     } else if (action === "confirm_add") {
       const days = parseInt(param2, 10) || 30;
       const updated = userStore.setUserPlan(userId, "pro", days);
-      logAdminAction("Администратор #1", `Подписка +${days}дн. для #${userId}`, { days });
+      const uName = updated ? (updated.username || "Трейдер") : `Пользователь #${userId}`;
+      logAdminAction("Администратор #1", `Подписка +${days}дн. для ${uName} (#${userId})`, { days });
 
       const text =
-        `<b>✅ Подписка изменена</b>\n\n` +
-        `Добавлено: ${days === 9999 ? "Навсегда" : days + " дней"}\n` +
-        `Новая дата окончания: ${updated.proExpiresAt ? formatDate(updated.proExpiresAt) : "Бессрочно"}`;
+        `<b>✅ Подписка успешно выдана</b>\n\n` +
+        `Пользователь: <b>${uName}</b> (<code>#${userId}</code>)\n` +
+        `Добавлено: <b>${days === 9999 ? "Навсегда" : "+" + days + " дней"}</b>\n` +
+        `Новая дата окончания: ${updated?.proExpiresAt ? formatDate(updated.proExpiresAt) : "Бессрочно"}\n\n` +
+        `<i>✓ Статус обновлен на сервере и в реальном времени на сайте!</i>`;
 
       const keyboard = {
         inline_keyboard: [[{ text: "👤 Вернуться к пользователю", callback_data: `adm:user:view:${userId}` }]]
@@ -1682,8 +1774,9 @@ async function handleAdminCallbackQuery(query) {
       await editAdminMessage(messageId, text, keyboard);
     } else if (action === "revoke") {
       userStore.setUserPlan(userId, "free");
-      logAdminAction("Администратор #1", `Подписка отозвана у #${userId}`);
       const user = userStore.findUser(userId);
+      const userTag = user ? `${user.username || "Трейдер"} (#${userId})` : `#${userId}`;
+      logAdminAction("Администратор #1", `Подписка отозвана у ${userTag}`);
       const card = buildUserCard(user);
       await editAdminMessage(messageId, card.text, card.keyboard);
     }
@@ -2007,9 +2100,14 @@ async function handleAdminCallbackQuery(query) {
         `<b>🎟 Создание промокода</b>\n\n` +
         `Отправьте промокод в чат в формате:\n` +
         `<code>КОД ТИП ЗНАЧЕНИЕ ЛИМИТ</code>\n\n` +
+        `<i>Типы промокодов:</i>\n` +
+        `• <code>gift</code> — 🎁 Бесплатные дни PRO в профиле (без оплаты)\n` +
+        `• <code>days</code> — ➕ Бонусные дни при покупке в окне PRO\n` +
+        `• <code>percent</code> — 🏷 Скидка в процентах при покупке\n\n` +
         `<i>Примеры:</i>\n` +
-        `• <code>SUMMER50 percent 50 100</code> — скидка 50% на 100 человек\n` +
-        `• <code>PROSTART days 7 50</code> — +7 дней подписки на 50 человек`,
+        `• <code>FREE7 gift 7 100</code> — 7 дней бесплатного PRO (100 чел.)\n` +
+        `• <code>PROSTART days 7 50</code> — +7 бонусных дней к покупке (50 чел.)\n` +
+        `• <code>SUMMER50 percent 50 100</code> — скидка 50% при покупке (100 чел.)`,
         { inline_keyboard: [[{ text: "← Отмена", callback_data: "adm:promos:main" }]] }
       );
     } else if (action === "list") {
@@ -2023,7 +2121,7 @@ async function handleAdminCallbackQuery(query) {
       if (list.length === 0) text += `<i>Список пуст</i>\n\n`;
       else {
         list.forEach((p, i) => {
-          const valStr = p.type === "days" ? `+${p.value}дн.` : `${p.value}%`;
+          const valStr = p.type === "gift_days" ? `🎁 ${p.value}дн. (профиль)` : p.type === "days" ? `+${p.value}дн. (покупка)` : `${p.value}%`;
           text += `${i+1}. <code>${p.code}</code> (${valStr}) — Использовано: ${p.usedCount || 0}/${p.limit || "∞"}\n`;
         });
       }

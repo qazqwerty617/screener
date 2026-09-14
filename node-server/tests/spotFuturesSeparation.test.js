@@ -137,11 +137,11 @@ test("the formation alert handler rejects spot", () => {
 });
 
 test("every formation map consumer skips spot keys", () => {
-  // Three scanners read /api/formations/map (trendline, level, retest). All three
-  // must drop spot keys, not just one of them.
-  const guards = APP_CODE.match(/if \(\/_SPOT\$\/i\.test\(sym\)\) continue;/g) || [];
-  assert.ok(guards.length >= 3,
-    `expected a spot guard in all three formation scanners, found ${guards.length}`);
+  // All snapshot types now share the same guarded delivery path.
+  const start = APP_CODE.indexOf('async function runFormationAlertScanner()');
+  const end = APP_CODE.indexOf('window.runFormationAlertScanner =', start);
+  assert.match(APP_CODE.slice(start, end), /window\.handleServerFormationAlert\(/);
+  assert.doesNotMatch(APP_CODE.slice(start, end), /triggerMatchedFormationAlert\(/);
 });
 
 // ── density: both markets stay valid ────────────────────────────────────────

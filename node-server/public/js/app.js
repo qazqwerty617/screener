@@ -833,10 +833,7 @@ async function syncPreferencesToServer() {
         showLabels: chartFovShowLabels,
         showTouches: chartFovShowTouches
       },
-      formationsActiveTab: typeof activeFormation !== "undefined" ? activeFormation : undefined,
-      formationsMinCascade: typeof formationsMinCascade !== "undefined" ? formationsMinCascade : undefined,
-      formationsTf: typeof formationsTf !== "undefined" ? formationsTf : undefined,
-      formationsCols: typeof formationsCols !== "undefined" ? formationsCols : undefined
+      ...(window.getFormationsPreferences?.() || {})
     };
 
     await fetch("/api/user/preferences", {
@@ -904,25 +901,8 @@ function applyAccountPreferences(prefs) {
     needChartRedraw = true;
   }
 
-  if (typeof prefs.formationsActiveTab === "string") {
-    activeFormation = prefs.formationsActiveTab;
-    localStorage.setItem("formations_active_tab", activeFormation);
-    if (typeof syncFormationsSelect === "function") syncFormationsSelect();
-  }
-  if (typeof prefs.formationsMinCascade === "number") {
-    formationsMinCascade = prefs.formationsMinCascade;
-    localStorage.setItem("formations_min_cascade", formationsMinCascade);
-    if (typeof syncFormationsSettings === "function") syncFormationsSettings();
-  }
-  if (typeof prefs.formationsTf === "string") {
-    formationsTf = prefs.formationsTf;
-    localStorage.setItem("formations_tf", formationsTf);
-  }
-  if (typeof prefs.formationsCols === "number") {
-    formationsCols = prefs.formationsCols;
-    localStorage.setItem("formations_cols", formationsCols);
-    if (typeof syncFormationsGridSelect === "function") syncFormationsGridSelect();
-  }
+  window.applyFormationsPreferences?.(prefs);
+  window.restoreFormationAlertsFromAccount?.(prefs.formationAlerts);
 
   if (prefs.drawingsBySymbol && typeof prefs.drawingsBySymbol === "object") {
     for (const [sym, drawings] of Object.entries(prefs.drawingsBySymbol)) {
@@ -2707,7 +2687,20 @@ function formatDensityUsd(value) {
   return `$${Math.round(amount)}`;
 }
 
-function drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH) {
+// ════════════════════════════════════════════════════════════
+// РЕЖИМ ОТОБРАЖЕНИЯ ЦЕНЫ ПЛОТНОСТЕЙ (DENSITY PRICE BADGE)
+// ────────────────────────────────────────────────────────────
+// "adjacent" : [НОВЫЙ] Компактный непрозрачный бейдж цены левее ценовой шкалы (рядом с ней), не перекрывает шкалу цен
+// "on_scale"  : [СТАРЫЙ] Полупрозрачный бейдж непосредственно на правой ценовой шкале
+//
+// ДЛЯ ОТКАТА К СТАРОМУ ВИДУ (на шкале):
+// 1) Либо смените здесь "adjacent" на "on_scale": const DENSITY_PRICE_BADGE_STYLE = "on_scale";
+// 2) Либо выполните в консоли браузера: localStorage.setItem("density_price_badge_style", "on_scale"); location.reload();
+// ════════════════════════════════════════════════════════════
+const DENSITY_PRICE_BADGE_STYLE = (typeof localStorage !== "undefined" && localStorage.getItem("density_price_badge_style")) || "adjacent";
+
+// [СТАРЫЙ ВАРИАНТ - СОХРАНЁН ДЛЯ ОТКАТА]
+function drawDensityScaleBadge_LEGACY(ctx, badge, badgeX, badgeW, badgeH) {
   const rgb = badge.baseColorArr;
   const badgeY = badge.y - badgeH / 2;
   const notch = Math.min(5, badgeW * 0.12);
@@ -2736,6 +2729,46 @@ function drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH) {
   ctx.textBaseline = "middle";
   ctx.fillText(fP(badge.price), badgeX + notch + (badgeW - notch) / 2, badge.y);
   ctx.restore();
+}
+
+// [НОВЫЙ ВАРИАНТ] Компактный бейдж цены левее ценовой шкалы (рядом с ней), не на шкале
+function drawDensityAdjacentBadge(ctx, badge, PW, isGrid = false) {
+  const rgb = badge.baseColorArr || (badge.isBid ? [38, 201, 122] : [255, 69, 96]);
+  const priceStr = fP(badge.price);
+
+  ctx.save();
+  const fontSize = isGrid ? 8 : 8.5;
+  ctx.font = `700 ${fontSize}px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+  const textW = ctx.measureText(priceStr).width;
+  const padX = isGrid ? 3.5 : 4.5;
+  const badgeW = Math.max(isGrid ? 30 : 36, Math.round(textW + padX * 2));
+  const badgeH = isGrid ? 13 : 15;
+  const badgeX = Math.round(PW - badgeW - (isGrid ? 2 : 3));
+  const badgeY = Math.round(badge.y - badgeH / 2);
+
+  // Непрозрачный глубокий фон с мягким оттенком (как у detail-плашки), чтобы цена не терялась
+  roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 3);
+  ctx.fillStyle = badge.isBid ? "rgba(5, 31, 25, 0.96)" : "rgba(39, 12, 19, 0.96)";
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.85)`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Чёткий яркий текст цены
+  ctx.fillStyle = `rgb(${rgb.join(',')})`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(priceStr, badgeX + badgeW / 2, badge.y);
+  ctx.restore();
+}
+
+function drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH, isGrid = false) {
+  if (DENSITY_PRICE_BADGE_STYLE === "on_scale") {
+    drawDensityScaleBadge_LEGACY(ctx, badge, badgeX, badgeW, badgeH);
+  } else {
+    // В новом режиме badgeX указывает на границу шкалы PW
+    drawDensityAdjacentBadge(ctx, badge, badgeX, isGrid || (badgeH <= 17 && badgeW <= 58));
+  }
 }
 
 function drawDensityTimelineOnChart(ctx, options) {
@@ -2868,7 +2901,19 @@ function drawDensityTimelineOnChart(ctx, options) {
       ctx.font = "700 9px Inter";
       const detailW = ctx.measureText(detailText).width + 12;
       const labelW = detailW;
-      const labelX = Math.max(5, PW - labelW - 7);
+
+      // Позиция detail-плашки ($51.1K · ↑1.3% · Bybit):
+      // В новом режиме "adjacent" сдвигаем левее компактного бейджа цены, чтобы они красиво стояли рядом
+      // В старом режиме "on_scale" плашка рисовалась у самого края шкалы (PW - labelW - 7)
+      let labelX = Math.max(5, PW - labelW - 7);
+      if (DENSITY_PRICE_BADGE_STYLE === "adjacent") {
+        ctx.save();
+        ctx.font = "700 8.5px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+        const pStr = fP(wall.price);
+        const pW = Math.max(36, Math.round(ctx.measureText(pStr).width + 9));
+        ctx.restore();
+        labelX = Math.max(5, PW - pW - 8 - labelW);
+      }
 
       roundRect(ctx, labelX, labelY, labelW, labelH, 4);
       ctx.fillStyle = isBid ? "rgba(5, 31, 25, 0.96)" : "rgba(39, 12, 19, 0.96)";
@@ -4761,7 +4806,7 @@ function drawChart() {
     const badgeX = PW;
 
     for (const badge of wallBadges) {
-      drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH);
+      drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH, false);
     }
   }
 
@@ -6028,10 +6073,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const tgBotStatusText = $("tg-bot-status-text");
   const tgBotLinkBtn = $("tg-bot-link-btn");
+  const authNoticeMsg = $("auth-notice-msg");
+  const authNoticeText = $("auth-notice-text");
 
-  function openAuthModal() {
+  function showAuthNotice(msg) {
+    if (!authNoticeMsg) return;
+    if (msg) {
+      if (authNoticeText) authNoticeText.textContent = msg;
+      else authNoticeMsg.textContent = msg;
+      authNoticeMsg.style.display = "flex";
+    } else {
+      authNoticeMsg.style.display = "none";
+    }
+  }
+
+  function isUserLoggedIn() {
+    const token = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "") || "";
+    const user = (typeof currentUser !== "undefined" && currentUser) || (typeof window !== "undefined" && window.currentUser);
+    if (!token) return false;
+    if (user && user.id) return true;
+    return token.length >= 32 && !window.__authFailed;
+  }
+  window.isUserLoggedIn = isUserLoggedIn;
+
+  function openAuthModal(noticeText = "", defaultTab = "login") {
     if (authModal) {
       showAuthError("");
+      showAuthNotice(noticeText);
+      if (defaultTab === "register" && authTabRegister) {
+        authTabRegister.click();
+      } else if (authTabLogin) {
+        authTabLogin.click();
+      }
       authModal.style.display = "flex";
     }
   }
@@ -6196,7 +6269,7 @@ document.addEventListener("DOMContentLoaded", () => {
             profileStatDays.style.color = "#26c97a";
           }
         } else {
-          profileStatDays.textContent = "∞ (Бессрочно)";
+          profileStatDays.textContent = "— (FREE)";
           profileStatDays.style.color = "#94a3b8";
         }
       }
@@ -6397,17 +6470,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function getStoredAuthToken() {
     let token = "";
+    // 1. localStorage
     try { token = localStorage.getItem("obsidian_auth_token") || ""; } catch (_) {}
+    // 2. sessionStorage fallback
+    if (!token) {
+      try { token = sessionStorage.getItem("obsidian_auth_token") || ""; } catch (_) {}
+    }
+    // 3. Cookie fallback
     if (!token) {
       try {
         const match = document.cookie.match(/(?:^|; )obsidian_auth_token=([^;]*)/);
-        if (match && match[1]) {
-          token = decodeURIComponent(match[1]);
-          if (token) {
-            try { localStorage.setItem("obsidian_auth_token", token); } catch (_) {}
-          }
-        }
+        if (match && match[1]) token = decodeURIComponent(match[1]);
       } catch (_) {}
+    }
+    // Auto-restore any missing stores so all 3 stay in sync
+    if (token) {
+      try { if (!localStorage.getItem("obsidian_auth_token")) localStorage.setItem("obsidian_auth_token", token); } catch (_) {}
+      try { if (!sessionStorage.getItem("obsidian_auth_token")) sessionStorage.setItem("obsidian_auth_token", token); } catch (_) {}
     }
     return token;
   }
@@ -6415,10 +6494,12 @@ document.addEventListener("DOMContentLoaded", () => {
   function setStoredAuthToken(token) {
     if (token) {
       try { localStorage.setItem("obsidian_auth_token", token); } catch (_) {}
+      try { sessionStorage.setItem("obsidian_auth_token", token); } catch (_) {}
       try { document.cookie = `obsidian_auth_token=${encodeURIComponent(token)}; max-age=31536000; path=/; SameSite=Lax`; } catch (_) {}
       if (typeof sendUserHeartbeat === "function") sendUserHeartbeat();
     } else {
       try { localStorage.removeItem("obsidian_auth_token"); } catch (_) {}
+      try { sessionStorage.removeItem("obsidian_auth_token"); } catch (_) {}
       try { document.cookie = "obsidian_auth_token=; max-age=0; path=/"; } catch (_) {}
     }
   }
@@ -6442,10 +6523,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   setInterval(sendUserHeartbeat, 30000);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") sendUserHeartbeat();
+    if (document.visibilityState === "visible") {
+      sendUserHeartbeat();
+      checkAuthSession();
+    }
   });
-  window.addEventListener("focus", sendUserHeartbeat);
+  window.addEventListener("focus", () => {
+    sendUserHeartbeat();
+    checkAuthSession();
+  });
 
+  var _auth401Count = 0;
   async function checkAuthSession() {
     authToken = getStoredAuthToken();
     if (!authToken) {
@@ -6460,14 +6548,33 @@ document.addEventListener("DOMContentLoaded", () => {
       if (r.ok) {
         const data = await r.json();
         if (data.success && data.user) {
-          setStoredAuthToken(authToken); // ensure 365-day cookie backup is synced
+          _auth401Count = 0; // reset on success
+          setStoredAuthToken(authToken); // ensure all 3 stores are synced
+          currentUser = data.user;
+          window.currentUser = data.user;
           renderProfile(data.user);
+          if (window.ws && window.ws.readyState === WebSocket.OPEN && authToken) {
+            try { window.ws.send(JSON.stringify({ type: "auth", token: authToken })); } catch (_) {}
+          }
           return;
         }
       }
+      // Server restart / temporary unavailability — keep token
+      if (r.status >= 500) return;
       if (r.status === 401) {
         const data = await r.json().catch(() => ({}));
-        if (data && (data.error === "Неавторизован" || data.error === "INVALID_TOKEN" || data.error === "USER_BLOCKED")) {
+        // Only wipe on definitive server responses
+        if (data && (data.error === "USER_BLOCKED")) {
+          authToken = "";
+          setStoredAuthToken("");
+          currentUser = null;
+          window.currentUser = null;
+          renderProfile(null);
+          return;
+        }
+        // For INVALID_TOKEN, count consecutive 401s before wiping (guards against restart races)
+        _auth401Count++;
+        if (_auth401Count >= 3 && data && (data.error === "Неавторизован" || data.error === "INVALID_TOKEN")) {
           authToken = "";
           setStoredAuthToken("");
           currentUser = null;
@@ -6476,7 +6583,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
     } catch (_) {
-      // Network hiccup or server restart — retain local token in storage and cookies
+      // Network hiccup or server restart — retain local token in all stores
     }
   }
 
@@ -6486,13 +6593,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (profileBtn) {
     profileBtn.onclick = () => {
-      const activeUser = currentUser || window.currentUser;
-      if (activeUser) {
-        renderProfile(activeUser);
-        if (profileModal) profileModal.style.display = "flex";
-      } else {
-        openAuthModal();
-      }
+      openProfileModal();
     };
   }
 
@@ -6502,6 +6603,8 @@ document.addEventListener("DOMContentLoaded", () => {
   if (authCloseBtn && authModal) {
     authCloseBtn.onclick = () => {
       authModal.style.display = "none";
+      showAuthNotice("");
+      window.pendingPayAfterAuth = false;
     };
   }
 
@@ -6512,7 +6615,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   if (authModal) {
     authModal.onclick = (e) => {
-      if (e.target === authModal) authModal.style.display = "none";
+      if (e.target === authModal) {
+        authModal.style.display = "none";
+        showAuthNotice("");
+        window.pendingPayAfterAuth = false;
+      }
     };
   }
 
@@ -6575,6 +6682,11 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.setItem("obsidian_auth_token", authToken);
         renderProfile(data.user);
         if (authModal) authModal.style.display = "none";
+        showAuthNotice("");
+        if (window.pendingPayAfterAuth) {
+          window.pendingPayAfterAuth = false;
+          setTimeout(() => { if (typeof openPayModal === "function") openPayModal(); }, 200);
+        }
         if (typeof showToast === "function") {
           showToast({ title: "Добро пожаловать!", message: `Вход выполнен успешно (${data.user.username})`, type: "success" });
         }
@@ -6660,6 +6772,11 @@ document.addEventListener("DOMContentLoaded", () => {
         localStorage.setItem("obsidian_auth_token", authToken);
         renderProfile(data.user);
         if (authModal) authModal.style.display = "none";
+        showAuthNotice("");
+        if (window.pendingPayAfterAuth) {
+          window.pendingPayAfterAuth = false;
+          setTimeout(() => { if (typeof openPayModal === "function") openPayModal(); }, 200);
+        }
         if (typeof showToast === "function") {
           showToast({ title: "Регистрация успешна", message: `Добро пожаловать, ${data.user.username}! Аккаунт успешно создан`, type: "success" });
         }
@@ -6707,6 +6824,11 @@ document.addEventListener("DOMContentLoaded", () => {
               localStorage.setItem("obsidian_auth_token", authToken);
               renderProfile(pollData.user);
               if (authModal) authModal.style.display = "none";
+              showAuthNotice("");
+              if (window.pendingPayAfterAuth) {
+                window.pendingPayAfterAuth = false;
+                setTimeout(() => { if (typeof openPayModal === "function") openPayModal(); }, 200);
+              }
               if (typeof showToast === "function") {
                 showToast({ title: "Успешный вход", message: `Вход через Telegram выполнен! Добро пожаловать, ${pollData.user.username || 'пользователь'}`, type: "success" });
               }
@@ -6746,6 +6868,81 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     };
   }
+
+  // Profile Promo Code Redemption
+  async function redeemProfilePromo() {
+    const input = $("profile-promo-input");
+    const btn = $("profile-promo-btn");
+    const msg = $("profile-promo-msg");
+    const code = String(input ? input.value : "").trim().toUpperCase();
+
+    const showMsg = (text, type = "error") => {
+      if (!msg) return;
+      msg.textContent = text;
+      msg.className = `profile-promo-msg ${type}`;
+      msg.style.display = "block";
+    };
+
+    if (!code) {
+      showMsg("Введите промокод для активации", "error");
+      if (input) input.focus();
+      return;
+    }
+
+    const token = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "") || "";
+    if (!token) {
+      showMsg("Необходимо войти в аккаунт", "error");
+      return;
+    }
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Проверка…";
+    }
+    if (msg) msg.style.display = "none";
+
+    try {
+      const response = await fetch("/api/user/promo/redeem", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify({ promoCode: code })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok || !data.user) {
+        throw new Error(data.error || "Не удалось активировать промокод");
+      }
+
+      showMsg(`✓ ${data.message || `Промокод активирован! Вам начислено ${data.days} дн. PRO`}`, "success");
+      if (input) input.value = "";
+      renderProfile(data.user);
+      if (typeof showToast === "function") {
+        showToast({
+          title: "Промокод активирован! 🎉",
+          message: `Вам начислено +${data.days} дней Obsidian PRO!`,
+          type: "success"
+        });
+      }
+    } catch (err) {
+      showMsg(err.message || "Ошибка активации промокода", "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Активировать";
+      }
+    }
+  }
+
+  window.redeemProfilePromo = redeemProfilePromo;
+
+  $("profile-promo-input")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      redeemProfilePromo();
+    }
+  });
 
   // Logout Handler
   if (authLogoutBtn) {
@@ -6989,6 +7186,15 @@ function connectWS() {
     }
 
     if (msg.type === "heartbeat") return;
+    if (msg.type === "user_updated" && msg.user) {
+      const activeId = (currentUser && currentUser.id) || (window.currentUser && window.currentUser.id);
+      if (!activeId || activeId === msg.user.id) {
+        currentUser = msg.user;
+        window.currentUser = msg.user;
+        renderProfile(msg.user);
+      }
+      return;
+    }
     if (msg.type === "formation_alert") {
       if (typeof window.handleServerFormationAlert === "function") {
         window.handleServerFormationAlert(msg.data);
@@ -9827,6 +10033,8 @@ if (settingsBtn && settingsOverlay) {
         // Pump settings live in their own module; use its public reset boundary.
         window.pdResetToDefaults?.();
 
+
+
         refreshCharts();
         schedulePreferencesSync();
         if (typeof showToast === "function") {
@@ -10893,7 +11101,6 @@ class ChartInstance {
     this._lastFormationDetectAt = now;
     const next = window.detectChartLevelsFn?.(this.candles) || [];
     this.levels = next;
-    window.registerFormationsCoinLevels?.(this.ex, this.sym, next);
   }
 
   subscribeLive() {
@@ -11115,7 +11322,6 @@ class ChartInstance {
     ) {
       this.candles = candles.map(c => ({ ...c }));
       this.levels = window.detectChartLevelsFn(this.candles);
-      if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
       this.loadingKlines = false;
       this.draw(true);
       return;
@@ -11139,7 +11345,6 @@ class ChartInstance {
       if (candList.length > 0) {
         this.candles = candList;
         this.levels = window.detectChartLevelsFn(this.candles);
-        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
         this.loadingKlines = false;
         this.draw(true);
         return;
@@ -11158,7 +11363,6 @@ class ChartInstance {
       if (Array.isArray(fastCandles) && fastCandles.length > 0) {
         this.candles = sanitizeCandles(fastCandles);
         this.levels = window.detectChartLevelsFn(this.candles);
-        if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
         storeKlinesCache(key, this.candles);
         this.loadingKlines = false;
         this.draw(true);
@@ -11178,7 +11382,6 @@ class ChartInstance {
             if (Array.isArray(parsed) && parsed.length > this.candles.length) {
               this.candles = mergeCandles(this.candles, parsed);
               this.levels = window.detectChartLevelsFn(this.candles);
-              if (activeView === 'formations') window.registerFormationsCoinLevels?.(this.ex, this.sym, this.levels);
               storeKlinesCache(key, this.candles);
               this.draw(true);
             }
@@ -11799,7 +12002,7 @@ class ChartInstance {
       const badgeX = PW;
 
       for (const badge of gridBadges) {
-        drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH);
+        drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH, true);
       }
     }
 
@@ -13575,6 +13778,7 @@ window.addEventListener("resize", () => {
   let paySelectedPlan = "1m";
   let paySelectedMethod = "trc20";
   let payAppliedPromoCode = "";
+  let payAppliedPromoData = null;
   let currentPayInvoice = null;
   let payPollTimer = null;
   let payCountdownTimer = null;
@@ -13588,6 +13792,7 @@ window.addEventListener("resize", () => {
   window.selectPayTariff = selectPayTariff;
   window.selectPayMethod = selectPayMethod;
   window.applyPayPromo = applyPayPromo;
+  window.updatePayTariffCards = updatePayTariffCards;
   window.backToTariffs = backToTariffs;
   window.startPayInvoice = startPayInvoice;
   window.copyPayField = copyPayField;
@@ -14900,19 +15105,44 @@ window.addEventListener("resize", () => {
   let activeFormation = localStorage.getItem("formations_active_tab") || 'cascades';
   let formationsMinCascade = parseInt(localStorage.getItem("formations_min_cascade") || "2", 10) || 2;
   const formationsMapClientCache = new Map(); // "type:tf" -> mapData for 0ms instant UI switching
+  formationsCols = [1, 2, 4, 6, 9, 12].includes(formationsCols) ? formationsCols : 2;
+  formationsTf = ['1m', '5m', '15m', '1h', '4h', '1d', '3d', '1w'].includes(formationsTf) ? formationsTf : '15m';
+  activeFormation = ['cascades', 'breakout', 'trendline', 'retest'].includes(activeFormation) ? activeFormation : 'cascades';
+  formationsMinCascade = Math.max(1, Math.min(5, formationsMinCascade));
+  let formationsFilters = { search: '', minVolume: 80000, distancePct: 15 };
+  try { Object.assign(formationsFilters, JSON.parse(localStorage.getItem('formations_filters') || '{}')); } catch (_) {}
+  formationsFilters.minVolume = Math.max(0, Number(formationsFilters.minVolume) || 0);
+  formationsFilters.distancePct = Math.max(0.1, Math.min(15, Number(formationsFilters.distancePct) || 15));
+  for (const [id, field] of [['formations-search', 'search'], ['formations-volume', 'minVolume'], ['formations-distance', 'distancePct']]) {
+    const input = $(id);
+    if (!input) continue;
+    input.value = formationsFilters[field];
+    input.addEventListener('input', () => {
+      if (input.type === 'number' && !input.checkValidity()) return;
+      formationsFilters[field] = input.type === 'number' ? Number(input.value) : input.value.trim().toUpperCase();
+      localStorage.setItem('formations_filters', JSON.stringify(formationsFilters));
+      schedulePreferencesSync();
+      window.loadFormations(true);
+    });
+  }
+  $('formations-refresh')?.addEventListener('click', () => preloadFormationsInBackground());
 
   const formationsNearestToggle = $("formations-nearest-toggle");
   if (formationsNearestToggle) {
-    formationsNearestToggle.checked = false; // default OFF
+    formationsNearestToggle.checked = localStorage.getItem('formations_nearest') === 'true';
     formationsNearestToggle.onchange = () => {
+      localStorage.setItem('formations_nearest', formationsNearestToggle.checked);
+      schedulePreferencesSync();
       window.loadFormations(true);
     };
   }
 
   const formationsApproachingToggle = $("formations-approaching-toggle");
   if (formationsApproachingToggle) {
-    formationsApproachingToggle.checked = false; // default OFF
+    formationsApproachingToggle.checked = localStorage.getItem('formations_approaching') === 'true';
     formationsApproachingToggle.onchange = () => {
+      localStorage.setItem('formations_approaching', formationsApproachingToggle.checked);
+      schedulePreferencesSync();
       formationsCoinsLevelsMap.clear();
       window.loadFormations(true);
     };
@@ -14931,7 +15161,6 @@ window.addEventListener("resize", () => {
       const cached = formationsMapClientCache.get(`${activeFormation}:${formationsTf}`);
       if (cached && Object.keys(cached).length > 0) {
         formationsCoinsLevelsMap.clear();
-        formationMissesByCoin.clear();
         for (const k in cached) formationsCoinsLevelsMap.set(k, cached[k]);
       } else {
         formationsCoinsLevelsMap.clear();
@@ -14986,6 +15215,8 @@ window.addEventListener("resize", () => {
     fgGridMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
       item.onclick = () => {
         formationsCols = parseInt(item.dataset.value, 10);
+        localStorage.setItem('formations_cols', formationsCols);
+        schedulePreferencesSync();
         syncFormationsGridSelect();
         fgGridMenu.classList.remove("open");
         fgGridBtn.classList.remove("open");
@@ -15029,6 +15260,13 @@ window.addEventListener("resize", () => {
     }
   }
 
+  try {
+    const saved = JSON.parse(localStorage.getItem('formations_exchanges') || 'null');
+    if (Array.isArray(saved)) fgExcMenu?.querySelectorAll('.exc-item').forEach(item => {
+      item.classList.toggle('on', saved.includes(item.dataset.cex));
+    });
+  } catch (_) {}
+
   if (fgExcBtn && fgExcMenu) {
     fgExcBtn.onclick = (e) => {
       e.stopPropagation();
@@ -15069,36 +15307,173 @@ window.addEventListener("resize", () => {
         }
 
         syncFormationsExchangeSelect();
-        window.loadFormations();
+        const exchanges = Array.from(fgExcMenu.querySelectorAll('.exc-item.on')).map(item => item.dataset.cex);
+        localStorage.setItem('formations_exchanges', JSON.stringify(exchanges));
+        schedulePreferencesSync();
+        window.loadFormations(true);
       };
     });
 
     syncFormationsExchangeSelect();
   }
 
-  function preloadFormationsInBackground() {
-    const tf = typeof formationsTf !== 'undefined' ? formationsTf : '15m';
-    const type = typeof activeFormation !== 'undefined' ? activeFormation : 'cascades';
-    fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=${encodeURIComponent(type)}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(mapData => {
-        if (mapData && Object.keys(mapData).length > 0) {
-          formationsMapClientCache.set(`${type}:${tf}`, mapData);
-          if (type === activeFormation && tf === formationsTf) {
-            for (const coinKey in mapData) {
-              formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
-              formationMissesByCoin.delete(coinKey);
-            }
-            if (activeView === "formations") {
-              window.loadFormations();
-            }
-          }
+  const formationSnapshots = new Map();
+  const formationRequests = new Map();
+  let formationBackgroundIndex = 0;
+  let formationWarmup = null;
+  let formationLoadError = false;
+  const formationTimeframes = ["1m", "5m", "15m", "1h", "4h", "1d", "3d", "1w"];
+
+  function formationMapType() {
+    return activeFormation === 'breakout' ? 'levels' :
+      activeFormation === 'retest' && formationsApproachingToggle?.checked ? 'approaching' : activeFormation;
+  }
+
+  function acceptFormationSnapshot(snapshot) {
+    if (!snapshot || !formationTimeframes.includes(snapshot.tf) || !snapshot.maps) throw new Error('Invalid formation snapshot');
+    for (const type of ['cascades', 'levels', 'trendline', 'retest', 'approaching']) {
+      const map = snapshot.maps[type];
+      if (!map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(levels => !Array.isArray(levels))) {
+        throw new Error('Invalid formation map');
+      }
+    }
+    formationSnapshots.set(snapshot.tf, snapshot);
+    for (const [type, map] of Object.entries(snapshot.maps)) {
+      formationsMapClientCache.set(type + ':' + snapshot.tf, map);
+    }
+    formationsMapClientCache.set('breakout:' + snapshot.tf, snapshot.maps.levels);
+  }
+
+  // A bounded last-known workspace also makes reloads useful while offline.
+  try {
+    const saved = JSON.parse(localStorage.getItem('formations_workspace_v1') || 'null');
+    if (saved && Date.now() - saved.savedAt < 30 * 60 * 1000) {
+      acceptFormationSnapshot(saved.snapshot);
+      for (const [key, value] of saved.candles || []) {
+        if (value && Array.isArray(value.data) && value.data.length) storeKlinesCache(key, value.data, value.ts);
+      }
+    }
+  } catch (_) {}
+
+  function persistFormationWorkspace() {
+    const snapshot = formationSnapshots.get(formationsTf);
+    if (!snapshot) return;
+    const candles = formationsAllCoins.slice(0, formationsCols).map(c => {
+      const key = c.ex + '|' + c.sym + '|' + formationsTf;
+      return [key, touchKlinesCache(key)];
+    }).filter(([, value]) => value);
+    try {
+      const json = JSON.stringify({ savedAt: Date.now(), snapshot, candles });
+      if (json.length <= 2000000) localStorage.setItem('formations_workspace_v1', json);
+    } catch (_) {}
+  }
+
+  function warmFormationCharts() {
+    if (formationWarmup) return formationWarmup;
+    const tf = formationsTf;
+    const selection = activeFormation;
+    const page = formationsPage;
+    const start = formationsPage * formationsCols;
+    const targets = formationsAllCoins.slice(start, start + Math.min(24, formationsCols * 2));
+    let index = 0;
+    const worker = async () => {
+      while (index < targets.length && tf === formationsTf && selection === activeFormation) {
+        const c = targets[index++];
+        const key = c.ex + '|' + c.sym + '|' + tf;
+        const cached = touchKlinesCache(key);
+        if (cached?.data?.length && Date.now() - cached.ts < 60000) continue;
+        try {
+          const data = await fetchChartKlines(c.ex, c.sym, tf);
+          if (Array.isArray(data) && data.length) storeKlinesCache(key, data);
+        } catch (_) {}
+      }
+    };
+    formationWarmup = Promise.all([worker(), worker(), worker()]).finally(() => {
+      formationWarmup = null;
+      persistFormationWorkspace();
+      if (tf !== formationsTf || selection !== activeFormation || page !== formationsPage) warmFormationCharts();
+    });
+    return formationWarmup;
+  }
+
+  function refreshFormationSnapshot(tf, force = false) {
+    if (formationRequests.has(tf)) return formationRequests.get(tf);
+    const cached = formationSnapshots.get(tf);
+    if (!force && cached?.receivedAt && Date.now() - cached.receivedAt < 10000) return Promise.resolve(cached);
+    const request = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      try {
+        const response = await fetch('/api/formations/snapshot?tf=' + encodeURIComponent(tf), { signal: controller.signal });
+        if (!response.ok) throw new Error('Formation snapshot unavailable');
+        const snapshot = await response.json();
+        if (snapshot.tf !== tf) throw new Error('Wrong formation timeframe');
+        acceptFormationSnapshot({ ...snapshot, receivedAt: Date.now() });
+        if (tf === formationsTf) {
+          formationLoadError = false;
+          window.loadFormations();
+          warmFormationCharts();
         }
-      })
-      .catch(() => {});
+        return snapshot;
+      } catch (_) {
+        if (tf === formationsTf) {
+          formationLoadError = true;
+          window.loadFormations();
+        }
+        return null;
+      } finally { clearTimeout(timeout); }
+    })();
+    formationRequests.set(tf, request);
+    request.finally(() => formationRequests.delete(tf));
+    return request;
+  }
+  window.getFormationSnapshot = refreshFormationSnapshot;
+
+  window.getFormationsPreferences = () => ({
+    formationsActiveTab: activeFormation, formationsTf, formationsCols, formationsMinCascade,
+    formationsNearest: !!formationsNearestToggle?.checked,
+    formationsApproaching: !!formationsApproachingToggle?.checked,
+    formationsFilters: { ...formationsFilters },
+    formationsExchanges: Array.from(fgExcMenu?.querySelectorAll('.exc-item.on') || []).map(item => item.dataset.cex)
+  });
+  window.applyFormationsPreferences = prefs => {
+    if (['cascades', 'breakout', 'trendline', 'retest'].includes(prefs.formationsActiveTab)) activeFormation = prefs.formationsActiveTab;
+    if (formationTimeframes.includes(prefs.formationsTf)) formationsTf = prefs.formationsTf;
+    if ([1, 2, 4, 6, 9, 12].includes(prefs.formationsCols)) formationsCols = prefs.formationsCols;
+    if (Number.isFinite(prefs.formationsMinCascade)) formationsMinCascade = Math.max(1, Math.min(5, Math.round(prefs.formationsMinCascade)));
+    if (typeof prefs.formationsNearest === 'boolean' && formationsNearestToggle) formationsNearestToggle.checked = prefs.formationsNearest;
+    if (typeof prefs.formationsApproaching === 'boolean' && formationsApproachingToggle) formationsApproachingToggle.checked = prefs.formationsApproaching;
+    if (prefs.formationsFilters) {
+      const f = prefs.formationsFilters;
+      formationsFilters = { search: String(f.search || ''), minVolume: Math.max(0, Number(f.minVolume) || 0), distancePct: Math.max(0.1, Math.min(15, Number(f.distancePct) || 15)) };
+      for (const [id, field] of [['formations-search', 'search'], ['formations-volume', 'minVolume'], ['formations-distance', 'distancePct']]) {
+        if ($(id)) $(id).value = formationsFilters[field];
+      }
+    }
+    if (Array.isArray(prefs.formationsExchanges)) fgExcMenu?.querySelectorAll('.exc-item').forEach(item => item.classList.toggle('on', prefs.formationsExchanges.includes(item.dataset.cex)));
+    localStorage.setItem('formations_tf', formationsTf);
+    localStorage.setItem('formations_active_tab', activeFormation);
+    localStorage.setItem('formations_cols', formationsCols);
+    localStorage.setItem('formations_min_cascade', formationsMinCascade);
+    localStorage.setItem('formations_nearest', !!formationsNearestToggle?.checked);
+    localStorage.setItem('formations_approaching', !!formationsApproachingToggle?.checked);
+    localStorage.setItem('formations_filters', JSON.stringify(formationsFilters));
+    if (Array.isArray(prefs.formationsExchanges)) localStorage.setItem('formations_exchanges', JSON.stringify(prefs.formationsExchanges));
+    document.querySelectorAll('.fg-tf-btn').forEach(btn => btn.classList.toggle('on', btn.dataset.tf === formationsTf));
+    syncFormationsSelect(); syncFormationsSettings(); syncFormationsGridSelect(); syncFormationsExchangeSelect();
+    window.loadFormations(true);
+  };
+
+  async function preloadFormationsInBackground() {
+    await refreshFormationSnapshot(formationsTf, true);
+    // Warm other timeframes gradually; selecting any formation type is local.
+    const others = formationTimeframes.filter(tf => tf !== formationsTf);
+    const nextTf = others[formationBackgroundIndex++ % others.length];
+    await refreshFormationSnapshot(nextTf);
   }
   setTimeout(preloadFormationsInBackground, 300);
   setInterval(preloadFormationsInBackground, 15000);
+  window.addEventListener('online', preloadFormationsInBackground);
 
   // Formations Selection Dropdown Binding
   const fgSelectBtn = $("formations-select-btn");
@@ -15199,6 +15574,8 @@ window.addEventListener("resize", () => {
     fgSelectMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
       item.onclick = () => {
         activeFormation = item.dataset.value;
+        localStorage.setItem('formations_active_tab', activeFormation);
+        schedulePreferencesSync();
         syncFormationsSelect();
         fgSelectMenu.classList.remove("open");
         fgSelectBtn.classList.remove("open");
@@ -15206,11 +15583,9 @@ window.addEventListener("resize", () => {
         const cached = formationsMapClientCache.get(`${activeFormation}:${formationsTf}`);
         if (cached && Object.keys(cached).length > 0) {
           formationsCoinsLevelsMap.clear();
-          formationMissesByCoin.clear();
           for (const k in cached) formationsCoinsLevelsMap.set(k, cached[k]);
         } else {
           formationsCoinsLevelsMap.clear();
-          formationMissesByCoin.clear();
         }
         window.loadFormations(true);
       };
@@ -15268,11 +15643,11 @@ window.addEventListener("resize", () => {
       item.onclick = () => {
         formationsMinCascade = parseInt(item.dataset.value, 10);
         localStorage.setItem("formations_min_cascade", formationsMinCascade);
+        schedulePreferencesSync();
         syncFormationsSettings();
         fgSettingsMenu.classList.remove("open");
         fgSettingsBtn.classList.remove("open");
         formationsCoinsLevelsMap.clear();
-        formationMissesByCoin.clear();
         window.loadFormations(true);
       };
     });
@@ -15284,291 +15659,17 @@ window.addEventListener("resize", () => {
   let formationsPage = 0;
   // Map of key => levels array for coins that have detected levels
   const formationsCoinsLevelsMap = new Map();
-  const formationMissesByCoin = new Map();
   // Full sorted list rebuilt on loadFormations, used for paging
   let formationsAllCoins = [];
 
-  let activeScanId = 0;
   let scanProgressText = "";
   let lastScanKey = "";
-  let formationsScanAbortController = null;
 
-  let lastLoadFormationsTs = 0;
-  let loadFormationsTimeout = null;
-
-  function triggerThrottledLoadFormations() {
-    const now = Date.now();
-    if (now - lastLoadFormationsTs >= 1500) {
-      lastLoadFormationsTs = now;
-      if (loadFormationsTimeout) {
-        clearTimeout(loadFormationsTimeout);
-        loadFormationsTimeout = null;
-      }
-      window.loadFormations();
-    } else {
-      if (!loadFormationsTimeout) {
-        loadFormationsTimeout = setTimeout(() => {
-          lastLoadFormationsTs = Date.now();
-          loadFormationsTimeout = null;
-          window.loadFormations();
-        }, 1500 - (now - lastLoadFormationsTs));
-      }
-    }
+  function startFormationsScan(checkedEx, tf) {
+    // Server scanning continues independently of visitors. Opening a tab only
+    // revalidates a snapshot; an empty result never starts a browser scan.
+    return refreshFormationSnapshot(tf);
   }
-
-  async function startFormationsScan(checkedEx, tf) {
-    const scanId = ++activeScanId;
-    formationsScanAbortController?.abort();
-    formationsScanAbortController = new AbortController();
-    const signal = formationsScanAbortController.signal;
-
-    // If we have cached results in memory, paint them instantly without showing loading text
-    const clientKey = `${activeFormation}:${tf}`;
-    const cachedClient = formationsMapClientCache.get(clientKey);
-    if (cachedClient && Object.keys(cachedClient).length > 0) {
-      for (const coinKey in cachedClient) {
-        if (checkedEx.includes(coinKey.split(':')[0])) {
-          formationsCoinsLevelsMap.set(coinKey, cachedClient[coinKey]);
-          formationMissesByCoin.delete(coinKey);
-        }
-      }
-      scanProgressText = "";
-      updateFormationsPagination();
-    } else {
-      scanProgressText = "Загрузка с сервера...";
-      updateFormationsPagination();
-    }
-
-    try {
-      const r = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=${encodeURIComponent(activeFormation)}`, { signal });
-      if (r.ok) {
-        const mapData = await r.json();
-        if (scanId !== activeScanId) return;
-        if (mapData && Object.keys(mapData).length > 0) {
-          formationsMapClientCache.set(clientKey, mapData);
-          for (const coinKey in mapData) {
-            if (checkedEx.includes(coinKey.split(':')[0])) {
-              formationsCoinsLevelsMap.set(coinKey, mapData[coinKey]);
-              formationMissesByCoin.delete(coinKey);
-            }
-          }
-          scanProgressText = "";
-          updateFormationsPagination();
-          window.loadFormations();
-          return;
-        }
-      }
-    } catch (error) {
-      if (error?.name === 'AbortError') return;
-    }
-
-    const eligibleCoins = [];
-    for (const ex of checkedEx) {
-      const exCoins = Array.from(coins.values())
-        .filter(c => c.ex === ex && isUsdtFutures(c) && c.v >= 100000 && !isStablecoinBase(c));
-      eligibleCoins.push(...exCoins);
-    }
-    eligibleCoins.sort((a, b) => {
-      const aSeeded = formationsCoinsLevelsMap.has(a.ex + ':' + a.sym) ? 1 : 0;
-      const bSeeded = formationsCoinsLevelsMap.has(b.ex + ':' + b.sym) ? 1 : 0;
-      return bSeeded - aSeeded || b.v - a.v;
-    });
-    // Fallback: fast scan top 20 liquid coins
-    if (eligibleCoins.length > 20) eligibleCoins.length = 20;
-
-    let index = 0;
-    const total = eligibleCoins.length;
-    if (total === 0) {
-      scanProgressText = "";
-      updateFormationsPagination();
-      setTimeout(() => {
-        if (scanId === activeScanId) {
-          startFormationsScan(checkedEx, tf);
-        }
-      }, 1000);
-      return;
-    }
-
-    let processedCount = 0;
-    const scanStartTime = performance.now();
-
-    async function nextBatch() {
-      if (scanId !== activeScanId) return; // cancelled
-      if (index >= total) {
-        scanProgressText = "";
-        updateFormationsPagination();
-        if (loadFormationsTimeout) {
-          clearTimeout(loadFormationsTimeout);
-          loadFormationsTimeout = null;
-        }
-        window.loadFormations();
-        return;
-      }
-
-      // Concurrency 4 to keep fallback fast
-      const batch = eligibleCoins.slice(index, index + 4);
-      index += batch.length;
-
-      const promises = batch.map(async (c) => {
-        const key = `${c.ex}|${c.sym}|${tf}`;
-        let klinesData = null;
-
-        try {
-          const cached = touchKlinesCache(key);
-          if (cached && Date.now() - cached.ts < 300000) {
-            klinesData = cached.data;
-          } else {
-            try {
-              klinesData = await fetchChartKlines(c.ex, c.sym, tf);
-              if (Array.isArray(klinesData) && klinesData.length > 0) {
-                storeKlinesCache(key, klinesData);
-              }
-            } catch (e) { }
-          }
-
-          if (klinesData) {
-            const flat = [];
-            if (typeof klinesData[0] === 'number') {
-              for (let i = 0; i < klinesData.length; i += 6) {
-                flat.push({ t: klinesData[i], o: klinesData[i + 1], h: klinesData[i + 2], l: klinesData[i + 3], c: klinesData[i + 4], v: klinesData[i + 5] });
-              }
-            } else {
-              flat.push(...klinesData);
-            }
-            const candlesList = sanitizeCandles(flat);
-            const detectedLevels = window.detectChartLevelsFn(candlesList);
-            const coinKey = c.ex + ':' + c.sym;
-
-            let wasEligible = false;
-            const hadLevel = formationsCoinsLevelsMap.has(coinKey);
-            if (hadLevel) {
-              const prevLvls = formationsCoinsLevelsMap.get(coinKey) || [];
-              if (activeFormation === 'breakout') {
-                wasEligible = prevLvls.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
-              } else if (activeFormation === 'trendline') {
-                wasEligible = prevLvls.some(l => (l.touches || 2) >= formationsMinCascade);
-              } else if (activeFormation === 'retest') {
-                wasEligible = true;
-              } else {
-                let upC = 0, downC = 0;
-                for (const l of prevLvls) {
-                  if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
-                }
-                wasEligible = Math.max(upC, downC) >= formationsMinCascade;
-              }
-            }
-
-            const hasLevel = Array.isArray(detectedLevels) && detectedLevels.length > 0;
-            if (hasLevel) {
-              formationsCoinsLevelsMap.set(coinKey, detectedLevels);
-              formationMissesByCoin.delete(coinKey);
-            } else {
-              formationsCoinsLevelsMap.delete(coinKey);
-              formationMissesByCoin.delete(coinKey);
-            }
-
-            let isEligible = false;
-            if (hasLevel) {
-              if (activeFormation === 'breakout') {
-                isEligible = detectedLevels.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
-              } else if (activeFormation === 'trendline') {
-                isEligible = detectedLevels.some(l => (l.touches || 2) >= formationsMinCascade);
-              } else if (activeFormation === 'retest') {
-                isEligible = true;
-              } else {
-                let upC = 0, downC = 0;
-                for (const l of detectedLevels) {
-                  if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
-                }
-                isEligible = Math.max(upC, downC) >= formationsMinCascade;
-              }
-            }
-
-            if (wasEligible !== isEligible) {
-              triggerThrottledLoadFormations();
-            }
-          }
-        } finally {
-          processedCount++;
-          if (scanId === activeScanId) {
-            const elapsedMs = performance.now() - scanStartTime;
-            const msPerCoin = processedCount > 0 ? elapsedMs / processedCount : 10;
-            const remCoins = total - processedCount;
-            const remainingMs = remCoins * msPerCoin;
-            const secTotal = Math.ceil(remainingMs / 1000);
-            const min = Math.floor(secTotal / 60);
-            const sec = secTotal % 60;
-            const etaText = min > 0 ? `~${min}м ${sec}с` : `~${sec}с`;
-
-            scanProgressText = `Сканирование: ${processedCount}/${total} (${etaText})`;
-            updateFormationsPagination();
-          }
-        }
-      });
-
-      await Promise.all(promises);
-
-      setTimeout(nextBatch, 60);
-    }
-
-    nextBatch();
-  }
-
-  // Called by ChartInstance after klines load and levels are computed
-  window.registerFormationsCoinLevels = function (ex, sym, levels) {
-    const key = ex + ':' + sym;
-    const had = formationsCoinsLevelsMap.has(key);
-
-    let wasEligible = false;
-    if (had) {
-      const prev = formationsCoinsLevelsMap.get(key) || [];
-      if (activeFormation === 'breakout') {
-        wasEligible = prev.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
-      } else if (activeFormation === 'trendline') {
-        wasEligible = prev.some(l => (l.touches || 2) >= formationsMinCascade);
-      } else if (activeFormation === 'retest') {
-        wasEligible = true;
-      } else {
-        let upC = 0, downC = 0;
-        for (const l of prev) {
-          if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
-        }
-        wasEligible = Math.max(upC, downC) >= formationsMinCascade;
-      }
-    }
-
-    const hasL = Array.isArray(levels) && levels.length > 0;
-    if (hasL) {
-      formationsCoinsLevelsMap.set(key, levels);
-      formationMissesByCoin.delete(key);
-    } else {
-      formationsCoinsLevelsMap.delete(key);
-      formationMissesByCoin.delete(key);
-    }
-
-    let isEligible = false;
-    if (hasL) {
-      if (activeFormation === 'breakout') {
-        isEligible = levels.some(l => (l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1)) >= formationsMinCascade);
-      } else if (activeFormation === 'trendline') {
-        isEligible = levels.some(l => (l.touches || 2) >= formationsMinCascade);
-      } else if (activeFormation === 'retest') {
-        isEligible = true;
-      } else {
-        let upC = 0, downC = 0;
-        for (const l of levels) {
-          if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
-        }
-        isEligible = Math.max(upC, downC) >= formationsMinCascade;
-      }
-    }
-
-    if (wasEligible !== isEligible) {
-      triggerThrottledLoadFormations();
-    } else {
-      updateFormationsPagination();
-    }
-  };
 
   function updateFormationsPagination() {
     const pgEl = $("formations-page-info");
@@ -15585,6 +15686,10 @@ window.addEventListener("resize", () => {
       infoText += ` [${scanProgressText}]`;
     }
     pgEl.textContent = infoText;
+    const status = $('formations-status');
+    if (status) { status.textContent = scanProgressText; status.dataset.error = String(formationLoadError); }
+    const count = $('formations-result-count');
+    if (count) count.textContent = 'Найдено: ' + total + ' · поиск в фоне';
 
     if (prevBtn) prevBtn.disabled = formationsPage === 0;
     if (nextBtn) nextBtn.disabled = formationsPage >= totalPages - 1;
@@ -15606,6 +15711,14 @@ window.addEventListener("resize", () => {
 
   window.loadFormations = function (resetPage = false) {
     if (resetPage) formationsPage = 0;
+    const snapshot = formationSnapshots.get(formationsTf);
+    const selectedMap = formationsMapClientCache.get(formationMapType() + ':' + formationsTf);
+    formationsCoinsLevelsMap.clear();
+    for (const [key, levels] of Object.entries(selectedMap || {})) formationsCoinsLevelsMap.set(key, levels);
+    scanProgressText = formationLoadError ? 'Нет связи — показаны последние результаты' :
+      !snapshot?.updatedAt ? 'Сервер готовит результаты' :
+      'Обновлено ' + new Date(snapshot.updatedAt).toLocaleTimeString('ru-RU') +
+      (snapshot.coverage === 'top-300' ? ' · до 300 монет' : '');
     const checkedEx = [];
     if (fgExcMenu) {
       fgExcMenu.querySelectorAll(".exc-item:not([data-cex='ALL'])").forEach(item => {
@@ -15633,7 +15746,9 @@ window.addEventListener("resize", () => {
 
     formationsAllCoins = Array.from(coins.values())
       .filter(c => {
-        if (!isUsdtFutures(c) || c.v < 80000) return false;
+        if (!isUsdtFutures(c) || c.v < formationsFilters.minVolume) return false;
+        if (formationsFilters.search && !String(c.sym).toUpperCase().includes(String(formationsFilters.search).toUpperCase())) return false;
+        if (getMinDist(c) > formationsFilters.distancePct / 100) return false;
         if (isStablecoinBase(c)) return false;
         if (!checkedEx.includes(c.ex)) return false;
         if (onlyFormations) {
@@ -15645,7 +15760,7 @@ window.addEventListener("resize", () => {
             const hasQualifying = lvls.some(l => {
               const count = l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 1);
               const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
-              return count >= minT && dist <= 0.15;
+              return count >= minT && dist <= formationsFilters.distancePct / 100;
             });
             if (!hasQualifying) return false;
           } else if (activeFormation === 'trendline') {
@@ -15654,20 +15769,20 @@ window.addEventListener("resize", () => {
               const count = l.touches || (Array.isArray(l.touchIndices) ? l.touchIndices.length : 2);
               const ep = l.endPrice || (l.p2 ? l.p2.price : 0);
               const dist = (curP > 0 && ep) ? Math.abs(ep - curP) / curP : 0;
-              return count >= minT && dist <= 0.15;
+              return count >= minT && dist <= formationsFilters.distancePct / 100;
             });
             if (!hasQualifying) return false;
           } else if (activeFormation === 'retest') {
             const hasQualifying = lvls.some(l => {
               const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
-              return dist <= 0.15;
+              return dist <= formationsFilters.distancePct / 100;
             });
             if (!hasQualifying) return false;
           } else {
             let upC = 0, downC = 0;
             for (const l of lvls) {
               const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
-              if (dist <= 0.15) {
+              if (dist <= formationsFilters.distancePct / 100) {
                 if (l.direction === 'up') upC++; else if (l.direction === 'down') downC++;
               }
             }
@@ -15725,7 +15840,9 @@ window.addEventListener("resize", () => {
       startFormationsScan(checkedEx, formationsTf);
     }
 
+    formationsPage = Math.min(formationsPage, Math.max(0, Math.ceil(formationsAllCoins.length / formationsCols) - 1));
     renderCurrentPage();
+    warmFormationCharts();
   };
 
   function renderCurrentPage() {
@@ -15755,7 +15872,7 @@ window.addEventListener("resize", () => {
     if (chartInstances.length === slice.length && slice.length > 0) {
       isSameCoins = slice.every((c, i) => {
         const inst = chartInstances[i];
-        return inst && inst.ex === c.ex && inst.sym === c.sym;
+        return inst && inst.ex === c.ex && inst.sym === c.sym && inst.tf === formationsTf && inst.el.parentElement === grid;
       });
     }
 
@@ -15777,7 +15894,12 @@ window.addEventListener("resize", () => {
     chartInstances = [];
 
     if (formationsAllCoins.length === 0) {
-      grid.innerHTML = `<div class="formations-empty">Загрузка формаций...</div>`;
+      const empty = document.createElement('div');
+      empty.className = 'formations-empty';
+      empty.textContent = formationLoadError ? 'Не удалось обновить формации. Повторим автоматически.' :
+        formationSnapshots.get(formationsTf)?.updatedAt ? 'По вашим настройкам формаций пока нет. Поиск продолжается в фоне.' :
+        'Сервер готовит формации. Можно перейти в другую вкладку — поиск продолжится.';
+      grid.appendChild(empty);
       updateFormationsPagination();
       return;
     }
@@ -15810,7 +15932,7 @@ window.addEventListener("resize", () => {
 // ── OBSIDIAN PRO MODALS & PAYMENT CONTROLLER ──
 
 function openProfileModal() {
-  const token = localStorage.getItem("obsidian_auth_token");
+  const token = localStorage.getItem("obsidian_auth_token") || (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : "");
   if (!token) {
     if (typeof openAuthModal === "function") openAuthModal();
     return;
@@ -15818,7 +15940,10 @@ function openProfileModal() {
   const modal = $("profile-modal");
   if (modal) {
     modal.style.display = "flex";
-    if (typeof renderProfile === "function") renderProfile(window.currentUser);
+    if (typeof renderProfile === "function") renderProfile(window.currentUser || currentUser);
+  }
+  if (typeof checkAuthSession === "function") {
+    checkAuthSession();
   }
 }
 
@@ -15870,6 +15995,17 @@ window.openProModal = openProModal;
 window.closeProModal = closeProModal;
 
 function openPayModal() {
+  const isAuth = typeof window.isUserLoggedIn === "function" ? window.isUserLoggedIn() : (!!((typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "")));
+  if (!isAuth) {
+    closeProModal();
+    closeProCompareModal();
+    closePayModal();
+    window.pendingPayAfterAuth = true;
+    if (typeof openAuthModal === "function") {
+      openAuthModal("Чтобы оформить подписку PRO, зарегистрируйтесь или войдите в аккаунт", "register");
+    }
+    return;
+  }
   closeProModal();
   closeProCompareModal();
   const modal = $("obsidian-pay-modal");
@@ -15892,7 +16028,11 @@ async function refreshAvailablePaymentMethods() {
     }
     if (!methods.includes(paySelectedMethod)) paySelectedMethod = methods[0] || "";
     if (paySelectedMethod) selectPayMethod(paySelectedMethod);
-    if (continueButton) continueButton.disabled = methods.length === 0;
+    if (continueButton) {
+      continueButton.disabled = methods.length === 0;
+      const isAuth = typeof window.isUserLoggedIn === "function" ? window.isUserLoggedIn() : (!!((typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "")));
+      continueButton.textContent = isAuth ? "Продолжить к оплате →" : "Войти в аккаунт для оплаты →";
+    }
   } catch (_) {
     if (continueButton) continueButton.disabled = true;
   }
@@ -17188,13 +17328,96 @@ function bindProFeatureGate() {
   });
 }
 
+const PAY_PLANS_INFO = Object.freeze({
+  "1m": Object.freeze({
+    baseUsd: 30,
+    months: 1,
+    defaultPrice: "$30",
+    defaultDesc: "$30.00 / месяц"
+  }),
+  "3m": Object.freeze({
+    baseUsd: 80,
+    months: 3,
+    defaultPrice: "$80",
+    defaultDesc: "$26.60 / месяц"
+  }),
+  "12m": Object.freeze({
+    baseUsd: 250,
+    months: 12,
+    defaultPrice: "$250",
+    defaultDesc: "$20.80 / месяц"
+  }),
+  "lifetime": Object.freeze({
+    baseUsd: 490,
+    months: null,
+    defaultPrice: "$490",
+    defaultDesc: "Безлимитно и навсегда"
+  })
+});
+
+function updatePayTariffCards(promo = null) {
+  const cards = document.querySelectorAll(".pay-tariff-card");
+  cards.forEach(card => {
+    const plan = card.dataset.plan;
+    const info = PAY_PLANS_INFO[plan];
+    if (!info) return;
+
+    const priceEl = card.querySelector(".pay-t-price");
+    const descEl = card.querySelector(".pay-t-desc");
+    if (!priceEl || !descEl) return;
+
+    if (!promo) {
+      priceEl.innerHTML = info.defaultPrice;
+      descEl.innerHTML = info.defaultDesc;
+      return;
+    }
+
+    if (promo.type === "percent" && Number(promo.discountPercent) > 0) {
+      const discountPct = Number(promo.discountPercent);
+      let finalPriceNum;
+      if (plan === paySelectedPlan && promo.amountStr) {
+        finalPriceNum = Number(promo.amountStr);
+      } else {
+        finalPriceNum = Math.max(1, Math.round(info.baseUsd * (100 - discountPct) / 100));
+      }
+
+      const formattedPrice = Number.isFinite(finalPriceNum)
+        ? (finalPriceNum % 1 === 0 ? `$${finalPriceNum}` : `$${finalPriceNum.toFixed(2)}`)
+        : info.defaultPrice;
+
+      priceEl.innerHTML = `<span class="pay-t-old-price">${info.defaultPrice}</span><span class="pay-t-new-price">${formattedPrice}</span>`;
+
+      if (info.months) {
+        const monthlyRate = (finalPriceNum / info.months).toFixed(2);
+        descEl.innerHTML = `<span class="pay-t-desc-discounted">$${monthlyRate} / месяц</span>`;
+      } else {
+        descEl.innerHTML = `<span class="pay-t-desc-discounted">Безлимитно со скидкой ${discountPct}%</span>`;
+      }
+    } else if (promo.type === "days" && Number(promo.bonusDays) > 0) {
+      priceEl.innerHTML = info.defaultPrice;
+      if (info.months) {
+        descEl.innerHTML = `<span class="pay-t-desc-discounted">${info.defaultDesc} (+${promo.bonusDays} дн. бонуса)</span>`;
+      } else {
+        descEl.innerHTML = info.defaultDesc;
+      }
+    } else {
+      priceEl.innerHTML = info.defaultPrice;
+      descEl.innerHTML = info.defaultDesc;
+    }
+  });
+}
+
 function selectPayTariff(planId) {
   paySelectedPlan = planId;
   document.querySelectorAll(".pay-tariff-card").forEach(el => {
     if (el.dataset.plan === planId) el.classList.add("selected");
     else el.classList.remove("selected");
   });
-  if (payAppliedPromoCode) applyPayPromo();
+  if (payAppliedPromoCode) {
+    applyPayPromo();
+  } else {
+    updatePayTariffCards(null);
+  }
 }
 
 function selectPayMethod(method) {
@@ -17217,18 +17440,21 @@ async function applyPayPromo() {
   const button = $("pay-promo-apply");
   const feedback = $("pay-promo-feedback");
   const token = localStorage.getItem("obsidian_auth_token");
-  const promoCode = String(input && input.value || payAppliedPromoCode || "").trim().toUpperCase();
+  const promoCode = String(input ? input.value : (payAppliedPromoCode || "")).trim().toUpperCase();
   if (input) input.value = promoCode;
   if (!promoCode) {
     payAppliedPromoCode = "";
+    payAppliedPromoData = null;
+    updatePayTariffCards(null);
     if (feedback) {
       feedback.textContent = "";
       feedback.className = "pay-promo-feedback";
     }
     return;
   }
-  if (!token) {
-    if (typeof openAuthModal === "function") openAuthModal();
+  const isAuthPromo = typeof window.isUserLoggedIn === "function" ? window.isUserLoggedIn() : (!!((typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "")));
+  if (!isAuthPromo) {
+    if (typeof openAuthModal === "function") openAuthModal("Войдите в аккаунт или зарегистрируйтесь для применения промокода", "register");
     return;
   }
 
@@ -17248,6 +17474,8 @@ async function applyPayPromo() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok || !data.promo) throw new Error(data.error || "Промокод не принят");
     payAppliedPromoCode = data.promo.code;
+    payAppliedPromoData = data.promo;
+    updatePayTariffCards(data.promo);
     if (feedback) {
       feedback.textContent = data.promo.type === "percent"
         ? `✓ Скидка ${data.promo.discountPercent}%: $${data.promo.originalAmountStr} → $${data.promo.amountStr}`
@@ -17256,6 +17484,8 @@ async function applyPayPromo() {
     }
   } catch (error) {
     payAppliedPromoCode = "";
+    payAppliedPromoData = null;
+    updatePayTariffCards(null);
     if (feedback) {
       feedback.textContent = error && error.name === "AbortError" ? "Проверка заняла слишком долго. Повторите ещё раз." : (error.message || "Промокод не принят");
       feedback.className = "pay-promo-feedback error";
@@ -17276,16 +17506,27 @@ function backToTariffs() {
     step1.style.display = "block";
     step2.style.display = "none";
   }
+  const continueButton = $("pay-continue-btn");
+  if (continueButton) {
+    const isAuth = typeof window.isUserLoggedIn === "function" ? window.isUserLoggedIn() : (!!((typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "")));
+    continueButton.textContent = isAuth ? "Продолжить к оплате →" : "Войти в аккаунт для оплаты →";
+  }
+  updatePayTariffCards(payAppliedPromoData);
   if (payPollTimer) clearInterval(payPollTimer);
   if (payCountdownTimer) clearInterval(payCountdownTimer);
 }
 
 async function startPayInvoice(replaceActive = false) {
-  const token = localStorage.getItem("obsidian_auth_token");
-  if (!token) {
-    if (typeof openAuthModal === "function") openAuthModal();
+  const isAuth = typeof window.isUserLoggedIn === "function" ? window.isUserLoggedIn() : (!!((typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || (typeof authToken === "string" ? authToken : "")));
+  if (!isAuth) {
+    closePayModal();
+    window.pendingPayAfterAuth = true;
+    if (typeof openAuthModal === "function") {
+      openAuthModal("Чтобы оформить подписку PRO, зарегистрируйтесь или войдите в аккаунт", "register");
+    }
     return;
   }
+  const token = localStorage.getItem("obsidian_auth_token") || authToken || "";
 
   const btn = $("pay-continue-btn");
   if (btn) {
@@ -17305,6 +17546,14 @@ async function startPayInvoice(replaceActive = false) {
       body: JSON.stringify({ planId: paySelectedPlan, method: paySelectedMethod, replaceActive, promoCode: payAppliedPromoCode }),
       signal: controller.signal
     });
+    if (res.status === 401) {
+      closePayModal();
+      window.pendingPayAfterAuth = true;
+      if (typeof openAuthModal === "function") {
+        openAuthModal("Сессия истекла. Пожалуйста, войдите в аккаунт для продолжения оплаты", "login");
+      }
+      return;
+    }
     const data = await res.json();
 
     if (!data.ok || !data.invoice) {
@@ -17543,21 +17792,59 @@ function saveFormationAlertSettings(settings) {
   }
   localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
   window.formationAlertSettings = currentFormationAlertSettings;
-  syncFormationAlertSettingsToServer(currentFormationAlertSettings);
+  return syncFormationAlertSettingsToServer(currentFormationAlertSettings);
 }
 
-async function syncFormationAlertSettingsToServer(settings) {
+window.restoreFormationAlertsFromAccount = settings => {
   try {
-    const token = localStorage.getItem("obsidian_auth_token");
-    const headers = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    await fetch("/api/user/formation-alerts", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(settings)
-    });
+    const pending = JSON.parse(localStorage.getItem('formation_alert_sync_pending') || 'null');
+    if (pending?.token === localStorage.getItem('obsidian_auth_token')) return;
+    localStorage.setItem('obsidian_formation_alert_settings', JSON.stringify(settings || DEFAULT_FORMATION_ALERT_SETTINGS));
+    localStorage.setItem('obsidian_formation_alerts_user_configured', 'true');
+    loadFormationAlertSettings();
+  } catch (_) {}
+};
+
+let formationSettingsSyncQueue = Promise.resolve();
+function syncFormationAlertSettingsToServer(settings) {
+  const token = localStorage.getItem("obsidian_auth_token");
+  const body = JSON.stringify(settings);
+  const status = $('formation-alert-sync-status');
+  if (status) status.textContent = 'Сохраняем настройки…';
+  localStorage.setItem('formation_alert_sync_pending', JSON.stringify({ token, body }));
+  const send = async () => {
+    if (localStorage.getItem('obsidian_auth_token') !== token) return false;
+    try {
+      const response = await fetch('/api/user/formation-alerts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+        body, signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) throw new Error('Settings sync failed');
+      const result = await response.json();
+      if (!result.success) throw new Error('Settings were not saved');
+      const pending = JSON.parse(localStorage.getItem('formation_alert_sync_pending') || 'null');
+      if (pending?.body === body && pending?.token === token) {
+        localStorage.removeItem('formation_alert_sync_pending');
+        if (status) status.textContent = 'Сохранено на сервере. Telegram работает и при закрытом сайте.';
+      }
+      return true;
+    } catch (_) {
+      if (status) status.textContent = 'Сохранено на этом устройстве. Нет подтверждения сервера — повторим автоматически.';
+      return false;
+    }
+  };
+  formationSettingsSyncQueue = formationSettingsSyncQueue.then(send, send);
+  return formationSettingsSyncQueue;
+}
+
+function retryFormationSettingsSync() {
+  try {
+    const pending = JSON.parse(localStorage.getItem('formation_alert_sync_pending') || 'null');
+    if (pending && pending.token === localStorage.getItem('obsidian_auth_token')) syncFormationAlertSettingsToServer(JSON.parse(pending.body));
   } catch (_) {}
 }
+window.addEventListener('online', retryFormationSettingsSync);
+setInterval(retryFormationSettingsSync, 30000);
 
 function initNotificationsUI() {
   loadPriceAlerts();
@@ -17686,7 +17973,7 @@ function initNotificationsUI() {
       };
       input.oninput = () => {
         const val = parseFloat(input.value);
-        if (!isNaN(val) && val > 0) onSelect(val);
+        if (input.checkValidity() && Number.isFinite(val) && val > 0) onSelect(val);
       };
     }
   }
@@ -17731,6 +18018,7 @@ function initNotificationsUI() {
 
   // Open & Close Formations Modal
   async function openFormationAlertsModal() {
+    const localAtOpen = localStorage.getItem('obsidian_formation_alert_settings');
     loadFormationAlertSettings();
     syncFormationUI();
     const overlay = $("modal-formation-alerts-overlay");
@@ -17744,7 +18032,9 @@ function initNotificationsUI() {
         });
         if (res.ok) {
           const data = await res.json();
-          if (data && data.success && data.settings) {
+          if (data && data.success && data.settings &&
+              !localStorage.getItem('formation_alert_sync_pending') &&
+              localAtOpen === localStorage.getItem('obsidian_formation_alert_settings')) {
             currentFormationAlertSettings = {
               ...DEFAULT_FORMATION_ALERT_SETTINGS,
               ...data.settings,
@@ -17754,6 +18044,7 @@ function initNotificationsUI() {
             };
             localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
             localStorage.setItem("obsidian_formation_alerts_user_configured", "true");
+            window.formationAlertSettings = currentFormationAlertSettings;
             syncFormationUI();
           }
         }
@@ -17805,6 +18096,7 @@ function initNotificationsUI() {
     if (setToastModal) setToastModal.checked = !!s.toastEnabled;
 
     function autoSaveSettings() {
+      currentFormationAlertSettings.enabled = !!(s.toastEnabled || s.soundEnabled || s.tgEnabled);
       saveFormationAlertSettings(currentFormationAlertSettings);
     }
 
@@ -17949,7 +18241,13 @@ function initNotificationsUI() {
   $("btn-test-tg-photo-fmt")?.addEventListener("click", triggerTestFormationTgAlert);
 
   // Formation Modal Save button
-  $("btn-save-formation-alerts")?.addEventListener("click", () => {
+  $("btn-save-formation-alerts")?.addEventListener("click", async () => {
+    for (const id of ['fmt-trendline-custom-dist', 'fmt-level-custom-dist']) {
+      const input = $(id);
+      if (input && input.style.display !== 'none' && (!input.value || !input.checkValidity())) {
+        input.reportValidity(); input.focus(); return;
+      }
+    }
     // 1. Telegram Chat ID
     const tgInput = $("fmt-tg-chat-id-input");
     if (tgInput && tgInput.value.trim()) {
@@ -18048,7 +18346,14 @@ function initNotificationsUI() {
 
     currentFormationAlertSettings.enabled = true;
 
-    saveFormationAlertSettings(currentFormationAlertSettings);
+    const button = $('btn-save-formation-alerts');
+    if (button) button.disabled = true;
+    const saved = await saveFormationAlertSettings(currentFormationAlertSettings);
+    if (button) button.disabled = false;
+    if (!saved) {
+      showToast({ title: 'Не удалось сохранить на сервере', message: 'Настройки сохранены локально. Проверьте соединение и авторизацию.', type: 'error' });
+      return;
+    }
     closeFormationAlertsModal();
     showToast({
       title: "Настройки сохранены",
@@ -18070,8 +18375,6 @@ function initNotificationsUI() {
 
   // ═══ 24/7 Background Formation Alert Scanner Engine ═══
   const formationAlertCooldownMap = new Map();
-  const formationAlertQueue = [];
-  let isProcessingFormationQueue = false;
   let isScanningFormationAlerts = false;
   let hasCompletedInitialWarmup = false;
 
@@ -18104,12 +18407,15 @@ function initNotificationsUI() {
 
     // Suppress popups when authentication / registration modals are open
     const authModal = $("auth-modal") || document.getElementById("auth-modal");
-    if (authModal && (authModal.style.display === "flex" || authModal.style.display === "block" || !authModal.classList.contains("hidden"))) return;
+    if (authModal && (authModal.style.display === "flex" || authModal.style.display === "block")) return;
 
     const s = currentFormationAlertSettings;
     if (!s) return;
     // Must be explicitly enabled by user (either toastEnabled, soundEnabled, or tgEnabled)
-    if (!s.toastEnabled && !s.soundEnabled && !s.tgEnabled) return;
+    if (s.enabled === false || (!s.toastEnabled && !s.soundEnabled)) return;
+    const volume = Number(data.vol24 ?? coins.get(data.ex + ':' + data.sym)?.v) || 0;
+    if (volume < (Number(s.minVolume ?? s.minVol24h) || 0)) return;
+    if (!(Number(data.curPrice) > 0) || !(Number(data.targetPrice) > 0)) return;
 
     const isTl = data.type === "trendline" && !!s.trendline?.enabled;
     const isLvl = data.type === "level" && !!s.level?.enabled;
@@ -18127,7 +18433,7 @@ function initNotificationsUI() {
     const isAllowedEx = allowedExs.includes("all") || allowedExs.includes(data.ex) || allowedExs.includes(String(data.ex).toUpperCase());
     if (!isAllowedEx) return;
 
-    const distVal = Number(data.distPct) || 0;
+    const distVal = Math.abs(Number(data.curPrice) - Number(data.targetPrice)) / Number(data.curPrice) * 100;
     const touchesVal = Number(data.touches) || 1;
 
     if (data.type === "trendline") {
@@ -18164,6 +18470,10 @@ function initNotificationsUI() {
         if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short") && isSupport) return;
       }
     } else if (data.type === "retest") {
+      const stage = data.meta?.status === 'approaching' ? 'approaching' : 'confirmed';
+      if (s.retest.stage && s.retest.stage !== 'both' && s.retest.stage !== stage) return;
+      if (distVal > 1) return;
+      if (stage === 'confirmed' && (!Number.isFinite(Number(data.meta?.lastTouchAge)) || Number(data.meta.lastTouchAge) > (Number(s.retest.maxAgeCandles) || 30))) return;
       const allowedTfs = Array.isArray(s.retest?.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h", "4h"];
       if (!allowedTfs.includes(data.tf)) return;
       const targetDir = s.retest?.direction || "all";
@@ -18176,42 +18486,23 @@ function initNotificationsUI() {
 
     const now = Date.now();
     const cooldownMs = (s.cooldownSeconds ? Number(s.cooldownSeconds) * 1000 : (Number(s.cooldownMinutes) || 5) * 60 * 1000);
-    const cdKey = `${data.ex}:${data.sym}:${data.type}:${data.tf}`;
-    const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
+    const owner = window.currentUser?.id || localStorage.getItem('obsidian_auth_token') || '';
+    const base = String(data.base || coins.get(data.ex + ':' + data.sym)?.base || data.sym).toUpperCase()
+      .replace(/[-_]?(?:USDTM|USDT|USDC|BUSD|USD)(?:[-_]?(?:SWAP|PERP|PERPETUAL))?$/, '')
+      .replace(/^(?:1000000|100000|10000|1000)(?=[A-Z])/, '');
+    const coinCooldownKey = `${owner}:${base}:coin`;
+    const cdKey = `${owner}:${data.ex}:${data.sym}:${data.type}:${data.tf}`;
+    const lastAlert = Math.max(formationAlertCooldownMap.get(cdKey) || 0, formationAlertCooldownMap.get(coinCooldownKey) || 0);
     if (now - lastAlert < cooldownMs) return;
 
     formationAlertCooldownMap.set(cdKey, now);
+    formationAlertCooldownMap.set(coinCooldownKey, now);
 
-    // Instant trigger
-    triggerMatchedFormationAlert(data);
-  };
-
-  function enqueueFormationAlert(data) {
-    const exists = formationAlertQueue.some(item => item.ex === data.ex && item.sym === data.sym && item.type === data.type);
-    if (exists) return;
-    formationAlertQueue.push(data);
-    processFormationAlertQueue();
-  }
-
-  async function processFormationAlertQueue() {
-    if (isProcessingFormationQueue || formationAlertQueue.length === 0) return;
-    isProcessingFormationQueue = true;
-
-    try {
-      while (formationAlertQueue.length > 0) {
-        const item = formationAlertQueue.shift();
-        triggerMatchedFormationAlert(item);
-        if (formationAlertQueue.length > 0) {
-          // Fast micro-yield so alerts arrive smoothly without artificial 4-second choke
-          await new Promise(r => setTimeout(r, 50));
-        }
-      }
-    } catch (err) {
-      console.error("[ALERT QUEUE ERROR]", err);
-    } finally {
-      isProcessingFormationQueue = false;
+    for (const [key, timestamp] of formationAlertCooldownMap) {
+      if (now - timestamp > Math.max(cooldownMs, 86400000)) formationAlertCooldownMap.delete(key);
     }
-  }
+    if (!data.silent) triggerMatchedFormationAlert(data);
+  };
 
   function isFormationCoinBlacklisted(sym) {
     if (!sym) return false;
@@ -18256,12 +18547,18 @@ function initNotificationsUI() {
       };
       const mapped = typeMap[data.type] || data.type;
       activeFormation = mapped;
+      localStorage.setItem('formations_active_tab', activeFormation);
+      if (mapped === 'retest' && formationsApproachingToggle) {
+        formationsApproachingToggle.checked = data.meta?.status === 'approaching';
+        localStorage.setItem('formations_approaching', formationsApproachingToggle.checked);
+      }
       if (typeof syncFormationsSelect === "function") syncFormationsSelect();
     }
 
     // 3. Set timeframe if specified
     if (data.tf) {
       formationsTf = data.tf;
+      localStorage.setItem('formations_tf', formationsTf);
       document.querySelectorAll(".fg-tf-btn").forEach(btn => {
         btn.classList.toggle("on", btn.dataset.tf === data.tf);
       });
@@ -18283,6 +18580,7 @@ function initNotificationsUI() {
     }
     if (typeof window.loadFormations === "function") {
       window.loadFormations(true);
+      window.openFormationFullChart?.(data.ex, data.sym, data.tf);
     }
   }
 
@@ -18322,265 +18620,42 @@ function initNotificationsUI() {
   }
 
   async function runFormationAlertScanner() {
-    if (isScanningFormationAlerts) return;
-    const isPro = true;
-
     const s = currentFormationAlertSettings;
-    if (!s) return;
-
-    const isTl = !!s.trendline?.enabled;
-    const isLvl = !!s.level?.enabled;
-    const isRet = !!s.retest?.enabled;
-    if (!isTl && !isLvl && !isRet) return;
-
+    if (isScanningFormationAlerts || !s || s.enabled === false || (!s.toastEnabled && !s.soundEnabled)) return;
+    if (!localStorage.getItem('obsidian_auth_token') && !window.currentUser) return;
+    if (!window.getFormationSnapshot) return;
     isScanningFormationAlerts = true;
-
     try {
-      const cooldownMs = (s.cooldownSeconds ? Number(s.cooldownSeconds) * 1000 : (Number(s.cooldownMinutes) || 5) * 60 * 1000);
-      const minVol = Number(s.minVol24h) || 0;
-      const allowedExs = Array.isArray(s.exchanges) && s.exchanges.length > 0 ? s.exchanges : ["all"];
-      const isAllowedEx = (e) => allowedExs.includes("all") || allowedExs.includes(e) || allowedExs.includes(String(e).toUpperCase());
-      const now = Date.now();
-      const isFirstRun = !hasCompletedInitialWarmup;
-
-      // Scan Trendlines in parallel
-      if (isTl) {
-        const tfs = Array.isArray(s.trendline.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h"];
-        const minTouches = Number(s.trendline.minTouches) || 2;
-        const maxDist = Number(s.trendline.distancePct) || 1.0;
-        const targetDir = s.trendline.direction || "all";
-
-        await Promise.all(tfs.map(async (tf) => {
-          try {
-            const res = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=trendline`);
-            if (!res.ok) return;
-            const map = await res.json();
-            if (!map || typeof map !== "object") return;
-
-            for (const [key, items] of Object.entries(map)) {
-              if (!Array.isArray(items) || items.length === 0) continue;
-              const colonIdx = key.indexOf(":");
-              if (colonIdx <= 0) continue;
-              const ex = key.substring(0, colonIdx);
-              const sym = key.substring(colonIdx + 1);
-              if (/_SPOT$/i.test(sym)) continue;
-
-              if (!isAllowedEx(ex)) continue;
-              if (isFormationCoinBlacklisted(sym)) continue;
-
-              const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
-              const curPrice = coinObj?.p || 0;
-              const vol24 = coinObj?.v || 0;
-              if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
-
-              for (const item of items) {
-                const touches = item.touches || item.swingIndices?.length || 2;
-                if (touches < minTouches) continue;
-
-                if (targetDir !== "all") {
-                  if ((targetDir === "down" || targetDir === "support" || targetDir === "long") && item.direction !== "down") continue;
-                  if ((targetDir === "up" || targetDir === "resistance" || targetDir === "short") && item.direction !== "up") continue;
-                }
-
-                const lineEndP = item.endPrice || (item.p2 ? item.p2.price : item.price);
-                if (!lineEndP || lineEndP <= 0) continue;
-
-                // Reject pierced lines
-                if (item.direction === "down" && curPrice < lineEndP * 0.998) continue;
-                if (item.direction === "up" && curPrice > lineEndP * 1.002) continue;
-
-                const distPct = Math.abs(curPrice - lineEndP) / curPrice * 100;
-                if (distPct > maxDist) continue;
-
-                const cdKey = `${key}:trendline:${tf}`;
-                const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
-                if (now - lastAlert < cooldownMs) continue;
-
-                formationAlertCooldownMap.set(cdKey, now);
-
-                if (!isFirstRun) {
-                  enqueueFormationAlert({
-                    ex,
-                    sym,
-                    tf,
-                    type: "trendline",
-                    typeName: "Наклонный уровень (Наклонка)",
-                    touches,
-                    distPct: distPct.toFixed(2),
-                    targetPrice: lineEndP,
-                    curPrice,
-                    vol24,
-                    formationInfo: {
-                      touches,
-                      distPct: distPct.toFixed(2),
-                      p1: item.p1?.price,
-                      p2: item.p2?.price
-                    }
-                  });
-                }
-              }
+      const tfs = new Set(['trendline', 'level', 'retest'].flatMap(type => s[type]?.enabled ? s[type].timeframes || [] : []));
+      let received = false;
+      for (const tf of tfs) {
+        const snapshot = await window.getFormationSnapshot(tf);
+        if (!snapshot?.updatedAt) continue;
+        received = true;
+        for (const [mapType, type] of [['trendline', 'trendline'], ['levels', 'level'], ['retest', 'retest'], ['approaching', 'retest']]) {
+          for (const [key, items] of Object.entries(snapshot.maps[mapType] || {})) {
+            const c = coins.get(key);
+            if (!c?.p) continue;
+            for (const item of items) {
+              const targetPrice = Number(item.endPrice || item.price || item.p2?.price);
+              const isLong = type === 'retest' ? item.direction === 'up' : item.direction === 'down';
+              window.handleServerFormationAlert({
+                ex: c.ex, sym: c.sym, tf, type, curPrice: c.p, targetPrice, vol24: c.v,
+                touches: item.touches || item.touchIndices?.length || 2,
+                distPct: (Math.abs(c.p - targetPrice) / c.p * 100).toFixed(2),
+                direction: isLong ? 'long' : 'short', silent: !hasCompletedInitialWarmup,
+                typeName: type === 'trendline' ? 'Наклонный уровень' : type === 'level' ? 'Горизонтальный уровень' : mapType === 'approaching' ? 'Приближение к ретесту' : 'Подтверждённый ретест',
+                meta: { ...item, status: mapType === 'approaching' ? 'approaching' : 'confirmed' }
+              });
             }
-          } catch (_) {}
-        }));
+          }
+        }
       }
-
-      // Scan Levels in parallel
-      if (isLvl) {
-        const tfs = Array.isArray(s.level.timeframes) && s.level.timeframes.length > 0 ? s.level.timeframes : ["5m", "15m", "1h"];
-        const minTouches = Number(s.level.minTouches) || 2;
-        const maxDist = Number(s.level.distancePct) || 1.0;
-        const targetDir = s.level.direction || "all";
-
-        await Promise.all(tfs.map(async (tf) => {
-          try {
-            const res = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=levels`);
-            if (!res.ok) return;
-            const map = await res.json();
-            if (!map || typeof map !== "object") return;
-
-            for (const [key, items] of Object.entries(map)) {
-              if (!Array.isArray(items) || items.length === 0) continue;
-              const colonIdx = key.indexOf(":");
-              if (colonIdx <= 0) continue;
-              const ex = key.substring(0, colonIdx);
-              const sym = key.substring(colonIdx + 1);
-              if (/_SPOT$/i.test(sym)) continue;
-
-              if (!isAllowedEx(ex)) continue;
-              if (isFormationCoinBlacklisted(sym)) continue;
-
-              const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
-              const curPrice = coinObj?.p || 0;
-              const vol24 = coinObj?.v || 0;
-              if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
-
-              for (const item of items) {
-                const touches = item.touches || item.touchIndices?.length || 1;
-                if (touches < minTouches) continue;
-
-                if (targetDir !== "all") {
-                  if ((targetDir === "support" || targetDir === "down" || targetDir === "long") && item.direction !== "down") continue;
-                  if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short") && item.direction !== "up") continue;
-                }
-
-                const lvlPrice = item.price || item.endPrice;
-                if (!lvlPrice || lvlPrice <= 0) continue;
-                const distPct = Math.abs(curPrice - lvlPrice) / curPrice * 100;
-                if (distPct > maxDist) continue;
-
-                const cdKey = `${key}:level:${tf}:${lvlPrice.toFixed(4)}`;
-                const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
-                if (now - lastAlert < cooldownMs) continue;
-
-                formationAlertCooldownMap.set(cdKey, now);
-
-                if (!isFirstRun) {
-                  enqueueFormationAlert({
-                    ex,
-                    sym,
-                    tf,
-                    type: "level",
-                    typeName: "Горизонтальный уровень (Горизонталка)",
-                    touches: Math.min(6, touches),
-                    distPct: distPct.toFixed(2),
-                    targetPrice: lvlPrice,
-                    curPrice,
-                    vol24,
-                    formationInfo: {
-                      touches: Math.min(6, touches),
-                      distPct: distPct.toFixed(2),
-                      p1: lvlPrice,
-                      p2: lvlPrice
-                    }
-                  });
-                }
-              }
-            }
-          } catch (_) {}
-        }));
-      }
-
-      // Scan Retests in parallel
-      if (isRet) {
-        const tfs = Array.isArray(s.retest.timeframes) && s.retest.timeframes.length > 0 ? s.retest.timeframes : ["5m", "15m", "1h"];
-        const targetDir = s.retest.direction || "all";
-
-        await Promise.all(tfs.map(async (tf) => {
-          try {
-            const res = await fetch(`/api/formations/map?tf=${encodeURIComponent(tf)}&type=retest`);
-            if (!res.ok) return;
-            const map = await res.json();
-            if (!map || typeof map !== "object") return;
-
-            for (const [key, items] of Object.entries(map)) {
-              if (!Array.isArray(items) || items.length === 0) continue;
-              const colonIdx = key.indexOf(":");
-              if (colonIdx <= 0) continue;
-              const ex = key.substring(0, colonIdx);
-              const sym = key.substring(colonIdx + 1);
-              if (/_SPOT$/i.test(sym)) continue;
-
-              if (!isAllowedEx(ex)) continue;
-              if (isFormationCoinBlacklisted(sym)) continue;
-
-              const coinObj = typeof coins !== "undefined" ? (coins.get(key) || coins.get(sym) || coins.get(`${ex}:${sym.toUpperCase()}`)) : null;
-              const curPrice = coinObj?.p || 0;
-              const vol24 = coinObj?.v || 0;
-              if (curPrice <= 0 || (minVol > 0 && vol24 < minVol)) continue;
-
-              for (const item of items) {
-                if (targetDir !== "all") {
-                  if ((targetDir === "up" || targetDir === "long") && item.direction !== "up") continue;
-                  if ((targetDir === "down" || targetDir === "short") && item.direction !== "down") continue;
-                }
-
-                const lvlPrice = item.price || item.endPrice;
-                if (!lvlPrice || lvlPrice <= 0) continue;
-                const distPct = Math.abs(curPrice - lvlPrice) / curPrice * 100;
-
-                const cdKey = `${key}:retest:${tf}`;
-                const lastAlert = formationAlertCooldownMap.get(cdKey) || 0;
-                if (now - lastAlert < cooldownMs) continue;
-
-                formationAlertCooldownMap.set(cdKey, now);
-
-                if (!isFirstRun) {
-                  enqueueFormationAlert({
-                    ex,
-                    sym,
-                    tf,
-                    type: "retest",
-                    typeName: "Подтвержденный ретест (Ретест)",
-                    touches: item.touches || 2,
-                    distPct: distPct.toFixed(2),
-                    targetPrice: lvlPrice,
-                    curPrice,
-                    vol24,
-                    formationInfo: {
-                      touches: item.touches || 2,
-                      distPct: distPct.toFixed(2),
-                      p1: lvlPrice,
-                      p2: lvlPrice
-                    }
-                  });
-                }
-              }
-            }
-          } catch (_) {}
-        }));
-      }
-
-      hasCompletedInitialWarmup = true;
-    } catch (err) {
-      console.error("[FORMATION ALERT SCANNER ERROR]", err);
-    } finally {
-      isScanningFormationAlerts = false;
-    }
+      if (received) hasCompletedInitialWarmup = true;
+    } finally { isScanningFormationAlerts = false; }
   }
-
-  // Run auto-scanner loop every 4 seconds (fast background fallback)
   setTimeout(runFormationAlertScanner, 2000);
-  setInterval(runFormationAlertScanner, 4000);
+  setInterval(runFormationAlertScanner, 15000);
   window.runFormationAlertScanner = runFormationAlertScanner;
 }
 

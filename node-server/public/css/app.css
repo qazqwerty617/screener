@@ -5035,6 +5035,89 @@ body {
     box-shadow: 0 0 8px rgba(124, 58, 237, 0.25);
 }
 
+.profile-promo-section {
+    padding-top: 10px;
+    border-top: 1px solid var(--bd);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.profile-promo-section label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--t2);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.profile-promo-row {
+    display: flex;
+    gap: 8px;
+}
+
+.profile-promo-row input {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--bd2);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: #fff;
+    outline: none;
+    text-transform: uppercase;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.profile-promo-row input:focus {
+    border-color: #10b981;
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+}
+
+.profile-promo-row button {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: 6px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.profile-promo-row button:hover {
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
+}
+
+.profile-promo-row button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.profile-promo-msg {
+    font-size: 11.5px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin-top: 2px;
+    line-height: 1.35;
+}
+
+.profile-promo-msg.success {
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    color: #34d399;
+}
+
+.profile-promo-msg.error {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #f87171;
+}
+
 .profile-edit-section {
     padding-top: 10px;
     border-top: 1px solid var(--bd);
@@ -5254,6 +5337,19 @@ body {
     padding: 9px 12px;
     font-size: 12px;
     line-height: 1.4;
+}
+
+.auth-banner-notice {
+    background: rgba(124, 58, 237, 0.15);
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    color: #d8b4fe;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .auth-form {
@@ -6856,11 +6952,32 @@ body {
     font-size: 18px;
     font-weight: 900;
     color: #26c97a;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.pay-t-old-price {
+    font-size: 13px;
+    color: #64748b;
+    text-decoration: line-through;
+    font-weight: 600;
+}
+
+.pay-t-new-price {
+    color: #26c97a;
+    font-weight: 900;
 }
 
 .pay-t-desc {
     font-size: 11px;
     color: #94a3b8;
+    transition: color 0.2s ease;
+}
+
+.pay-t-desc-discounted {
+    color: #38bdf8;
+    font-weight: 600;
 }
 
 .pay-promo-box {

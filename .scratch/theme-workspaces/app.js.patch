@@ -1,0 +1,339 @@
+diff --git a/node-server/public/js/app.js b/node-server/public/js/app.js
+index 7be6545..d457e3e 100644
+--- a/node-server/public/js/app.js
++++ b/node-server/public/js/app.js
+@@ -814,6 +814,7 @@ async function syncPreferencesToServer() {
+       toolColors: typeof toolColors !== "undefined" ? toolColors : undefined,
+       candleSettings: typeof window.candleSettings !== "undefined" ? window.candleSettings : undefined,
+       volumeSettings: typeof window.volumeSettings !== "undefined" ? window.volumeSettings : undefined,
++      workspaceColors: typeof window.workspaceAppearanceColors !== "undefined" ? window.workspaceAppearanceColors : undefined,
+       chartDensitySettings: {
+         enabled: chartDensityEnabled,
+         side: chartDensitySide,
+@@ -928,6 +929,9 @@ function applyAccountPreferences(prefs) {
+     if (window.volumeSettings) Object.assign(window.volumeSettings, prefs.volumeSettings);
+     localStorage.setItem("screener-volume-settings", JSON.stringify(prefs.volumeSettings));
+   }
++  if (prefs.workspaceColors && typeof prefs.workspaceColors === "object") {
++    applyWorkspaceAppearanceColors(prefs.workspaceColors, true);
++  }
+ 
+   if (prefs.pumpAlerts || (prefs.notifications && (prefs.notifications.pumpDump || prefs.notifications.pumpAlerts))) {
+     const p = prefs.pumpAlerts || (prefs.notifications && (prefs.notifications.pumpDump || prefs.notifications.pumpAlerts));
+@@ -8994,6 +8998,15 @@ cDexCbs.forEach(cb => {
+   });
+ });
+ 
++const WORKSPACE_APPEARANCE_FIELDS = {
++  mapBg: "--map-bg",
++  mapPanel: "--map-panel",
++  arbitrageBg: "--arbitrage-bg",
++  arbitragePanel: "--arbitrage-panel",
++  formationsBg: "--formations-bg",
++  formationsPanel: "--formations-panel"
++};
++
+ const settingsBtn = $("settings-btn");
+ const settingsOverlay = $("settings-overlay");
+ const settingsClose = $("settings-close");
+@@ -9410,6 +9423,7 @@ if (settingsBtn && settingsOverlay) {
+     };
+ 
+     const formationColorState = { ...DEFAULT_FORMATION_COLORS };
++    const workspaceColorState = applyWorkspaceAppearanceColors(loadWorkspaceAppearanceColors());
+ 
+     window.candleSettings = candleState;
+     window.volumeSettings = volumeState;
+@@ -9499,6 +9513,26 @@ if (settingsBtn && settingsOverlay) {
+             refreshCharts();
+           };
+         }
++      } else if (id.startsWith("view-")) {
++        const keyMap = {
++          "view-map-bg": "mapBg",
++          "view-map-panel": "mapPanel",
++          "view-arbitrage-bg": "arbitrageBg",
++          "view-arbitrage-panel": "arbitragePanel",
++          "view-formations-bg": "formationsBg",
++          "view-formations-panel": "formationsPanel"
++        };
++        const prop = keyMap[id];
++        if (prop) {
++          initialColor = workspaceColorState[prop];
++          initialOpacity = 100;
++          onUpdate = (c) => {
++            workspaceColorState[prop] = c;
++            applyWorkspaceAppearanceColors(workspaceColorState, true);
++            schedulePreferencesSync();
++            refreshCharts();
++          };
++        }
+       } else if (id === "screener-bg") {
+         initialColor = localStorage.getItem("screener-sidebar-bg-color") || "#0d0f14";
+         initialOpacity = 100;
+@@ -9525,6 +9559,15 @@ if (settingsBtn && settingsOverlay) {
+       updateAxisColor(theme.muted, 100, true);
+       updateScreenerBgColor(theme.panel, true);
+       updateScreenerHeaderColor(theme.raised, true);
++      Object.assign(workspaceColorState, {
++        mapBg: theme.mapBg,
++        mapPanel: theme.mapPanel,
++        arbitrageBg: theme.arbitrageBg,
++        arbitragePanel: theme.arbitragePanel,
++        formationsBg: theme.formationsBg,
++        formationsPanel: theme.formationsPanel
++      });
++      applyWorkspaceAppearanceColors(workspaceColorState, true);
+       for (const type of ['body', 'border', 'wick']) {
+         Object.assign(candleState[type], { show: true, up: type === 'body' ? theme.up : theme.wickUp, down: type === 'body' ? theme.down : theme.wickDown, upOp: 100, downOp: 100 });
+         if ($('set-candle-' + type)) $('set-candle-' + type).checked = true;
+@@ -9535,6 +9578,14 @@ if (settingsBtn && settingsOverlay) {
+       for (const side of ['up', 'down']) pickers['volume-' + side]?.setColor(volumeState[side], 85);
+       pickers['screener-bg']?.setColor(theme.panel, 100);
+       pickers['screener-header']?.setColor(theme.raised, 100);
++      for (const [pickerId, prop] of Object.entries({
++        'view-map-bg': 'mapBg',
++        'view-map-panel': 'mapPanel',
++        'view-arbitrage-bg': 'arbitrageBg',
++        'view-arbitrage-panel': 'arbitragePanel',
++        'view-formations-bg': 'formationsBg',
++        'view-formations-panel': 'formationsPanel'
++      })) pickers[pickerId]?.setColor(workspaceColorState[prop], 100);
+       localStorage.setItem('screener-candle-settings', JSON.stringify(candleState));
+       localStorage.setItem('screener-volume-settings', JSON.stringify(volumeState));
+       if (bgPreview) bgPreview.style.backgroundColor = theme.bg;
+@@ -9736,6 +9787,27 @@ function hexToRgba(hex, opacity = 100) {
+   return `rgba(${r}, ${g}, ${b}, ${(opacity !== undefined ? opacity : 100) / 100})`;
+ }
+ 
++function getWorkspaceAppearanceDefaults() {
++  const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
++  return Object.fromEntries(Object.keys(WORKSPACE_APPEARANCE_FIELDS).map(key => [key, theme?.[key] || "#0d0f14"]));
++}
++
++function loadWorkspaceAppearanceColors() {
++  let saved = {};
++  try { saved = JSON.parse(localStorage.getItem("screener-workspace-colors") || "{}"); } catch (_) {}
++  return { ...getWorkspaceAppearanceDefaults(), ...saved };
++}
++
++function applyWorkspaceAppearanceColors(colors, save = false) {
++  const next = { ...getWorkspaceAppearanceDefaults(), ...(colors || {}) };
++  for (const [key, cssVar] of Object.entries(WORKSPACE_APPEARANCE_FIELDS)) {
++    if (/^#[0-9a-f]{6}$/i.test(next[key] || "")) document.documentElement.style.setProperty(cssVar, next[key]);
++  }
++  window.workspaceAppearanceColors = next;
++  if (save) localStorage.setItem("screener-workspace-colors", JSON.stringify(next));
++  return next;
++}
++
+ function updateScreenerBgColor(color, save = true) {
+   document.documentElement.style.setProperty("--screener-bg", color);
+   document.documentElement.style.setProperty("--screener-header-bg", color);
+@@ -9796,6 +9868,13 @@ function getCanvasBgColor() {
+   return hexToRgba(color, opacity);
+ }
+ 
++function getCanvasBgColorFor(canvas) {
++  if (canvas?.closest?.("#formations-view")) {
++    return getComputedStyle(document.documentElement).getPropertyValue("--formations-panel").trim() || getCanvasBgColor();
++  }
++  return getCanvasBgColor();
++}
++
+ function updateSymInfo() {
+   const key = `${activeEx}:${activeSym}`;
+   const c = coins.get(key);
+@@ -11068,7 +11147,7 @@ class ChartInstance {
+             this.canvas.height = ch * dpr;
+           }
+           this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+-          this.ctx.fillStyle = getCanvasBgColor();
++          this.ctx.fillStyle = getCanvasBgColorFor(this.canvas);
+           this.ctx.fillRect(0, 0, cw, ch);
+           this.ctx.fillStyle = "rgba(160, 160, 180, 0.4)";
+           this.ctx.font = "11px Inter, sans-serif";
+@@ -11159,7 +11238,7 @@ class ChartInstance {
+     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+ 
+     const ctx = this.ctx;
+-    ctx.fillStyle = getCanvasBgColor();
++    ctx.fillStyle = getCanvasBgColorFor(this.canvas);
+     ctx.fillRect(0, 0, cw, ch);
+ 
+     const PR = 60;
+@@ -11420,7 +11499,7 @@ class ChartInstance {
+ 
+     const tH = 18, tW = PR - 8, tX = PW + 4, tY = ly - tH / 2;
+     roundRect(ctx, tX, tY, tW, tH, 4);
+-    ctx.fillStyle = getCanvasBgColor();
++    ctx.fillStyle = getCanvasBgColorFor(this.canvas);
+     ctx.fill();
+     ctx.strokeStyle = up ? "#26c97a" : "#ff4560";
+     ctx.lineWidth = 1.2;
+@@ -12420,6 +12499,15 @@ function findDensityAt(x, y) {
+ function drawDensityMap() {
+   if (!densityCtx || !densityW || !densityH) return;
+   const ctx = densityCtx;
++  const rootStyle = getComputedStyle(document.documentElement);
++  const activePalette = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
++  const mapBg = rootStyle.getPropertyValue("--map-bg").trim() || activePalette?.mapBg || "#04050d";
++  const mapPanel = rootStyle.getPropertyValue("--map-panel").trim() || activePalette?.mapPanel || "#0d0f14";
++  const mapAccent = rootStyle.getPropertyValue("--ac").trim() || activePalette?.accent || "#7c3aed";
++  const mapText = rootStyle.getPropertyValue("--t1").trim() || activePalette?.text || "#ffffff";
++  const mapMuted = rootStyle.getPropertyValue("--t2").trim() || activePalette?.muted || "#94a3b8";
++  const mapBorder = rootStyle.getPropertyValue("--bd").trim() || activePalette?.border || "#2b2e39";
++  const accentAlpha = alpha => hexToRgba(mapAccent, alpha * 100);
+   const cx = densityW / 2;
+   const cy = densityH / 2;
+   const maxR = Math.min(cx, cy) - 60;
+@@ -12430,9 +12518,9 @@ function drawDensityMap() {
+ 
+   // тФАтФА Background gradient
+   const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.8);
+-  bg.addColorStop(0, "#0c0e1a");
+-  bg.addColorStop(0.55, "#080a12");
+-  bg.addColorStop(1, "#04050d");
++  bg.addColorStop(0, mapPanel);
++  bg.addColorStop(0.55, mapBg);
++  bg.addColorStop(1, mapBg);
+   ctx.fillStyle = bg;
+   ctx.fillRect(0, 0, densityW, densityH);
+ 
+@@ -12452,7 +12540,7 @@ function drawDensityMap() {
+   for (let a = 0; a < 24; a++) {
+     const angle = (a / 24) * Math.PI * 2 - Math.PI / 2;
+     const alpha = a % 6 === 0 ? 0.12 : 0.05;
+-    ctx.strokeStyle = `rgba(138,80,255, ${alpha})`;
++    ctx.strokeStyle = accentAlpha(alpha);
+     ctx.lineWidth = a % 6 === 0 ? 1.2 : 0.7;
+     ctx.beginPath();
+     ctx.moveTo(cx + Math.cos(angle) * 28, cy + Math.sin(angle) * 28);
+@@ -12480,7 +12568,7 @@ function drawDensityMap() {
+     ringFill.addColorStop(1, "transparent");
+ 
+     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+-    ctx.strokeStyle = accent ? "rgba(138,80,255, 0.4)" : "rgba(138,80,255, 0.13)";
++    ctx.strokeStyle = accent ? accentAlpha(0.4) : accentAlpha(0.13);
+     ctx.lineWidth = accent ? 1.8 : 1;
+     if (!accent) ctx.setLineDash([4, 6]);
+     ctx.stroke();
+@@ -12488,7 +12576,7 @@ function drawDensityMap() {
+ 
+     // label ├Ч4
+     ctx.font = `bold ${accent ? 13 : 11}px Inter`;
+-    ctx.fillStyle = accent ? "rgba(175,140,255, 0.85)" : "rgba(138,80,255, 0.55)";
++    ctx.fillStyle = accent ? accentAlpha(0.85) : accentAlpha(0.55);
+     [[cx + r + 8, cy + 5, "left"], [cx - r - 8, cy + 5, "right"],
+     [cx, cy - r - 9, "center"], [cx, cy + r + 16, "center"]].forEach(([lx, ly, align]) => {
+       ctx.textAlign = align; ctx.fillText(ring.label, lx, ly);
+@@ -12499,7 +12587,7 @@ function drawDensityMap() {
+   // тФАтФА Outer ring decoration
+   ctx.save();
+   ctx.beginPath(); ctx.arc(cx, cy, maxR + 12, 0, Math.PI * 2);
+-  ctx.strokeStyle = "rgba(138,80,255, 0.08)"; ctx.lineWidth = 1; ctx.stroke();
++  ctx.strokeStyle = accentAlpha(0.08); ctx.lineWidth = 1; ctx.stroke();
+   ctx.restore();
+ 
+   // тФАтФА Animated scan sweep
+@@ -12513,14 +12601,14 @@ function drawDensityMap() {
+   const sweepGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR + 10);
+   sweepGrad.addColorStop(0, "transparent");
+   // Made the cone much more transparent
+-  sweepGrad.addColorStop(0.4, "rgba(138,80,255, 0.02)");
+-  sweepGrad.addColorStop(1, "rgba(138,80,255, 0.05)");
++  sweepGrad.addColorStop(0.4, accentAlpha(0.02));
++  sweepGrad.addColorStop(1, accentAlpha(0.05));
+   ctx.fillStyle = sweepGrad; ctx.fill();
+   // sweep leading line
+   ctx.beginPath();
+   ctx.moveTo(cx, cy);
+   ctx.lineTo(cx + Math.cos(sweepAngle) * (maxR + 12), cy + Math.sin(sweepAngle) * (maxR + 12));
+-  ctx.strokeStyle = "rgba(138,80,255, 0.35)"; ctx.lineWidth = 1.5; ctx.stroke();
++  ctx.strokeStyle = accentAlpha(0.35); ctx.lineWidth = 1.5; ctx.stroke();
+   ctx.restore();
+ 
+   // тФАтФА Center pulsing dot
+@@ -12528,19 +12616,19 @@ function drawDensityMap() {
+   ctx.save();
+   // outer glow ring
+   const cGlow2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, 60);
+-  cGlow2.addColorStop(0, `rgba(138,80,255, ${0.15 * pulse})`);
++  cGlow2.addColorStop(0, accentAlpha(0.15 * pulse));
+   cGlow2.addColorStop(1, "transparent");
+   ctx.fillStyle = cGlow2; ctx.beginPath(); ctx.arc(cx, cy, 60, 0, Math.PI * 2); ctx.fill();
+   // inner glow
+   const cGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 22);
+-  cGlow.addColorStop(0, `rgba(168,110,255, ${0.7 * pulse})`);
++  cGlow.addColorStop(0, accentAlpha(0.7 * pulse));
+   cGlow.addColorStop(1, "transparent");
+   ctx.fillStyle = cGlow; ctx.beginPath(); ctx.arc(cx, cy, 22, 0, Math.PI * 2); ctx.fill();
+   // dot
+   ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+-  ctx.fillStyle = "#c084fc"; ctx.fill();
+-  ctx.strokeStyle = "rgba(200,200,255, 0.6)"; ctx.lineWidth = 1.5; ctx.stroke();
+-  ctx.fillStyle = "rgba(220, 200, 255, 0.8)";
++  ctx.fillStyle = mapAccent; ctx.fill();
++  ctx.strokeStyle = accentAlpha(0.6); ctx.lineWidth = 1.5; ctx.stroke();
++  ctx.fillStyle = mapMuted;
+   ctx.font = "bold 10px Inter"; ctx.textAlign = "center";
+   ctx.fillText("PRICE", cx, cy + 22);
+   ctx.restore();
+@@ -12587,8 +12675,8 @@ function drawDensityMap() {
+     const tipRows = [];
+     tipRows.push(["БИРЖА", (typeof CHART_EXCHANGE_NAMES !== "undefined" && CHART_EXCHANGE_NAMES[d.ex]) || d.ex, "#7dd3fc"]);
+     tipRows.push(["РЫНОК", marketText, marketColor]);
+-    tipRows.push(["ОБЪЕМ", volText, "#fff"]);
+-    tipRows.push(["ЦЕНА / ДИСТ", priceText, "#fff"]);
++    tipRows.push(["ОБЪЕМ", volText, mapText]);
++    tipRows.push(["ЦЕНА / ДИСТ", priceText, mapText]);
+ 
+     // Live lifetime: firstSeenAt keeps counting up while the wall exists,
+     // unlike the stale `age` snapshot from the scanner.
+@@ -12622,7 +12710,7 @@ function drawDensityMap() {
+       const minutesText = volMinutes >= 60
+         ? `${(volMinutes / 60).toFixed(1)} ч оборота`
+         : `${volMinutes < 1 ? volMinutes.toFixed(2) : volMinutes.toFixed(1)} мин оборота`;
+-      tipRows.push(["ОБЪЁМ РЫНКА", minutesText, "#c084fc"]);
++      tipRows.push(["ОБЪЁМ РЫНКА", minutesText, mapAccent]);
+     }
+ 
+     // Подтверждение на нескольких биржах — сильнейший сигнал: это не спуф.
+@@ -12687,8 +12775,8 @@ function drawDensityMap() {
+     ctx.save();
+     // Dark background box with subtle border
+     roundRect(ctx, tipX, tipY, tipW, tipH, 6);
+-    ctx.fillStyle = "rgba(10, 11, 16, 0.96)"; ctx.fill();
+-    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)"; ctx.lineWidth = 1; ctx.stroke();
++    ctx.fillStyle = mapPanel; ctx.fill();
++    ctx.strokeStyle = mapBorder; ctx.lineWidth = 1; ctx.stroke();
+ 
+     // 1. Header (TRADOOR.S — СОПРОТИВЛЕНИЕ)
+     const suffix = d.market === "spot" ? ".S" : ".F";
+@@ -12699,7 +12787,7 @@ function drawDensityMap() {
+     ctx.textBaseline = "top";
+     ctx.font = "bold 13px Inter";
+     ctx.textAlign = "left";
+-    ctx.fillStyle = "#ffffff";
++    ctx.fillStyle = mapText;
+     ctx.fillText(headerTitle, tipX + 16, tipY + 16);
+     const titleW = ctx.measureText(headerTitle).width;
+     ctx.fillStyle = headerTypeColor;
+@@ -12709,7 +12797,7 @@ function drawDensityMap() {
+     ctx.beginPath();
+     ctx.moveTo(tipX + 16, tipY + 38);
+     ctx.lineTo(tipX + tipW - 16, tipY + 38);
+-    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
++    ctx.strokeStyle = mapBorder;
+     ctx.setLineDash([]);
+     ctx.lineWidth = 1;
+     ctx.stroke();
+@@ -12720,7 +12808,7 @@ function drawDensityMap() {
+       // The lifetime row is the key signal — draw it slightly larger.
+       const isAgeRow = label === "ВРЕМЯ ЖИЗНИ";
+       ctx.font = isAgeRow ? "600 12px Inter" : "11px Inter";
+-      ctx.fillStyle = "rgba(255,255,255,0.4)";
++      ctx.fillStyle = mapMuted;
+       ctx.textAlign = "left";
+       ctx.fillText(label, tipX + 16, currY);
+ 

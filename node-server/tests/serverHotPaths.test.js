@@ -266,7 +266,7 @@ test("request-path persistence is debounced and non-blocking", () => {
 
   const tokenFn = USERSTORE.slice(USERSTORE.indexOf("function getUserByToken(token"), USERSTORE.indexOf("// Update profile name"));
   assert.ok(!/[^d]saveJSON\(/.test(tokenFn), "getUserByToken must not call the blocking writer");
-  assert.equal((tokenFn.match(/saveJSONDebounced\(/g) || []).length, 3);
+  assert.equal((tokenFn.match(/saveJSONDebounced\(/g) || []).length, 4);
 });
 
 test("auth logging is O(1) per event", () => {

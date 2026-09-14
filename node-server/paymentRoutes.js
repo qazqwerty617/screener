@@ -120,6 +120,30 @@ function registerPaymentRoutes(app, { userStore, paymentGateway }) {
     }
   });
 
+  const handlePromoRedeem = (req, res) => {
+    try {
+      const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+      const promoCode = typeof body.promoCode === "string" ? body.promoCode.trim() : "";
+      if (!promoCode || promoCode.length > 32) {
+        return res.status(400).json({ error: "Введите корректный промокод.", code: "INVALID_INPUT" });
+      }
+      const result = paymentGateway.redeemGiftPromo(promoCode, req.authUser.id);
+      res.json({
+        ok: true,
+        success: true,
+        code: result.code,
+        days: result.days,
+        message: `Вам успешно начислено ${result.days} дн. PRO подписки!`,
+        user: result.user
+      });
+    } catch (error) {
+      sendError(res, error);
+    }
+  };
+
+  app.post("/api/user/promo/redeem", paymentHeaders, authenticate, promoLimit, handlePromoRedeem);
+  app.post("/api/pay/promo/redeem", paymentHeaders, authenticate, promoLimit, handlePromoRedeem);
+
   app.get("/api/pay/status/:invoiceId", paymentHeaders, authenticate, statusLimit, async (req, res) => {
     try {
       const result = await paymentGateway.getInvoiceStatus(req.params.invoiceId, req.authUser.id);

@@ -42,7 +42,30 @@
     hitRegions: [] // populated during draw()
   };
 
-  const EXCHANGE_NAMES = { BN: "BINANCE", BB: "BYBIT", OX: "OKX" };
+  function currentToken() {
+    return (typeof window.getStoredAuthToken === "function" ? window.getStoredAuthToken() : localStorage.getItem("obsidian_auth_token")) || "";
+  }
+
+  function syncIdentity() {
+    const token = currentToken();
+    const market = window.getActiveMarket?.();
+    const identity = `${token}|${market?.ex || ''}|${market?.sym || ''}`;
+    if (state.identity !== identity) {
+      state.identity = identity;
+      state.requestController?.abort();
+      state.requestController = null;
+      state.loading = false;
+      state.executions = [];
+      state.hitRegions = [];
+      state.lastFetchAt = 0;
+      state.exchange = market?.ex || '';
+      state.symbol = market?.sym || '';
+      window.requestMainChartDraw?.();
+    }
+    return { token, market, identity };
+  }
+
+  const EXCHANGE_NAMES = { BN: "BINANCE", BB: "BYBIT", OX: "OKX", BG: "BITGET" };
 
   function number(value) {
     const n = Number(value);
@@ -318,6 +341,8 @@
   }
 
   function draw(ctx, options) {
+    const session = syncIdentity();
+    if (!session.token) return;
     if (state.hidden) {
       state.hitRegions = [];
       return;
@@ -636,12 +661,11 @@
   }
 
   async function refresh(force) {
-    const market = window.getActiveMarket?.();
-    const token = localStorage.getItem("obsidian_auth_token") || "";
+    const { market, token, identity } = syncIdentity();
     if (!market || !token || !EXCHANGE_NAMES[market.ex] || state.loading) return;
 
     const isSameSymbol = market.ex === state.exchange && market.sym === state.symbol;
-    if (!force && isSameSymbol && Date.now() - state.lastFetchAt < 650) return;
+    if (!force && isSameSymbol && Date.now() - state.lastFetchAt < 2000) return;
 
     if (!isSameSymbol) {
       state.executions = [];
@@ -649,18 +673,27 @@
     }
 
     state.loading = true;
+    const controller = new AbortController();
+    state.requestController = controller;
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const isCurrent = () => currentToken() === token && state.identity === identity && window.getActiveMarket?.()?.ex === market.ex && window.getActiveMarket?.()?.sym === market.sym;
     try {
       const query = new URLSearchParams({ exchange: market.ex, symbol: market.sym });
       const response = await fetch(`/api/journal/live?${query}`, {
         cache: "no-store",
+        signal: controller.signal,
         headers: { Authorization: `Bearer ${token}` }
       });
-      if (response.status === 404) {
+      if (!isCurrent()) return;
+      if ([401, 403, 404].includes(response.status)) {
         state.executions = [];
+        state.hitRegions = [];
+        window.requestMainChartDraw?.();
         return;
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      if (!isCurrent()) return;
       const raw = Array.isArray(data.executions) ? data.executions : [];
       const classified = classify(raw);
       const dismissed = getDismissedSet(market.sym);
@@ -672,9 +705,13 @@
       state.lastFetchAt = Date.now();
       window.requestMainChartDraw?.();
     } catch (_) {
-      if (force) state.executions = [];
+      if (isCurrent() && force) state.executions = [];
     } finally {
-      state.loading = false;
+      clearTimeout(timeout);
+      if (state.requestController === controller) {
+        state.loading = false;
+        state.requestController = null;
+      }
     }
   }
 
@@ -745,7 +782,7 @@
     state.timer = setInterval(() => {
       if (document.visibilityState === "visible") refresh(false);
       hookCanvasMouse();
-    }, 800);
+    }, 2500);
     refresh(true);
   }
 
@@ -759,6 +796,7 @@
     deleteAt,
     handleRightClick,
     hasExecutions() {
+      if (!syncIdentity().token) return false;
       const activeEx = state.exchange || window.getActiveMarket?.()?.ex || "";
       if (typeof window.CryptoJournal?.isExchangeChartEnabled === "function") {
         if (!window.CryptoJournal.isExchangeChartEnabled(activeEx)) return false;
@@ -770,6 +808,7 @@
       return state.hidden;
     },
     setExecutions(items) {
+      if (!syncIdentity().token) return;
       state.executions = Array.isArray(items) ? items : [];
     }
   };

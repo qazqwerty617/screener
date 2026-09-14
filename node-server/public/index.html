@@ -3011,6 +3011,7 @@
             </div>
 
             <div class="auth-banner-error" id="auth-error-msg" style="display: none;"></div>
+            <div class="auth-banner-notice" id="auth-notice-msg" style="display: none;"><span id="auth-notice-text"></span></div>
 
             <!-- Login Form -->
             <form id="auth-login-form" class="auth-form">
@@ -3161,6 +3162,21 @@
                     </div>
                 </div>
                 <button type="button" class="bug-card-action-btn">Сообщить →</button>
+            </div>
+
+            <div class="profile-promo-section">
+                <label for="profile-promo-input">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                    </svg>
+                    <span>Активация промокода на дни PRO</span>
+                </label>
+                <div class="profile-promo-row">
+                    <input type="text" id="profile-promo-input" placeholder="Введите код (например, FREE7)" maxlength="32" autocomplete="off" />
+                    <button type="button" id="profile-promo-btn" onclick="redeemProfilePromo();">Активировать</button>
+                </div>
+                <div id="profile-promo-msg" class="profile-promo-msg" style="display: none;"></div>
             </div>
 
             <div class="profile-edit-section">

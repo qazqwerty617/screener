@@ -1,0 +1,488 @@
+diff --git a/node-server/server.js b/node-server/server.js
+index cea2415..fb81a32 100644
+--- a/node-server/server.js
++++ b/node-server/server.js
+@@ -2320,107 +2320,51 @@ async function fetchBacktestCandles(ex, sym, tf) {
+ }
+ 
+ function scoreBacktestCandidate(candles, cut, visibleBars, futureBars, tf) {
++  if (cut < visibleBars || candles.length < cut + futureBars) return 0;
+   const visible = candles.slice(cut - visibleBars, cut);
+-  const future = candles.slice(cut, cut + futureBars);
+-  if (visible.length < visibleBars || future.length < futureBars) return 0;
+-
+-  const lastClose = visible[visible.length - 1].c;
+-  if (!lastClose || lastClose <= 0) return 0;
+-
+-  const visHigh = Math.max(...visible.map(c => c.h));
+-  const visLow = Math.min(...visible.map(c => c.l));
+-  const visRangePct = (visHigh - visLow) / lastClose;
+-
+-  const futHigh = Math.max(...future.map(c => c.h));
+-  const futLow = Math.min(...future.map(c => c.l));
+-  const futRangePct = (futHigh - futLow) / lastClose;
+-
+-  // Strict dynamic filters: guarantees active, volatile market, not a boring flat channel
+-  const minVisRange = { "1m": 0.035, "5m": 0.055, "15m": 0.080, "30m": 0.100, "1h": 0.130, "4h": 0.180, "1d": 0.250 }[tf] || 0.06;
+-  const minFutRange = { "1m": 0.020, "5m": 0.030, "15m": 0.045, "30m": 0.060, "1h": 0.080, "4h": 0.120, "1d": 0.160 }[tf] || 0.035;
+-
+-  if (visRangePct < minVisRange || futRangePct < minFutRange) return 0;
+-
+-  // Check activity near cutoff (last 25 bars must have movement)
+-  const recent = visible.slice(-25);
+-  const recHigh = Math.max(...recent.map(c => c.h));
+-  const recLow = Math.min(...recent.map(c => c.l));
+-  const recRangePct = (recHigh - recLow) / lastClose;
+-  if (recRangePct < minFutRange * 0.4) return 0;
+-
+-  // Measure ATR and Candle Bodies
+-  let trSum = 0;
+-  let bodySum = 0;
+-  for (let i = 1; i < visible.length; i++) {
+-    const cur = visible[i];
+-    const prev = visible[i - 1].c;
+-    trSum += Math.max(cur.h - cur.l, Math.abs(cur.h - prev), Math.abs(cur.l - prev));
+-    bodySum += Math.abs(cur.c - cur.o);
+-  }
+-  const avgTr = trSum / (visible.length - 1);
+-  const avgBody = bodySum / (visible.length - 1);
+-  const atrPct = avgTr / lastClose;
+-  const bodyPct = avgBody / lastClose;
+-
+-  const firstOpen = visible[0].o;
+-  const trendPct = Math.abs(lastClose - firstOpen) / firstOpen;
+-
+-  return (visRangePct * 100) * 2.5 
+-       + (futRangePct * 100) * 3.5 
+-       + (recRangePct * 100) * 2.0 
+-       + (atrPct * 1000) * 3.0 
+-       + (bodyPct * 1000) * 2.0 
+-       + (trendPct * 100) * 1.5;
++  const recent = visible.slice(-40);
++  const last = recent.at(-1)?.c;
++  if (!(last > 0)) return 0;
++  const minMove = { '1m': .0004, '5m': .0008, '15m': .0012, '30m': .0015, '1h': .002, '4h': .003, '1d': .005 }[tf] || .0008;
++  const moves = [], ranges = [];
++  for (let i = 1; i < recent.length; i++) {
++    const c = recent[i], previous = recent[i-1].c;
++    if (!(c.h >= Math.max(c.o,c.c)) || !(c.l <= Math.min(c.o,c.c)) || !(c.l > 0)) return 0;
++    moves.push(Math.max(Math.abs(c.c-c.o), Math.abs(c.c-previous)) / previous);
++    ranges.push((c.h-c.l)/previous);
++  }
++  const active = moves.filter(move => move >= minMove).length;
++  const medianRange = ranges.sort((a,b)=>a-b)[Math.floor(ranges.length/2)];
++  const path = moves.reduce((sum, move) => sum + move, 0);
++  // Activity must be sustained near the decision point, not one old impulse/wick.
++  if (active < 14 || medianRange < minMove || path < minMove * 24) return 0;
++  const range = (Math.max(...recent.map(c=>c.h)) - Math.min(...recent.map(c=>c.l))) / last;
++  if (range < minMove * 8) return 0;
++  // Rank using revealed history only: future bars do not select a favourable outcome.
++  return active + medianRange * 3000 + Math.min(path, .6) * 100 + Math.min(range,.4) * 100;
+ }
+ 
+ function findBestBacktestWindow(candles, tf) {
+   if (!candles || candles.length < 260) return null;
+-  const visibleBars = Math.min(200, Math.max(150, Math.floor(candles.length * 0.45)));
+-  const futureBars = Math.min(90, Math.max(50, Math.floor(candles.length * 0.18)));
+-  const minCut = visibleBars;
++  const visibleBars = Math.min(200, Math.max(150, Math.floor(candles.length * .45)));
++  const futureBars = Math.min(90, Math.max(50, Math.floor(candles.length * .18)));
+   const maxCut = candles.length - futureBars;
+-  if (maxCut <= minCut) return null;
+-
++  const stride = Math.max(1, Math.floor((maxCut - visibleBars) / 90));
+   const candidates = [];
+-  for (let attempt = 0; attempt < 60; attempt++) {
+-    const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
+-    const score = scoreBacktestCandidate(candles, candidateCut, visibleBars, futureBars, tf);
+-    if (score > 0) {
+-      candidates.push({
+-        cut: candidateCut,
+-        visible: candles.slice(candidateCut - visibleBars, candidateCut),
+-        future: candles.slice(candidateCut, candidateCut + futureBars),
+-        score,
+-      });
+-    }
+-  }
+-
+-  // Fallback with slightly relaxed criteria if strict filter didn't match in this specific batch
+-  if (candidates.length === 0) {
+-    for (let attempt = 0; attempt < 40; attempt++) {
+-      const candidateCut = minCut + Math.floor(Math.random() * (maxCut - minCut + 1));
+-      const visible = candles.slice(candidateCut - visibleBars, candidateCut);
+-      const future = candles.slice(candidateCut, candidateCut + futureBars);
+-      const lastClose = visible[visible.length - 1].c;
+-      const visHigh = Math.max(...visible.map(c => c.h));
+-      const visLow = Math.min(...visible.map(c => c.l));
+-      const visRangePct = (visHigh - visLow) / lastClose;
+-      const futHigh = Math.max(...future.map(c => c.h));
+-      const futLow = Math.min(...future.map(c => c.l));
+-      const futRangePct = (futHigh - futLow) / lastClose;
+-
+-      if (visRangePct > 0.035 && futRangePct > 0.02) {
+-        candidates.push({ cut: candidateCut, visible, future, score: visRangePct + futRangePct });
+-      }
+-    }
+-  }
+-
+-  if (candidates.length === 0) return null;
+-  candidates.sort((a, b) => b.score - a.score);
+-  const top = candidates.slice(0, Math.min(3, candidates.length));
+-  return top[Math.floor(Math.random() * top.length)];
++  for (let cut = visibleBars; cut <= maxCut; cut += stride) {
++    const score = scoreBacktestCandidate(candles, cut, visibleBars, futureBars, tf);
++    if (score > 0) candidates.push({cut, score});
++  }
++  if (!candidates.length) return null;
++  candidates.sort((a,b)=>b.score-a.score);
++  const best = candidates[Math.floor(Math.random() * Math.min(8,candidates.length))];
++  return { ...best, visible: candles.slice(best.cut-visibleBars,best.cut), future: candles.slice(best.cut,best.cut+futureBars) };
+ }
+ 
++const backtestPool = require('./backtestPool').createBacktestPool({
++  getUniverse: getBacktestUniverse, loadCandles: fetchBacktestCandles, selectWindow: findBestBacktestWindow
++});
++
+ function publicBacktestCandle(c) {
+   return [c.t, c.o, c.h, c.l, c.c, c.v];
+ }
+@@ -2827,62 +2771,36 @@ app.get("/api/backtest/new", async (req, res) => {
+       return res.status(503).json({ error: "Рынок ещё загружается. Повторите через несколько секунд." });
+     }
+ 
+-    // Pick from the top active liquid coins (ranked by volume & volatility)
+-    const topPool = universe.slice(0, Math.min(80, universe.length)).sort(() => Math.random() - 0.5);
+-    let lastError = null;
+-
+-    // A batch of 3 meant up to 27 strictly sequential round trips before the
+-    // first usable candidate — seconds of latency on a cold cache for a route
+-    // that aims at sub-300ms. 8 keeps the burst modest while cutting the worst
+-    // case to 10 rounds, and the first acceptable candidate still short-circuits.
+-    const BATCH_SIZE = 8;
+-    for (let i = 0; i < topPool.length; i += BATCH_SIZE) {
+-      const batch = topPool.slice(i, i + BATCH_SIZE);
+-      const fetchPromises = batch.map(ticker =>
+-        fetchBacktestCandles(ticker.ex, ticker.sym, tf)
+-          .then(candles => ({ ticker, candles }))
+-          .catch(err => { lastError = err; return null; })
+-      );
+-
+-      const results = await Promise.all(fetchPromises);
+-
+-      for (const resItem of results) {
+-        if (!resItem || !resItem.candles || resItem.candles.length < 260) continue;
+-        const best = findBestBacktestWindow(resItem.candles, tf);
+-        if (!best || !best.visible || best.visible.length === 0) continue;
+-
+-        const ticker = resItem.ticker;
+-        const id = randomUUID();
+-        backtestSessions.set(id, {
+-          id,
+-          createdAt: Date.now(),
+-          ex: ticker.ex,
+-          sym: ticker.sym,
+-          base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+-          tf,
+-          future: best.future,
+-          revealed: 0,
+-        });
+-
+-        return res.json({
+-          id,
+-          ex: ticker.ex,
+-          exchange: BACKTEST_EXCHANGES[exchange],
+-          sym: ticker.sym,
+-          base: ticker.base || ticker.sym.replace(/USDT$/, ""),
+-          tf,
+-          cutoffTime: best.visible[best.visible.length - 1].t,
+-          candles: best.visible.map(publicBacktestCandle),
+-          futureCount: best.future.length,
+-          universeSize: universe.length,
+-        });
+-      }
+-    }
++    const { ticker, best } = await backtestPool.take(exchange, tf);
++    if (res.destroyed) return;
++    while (backtestSessions.size >= 2000) backtestSessions.delete(backtestSessions.keys().next().value);
++    const id = randomUUID();
++    backtestSessions.set(id, {
++      id,
++      createdAt: Date.now(),
++      ex: ticker.ex,
++      sym: ticker.sym,
++      base: ticker.base || ticker.sym.replace(/USDT$/, ""),
++      tf,
++      future: best.future,
++      revealed: 0,
++    });
+ 
+-    res.status(503).json({ error: lastError?.message || "Не удалось подобрать активный исторический участок. Попробуйте еще раз." });
++    return res.json({
++      id,
++      ex: ticker.ex,
++      exchange: BACKTEST_EXCHANGES[exchange],
++      sym: ticker.sym,
++      base: ticker.base || ticker.sym.replace(/USDT$/, ""),
++      tf,
++      cutoffTime: best.visible[best.visible.length - 1].t,
++      candles: best.visible.map(publicBacktestCandle),
++      futureCount: best.future.length,
++      universeSize: universe.length,
++    });
+   } catch (err) {
+     console.error("[BACKTEST NEW]", err && err.message);
+-    if (!res.headersSent) res.status(503).json({ error: "Не удалось создать сессию бэктеста" });
++    if (!res.headersSent) res.status(503).json({ error: err.message || "Не удалось создать сессию бэктеста" });
+   }
+ });
+ 
+diff --git a/node-server/public/js/app.js b/node-server/public/js/app.js
+index 1a07f35..690f2ce 100644
+--- a/node-server/public/js/app.js
++++ b/node-server/public/js/app.js
+@@ -3234,7 +3234,7 @@ function drawChart() {
+   const gridStep = calcNiceStep(pr, Math.max(4, Math.floor(PH / 70)));
+   let gridPrice = Math.ceil(mn / gridStep) * gridStep;
+   ctx.setLineDash([]);
+-  ctx.strokeStyle = "rgba(255,255,255,.045)";
++  ctx.strokeStyle = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme).grid || "rgba(255,255,255,.045)";
+   ctx.lineWidth = 1;
+   ctx.beginPath();
+   while (gridPrice <= mx + gridStep * 0.01) {
+@@ -9041,24 +9041,6 @@ if (settingsBtn && settingsOverlay) {
+     };
+   });
+ 
+-  // Theme switching
+-  document.querySelectorAll(".theme-opt").forEach(opt => {
+-    opt.onclick = () => {
+-      document.querySelectorAll(".theme-opt").forEach(o => o.classList.remove("active"));
+-      opt.classList.add("active");
+-      const theme = opt.dataset.theme;
+-      let c = "#0d0f14";
+-      if (theme === "dark") c = "#0d0f14";
+-      if (theme === "black") c = "#000000";
+-      if (theme === "blue") c = "#0a0c1a";
+-      pendingBg = c;
+-      const bgPrev = $("bg-color-preview");
+-      if (bgPrev) bgPrev.style.backgroundColor = c;
+-      updateBgColor(c, pendingOpacity || 100, true);
+-    };
+-  });
+-
+-
+   // ═══ Formations Overlay Settings Init ═══
+   (function initFormationsOverlay() {
+     const LS_KEY = 'fov_settings';
+@@ -9534,7 +9516,52 @@ if (settingsBtn && settingsOverlay) {
+       pickers[id] = createColorPicker(el, initialColor, initialOpacity, onUpdate);
+     });
+ 
++    function selectAppearanceTheme(id) {
++      const theme = window.AppearanceThemes.applyShell(id);
++      localStorage.setItem('screener-appearance-theme', theme.id);
++      pendingBg = theme.bg; pendingOpacity = 100;
++      pendingAxisColor = theme.muted; pendingAxisOpacity = 100;
++      updateBgColor(theme.bg, 100, true);
++      updateAxisColor(theme.muted, 100, true);
++      updateScreenerBgColor(theme.panel, true);
++      updateScreenerHeaderColor(theme.raised, true);
++      for (const type of ['body', 'border', 'wick']) {
++        Object.assign(candleState[type], { show: true, up: type === 'body' ? theme.up : theme.wickUp, down: type === 'body' ? theme.down : theme.wickDown, upOp: 100, downOp: 100 });
++        if ($('set-candle-' + type)) $('set-candle-' + type).checked = true;
++        for (const side of ['up', 'down']) pickers['candle-' + side + '-' + type]?.setColor(candleState[type][side], 100);
++      }
++      Object.assign(volumeState, { show: true, up: theme.volumeUp, down: theme.volumeDown, upOp: 85, downOp: 85 });
++      if ($('set-show-volume')) $('set-show-volume').checked = true;
++      for (const side of ['up', 'down']) pickers['volume-' + side]?.setColor(volumeState[side], 85);
++      pickers['screener-bg']?.setColor(theme.panel, 100);
++      pickers['screener-header']?.setColor(theme.raised, 100);
++      localStorage.setItem('screener-candle-settings', JSON.stringify(candleState));
++      localStorage.setItem('screener-volume-settings', JSON.stringify(volumeState));
++      if (bgPreview) bgPreview.style.backgroundColor = theme.bg;
++      if (axisPreview) axisPreview.style.backgroundColor = theme.muted;
++      if (opacitySlider) opacitySlider.value = 100;
++      if (opacityVal) opacityVal.textContent = '100%';
++      if (axisOpacitySlider) axisOpacitySlider.value = 100;
++      if (axisOpacityVal) axisOpacityVal.textContent = '100%';
++      document.querySelectorAll('.theme-opt').forEach(button => {
++        const selected = button.dataset.theme === theme.id;
++        button.classList.toggle('active', selected);
++        button.setAttribute('aria-pressed', String(selected));
++      });
++      schedulePreferencesSync();
++      refreshCharts();
++    }
++    const themeGrid = document.querySelector('.theme-grid');
++    if (themeGrid && window.AppearanceThemes) {
++      const saved = localStorage.getItem('screener-appearance-theme');
++      const selected = window.AppearanceThemes.get(saved).id;
++      themeGrid.innerHTML = window.AppearanceThemes.themes.map(theme => '<button type="button" class="theme-opt' + (theme.id === selected ? ' active' : '') + '" data-theme="' + theme.id + '" aria-pressed="' + (theme.id === selected) + '">' + window.AppearanceThemes.preview(theme) + '<span class="theme-name">' + theme.name + '</span><span class="theme-description">' + theme.description + '</span></button>').join('');
++      themeGrid.querySelectorAll('button').forEach(button => button.onclick = () => selectAppearanceTheme(button.dataset.theme));
++      if (!saved) setTimeout(() => selectAppearanceTheme(selected), 0);
++    }
++
+     function refreshCharts() {
++      window.dispatchEvent(new Event("appearancechange"));
+       if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+       if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
+         chartInstances.forEach(inst => {
+@@ -9606,6 +9633,7 @@ if (settingsBtn && settingsOverlay) {
+         localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
+ 
+         localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
++        schedulePreferencesSync();
+ 
+         if (typeof pdCommitDraftAndSave === "function") {
+           pdCommitDraftAndSave();
+@@ -9625,34 +9653,7 @@ if (settingsBtn && settingsOverlay) {
+     const resetBtn = $("settings-reset-btn");
+     if (resetBtn) {
+       resetBtn.onclick = () => {
+-        // 1. Reset theme and background color to default dark (#0d0f14)
+-        pendingBg = "#0d0f14";
+-        pendingOpacity = "100";
+-        if (opacitySlider) opacitySlider.value = "100";
+-        if (opacityVal) opacityVal.textContent = "100%";
+-        if (bgPreview) bgPreview.style.backgroundColor = "#0d0f14";
+-        document.querySelectorAll(".theme-opt").forEach(o => o.classList.toggle("active", o.dataset.theme === "dark"));
+-        updateBgColor("#0d0f14", 100, true);
+-
+-        // 2. Reset axis text color to default
+-        pendingAxisColor = "#d1d4dc";
+-        pendingAxisOpacity = "100";
+-        if (axisOpacitySlider) axisOpacitySlider.value = "100";
+-        if (axisOpacityVal) axisOpacityVal.textContent = "100%";
+-        if (axisPreview) axisPreview.style.backgroundColor = "#d1d4dc";
+-        updateAxisColor("#d1d4dc", 100, true);
+-
+-        // 3. Reset screener sidebar color
+-        updateScreenerBgColor("#0d0f14", true);
+-
+-        // 4. Reset candle settings
+-        if ($("set-candle-body")) $("set-candle-body").checked = true;
+-        if ($("set-candle-border")) $("set-candle-border").checked = true;
+-        if ($("set-candle-wick")) $("set-candle-wick").checked = true;
+-        candleState.body.show = true;
+-        candleState.border.show = true;
+-        candleState.wick.show = true;
+-        localStorage.setItem("screener-candle-settings", JSON.stringify(candleState));
++        selectAppearanceTheme("aurora");
+ 
+         // 5. Reset compact & animation & volume
+         if ($("set-compact-list")) $("set-compact-list").checked = false;
+@@ -9745,7 +9746,8 @@ function updateScreenerBgColor(color, save = true) {
+ }
+ 
+ function updateScreenerHeaderColor(color, save = true) {
+-  updateScreenerBgColor(color, save);
++  document.documentElement.style.setProperty("--screener-header-bg", color);
++  if (save) localStorage.setItem("screener-sidebar-header-bg-color", color);
+ }
+ 
+ let currentActiveBgColor = localStorage.getItem("screener-bg-color") || "#0d0f14";
+@@ -9758,7 +9760,7 @@ function updateBgColor(color, opacity = 100, save = true) {
+ 
+   const rgba = hexToRgba(color, opacity);
+   document.documentElement.style.setProperty("--bg", rgba);
+-  document.documentElement.style.setProperty("--bg2", rgba);
++  document.documentElement.style.setProperty("--bg2", window.AppearanceThemes ? window.AppearanceThemes.get(document.documentElement.dataset.appearanceTheme).panel : rgba);
+ 
+   const chartArea = document.getElementById("chart-area");
+   if (chartArea) chartArea.style.backgroundColor = rgba;
+@@ -11226,7 +11228,7 @@ class ChartInstance {
+     while (gridPrice <= mx + gridStep * 0.01) {
+       const y = toY(gridPrice);
+       if (y >= 8 && y <= ch - 8) {
+-        ctx.strokeStyle = "rgba(255,255,255,0.045)";
++        ctx.strokeStyle = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme).grid || "rgba(255,255,255,0.045)";
+         ctx.lineWidth = 1;
+         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(PW, y); ctx.stroke();
+ 
+diff --git a/node-server/public/css/app.css b/node-server/public/css/app.css
+index 1849e2a..8862fb2 100644
+--- a/node-server/public/css/app.css
++++ b/node-server/public/css/app.css
+@@ -8553,4 +8553,32 @@ body {
+ .pd-card-price { font-size: 10px; color: #6b7280; font-family: monospace; }
+ .pd-empty { padding: 32px 20px; text-align: center; color: #4b5563; font-size: 13px; line-height: 1.6; }
+ 
++/* Complete appearance palettes. Preview colors come from the same catalogue. */
++[data-appearance-theme] .settings-modal { width: 790px; height: 720px; background: var(--bg2); }
++[data-appearance-theme] .settings-sidebar,
++[data-appearance-theme] .settings-footer { background: var(--bg); }
++[data-appearance-theme] .theme-grid { gap: 12px; }
++[data-appearance-theme] .theme-opt { padding: 0 0 12px; overflow: hidden; text-align: left; border-radius: 10px; background: var(--bg3); color: var(--t1); }
++[data-appearance-theme] .theme-opt svg { display: block; width: 100%; height: auto; border-bottom: 1px solid var(--bd); }
++[data-appearance-theme] .theme-opt.active { outline: 2px solid var(--ac); outline-offset: 2px; background: var(--bg3); color: var(--t1); }
++[data-appearance-theme] .theme-opt:focus-visible { outline: 3px solid var(--ac); outline-offset: 2px; }
++.theme-name { display: block; padding: 10px 12px 3px; font-weight: 700; font-size: 13px; }
++.theme-description { display: block; padding: 0 12px; font-size: 10px; line-height: 1.5; color: var(--t2); }
++[data-appearance-theme] :is(#bt-trade-panel, #bt-chart-head, .bt-indicators-menu, .bt-result, .color-dropdown, .bt-exchange-select) { background: var(--bg2); color: var(--t1); }
++[data-appearance-theme] :is(.bt-field input, .bt-field textarea, #bt-draw-tools) { background: var(--bg3); color: var(--t1); }
++[data-appearance-theme] .bt-loader { background: color-mix(in srgb, var(--bg) 85%, transparent); }
++[data-appearance-theme] :is(.settings-tab.active, .settings-apply-btn, .bt-primary, .bt-reveal, .bt-tf.on, .bt-speeds button.on, .bt-chip.on, .bt-stage-row span.on, .bt-commit-plan, .bt-module-icon, .bt-level-input button, .nav-tab.active) { background: var(--ac); color: var(--on-accent); box-shadow: none; }
++[data-appearance-theme] #bt-plan-state { color: var(--ac); background: var(--bg3); border-color: var(--bd); }
++[data-appearance-theme] .settings-pane h2 { color: var(--t1); }
++[data-appearance-theme] .ntab.on { color: var(--on-accent); }
++[data-appearance-theme] .exc-menu { background: var(--bg2) !important; }
++[data-appearance-theme] #bt-draw-tools .dt-btn.on { background: var(--ac); color: var(--on-accent); box-shadow: none; }
++[data-appearance-theme] #bt-long { color: var(--t1); background: var(--bg3); border-color: var(--bd2); }
++[data-appearance-theme] #bt-short { color: var(--rd); background: var(--bg3); border-color: var(--bd2); }
++[data-appearance-theme] #bt-long.on, [data-appearance-theme] #bt-short.on { background: var(--bgh); border-color: var(--ac); }
++@media (max-width: 600px) {
++    [data-appearance-theme] .settings-content { padding: 16px; }
++    [data-appearance-theme] .theme-grid { grid-template-columns: 1fr; }
++}
++
+ 
+diff --git a/node-server/public/index.html b/node-server/public/index.html
+index e242537..c03229c 100644
+--- a/node-server/public/index.html
++++ b/node-server/public/index.html
+@@ -33,9 +33,9 @@
+          otherwise show while fonts.css is still being parsed. -->
+     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
+     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
+-    <link rel="preload" href="/js/app.js?v=2086" as="script" />
++    <link rel="preload" href="/js/app.js?v=2088" as="script" />
+     <link rel="stylesheet" href="/css/fonts.css?v=3" />
+-    <link rel="stylesheet" href="/css/app.css?v=1010" />
++    <link rel="stylesheet" href="/css/app.css?v=1012" />
+     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
+          `media="print"` + onload swap is the standard non-blocking stylesheet
+          pattern: the browser fetches it at low priority without blocking paint. -->
+@@ -72,6 +72,7 @@
+                 ]
+             }
+         </script>
++    <script src="/js/appearanceThemes.js?v=1"></script>
+ </head>
+ 
+ <body>
+@@ -2456,11 +2457,7 @@
+                         <h2>Оформление</h2>
+                         <div class="settings-group">
+                             <label>Цветовая схема</label>
+-                            <div class="theme-grid">
+-                                <div class="theme-opt active" data-theme="dark">Тёмная (по умолч.)</div>
+-                                <div class="theme-opt" data-theme="black">Глубокий чёрный</div>
+-                                <div class="theme-opt" data-theme="blue">Тёмно-синяя</div>
+-                            </div>
++                            <div class="theme-grid" aria-label="Готовые цветовые схемы"></div>
+                         </div>
+                         <div class="settings-group">
+                             <div class="s-row">
+@@ -3551,10 +3548,10 @@
+     <script defer src="/js/formationEngine.js?v=2013"></script>
+     <script defer src="/js/tradeOverlay.js?v=2015"></script>
+     <script defer src="/js/pumpLogic.js?v=2"></script>
+-    <script defer src="/js/app.js?v=2086"></script>
++    <script defer src="/js/app.js?v=2088"></script>
+     <script defer src="/js/arbitrage.js?v=2011"></script>
+     <script defer src="/js/arbitrage-pro.js?v=2011"></script>
+-    <script defer src="/js/backtest.js?v=2009"></script>
++    <script defer src="/js/backtest.js?v=2010"></script>
+     <script defer src="/js/journal.js?v=2017"></script>
+ </body>
+ 

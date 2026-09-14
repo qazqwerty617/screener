@@ -173,12 +173,12 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
     const tol = cfg.levelTolerance || 0.0035;
     const minDeparturePct = tol * 1.6;
 
-    // Check piercing along the trendline: closes must stay on correct side
+    // Check piercing along the trendline: closes and wicks must stay on correct side
     for (let i = p1.idx + 1; i < candles.length; i++) {
       const lp = linePrice(p1, p2, i);
       const c = candles[i];
-      if (type === 'asc'  && (c.c < lp * (1 - tol * 1.1) || c.l < lp * (1 - tol * 1.8))) return null;
-      if (type === 'desc' && (c.c > lp * (1 + tol * 1.1) || c.h > lp * (1 + tol * 1.8))) return null;
+      if (type === 'asc'  && (c.c < lp || c.l < lp - 1e-7)) return null;
+      if (type === 'desc' && (c.c > lp || c.h > lp + 1e-7)) return null;
     }
 
     // Anchor points p1 and p2 form 2 initial touches
@@ -198,7 +198,7 @@ function detectTrendlines(candles, swings, cfg = DEFAULT_CONFIG) {
 
       // Check discrete touch after departure (at least 4 candles away from last touch)
       const wickDist = type === 'asc' ? Math.abs(c.l - lp) / lp : Math.abs(c.h - lp) / lp;
-      if (departed && i > p2.idx && (i - lastTouch >= 4) && wickDist <= tol * 1.2) {
+      if (departed && i > p2.idx && (i - lastTouch >= 4) && wickDist <= 0.00025) {
         touches++;
         lastTouch = i;
         departed = false;
@@ -472,7 +472,7 @@ function detectImpulses(candles, cfg = DEFAULT_CONFIG) {
 
 const formationEngine = require("./public/js/formationEngine");
 
-function scanCandles(meta, candles, cfgOverride = {}) {
+function scanCandles(meta, candles, cfgOverride = {}, precomputedFormations) {
   const cfg    = { ...DEFAULT_CONFIG, ...cfgOverride };
   if (!candles || candles.length < 30) return [];
 
@@ -496,7 +496,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
 
   // ── FormationEngine unified scan (1 normalize + 1 swings pass for all 3) ──
   try {
-    const fmAll = formationEngine.scanAll(candles, 2);
+    const fmAll = precomputedFormations || formationEngine.scanAll(candles, 2);
 
     // 1. Dominant Unbroken Trendlines
     if (fmAll.trendlines) {
@@ -509,7 +509,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
         if (!isResistance && (priceNow < endPrice * 0.998 || lastC.c < endPrice * 0.9985)) continue;
 
         const dist = Math.abs(priceNow - endPrice) / priceNow;
-        if (dist <= 0.04) {
+        if (dist <= 0.15) {
           signals.push({
             type: 'trendline', ex, sym, base, tf,
             price: endPrice,
@@ -541,7 +541,7 @@ function scanCandles(meta, candles, cfgOverride = {}) {
         if (isSupport && (priceNow < hl.price * 0.998 || lastC.c < hl.price * 0.9985)) continue;
 
         const dist = Math.abs(priceNow - hl.price) / priceNow;
-        if (dist <= 0.04) {
+        if (dist <= 0.15) {
           signals.push({
             type: 'level', ex, sym, base, tf,
             price: hl.price,
@@ -563,20 +563,20 @@ function scanCandles(meta, candles, cfgOverride = {}) {
 
     // 3. Confirmed Retests
     if (fmAll.retests) {
-      for (const rt of fmAll.retests) {
+      for (const rt of [...fmAll.retests, ...(fmAll.approachingRetests || [])]) {
         const dist = Math.abs(priceNow - rt.price) / priceNow;
-        const retestAge = Number(rt.lastTouchAge);
+        const retestAge = rt.isApproachingRetest ? 0 : Number(rt.lastTouchAge);
         // A retest is an entry event, not a historical decoration. Once price
         // has already travelled >1% from the level, or the reaction is older
-        // than 20 candles, sending it as a fresh Telegram signal is misleading.
-        if (dist > 0.01 || !Number.isFinite(retestAge) || retestAge > 20) continue;
+        // than the largest supported user age, it cannot match any subscriber.
+        if (dist > 0.01 || !Number.isFinite(retestAge) || retestAge > 35) continue;
         signals.push({
           type: 'retest', ex, sym, base, tf,
           price: Number(rt.price),
           direction: rt.direction === 'up' ? 'long' : 'short',
           confidence: 5, ts: rt.touchTime || now,
           meta: {
-            status: 'confirmed', touches: rt.touches || 2,
+            status: rt.isApproachingRetest ? 'approaching' : 'confirmed', touches: rt.touches || 2,
             dist: +(dist * 100).toFixed(2),
             touchIdx: rt.touchIdx, swingIdx: rt.swingIdx,
             breakIdx: rt.breakIdx, lastTouchAge: retestAge,

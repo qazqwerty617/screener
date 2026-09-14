@@ -1,0 +1,140 @@
+"use strict";
+/**
+ * MEXC Futures — Pro Terminal Speed
+ * Mid-price from order book (bid1+ask1)/2 for maximum accuracy
+ * push.ticker has bid1/ask1 — used for instant mid-price calculation
+ */
+module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) {
+  let mxSyms = [];
+
+  async function init() {
+    try {
+      if (updateExStatus) updateExStatus("MX", "connecting");
+      const detailMap = new Map();
+      // Contract sizes enrich metadata but must not hold chart availability.
+      apiFetch("https://contract.mexc.com/api/v1/contract/detail", 15000, 2).then(detailResp => {
+        if (!detailResp?.success || !Array.isArray(detailResp.data)) return;
+        for (const item of detailResp.data) {
+          if (item.symbol && item.contractSize) {
+            detailMap.set(item.symbol, +item.contractSize);
+            const existing = tickers.get("MX:" + item.symbol);
+            if (existing) existing.cs = +item.contractSize;
+          }
+        }
+      }).catch(() => {});
+      const data = await apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 15000, 2);
+      if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) throw new Error("MEXC API error");
+
+      mxSyms = [];
+      let added = 0;
+      for (const d of data.data) {
+        if (!d.symbol || !d.symbol.endsWith("_USDT")) continue;
+        const p = +d.lastPrice, changeRate = +d.riseFallRate;
+        const o = p && Number.isFinite(changeRate) ? p / (1 + changeRate) : 0;
+        const h = +d.high24Price, l = +(d.lower24Price || 0);
+        let oi = 0;
+        if (d.holdVol && d.volume24 && d.amount24 && +d.volume24 !== 0) {
+          oi = (+d.holdVol / +d.volume24) * +d.amount24;
+        }
+        mxSyms.push(d.symbol);
+        const cs = detailMap.get(d.symbol) || 1;
+        const tObj = {
+          key: "MX:" + d.symbol, ex: "MX", sym: d.symbol, base: d.symbol.replace(/_USDT$/, ""),
+          p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changeRate * 100,
+          v: +d.amount24, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
+          oi,
+          cs
+        };
+        tickers.set("MX:" + d.symbol, tObj);
+        const noUnder = d.symbol.replace("_", "");
+        if (noUnder !== d.symbol) tickers.set("MX:" + noUnder, tObj);
+        added++;
+      }
+      console.log(`[MX] Loaded ${added} symbols`);
+      if (updateExStatus) updateExStatus("MX", "online");
+      for (const [k] of tickers) { if (k.startsWith("MX:")) dirtyKeys.add(k); }
+      connectWs();
+      startRestPolling();
+    } catch (e) {
+      if (updateExStatus) updateExStatus("MX", "offline", e.message);
+      console.error("[MX] Init error:", e.message);
+      setTimeout(init, 5000);
+    }
+  }
+
+  function startRestPolling() {
+    const poll = async () => {
+      try {
+        const data = await apiFetch("https://contract.mexc.com/api/v1/contract/ticker", 5000, 0);
+        if (!data?.success || data.code !== 0 || !Array.isArray(data.data)) return;
+        
+        for (const tick of data.data) {
+          const t = tickers.get("MX:" + tick.symbol);
+          if (!t) continue;
+          
+          const p = +tick.lastPrice;
+          if (p > 0 && !t._wsMid) t.p = p; // only REST fallback if no WS mid-price
+          if (tick.amount24) t.v = +tick.amount24;
+          if (tick.holdVol && tick.volume24 && tick.amount24 && +tick.volume24 !== 0) {
+            t.oi = (+tick.holdVol / +tick.volume24) * +tick.amount24;
+          }
+          if (tick.high24Price) t.h = +tick.high24Price;
+          if (tick.lower24Price) t.l = +tick.lower24Price;
+          if (tick.riseFallRate && t.p > 0) t.o = t.p / (1 + +tick.riseFallRate);
+          if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+          if (tick.fundingRate) t.funding = +tick.fundingRate * 100;
+          
+          dirtyKeys.add(t.key);
+        }
+      } catch (_) {}
+    };
+    setInterval(poll, 15000);
+  }
+
+  function connectWs() {
+    if (updateExStatus) updateExStatus("MX", "online");
+
+    mkExWs("MX", "wss://contract.mexc.com/edge", (raw) => {
+      try {
+        const d = JSON.parse(raw.toString());
+        
+        if (d.channel === "push.tickers" && Array.isArray(d.data)) {
+          for (const tick of d.data) {
+            const sym = tick.symbol;
+            if (!sym) continue;
+            const t = tickers.get("MX:" + sym);
+            if (!t) continue;
+
+            const bid = +(tick.bid1 || 0);
+            const ask = +(tick.ask1 || 0);
+            if (bid > 0 && ask > 0) {
+              t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
+              t.p = (bid + ask) / 2;
+              t._wsMid = true;
+            } else {
+              const lp = +(tick.lastPrice || 0);
+              if (lp > 0) { t.p = lp; t.quoteTs = Date.now(); }
+            }
+
+            if (tick.amount24) t.v = +tick.amount24;
+            if (tick.high24Price) t.h = +tick.high24Price;
+            if (tick.lower24Price) t.l = +tick.lower24Price;
+            if (tick.riseFallRate) {
+              t.o = t.p / (1 + +tick.riseFallRate);
+            }
+            if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+            dirtyKeys.add(t.key);
+          }
+        }
+      } catch (_) {}
+    }, (ws) => {
+      ws.send(JSON.stringify({ method: "sub.tickers", param: {} }));
+      const ping = setInterval(() => {
+        if (ws.readyState === 1) ws.send(JSON.stringify({ method: "ping" }));
+        else clearInterval(ping);
+      }, 15000);
+    });
+  }
+
+  return { init };
+};

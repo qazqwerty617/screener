@@ -1,0 +1,212 @@
+diff --git a/node-server/public/css/app.css b/node-server/public/css/app.css
+index 988f62a..a829fc3 100644
+--- a/node-server/public/css/app.css
++++ b/node-server/public/css/app.css
+@@ -3341,7 +3341,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     display: flex;
+     flex-direction: column;
+     overflow: hidden;
+-    background: var(--bg);
++    background: var(--map-bg, var(--bg));
+ }
+ 
+ #density-toolbar {
+@@ -3351,7 +3351,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     padding: 6px 16px;
+     gap: 12px;
+     border-bottom: 1px solid var(--bd);
+-    background: rgba(13, 15, 20, 0.98);
++    background: var(--map-panel, var(--bg2));
+     flex-shrink: 0;
+     flex-wrap: wrap;
+ }
+@@ -3429,7 +3429,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     border: 1px solid var(--bd);
+     border-radius: 5px;
+     color: var(--t2);
+-    background: #11141c;
++    background: var(--map-panel, var(--bg2));
+     font: 500 10px var(--font);
+     outline: none;
+     cursor: pointer;
+@@ -3505,6 +3505,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     flex: 1;
+     position: relative;
+     overflow: hidden;
++    background: var(--map-bg, var(--bg));
+ }
+ 
+ #density-canvas {
+@@ -3520,30 +3521,30 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+   flex-wrap: wrap;
+   gap: 12px;
+   padding: 10px 14px;
+-  background: #10131a;
+-  border-bottom: 1px solid #272c38;
++  background: var(--formations-panel, var(--bg2));
++  border-bottom: 1px solid var(--bd);
+   flex-shrink: 0;
+ }
+-.formations-workspace-controls label { display: grid; gap: 5px; color: #9aa7bd; font-size: 11px; }
++.formations-workspace-controls label { display: grid; gap: 5px; color: var(--t2); font-size: 11px; }
+ .formations-workspace-controls input,
+ .formations-workspace-controls button {
+-  height: 32px; border: 1px solid #30394a; border-radius: 6px;
+-  background: #191f2b; color: #e4ebf8; padding: 0 10px; font: inherit;
++  height: 32px; border: 1px solid var(--bd); border-radius: 6px;
++  background: var(--formations-bg, var(--bg)); color: var(--t1); padding: 0 10px; font: inherit;
+ }
+ .formations-workspace-controls input { width: 135px; font-size: 12px; }
+ .formations-workspace-controls button { cursor: pointer; font-size: 12px; }
+ .formations-workspace-controls button:hover { border-color: #7d9bfa; }
+ .formations-workspace-controls input:focus-visible,
+ .formations-workspace-controls button:focus-visible { outline: 2px solid #7d9bfa; outline-offset: 2px; }
+-.formations-background-status { display: grid; gap: 5px; margin-right: auto; font-size: 11px; color: #9aa7bd; }
+-.formations-background-status strong { color: #b4d3c6; font-size: 12px; }
++.formations-background-status { display: grid; gap: 5px; margin-right: auto; font-size: 11px; color: var(--t2); }
++.formations-background-status strong { color: var(--gr); font-size: 12px; }
+ #formations-status[data-error="true"] { color: #f0b87b; }
+ #formations-view {
+     display: flex;
+     flex-direction: column;
+     width: 100%;
+     height: calc(100vh - var(--header-h, 50px));
+-    background: #0d0f14;
++    background: var(--formations-bg, var(--bg));
+     overflow: hidden;
+ }
+ 
+@@ -3556,7 +3557,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     padding: 0 16px;
+     height: 52px;
+     border-bottom: 1px solid var(--bd);
+-    background: rgba(19, 21, 30, 0.7);
++    background: color-mix(in srgb, var(--formations-panel, var(--bg2)) 88%, transparent);
+     backdrop-filter: blur(12px);
+     flex-shrink: 0;
+     gap: 16px;
+@@ -3688,7 +3689,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     gap: 4px;
+     padding: 4px;
+     overflow: hidden;
+-    background: #1a1c22;
++    background: var(--formations-bg, var(--bg));
+     min-height: 0;
+ }
+ 
+@@ -3699,8 +3700,8 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     justify-content: center;
+     gap: 14px;
+     padding: 8px 16px;
+-    background: var(--bg1);
+-    border-top: 1px solid var(--bd1);
++    background: var(--formations-panel, var(--bg2));
++    border-top: 1px solid var(--bd);
+     flex-shrink: 0;
+ }
+ 
+@@ -3767,7 +3768,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+ }
+ 
+ .formation-chart-card {
+-    background: #11131c;
++    background: var(--formations-panel, var(--bg2));
+     border: 1px solid var(--bd);
+     border-radius: 8px;
+     position: relative;
+@@ -3797,7 +3798,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     height: 100%;
+     flex: 1;
+     display: block;
+-    background: #0f1118;
++    background: var(--formations-panel, var(--bg2));
+ }
+ 
+ .fc-overlay-header {
+@@ -3852,10 +3853,10 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     flex-direction: column;
+     gap: 3px;
+     pointer-events: none;
+-    background: rgba(9, 10, 15, 0.7);
++    background: color-mix(in srgb, var(--formations-panel, var(--bg2)) 82%, transparent);
+     padding: 6px 10px;
+     border-radius: 6px;
+-    border: 1px solid rgba(255, 255, 255, 0.04);
++    border: 1px solid var(--bd);
+     backdrop-filter: blur(4px);
+     z-index: 5;
+ }
+@@ -3876,7 +3877,7 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     font-size: 9px;
+     font-weight: 600;
+     color: var(--t2);
+-    background: rgba(255, 255, 255, 0.06);
++    background: var(--bgh);
+     padding: 1px 4px;
+     border-radius: 3px;
+ }
+@@ -3892,8 +3893,8 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
+     bottom: 8px;
+     left: 8px;
+     right: 8px;
+-    background: rgba(13, 15, 22, 0.85);
+-    border: 1px solid rgba(255, 255, 255, 0.05);
++    background: color-mix(in srgb, var(--formations-panel, var(--bg2)) 90%, transparent);
++    border: 1px solid var(--bd);
+     border-radius: 6px;
+     padding: 8px 10px;
+     display: flex;
+@@ -8576,6 +8577,53 @@ body {
+ [data-appearance-theme] #bt-long { color: var(--t1); background: var(--bg3); border-color: var(--bd2); }
+ [data-appearance-theme] #bt-short { color: var(--rd); background: var(--bg3); border-color: var(--bd2); }
+ [data-appearance-theme] #bt-long.on, [data-appearance-theme] #bt-short.on { background: var(--bgh); border-color: var(--ac); }
++
++/* Map, arbitrage and formations have their own workspace surfaces. Keep those
++   surfaces on the selected palette instead of the legacy fixed dark colors. */
++[data-appearance-theme] #arbitrage-view {
++    background: var(--arbitrage-bg);
++    color: var(--t1);
++}
++[data-appearance-theme] #arbitrage-view .arb-hero {
++    background: radial-gradient(700px 180px at 8% 0, var(--acglow), transparent 70%), var(--arbitrage-panel);
++    border-color: var(--bd);
++}
++[data-appearance-theme] #arbitrage-view :is(.arb-kpis article, .arb-filters, .arb-results, .arb-filterbar, .arb-exchange-bar, .arb-table th) {
++    background: var(--arbitrage-panel);
++    border-color: var(--bd);
++}
++[data-appearance-theme] #arbitrage-view :is(.arb-search, .arb-field-row input, .arb-field-row select, .arb-tools select, .arb-tools button, .arb-compact-field input, .arb-compact-field select, .arb-reset-btn, .arb-refresh-btn, .arb-exchange) {
++    background: var(--arbitrage-bg);
++    border-color: var(--bd);
++    color: var(--t1);
++}
++[data-appearance-theme] #arbitrage-view :is(.arb-modebar, .arb-table-top, .arb-exchange-bar, .arb-table th, .arb-table td, .arb-route-leg:first-child, .arb-table-foot) {
++    border-color: var(--bd);
++}
++[data-appearance-theme] #arbitrage-view :is(.arb-page-head h1, .arb-kpis strong, .arb-table-top strong, .arb-filter-head strong, .arb-pair strong, .arb-leg strong, .arb-route-leg strong, .arb-route-leg b) {
++    color: var(--t1);
++}
++[data-appearance-theme] #arbitrage-view :is(.arb-page-head p, .arb-feed-state span, .arb-feed-state strong, .arb-kpis span, .arb-kpis small, .arb-table-top span, .arb-table th, .arb-table td, .arb-muted, .arb-route-leg small, .arb-transfer-mini > span, .arb-table-foot) {
++    color: var(--t2);
++}
++[data-appearance-theme] #arbitrage-view .arb-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--arbitrage-panel) 76%, var(--arbitrage-bg)); }
++[data-appearance-theme] #arbitrage-view .arb-table tbody tr:hover { background: var(--bgh); }
++[data-appearance-theme] #arbitrage-view .arb-modes button.on { color: var(--t1); border-color: var(--ac); }
++[data-appearance-theme] #arbitrage-view .arb-score-ring { background: conic-gradient(var(--ac) calc(var(--score) * 1%), var(--bd) 0); }
++[data-appearance-theme] #arbitrage-view .arb-score-ring::before { background: var(--arbitrage-panel); }
++[data-appearance-theme] :is(.arb-drawer, .arb-detail-score, .arb-detail-chart, .arb-detail-leg) {
++    background: var(--arbitrage-panel);
++    border-color: var(--bd);
++    color: var(--t1);
++}
++[data-appearance-theme] .arb-drawer :is(h2, strong, .arb-breakdown b) { color: var(--t1); }
++[data-appearance-theme] .arb-drawer :is(p, span, .arb-breakdown div) { color: var(--t2); }
++[data-appearance-theme] .arb-drawer :is(.arb-breakdown, .arb-drawer > header) { border-color: var(--bd); }
++[data-appearance-theme] #formations-view .grid-cell { background: var(--formations-panel); border-color: var(--bd); }
++[data-appearance-theme] #formations-view .cell-header { background: var(--formations-panel); border-color: var(--bd); }
++[data-appearance-theme] #formations-view :is(.cell-sym, .cell-price) { color: var(--t1); }
++[data-appearance-theme] #formations-view .cell-tf { background: var(--bgh); color: var(--t2); }
++[data-appearance-theme] #formations-view .cell-fs-btn:hover { background: var(--bgh); color: var(--t1); }
+ @media (max-width: 600px) {
+     [data-appearance-theme] .settings-content { padding: 16px; }
+     [data-appearance-theme] .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

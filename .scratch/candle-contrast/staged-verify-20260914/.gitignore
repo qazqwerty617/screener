@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+
+# ─── СЕКРЕТЫ — НИКОГДА НЕ КОММИТИТЬ ─────────────────────────────────────
+.env
+.env.*
+node-server/.env
+go-aggregator/.env
+go-scanner/.env
+!.env.example
+!node-server/.env.example
+
+
+# Logs and temp files
+*.log
+*.txt
+.vscode/
+.gemini/
+
+# Scratch and test files
+node-server/0
+node-server/t*.json
+node-server/tmp*.json
+node-server/check_*.js
+node-server/diag*.js
+node-server/test_*.js
+node-server/test-*.js
+node-server/tests/check_*.js
+node-server/tests/diagnose_*.js
+node-server/tests/test_*.js
+node-server/tests/analyze_*.js
+node-server/tests/find_*.js
+node-server/tests/set_*.js
+node-server/scripts/
+tmp*.png
+
+
+# Runtime identity/payment data (never commit production records)
+node-server/payments.json
+node-server/payment_invoices.json
+node-server/users.json
+node-server/sessions.json
+node-server/auth_logs.json
+node-server/journal_credentials.json
+node-server/users_database.csv
+node-server/data/
+
+# Go scanner binaries and data
+go-scanner/*.exe
+go-scanner/data/
+go-scanner/*.tmp
+
+# Scratch python scripts
+check_remote*.py
+deploy_remote*.py
+scratch_digest.py
+
+# Backups, snapshots, and security runtime files
+node-server/backups/
+node-server/security_banned_ips.json
+node-server/formation_cooldowns.json
+*.heapsnapshot
+go-scanner/scanner
+__pycache__/
+*.pyc
+
+# Source artwork the shipped icons are generated from (not served)
+node-server/assets-src/
+
+# Deployment scripts & temp auth helpers
+deploy.ps1
+remote.ps1
+askpass*.bat
+check_bx.py
+node-server/tests/run_remote_test.ps1
+node-server/tests/test_remote_fetch.py
+node-server/correlation_cache.json
+node-server/admin_audit*.json
+*.corrupted.*
+
+
+
+
