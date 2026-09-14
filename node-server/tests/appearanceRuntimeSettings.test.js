@@ -22,3 +22,15 @@ test("chart-animation switch controls the interpolation path instead of a dead v
   assert.match(app, /const factor = 1 - Math\.exp\(-INTERP_SPEED \* clampedDt\)/);
   assert.match(app, /function scheduleInterp\(key\)[\s\S]*?if \(!chartAnimationsEnabled\)[\s\S]*?c\.displayP = c\.p/s);
 });
+
+test("reset all restores every settings section and its visible controls", () => {
+  const reset = app.match(/resetBtn\.onclick\s*=\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\};\n\s*\}/)?.[1] || "";
+  assert.match(reset, /selectAppearanceTheme\("obsidian"\)/);
+  assert.match(reset, /Object\.assign\(formationColorState, DEFAULT_FORMATION_COLORS\)/);
+  assert.match(reset, /visibleCols\s*=\s*\{\s*\.\.\.defaultCols\s*\}/);
+  assert.match(reset, /updateTableGrid\(\)/);
+  assert.match(reset, /window\.pdResetToDefaults\?\.\(\)/);
+  assert.match(reset, /schedulePreferencesSync\(\)/);
+  assert.match(reset, /closeSettingsModal\(\)/);
+  assert.match(app, /function pdResetToDefaults\(\)[\s\S]*?pdSettings\s*=\s*JSON\.parse\(JSON\.stringify\(DEFAULT_PD_SETTINGS\)\)[\s\S]*?pdSave\(pdSettings\)[\s\S]*?pdSyncModalUI\(pdDraftSettings\)/);
+});

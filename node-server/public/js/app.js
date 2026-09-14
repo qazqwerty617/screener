@@ -9118,6 +9118,7 @@ if (settingsBtn && settingsOverlay) {
   settingsOverlay.onclick = (e) => {
     if (e.target === settingsOverlay) closeSettings();
   };
+  const closeSettingsModal = closeSettings;
   window.openSettingsModal = openSettings;
   window.closeSettingsModal = closeSettings;
 
@@ -9794,7 +9795,7 @@ if (settingsBtn && settingsOverlay) {
       resetBtn.onclick = () => {
         selectAppearanceTheme("obsidian");
 
-        // 5. Reset compact & animation & volume
+        // Reset every setting represented by this modal, including unsaved UI state.
         if ($("set-compact-list")) $("set-compact-list").checked = false;
         localStorage.setItem("screener-compact-list", "false");
         applyCompactList(false);
@@ -9807,17 +9808,27 @@ if (settingsBtn && settingsOverlay) {
         volumeState.show = true;
         localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
 
-        // 6. Reset Pump / Dump Scanner settings to default OFF
-        if (typeof DEFAULT_PD_SETTINGS !== "undefined") {
-          pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
-          if (typeof window.pdDiscardDraft === "function") window.pdDiscardDraft();
-          if (typeof pdSave === "function") pdSave(pdSettings);
-          if (typeof pdSyncModalUI === "function") pdSyncModalUI(pdSettings);
+        Object.assign(formationColorState, DEFAULT_FORMATION_COLORS);
+        for (const [pickerId, prop] of Object.entries({
+          "fmt-cascade-up": "cascadeUp",
+          "fmt-cascade-down": "cascadeDown",
+          "fmt-trendline-up": "trendlineUp",
+          "fmt-trendline-down": "trendlineDown",
+          "fmt-level": "level",
+          "fmt-retest": "retest"
+        })) {
+          pickers[pickerId]?.setColor(formationColorState[prop], formationColorState[prop + "Op"]);
         }
+        localStorage.setItem("screener-formation-colors", JSON.stringify(formationColorState));
 
+        visibleCols = { ...defaultCols };
+        updateTableGrid();
 
+        // Pump settings live in their own module; use its public reset boundary.
+        window.pdResetToDefaults?.();
 
         refreshCharts();
+        schedulePreferencesSync();
         if (typeof showToast === "function") {
           showToast({
             title: "Сброс настроек",
@@ -9825,6 +9836,7 @@ if (settingsBtn && settingsOverlay) {
             type: "success"
           });
         }
+        if (typeof closeSettingsModal === "function") closeSettingsModal();
       };
     }
 
@@ -19133,6 +19145,15 @@ if (document.readyState === "loading") {
 
   window.pdCommitDraftAndSave = pdCommitDraftAndSave;
   window.pdDiscardDraft = pdDiscardDraft;
+
+  function pdResetToDefaults() {
+    pdSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+    pdDraftSettings = JSON.parse(JSON.stringify(DEFAULT_PD_SETTINGS));
+    pdSave(pdSettings);
+    pdSyncModalUI(pdDraftSettings);
+  }
+
+  window.pdResetToDefaults = pdResetToDefaults;
 
   function pdSyncModalUI(customS) {
     if (customS) {
