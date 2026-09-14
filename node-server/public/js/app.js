@@ -1146,6 +1146,7 @@ window.MarketData = { subscribe: subscribeMarketData };
 // by the browser's 60fps rAF budget тАФ giving us ~240fps logic ticks.
 let INTERP_SPEED = 100.0; // catch-up speed per second (100.0 = Cinematic)
 const DEFAULT_INTERP_SPEED = 30.0;
+let chartAnimationsEnabled = true;
 const INTERP_SMOOTH_FACTOR = 0.85; // exponential smoothing for ultra-smooth price movement
 const SNAP_THRESHOLD = 0.01; // 1% difference triggers instant snap (cinematic mode)
 const interpActive = new Map(); // key => { target, lastUpdate }
@@ -1154,6 +1155,25 @@ const INTERP_PERIOD = 0.07; // Snappier smoothing window (seconds)
 let lastTickTs = 0;
 let mcRunning = false;
 let lastVltRankTs = 0;
+
+function applyCompactList(enabled) {
+  $("coin-list")?.classList.toggle("compact", Boolean(enabled));
+}
+
+function setChartAnimationsEnabled(enabled) {
+  chartAnimationsEnabled = Boolean(enabled);
+  INTERP_SPEED = DEFAULT_INTERP_SPEED;
+  document.documentElement.classList.toggle("chart-animations-off", !chartAnimationsEnabled);
+  if (chartAnimationsEnabled) return;
+  for (const [key] of interpActive) {
+    const coin = coins.get(key);
+    if (!coin) continue;
+    coin.displayP = coin.p;
+    markTickerDirty(key);
+  }
+  interpActive.clear();
+  chartNeedsDraw = true;
+}
 
 // тФАтФА Clean V-Sync Aligned High-Fidelity Lerp Interpolator ( Butter-Smooth Price Motion ) тФАтФА
 function processTickData(dt) {
@@ -1179,7 +1199,7 @@ function processTickData(dt) {
         interpActive.delete(key);
       } else {
         // Ultra-responsive smooth exponential lerp (fast & buttery smooth 120 FPS Glide)
-        const factor = 1 - Math.exp(-35 * clampedDt);
+        const factor = 1 - Math.exp(-INTERP_SPEED * clampedDt);
         c.displayP += diff * factor;
         markTickerDirty(key);
       }
@@ -1286,6 +1306,12 @@ function startMcLoop() {
 function scheduleInterp(key) {
   const c = coins.get(key);
   if (!c) return;
+  if (!chartAnimationsEnabled) {
+    c.displayP = c.p;
+    interpActive.delete(key);
+    markTickerDirty(key);
+    return;
+  }
   interpActive.set(key, { target: c.p, lastUpdate: performance.now() });
 }
 
@@ -9506,13 +9532,19 @@ if (settingsBtn && settingsOverlay) {
 
       const compact = localStorage.getItem("screener-compact-list") === "true";
       const compactEl = $("set-compact-list");
-      if (compactEl) compactEl.checked = compact;
-      if (compact) $("coin-list")?.classList.add("compact");
+      if (compactEl) {
+        compactEl.checked = compact;
+        compactEl.onchange = () => applyCompactList(compactEl.checked);
+      }
+      applyCompactList(compact);
 
       const anim = localStorage.getItem("screener-chart-anim") !== "false";
       const animEl = $("set-chart-anim");
-      if (animEl) animEl.checked = anim;
-      INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
+      if (animEl) {
+        animEl.checked = anim;
+        animEl.onchange = () => setChartAnimationsEnabled(animEl.checked);
+      }
+      setChartAnimationsEnabled(anim);
 
       const sBg = localStorage.getItem("screener-sidebar-bg-color");
       if (sBg) updateScreenerBgColor(sBg, false);
@@ -9730,11 +9762,11 @@ if (settingsBtn && settingsOverlay) {
 
         const compact = $("set-compact-list") ? $("set-compact-list").checked : false;
         localStorage.setItem("screener-compact-list", compact);
-        $("coin-list")?.classList.toggle("compact", compact);
+        applyCompactList(compact);
 
         const anim = $("set-chart-anim") ? $("set-chart-anim").checked : true;
         localStorage.setItem("screener-chart-anim", anim);
-        INTERP_SPEED = anim ? DEFAULT_INTERP_SPEED : 999.0;
+        setChartAnimationsEnabled(anim);
 
         if ($("set-show-volume")) volumeState.show = $("set-show-volume").checked;
         localStorage.setItem("screener-volume-settings", JSON.stringify(volumeState));
@@ -9765,11 +9797,11 @@ if (settingsBtn && settingsOverlay) {
         // 5. Reset compact & animation & volume
         if ($("set-compact-list")) $("set-compact-list").checked = false;
         localStorage.setItem("screener-compact-list", "false");
-        $("coin-list")?.classList.remove("compact");
+        applyCompactList(false);
 
         if ($("set-chart-anim")) $("set-chart-anim").checked = true;
         localStorage.setItem("screener-chart-anim", "true");
-        INTERP_SPEED = DEFAULT_INTERP_SPEED;
+        setChartAnimationsEnabled(true);
 
         if ($("set-show-volume")) $("set-show-volume").checked = true;
         volumeState.show = true;
