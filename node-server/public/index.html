@@ -40,7 +40,7 @@
          `media="print"` + onload swap is the standard non-blocking stylesheet
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=4" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/arbitrage-pro.css?v=6" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1121,8 +1121,8 @@
         <!-- Cross-exchange futures and funding arbitrage -->
         <div id="arbitrage-view" class="arb-view" style="display:none">
             <header class="arb-page-head">
-                <div><span class="arb-eyebrow"><i class="arb-live-dot"></i>LIVE BBO · CEX + DEX</span><h1>Арбитраж <em>Obsidian</em></h1><p>Исполнимые межбиржевые спреды, фандинг, переводы и DEX-пулы с точной проверкой контрактов.</p></div>
-                <div class="arb-feed-state"><span id="arb-update-age">обновление…</span><strong><i></i> Рынок онлайн</strong></div>
+                <div><h1>Арбитраж <em>Obsidian</em></h1><p>Исполнимые межбиржевые спреды, фандинг, переводы и DEX-пулы с точной проверкой контрактов.</p></div>
+                <span class="arb-freshness" id="arb-update-age">обновление…</span>
             </header>
             <section class="arb-kpis">
                 <article><span>Исполнимых возможностей</span><strong id="arb-kpi-count">—</strong><small>свежий BBO · полный round-trip</small></article>
@@ -1136,7 +1136,6 @@
                     <button data-arb-mode="funding" role="tab">Фандинг <b id="arb-funding-badge">0</b></button>
                     <button data-arb-mode="dex" role="tab">CEX ↔ DEX <b id="arb-dex-badge">0</b></button>
                 </div>
-                <div class="arb-update-state"><span></span><b>ask → bid · taker включён</b></div>
             </div>
             <section class="arb-workspace">
                 <main class="arb-results">
@@ -1168,7 +1167,7 @@
         <aside class="arb-drawer" id="arb-drawer" aria-hidden="true">
             <header><div><span id="arb-detail-kind">СПРЕД</span><h2 id="arb-detail-title">—</h2></div><button id="arb-detail-close">×</button></header>
             <div class="arb-detail-score"><div><span>EDGE SCORE</span><strong id="arb-detail-score">—</strong></div><p id="arb-detail-summary">—</p></div>
-            <section class="arb-transfer-card"><header><div><span>ПЕРЕВОД МЕЖДУ БИРЖАМИ</span><strong id="arb-transfer-title">Проверяем сети…</strong></div><b id="arb-transfer-state">ЗАГРУЗКА</b></header><div id="arb-transfer-route" class="arb-transfer-route"></div><small>Статусы относятся к базовому активу и не являются требованием для открытия двух фьючерсных ног.</small></section>
+            <section class="arb-transfer-card" id="arb-transfer-card"><header><div><span>ПЕРЕВОД МЕЖДУ БИРЖАМИ</span><strong id="arb-transfer-title">Проверяем сети…</strong></div><b id="arb-transfer-state">ЗАГРУЗКА</b></header><div id="arb-transfer-route" class="arb-transfer-route"></div><small>Статусы относятся к базовому активу и не являются требованием для открытия двух фьючерсных ног.</small></section>
             <section class="arb-execution" id="arb-execution">
                 <div class="arb-execution-head"><div><strong>Симулятор исполнения</strong><span>Расчёт по реальной глубине стаканов</span></div><b id="arb-depth-state">ЗАГРУЗКА</b></div>
                 <div class="arb-volume-input"><span>$</span><input id="arb-notional" type="number" min="10" max="1000000" step="10" value="500"><em>USDT</em></div>
@@ -1184,12 +1183,12 @@
                     <div class="arb-chart-tfs"><button class="on" data-arb-tf="live">Live</button><button data-arb-tf="5m">5м</button><button data-arb-tf="15m">15м</button><button data-arb-tf="1h">1ч</button><button data-arb-tf="4h">4ч</button></div>
                 </div>
                 <div class="arb-chart-heading"><div><span id="arb-chart-kicker">ИСТОРИЯ СВЯЗКИ</span><strong id="arb-chart-title">Исполнимый спред · BBO</strong></div><b id="arb-chart-quality">BBO</b></div>
-                <div class="arb-chart-legend"><span><i class="buy-leg"></i><b id="arb-chart-buy-label">Вход</b></span><span><i class="sell-leg"></i><b id="arb-chart-sell-label">Выход</b></span><span class="arb-chart-now">Сейчас <b id="arb-chart-current">—</b></span><span><i class="funding"></i>Funding/ч <b id="arb-chart-funding">—</b></span></div>
+                <div class="arb-chart-legend"><span><i class="buy-leg"></i><b id="arb-chart-buy-label">Вход</b></span><span><i class="sell-leg"></i><b id="arb-chart-sell-label">Выход</b></span><span class="arb-chart-now">Сейчас <b id="arb-chart-current">—</b></span><span id="arb-chart-funding-item"><i class="funding"></i>Funding/ч <b id="arb-chart-funding">—</b></span></div>
                 <div class="arb-chart-stage"><canvas id="arb-detail-canvas"></canvas><div class="arb-chart-empty" id="arb-chart-empty">Собираем историю выбранной связки…</div></div>
                 <div class="arb-chart-bottom"><div class="arb-chart-stats"><span>МИН <b id="arb-chart-min">—</b></span><span>СРЕДНИЙ <b id="arb-chart-avg">—</b></span><span>МАКС <b id="arb-chart-max">—</b></span><span>В ПЛЮСЕ <b id="arb-chart-positive">—</b></span><span>СВЕЖЕСТЬ <b id="arb-chart-age">—</b></span><span>ТОЧЕК <b id="arb-chart-samples">0</b></span></div><div class="arb-chart-modes"><button class="on" data-spread-mode="best">BBO</button><button data-spread-mode="volume">На объём</button></div></div>
             </section>
             <section class="arb-breakdown" id="arb-detail-breakdown"></section>
-            <div class="arb-warning"><b>Контроль риска</b><p>Funding — текущая оценка биржи и может измениться до расчёта. Окупаемость предполагает неизменную ставку. Проверяйте стакан, проскальзывание, базис, маржу и синхронно открывайте обе ноги.</p></div>
+            <div class="arb-warning" id="arb-risk-warning"><b>Контроль риска</b><p>Funding — текущая оценка биржи и может измениться до расчёта. Окупаемость предполагает неизменную ставку. Проверяйте стакан, проскальзывание, базис, маржу и синхронно открывайте обе ноги.</p></div>
             <div class="arb-detail-actions" id="arb-detail-actions"></div>
         </aside>
 
@@ -2437,15 +2436,6 @@
                         </svg>
                         <span>Уведомления</span>
                     </div>
-                    <div class="settings-tab" data-tab="trading">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <line x1="12" y1="20" x2="12" y2="10"></line>
-                            <line x1="18" y1="20" x2="18" y2="4"></line>
-                            <line x1="6" y1="20" x2="6" y2="16"></line>
-                        </svg>
-                        <span>Трейдинг</span>
-                    </div>
                     <div class="settings-tab" data-tab="filters">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
@@ -2946,11 +2936,6 @@
                         </div>
                     </div>
 
-                    <div class="settings-pane" id="tab-trading">
-
-                        <h2>Трейдинг</h2>
-                        <p style="color: var(--t2); font-size: 12px;">Здесь будут настройки быстрого перехода на биржи...</p>
-                    </div>
                     <div class="settings-pane" id="tab-filters">
                         <h2>Отображение Фильтров</h2>
                         <p style="color: var(--t2); font-size: 12px; margin-bottom: 12px;">Отключите ненужные колонки, чтобы сделать таблицу просторнее и чище.</p>
@@ -3576,8 +3561,8 @@
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
     <script defer src="/js/app.js?v=2095"></script>
-    <script defer src="/js/arbitrage.js?v=2014"></script>
-    <script defer src="/js/arbitrage-pro.js?v=2015"></script>
+    <script defer src="/js/arbitrage.js?v=2015"></script>
+    <script defer src="/js/arbitrage-pro.js?v=2016"></script>
     <script defer src="/js/backtest.js?v=2012"></script>
     <script defer src="/js/journal.js?v=2017"></script>
 </body>

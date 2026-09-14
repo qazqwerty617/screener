@@ -109,3 +109,62 @@ test("forced DEX refreshes are throttled to protect the upstream pool API", asyn
   await service.getSnapshot({ force: true });
   assert.equal(requests, 1);
 });
+
+test("DEX opportunities use the live ticker universe even without a CEX-to-CEX spread", () => {
+  const now = Date.now();
+  const tickers = new Map([["BN|BREWUSDT", {
+    base: "BREW", sym: "BREWUSDT", ex: "BN", p: 0.99, bid: 0.985, ask: 0.99,
+    v: 2_000_000, quoteTs: now,
+  }]]);
+  const pair = {
+    base: "BREW", tokenPriceUsd: 1.01, liquidityUsd: 500_000, volume24hUsd: 100_000,
+    transactions5m: 2, transactions1h: 10,
+    dexId: "pancakeswap", dexName: "PancakeSwap", chainId: "bsc", network: "BSC",
+    pairAddress: "0xpair", pairUrl: "https://dexscreener.com/bsc/0xpair",
+    contractAddress: "0x1111111111111111111111111111111111111111",
+    contractSources: ["BN"], contractVerified: true,
+  };
+
+  const rows = buildDexOpportunities(tickers, [pair], { now });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cexEx, "BN");
+  assert.match(rows[0].cexUrl, /binance/i);
+});
+
+test("DEX service retains bounded route history for the detail chart", async () => {
+  let now = 1_800_000_000_000;
+  let dexPrice = 1.01;
+  const contractAddress = "0x1111111111111111111111111111111111111111";
+  const transferService = {
+    catalogs: new Map([["BN", new Map([["BREW", [{ network: "BSC", contractAddress }]]])]]),
+    refresh: async () => {},
+  };
+  const tickers = new Map([["BN|BREWUSDT", {
+    base: "BREW", sym: "BREWUSDT", ex: "BN", p: 0.99, bid: 0.985, ask: 0.99,
+    v: 2_000_000, quoteTs: now,
+  }]]);
+  const service = createDexArbitrageService(async () => [{
+    chainId: "bsc", dexId: "pancakeswap", pairAddress: "0xpair",
+    url: "https://dexscreener.com/bsc/0xpair",
+    baseToken: { address: contractAddress, symbol: "BREW" },
+    quoteToken: { address: "0xusdt", symbol: "USDT" },
+    priceUsd: String(dexPrice), liquidity: { usd: 500_000 }, volume: { h24: 100_000 },
+    txns: { m5: { buys: 2, sells: 1 }, h1: { buys: 12, sells: 8 } },
+  }], transferService, () => tickers, {
+    ttlMs: 30_000, forceMinAgeMs: 0, clock: () => now, historyLimit: 2,
+  });
+
+  const first = await service.getSnapshot({ force: true });
+  now += 1_000;
+  tickers.get("BN|BREWUSDT").quoteTs = now;
+  dexPrice = 1.02;
+  await service.getSnapshot({ force: true });
+  now += 1_000;
+  tickers.get("BN|BREWUSDT").quoteTs = now;
+  dexPrice = 1.03;
+  await service.getSnapshot({ force: true });
+
+  const history = service.getHistory(first.rows[0].key);
+  assert.equal(history.points.length, 2);
+  assert.deepEqual(history.points.map(point => point[0]), [1_800_000_001_000, 1_800_000_002_000]);
+});

@@ -62,6 +62,26 @@ test("arbitrage exposes a separate contract-verified CEX to DEX workspace", () =
   assert.match(server, /createDexArbitrageService/);
 });
 
+test("CEX to DEX rows open a detail drawer with their own price history", () => {
+  assert.match(client, /data-dex-id=/);
+  assert.match(client, /function openDexDetail\(row\)/);
+  assert.match(client, /window\.ArbitragePro\?\.openDex\(row\)/);
+  assert.match(chart, /async function openDex\(row\)/);
+  assert.match(server, /app\.get\("\/api\/arbitrage\/dex\/history"/);
+});
+
+test("arbitrage header has one quiet freshness indicator instead of repeated live lights", () => {
+  assert.doesNotMatch(arbitrageHtml, /LIVE BBO/i);
+  assert.doesNotMatch(arbitrageHtml, /Рынок онлайн/i);
+  assert.doesNotMatch(arbitrageHtml, /ask → bid/i);
+  assert.match(arbitrageHtml, /id="arb-update-age"/);
+});
+
+test("settings do not expose an empty trading tab", () => {
+  assert.doesNotMatch(html, /data-tab="trading"/);
+  assert.doesNotMatch(html, /id="tab-trading"/);
+});
+
 test("transfer status endpoint is public read-only data", () => {
   assert.match(server, /app\.get\("\/api\/arbitrage\/transfers"/);
   assert.match(server, /createTransferStatusService\(apiFetch\)/);

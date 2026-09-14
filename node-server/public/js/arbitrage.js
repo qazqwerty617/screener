@@ -87,6 +87,16 @@
     const resetBtn = $("arb-reset"); if (resetBtn) resetBtn.addEventListener("click", reset);
     const spreadsBody = $("arb-spreads-body"); if (spreadsBody) spreadsBody.addEventListener("click", tableClick);
     const fundingBody = $("arb-funding-body"); if (fundingBody) fundingBody.addEventListener("click", tableClick);
+    const dexBody = $("arb-dex-body");
+    if (dexBody) {
+      dexBody.addEventListener("click", dexTableClick);
+      dexBody.addEventListener("keydown", e => {
+        if ((e.key === "Enter" || e.key === " ") && e.target.matches("tr[data-dex-id]")) {
+          e.preventDefault();
+          openDexDetailById(e.target.dataset.dexId);
+        }
+      });
+    }
     const closeBtn = $("arb-detail-close"); if (closeBtn) closeBtn.addEventListener("click", closeDetail);
     const backdrop = $("arb-drawer-backdrop"); if (backdrop) backdrop.addEventListener("click", closeDetail);
     document.addEventListener("keydown", e => { if (e.key === "Escape" && state.detailKey) closeDetail(); });
@@ -154,6 +164,7 @@
         if (!dexResponse.ok) throw new Error(`HTTP ${dexResponse.status}`);
         state.dexData = await dexResponse.json();
         if ($("arb-dex-badge")) $("arb-dex-badge").textContent = state.dexData.total ?? state.dexData.rows?.length ?? 0;
+        updateFreshness(state.dexData.generatedAt);
         render();
         return;
       }
@@ -211,8 +222,7 @@
     if ($("arb-kpi-funding-sub")) $("arb-kpi-funding-sub").textContent = bestFunding ? `${bestFunding.base} · ${countdown(bestFunding.nextEventAt)}` : "нет расписания";
     if ($("arb-kpi-streams")) $("arb-kpi-streams").textContent = Number(data.marketCount || 0).toLocaleString("ru-RU");
     if ($("arb-update-age")) {
-      const age = Math.max(0, Date.now() - Number(data.generatedAt || 0));
-      $("arb-update-age").textContent = age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;
+      updateFreshness(data.generatedAt);
     }
     if ($("arb-spread-badge")) $("arb-spread-badge").textContent = data.totals?.spreads ?? data.spreads.length;
     if ($("arb-funding-badge")) $("arb-funding-badge").textContent = data.totals?.funding ?? data.funding.length;
@@ -374,7 +384,7 @@
     const body = $("arb-dex-body");
     if (!body) return;
     body.innerHTML = rows.filter(r => r.contractMatch === "exact").map(r => `
-      <tr>
+      <tr data-dex-id="${esc(r.key)}" tabindex="0" aria-label="Открыть детали ${esc(r.base)}: ${esc(r.buyVenue)} — ${esc(r.sellVenue)}">
         <td>${pairCell(r)}</td>
         <td><div class="arb-dex-route"><strong>${esc(r.buyVenue)}</strong><i>→</i><strong>${esc(r.sellVenue)}</strong><small>${r.direction === "cex_to_dex" ? "купить CEX · продать DEX" : "купить DEX · продать CEX"}</small></div></td>
         <td><span class="arb-chain-badge">${esc(r.network)}</span><small class="arb-dex-source">${esc(r.dexName)}</small></td>
@@ -387,6 +397,13 @@
         <td class="arb-num">${money(r.liquidityUsd)}</td>
         <td class="arb-num">${money(r.volume24hUsd)}</td>
       </tr>`).join("");
+  }
+
+  function updateFreshness(generatedAt) {
+    const target = $("arb-update-age");
+    if (!target) return;
+    const age = Math.max(0, Date.now() - Number(generatedAt || 0));
+    target.textContent = age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;
   }
 
   function fundingHourly(r) {
@@ -405,6 +422,17 @@
     }
     const row = e.target.closest("tr[data-key]");
     if (row) openDetail(row.dataset.key);
+  }
+
+  function dexTableClick(e) {
+    if (e.target.closest("a")) return;
+    const row = e.target.closest("tr[data-dex-id]");
+    if (row) openDexDetailById(row.dataset.dexId);
+  }
+
+  function openDexDetailById(key) {
+    const row = (state.dexData?.rows || []).find(item => item.key === key);
+    if (row) openDexDetail(row);
   }
 
   function drawSparks() {
@@ -454,6 +482,8 @@
     state.detailKey = key;
     state.detailRow = r;
     const isFunding = key.startsWith("funding:");
+    if ($("arb-transfer-card")) $("arb-transfer-card").hidden = false;
+    if ($("arb-risk-warning")) $("arb-risk-warning").innerHTML = "<b>Контроль риска</b><p>Funding — текущая оценка биржи и может измениться до расчёта. Окупаемость предполагает неизменную ставку. Проверяйте стакан, проскальзывание, базис, маржу и синхронно открывайте обе ноги.</p>";
 
     if ($("arb-detail-kind")) $("arb-detail-kind").textContent = isFunding ? "FUNDING ARBITRAGE" : "FUTURES SPREAD";
     if ($("arb-detail-title")) $("arb-detail-title").textContent = `${r.base}/USDT`;
@@ -488,6 +518,45 @@
     renderTransferDetail(r);
     fetchTransferStatuses();
     if (window.ArbitragePro) window.ArbitragePro.open(r, isFunding);
+  }
+
+  function openDexDetail(row) {
+    state.detailKey = row.key;
+    state.detailRow = row;
+    const buyPrice = row.direction === "cex_to_dex" ? row.cexPrice : row.dexPrice;
+    const sellPrice = row.direction === "cex_to_dex" ? row.dexPrice : row.cexPrice;
+    const score = Math.max(1, Math.min(99, Math.round(45 + Number(row.netPct || 0) * 8 + Math.log10(Math.max(1, Number(row.liquidityUsd))) * 3)));
+    if ($("arb-detail-kind")) $("arb-detail-kind").textContent = "CEX ↔ DEX · EXACT CONTRACT";
+    if ($("arb-detail-title")) $("arb-detail-title").textContent = `${row.base}/USDT`;
+    if ($("arb-detail-score")) $("arb-detail-score").textContent = score;
+    if ($("arb-detail-summary")) $("arb-detail-summary").textContent = `${row.buyVenue} → ${row.sellVenue}: ${pct(row.netPct)} после оценки комиссий и влияния на пул. Сеть ${row.network}, контракт проверен по адресу.`;
+    if ($("arb-detail-legs")) {
+      $("arb-detail-legs").innerHTML = detailLeg("КУПИТЬ", row.buyVenue, price(buyPrice), "long")
+        + detailLeg("ПРОДАТЬ", row.sellVenue, price(sellPrice), "short");
+    }
+    if ($("arb-detail-breakdown")) {
+      $("arb-detail-breakdown").innerHTML = breakdown([
+        ["Валовая разница", pct(row.grossPct)],
+        ["Комиссии + impact", `−${Number(row.estimatedCostsPct || 0).toFixed(3)}%`],
+        ["Расчётный net", pct(row.netPct)],
+        ["Ликвидность пула", money(row.liquidityUsd)],
+        ["Объём пула 24ч", money(row.volume24hUsd)],
+        ["Сеть", row.network],
+        ["Контракт", shortContract(row.contractAddress)],
+      ]);
+    }
+    if ($("arb-detail-actions")) {
+      const urls = [[row.cexUrl, `Открыть ${row.cexName}`], [row.pairUrl, `Открыть ${row.dexName}`]].filter(([url]) => url && url !== "#");
+      $("arb-detail-actions").innerHTML = urls.map(([url, label]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>`).join("");
+    }
+    if ($("arb-transfer-card")) $("arb-transfer-card").hidden = true;
+    if ($("arb-risk-warning")) $("arb-risk-warning").innerHTML = "<b>Контроль риска</b><p>DEX-цена индикативная. Перед сделкой получите исполнимую wallet quote и проверьте gas, price impact, MEV, сеть и адрес контракта.</p>";
+    if ($("arb-drawer-backdrop")) $("arb-drawer-backdrop").hidden = false;
+    if ($("arb-drawer")) {
+      $("arb-drawer").classList.add("open");
+      $("arb-drawer").setAttribute("aria-hidden", "false");
+    }
+    window.ArbitragePro?.openDex(row);
   }
 
   function renderTransferDetail(r) {

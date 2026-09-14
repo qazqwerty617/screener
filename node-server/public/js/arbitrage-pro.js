@@ -3,7 +3,7 @@
 (function () {
   const $ = id => document.getElementById(id);
   const pro = {
-    row: null, isFunding: false, tf: 'live', mode: 'best', view: 'spread', depth: null,
+    row: null, isFunding: false, isDex: false, tf: 'live', mode: 'best', view: 'spread', depth: null,
     depthLoading: false, requestId: 0, historySeq: 0, initialized: false,
     drawQueued: false, history: [], historyTimer: null, hoverX: -1,
   };
@@ -32,11 +32,17 @@
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), wait); };
   }
   function fundingHourly(row) {
+    if (pro.isDex) return 0;
     if (pro.isFunding) return Number(row.hourly) || 0;
     return ((Number(row.sellFunding) || 0) / (Number(row.sellInterval) || 8)
       - (Number(row.buyFunding) || 0) / (Number(row.buyInterval) || 8));
   }
   function legs(row) {
+    if (pro.isDex) {
+      return row.direction === 'cex_to_dex'
+        ? { buyName: row.cexName, buyPrice: row.cexPrice, sellName: row.dexName, sellPrice: row.dexPrice }
+        : { buyName: row.dexName, buyPrice: row.dexPrice, sellName: row.cexName, sellPrice: row.cexPrice };
+    }
     return pro.isFunding
       ? { buyName: row.longName, buyPrice: row.longPrice || 0, sellName: row.shortName, sellPrice: row.shortPrice || 0 }
       : { buyName: row.buyName, buyPrice: row.buyAsk, sellName: row.sellName, sellPrice: row.sellBid };
@@ -45,11 +51,11 @@
     const l = legs(row);
     return {
       t: Number(row.generatedAt) || Date.now(),
-      spread: Number(pro.isFunding ? row.hourly : row.net) || 0,
+      spread: Number(pro.isDex ? row.netPct : (pro.isFunding ? row.hourly : row.net)) || 0,
       buyP: Number(l.buyPrice) || 0,
       sellP: Number(l.sellPrice) || 0,
-      gross: Number(pro.isFunding ? row.basis : row.gross),
-      exit: pro.isFunding ? NaN : Number(row.exitNet),
+      gross: Number(pro.isDex ? row.grossPct : (pro.isFunding ? row.basis : row.gross)),
+      exit: pro.isFunding || pro.isDex ? NaN : Number(row.exitNet),
       buyExit: Number(row.buyBid) || Number(l.buyPrice) || 0,
       sellExit: Number(row.sellAsk) || Number(l.sellPrice) || 0,
     };
@@ -94,10 +100,11 @@
     window.addEventListener('resize', debounce(scheduleCharts, 100));
   }
 
-  function open(row, isFunding) {
+  function openRoute(row, isFunding, isDex) {
     init();
     pro.row = row;
-    pro.isFunding = isFunding;
+    pro.isFunding = Boolean(isFunding);
+    pro.isDex = Boolean(isDex);
     pro.depth = null;
     pro.mode = 'best';
     pro.view = 'spread';
@@ -107,7 +114,9 @@
     pro.history = [snapshotPoint(row)].filter(point => point.buyP > 0 && point.sellP > 0);
     pro.hoverX = -1;
     if ($('arb-drawer')) $('arb-drawer').scrollTop = 0;
-    if ($('arb-execution')) $('arb-execution').style.display = isFunding ? 'none' : 'block';
+    if ($('arb-execution')) $('arb-execution').style.display = isFunding || isDex ? 'none' : 'block';
+    if ($('arb-transfer-card')) $('arb-transfer-card').hidden = Boolean(isDex);
+    if ($('arb-chart-funding-item')) $('arb-chart-funding-item').hidden = Boolean(isDex);
     document.querySelectorAll('[data-spread-mode]').forEach(btn => {
       btn.classList.toggle('on', btn.dataset.spreadMode === 'best');
       if (btn.dataset.spreadMode === 'volume') btn.disabled = true;
@@ -120,15 +129,27 @@
     }
     updateChartLabels();
     renderCharts();
-    loadServerHistory(row.key);
+    if (isDex) loadDexHistory(row.key); else loadServerHistory(row.key);
     if (pro.historyTimer) clearInterval(pro.historyTimer);
-    pro.historyTimer = setInterval(() => { if (pro.row) loadServerHistory(pro.row.key); }, 2000);
-    if (!isFunding) loadDepth();
+    pro.historyTimer = setInterval(() => {
+      if (!pro.row) return;
+      if (pro.isDex) loadDexHistory(pro.row.key); else loadServerHistory(pro.row.key);
+    }, isDex ? 10_000 : 2_000);
+    if (!isFunding && !isDex) loadDepth();
+  }
+
+  function open(row, isFunding) {
+    openRoute(row, isFunding, false);
+  }
+
+  async function openDex(row) {
+    openRoute(row, false, true);
   }
 
   function close() {
     if (pro.historyTimer) { clearInterval(pro.historyTimer); pro.historyTimer = null; }
     pro.row = null;
+    pro.isDex = false;
     pro.depth = null;
     pro.history = [];
     pro.requestId++;
@@ -139,20 +160,20 @@
     const row = pro.row;
     if (!row) return;
     const l = legs(row);
-    const isBbo = !pro.isFunding && row.quality === 'bbo';
+    const isBbo = !pro.isFunding && !pro.isDex && row.quality === 'bbo';
     const quality = $('arb-chart-quality');
     if (quality) {
-      quality.textContent = pro.isFunding ? 'FUNDING' : (isBbo ? 'BBO' : 'MID');
+      quality.textContent = pro.isDex ? 'CONTRACT EXACT' : (pro.isFunding ? 'FUNDING' : (isBbo ? 'BBO' : 'MID'));
       quality.classList.toggle('indicative', !isBbo);
     }
-    if ($('arb-chart-kicker')) $('arb-chart-kicker').textContent = pro.view === 'index' ? 'СИНХРОННОЕ ДВИЖЕНИЕ ЦЕН' : 'ИСТОРИЯ СВЯЗКИ';
+    if ($('arb-chart-kicker')) $('arb-chart-kicker').textContent = pro.view === 'index' ? 'СИНХРОННОЕ ДВИЖЕНИЕ ЦЕН' : (pro.isDex ? 'ИСТОРИЯ CEX ↔ DEX' : 'ИСТОРИЯ СВЯЗКИ');
     if ($('arb-chart-title')) {
       $('arb-chart-title').textContent = pro.view === 'index'
         ? `${l.buyName} / ${l.sellName} · индекс 100`
-        : pro.isFunding ? 'Текущая разница ставок / час' : `${isBbo ? 'Исполнимый' : 'Ориентировочный'} спред · ${isBbo ? 'BBO' : 'Mid'}`;
+        : pro.isDex ? 'Расчётный net и валовая разница' : pro.isFunding ? 'Текущая разница ставок / час' : `${isBbo ? 'Исполнимый' : 'Ориентировочный'} спред · ${isBbo ? 'BBO' : 'Mid'}`;
     }
     const modes = document.querySelector('.arb-chart-modes');
-    if (modes) modes.hidden = pro.isFunding || pro.view === 'index';
+    if (modes) modes.hidden = pro.isFunding || pro.isDex || pro.view === 'index';
   }
 
   async function loadServerHistory(key) {
@@ -181,6 +202,38 @@
       if (!pro.history.length && $('arb-chart-empty')) {
         $('arb-chart-empty').hidden = false;
         $('arb-chart-empty').textContent = 'История временно недоступна';
+      }
+    }
+  }
+
+  async function loadDexHistory(key) {
+    const requestId = pro.requestId;
+    const sequence = ++pro.historySeq;
+    try {
+      const response = await fetch(`/api/arbitrage/dex/history?key=${encodeURIComponent(key)}`, { cache: 'no-store' });
+      if (!response.ok || requestId !== pro.requestId || sequence !== pro.historySeq) return;
+      const data = await response.json();
+      const byTime = new Map();
+      for (const raw of data.points || []) {
+        const cexPrice = Number(raw[2]) || 0;
+        const dexPrice = Number(raw[3]) || 0;
+        const point = {
+          t: Number(raw[0]) || 0, spread: Number(raw[1]), gross: Number(raw[4]), exit: NaN,
+          buyP: pro.row?.direction === 'cex_to_dex' ? cexPrice : dexPrice,
+          sellP: pro.row?.direction === 'cex_to_dex' ? dexPrice : cexPrice,
+          buyExit: 0, sellExit: 0,
+        };
+        if (point.t > 0 && Number.isFinite(point.spread) && point.buyP > 0 && point.sellP > 0) byTime.set(point.t, point);
+      }
+      const points = [...byTime.values()].sort((a, b) => a.t - b.t).slice(-2160);
+      if (!points.length) return;
+      pro.history = points;
+      if ($('arb-chart-empty')) $('arb-chart-empty').hidden = true;
+      renderCharts();
+    } catch (_) {
+      if (!pro.history.length && $('arb-chart-empty')) {
+        $('arb-chart-empty').hidden = false;
+        $('arb-chart-empty').textContent = 'История DEX-маршрута временно недоступна';
       }
     }
   }
@@ -272,6 +325,11 @@
       series = [
         { key: 'buyIndex', label: l.buyName, color: '#2bd98a', width: 2 },
         { key: 'sellIndex', label: l.sellName, color: '#ef647a', width: 2 },
+      ];
+    } else if (pro.isDex) {
+      series = [
+        { key: 'spread', label: 'Net', color: '#2bd98a', width: 2.2, fill: true },
+        { key: 'gross', label: 'Gross', color: '#9b82e7', width: 1.5, dash: [4, 4] },
       ];
     } else if (pro.isFunding) {
       series = [
@@ -468,5 +526,5 @@
     }
   }
 
-  window.ArbitragePro = { open, close };
+  window.ArbitragePro = { open, openDex, close };
 })();

@@ -327,7 +327,7 @@ const arbitrageTransfers = createTransferStatusService(apiFetch);
 const dexArbitrage = createDexArbitrageService(
   apiFetch,
   arbitrageTransfers,
-  () => arbitrageEngine.getSnapshot().spreads,
+  () => tickers,
 );
 const authenticatedTransferCache = new Map();
 const AUTH_TRANSFER_TTL_MS = 15 * 60_000;
@@ -2938,6 +2938,7 @@ app.get("/api/arbitrage/dex", async (req, res) => {
       search: String(req.query.search || "").slice(0, 32),
       minNet: Math.max(0, Math.min(20, Number(req.query.minNet) || 0)),
       minLiquidityUsd: Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0)),
+      exchanges: String(req.query.exchanges || "").split(",").filter(code => /^[A-Z0-9]{2}$/.test(code)),
       limit: Math.max(25, Math.min(500, Number(req.query.limit) || 250)),
       force: req.query.force === "1",
     });
@@ -2946,6 +2947,15 @@ app.get("/api/arbitrage/dex", async (req, res) => {
   } catch (error) {
     res.status(502).json({ error: "DEX market data unavailable", detail: String(error?.message || error).slice(0, 160) });
   }
+});
+
+app.get("/api/arbitrage/dex/history", (req, res) => {
+  const key = String(req.query.key || "").slice(0, 220);
+  if (!/^dex:[a-z0-9-]{1,24}:[A-Z0-9_.-]{1,40}:[^:]{1,100}:[A-Z0-9]{2}:(?:cex_to_dex|dex_to_cex)$/i.test(key)) {
+    return res.status(400).json({ error: "Invalid DEX route key" });
+  }
+  res.setHeader("Cache-Control", "no-store");
+  res.json(dexArbitrage.getHistory(key));
 });
 
 app.get("/api/arbitrage/depth", async (req, res) => {
