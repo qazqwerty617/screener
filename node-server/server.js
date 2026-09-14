@@ -3746,6 +3746,7 @@ app.get("/api/market/pump-alerts", (req, res) => {
       quality: Math.round(analysis.quality * 1000) / 1000,
       efficiency: Math.round(analysis.efficiency * 1000) / 1000,
       pastPrice: analysis.referencePrice,
+      referenceTs: analysis.referenceTime,
       ts: now
     });
   }

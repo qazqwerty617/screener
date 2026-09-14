@@ -36,7 +36,9 @@ test("alertEngine isolates subscribers and prevents cross-subscriber pollution",
 test("alertEngine sends targeted WebSocket alerts with targetUserId and user's period", () => {
   assert.match(ENGINE_SRC, /targetUserId:\s*entry\.sub\.userId/);
   assert.match(ENGINE_SRC, /bars:\s*entry\.periodMins/);
+  assert.match(ENGINE_SRC, /referenceTs:\s*entry\.referenceTs/);
   assert.match(ENGINE_SRC, /sendUserAlertFn\(entry\.sub\.userId,\s*"pump_dump_alert",\s*userAlertData\)/);
+  assert.match(SERVER_SRC, /referenceTs:\s*analysis\.referenceTime/);
 });
 
 test("alertEngine global WebSocket broadcast is strictly benchmark 5m and does not bleed subscriber settings", () => {
@@ -62,7 +64,26 @@ test("app.js enforces targetUserId and period/timeframe matching on server push 
   assert.match(handlerBody, /const alertBars = Math\.max\(1, Math\.round\(data\.bars \|\| 5\)\);/);
   assert.match(handlerBody, /if \(alertBars !== userBars\) return;/);
   assert.match(handlerBody, /if \(!pdIsExchangeAllowed\(data\.ex\)\) return;/);
+  assert.match(handlerBody, /if \(!pdIsFreshSessionAlert\(data\)\) return;/);
   assert.match(APP_SRC, /function pdFireAlert\([^)]*\) \{\s*\/\/[\s\S]*?if \(!pdIsExchangeAllowed\(ex\)\) return;/);
+});
+
+test("the first browser scan silently baselines every existing move", () => {
+  const firstScanStart = APP_SRC.indexOf("if (!pdIsSeeded)");
+  const firstScanEnd = APP_SRC.indexOf("} else {", firstScanStart);
+  const firstScan = APP_SRC.slice(firstScanStart, firstScanEnd);
+  assert.ok(firstScanStart > 0);
+  assert.match(APP_SRC, /validAlerts = data\.alerts\.filter\(alert => pdAlertMatchesSettings\(alert\) && pdIsFreshSessionAlert\(alert\)\)/);
+  assert.doesNotMatch(firstScan, /pdAddCard\(/);
+  assert.match(firstScan, /for \(const alert of data\.alerts\)/);
+});
+
+test("Telegram pump delivery remains server-owned while the page is open", () => {
+  const fireStart = APP_SRC.indexOf("function pdFireAlert");
+  const fireEnd = APP_SRC.indexOf("// ── Alert Card Panel", fireStart);
+  const fireBody = APP_SRC.slice(fireStart, fireEnd);
+  assert.doesNotMatch(fireBody, /sendTelegramAlert\(/);
+  assert.match(ENGINE_SRC, /sendTelegramAlert\(entry\.sub\.chatId/);
 });
 
 test("app.js applies one symbol cooldown across pump and dump delivery paths", () => {

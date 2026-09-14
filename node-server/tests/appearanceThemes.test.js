@@ -11,7 +11,7 @@ test('every complete palette has an accurate chart, screener and volume preview'
   const dom=new JSDOM('<html></html>',{url:'https://local.test',runScripts:'outside-only'});
   dom.window.eval(source);
   const {themes,preview,applyShell}=dom.window.AppearanceThemes;
-  assert.equal(themes.length,7);
+  assert.equal(themes.length,8);
   for(const theme of themes){
     applyShell(theme.id);
     const style=dom.window.document.documentElement.style;
@@ -23,6 +23,8 @@ test('every complete palette has an accurate chart, screener and volume preview'
     assert.notEqual(theme.up,theme.down);
   }
   assert.equal(dom.window.AppearanceThemes.get('silver').light,true);
+  assert.equal(themes.some(theme=>theme.name==='Терминал'||theme.name==='Ледяной океан'),false);
+  assert.ok(themes.some(theme=>theme.name==='Карбон'));
   assert.deepEqual(JSON.parse(JSON.stringify(themes[0])), {
     id:'obsidian', name:'Obsidian Original', description:'Оригинальная · фирменный фиолетовый',
     bg:'#0d0f14', panel:'#13151e', raised:'#181b26', hover:'#1e2235', text:'#d1d4dc',

@@ -9,7 +9,8 @@ const {
   toggleExchangeSelection,
   analyzeMove,
   SignalConfirmationGate,
-  SignalCooldownGate
+  SignalCooldownGate,
+  isFreshSessionAlert
 } = require("../public/js/pumpLogic");
 
 test("clicking Binance from the initial ALL state selects Binance only", () => {
@@ -89,6 +90,27 @@ test("a short bad-price plateau followed by one correction is not a pump or dump
   assert.equal(fakePump.reason, "unconfirmed_path");
   assert.equal(fakeDump.accepted, false);
   assert.equal(fakeDump.reason, "unconfirmed_path");
+});
+
+test("a lone terminal price spike is not accepted as a real impulse", () => {
+  const now = 1_000_000;
+  const result = analyzeMove([
+    { t: now - 60_000, p: 100 },
+    { t: now - 40_000, p: 100.15 },
+    { t: now - 20_000, p: 100.35 },
+    { t: now, p: 104 }
+  ], { now, periodMs: 60_000, minPct: 2, volume: 8_000_000 });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reason, "unstable_latest");
+});
+
+test("browser session alerts require a fresh observation and fresh reference", () => {
+  const openedAt = 1_000_000;
+  assert.equal(isFreshSessionAlert({ ts: openedAt + 20_000, referenceTs: openedAt + 1_000 }, openedAt, openedAt + 20_000), true);
+  assert.equal(isFreshSessionAlert({ ts: openedAt + 20_000, referenceTs: openedAt - 60_000 }, openedAt, openedAt + 20_000), false);
+  assert.equal(isFreshSessionAlert({ ts: openedAt - 60_000, referenceTs: openedAt - 120_000 }, openedAt, openedAt + 20_000), false);
+  assert.equal(isFreshSessionAlert({ ts: openedAt + 20_000 }, openedAt, openedAt + 20_000), false);
 });
 
 test("two sparse endpoint samples are not enough to prove a pump", () => {

@@ -532,6 +532,35 @@
     ctx.restore();
   }
 
+  function drawIndicatorCandles(targetCtx, values, start, count, xForIndex, candleWidth, yForValue) {
+    const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const bodyWidth = Math.max(1 / dpr, Math.min(6, Math.max(1 / dpr, candleWidth - 2)));
+    targetCtx.save();
+    for (let i = 0; i < count; i++) {
+      const index = start + i;
+      const close = Number(values[index]);
+      if (!Number.isFinite(close)) continue;
+      const previous = Number(values[index - 1]);
+      const open = Number.isFinite(previous) ? previous : close;
+      const yOpen = yForValue(open), yClose = yForValue(close);
+      if (!Number.isFinite(yOpen) || !Number.isFinite(yClose)) continue;
+      const rising = close >= open;
+      const color = rising ? (theme?.up || "#26c97a") : (theme?.down || "#ff4560");
+      const border = rising ? (theme?.wickUp || color) : (theme?.wickDown || color);
+      const x = xForIndex(i);
+      const left = Math.round((x - bodyWidth / 2) * dpr) / dpr;
+      const top = Math.min(yOpen, yClose);
+      const height = Math.max(1 / dpr, Math.abs(yClose - yOpen));
+      targetCtx.fillStyle = color;
+      targetCtx.fillRect(left, top, bodyWidth, height);
+      targetCtx.strokeStyle = border;
+      targetCtx.lineWidth = 1 / dpr;
+      targetCtx.strokeRect(left + .5 / dpr, top + .5 / dpr, Math.max(1 / dpr, bodyWidth - 1 / dpr), Math.max(1 / dpr, height - 1 / dpr));
+    }
+    targetCtx.restore();
+  }
+
   function drawVolumeProfile(m) {
     if (!state.indicators.has("vp") || !m.data.length) return;
     const bins = 28;
@@ -634,16 +663,7 @@
         const zeroY = yFor(0); vCtx.strokeStyle = "rgba(255,255,255,.12)"; vCtx.beginPath(); vCtx.moveTo(0, zeroY); vCtx.lineTo(m.plot.w, zeroY); vCtx.stroke();
       }
 
-      vCtx.beginPath();
-      vCtx.strokeStyle = color;
-      vCtx.lineWidth = 1.5;
-      values.slice(m.start, m.end).forEach((value, i) => {
-        if (!Number.isFinite(value)) return;
-        const x = m.xForIndex(i);
-        const y = yFor(value);
-        if (i === 0) vCtx.moveTo(x, y); else vCtx.lineTo(x, y);
-      });
-      vCtx.stroke();
+      drawIndicatorCandles(vCtx, values, m.start, m.end - m.start, m.xForIndex, m.stepX, yFor);
 
       const lastValue = values?.[values.length - 1];
       // Rounded dark glass pill badge for indicator label

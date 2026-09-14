@@ -78,6 +78,16 @@
     return requested;
   }
 
+  function isFreshSessionAlert(alert, sessionStartedAt, now = Date.now()) {
+    const openedAt = Number(sessionStartedAt);
+    const observedAt = Number(alert?.ts);
+    const referenceAt = Number(alert?.referenceTs ?? alert?.referenceTime);
+    const clockSkewMs = 5_000;
+    if (![openedAt, observedAt, referenceAt].every(Number.isFinite)) return false;
+    if (observedAt < openedAt - clockSkewMs || observedAt > now + clockSkewMs) return false;
+    return referenceAt >= openedAt - clockSkewMs && referenceAt <= observedAt + clockSkewMs;
+  }
+
   function analyzeMove(samples, options = {}) {
     const now = Number(options.now) || Date.now();
     const periodMs = Math.max(30_000, Number(options.periodMs) || 5 * 60_000);
@@ -152,6 +162,7 @@
     }
     let travelledPct = 0;
     let largestCounterPct = 0;
+    let largestDirectionalPct = 0;
     let directionalSteps = 0;
     const meaningfulStepPct = Math.max(0.02, threshold * 0.03);
     for (let i = 1; i < path.length; i++) {
@@ -160,7 +171,10 @@
       const isCounter = direction === "pump" ? stepPct < 0 : stepPct > 0;
       if (isCounter) largestCounterPct = Math.max(largestCounterPct, Math.abs(stepPct));
       const followsDirection = direction === "pump" ? stepPct > 0 : stepPct < 0;
-      if (followsDirection && Math.abs(stepPct) >= meaningfulStepPct) directionalSteps++;
+      if (followsDirection) {
+        largestDirectionalPct = Math.max(largestDirectionalPct, Math.abs(stepPct));
+        if (Math.abs(stepPct) >= meaningfulStepPct) directionalSteps++;
+      }
     }
     const efficiency = travelledPct > 0 ? Math.min(1, absPct / travelledPct) : 0;
     // A real impulse has to progress through at least two independently sampled
@@ -173,6 +187,12 @@
     }
     if (path.length >= 3 && (efficiency < 0.28 || (largestCounterPct > absPct * 0.8 && efficiency < 0.55))) {
       return { accepted: false, reason: "noisy_path", threshold, pct, direction, efficiency };
+    }
+    // A single quote jump followed by a flat price can survive the temporal
+    // confirmation gate even though no tradeable impulse exists on the chart.
+    // Require the move to be distributed across more than one sampled step.
+    if (largestDirectionalPct > absPct * 0.72 && largestDirectionalPct > threshold * 0.75) {
+      return { accepted: false, reason: "unstable_latest", threshold, pct, direction, efficiency, largestDirectionalPct };
     }
 
     const strength = Math.min(1, absPct / Math.max(threshold * 1.5, 0.1));
@@ -307,6 +327,7 @@
     isExchangeAllowed,
     toggleExchangeSelection,
     adaptiveThreshold,
+    isFreshSessionAlert,
     analyzeMove,
     SignalConfirmationGate,
     SignalCooldownGate

@@ -688,7 +688,8 @@ function processTicker(t, now, activeSubscribers) {
       cooldownKey,
       baseCooldownKey,
       cooldownMs,
-      quality: analysis.quality
+      quality: analysis.quality,
+      referenceTs: analysis.referenceTime
     });
   }
 
@@ -711,6 +712,7 @@ function processTicker(t, now, activeSubscribers) {
             vol: t.v || 0,
             bars: entry.periodMins,
             quality: entry.quality,
+            referenceTs: entry.referenceTs,
             ts: now,
             targetUserId: entry.sub.userId
           };
@@ -760,6 +762,7 @@ function processTicker(t, now, activeSubscribers) {
           vol: t.v || 0,
           bars: 5,
           quality: wsAnalysis.quality,
+          referenceTs: wsAnalysis.referenceTime,
           ts: now
         });
       }
