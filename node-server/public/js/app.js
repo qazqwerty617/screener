@@ -2662,6 +2662,53 @@ const CHART_EXCHANGE_NAMES = {
   MX: "MEXC", KC: "KuCoin", BX: "BingX", HT: "HTX", HL: "Hyperliquid", AD: "Asterdex"
 };
 
+function formatDensityUsd(value) {
+  const amount = Math.max(0, Number(value) || 0);
+  const units = [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "K"],
+  ];
+  for (const [divisor, suffix] of units) {
+    if (amount < divisor) continue;
+    const scaled = amount / divisor;
+    const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+    return `$${scaled.toFixed(digits).replace(/\.?0+$/, "")}${suffix}`;
+  }
+  return `$${Math.round(amount)}`;
+}
+
+function drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH) {
+  const rgb = badge.baseColorArr;
+  const badgeY = badge.y - badgeH / 2;
+  const notch = Math.min(5, badgeW * 0.12);
+  const right = badgeX + badgeW;
+  const bottom = badgeY + badgeH;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(badgeX, badge.y);
+  ctx.lineTo(badgeX + notch, badgeY);
+  ctx.lineTo(right - 4, badgeY);
+  ctx.quadraticCurveTo(right, badgeY, right, badgeY + 4);
+  ctx.lineTo(right, bottom - 4);
+  ctx.quadraticCurveTo(right, bottom, right - 4, bottom);
+  ctx.lineTo(badgeX + notch, bottom);
+  ctx.closePath();
+  ctx.fillStyle = `rgba(${rgb.join(',')}, 0.16)`;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.9)`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = `rgb(${rgb.join(',')})`;
+  ctx.font = "700 10px Inter";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(fP(badge.price), badgeX + notch + (badgeW - notch) / 2, badge.y);
+  ctx.restore();
+}
+
 function drawDensityTimelineOnChart(ctx, options) {
   if (!chartDensityEnabled) return [];
   const { candles: chartCandles, base, candleWidth, viewStart, toY, PW, PH, TOP = 0 } = options;
@@ -2713,6 +2760,7 @@ function drawDensityTimelineOnChart(ctx, options) {
   const badges = [];
   const occupiedLabelY = [];
   const visibleWalls = walls.slice(0, 80);
+  const lastPrice = Number(chartCandles[chartCandles.length - 1]?.c) || 0;
 
   ctx.save();
   ctx.beginPath();
@@ -2739,41 +2787,87 @@ function drawDensityTimelineOnChart(ctx, options) {
     const active = wall.active !== false && !wall.endedAt;
     if (!active) continue; // Never draw inactive/ended walls that produce dashed clutter
     const rgb = isBid ? [38, 201, 122] : [255, 69, 96];
+    const sizeType = getDensitySizeType(wall);
+    const visual = {
+      small: { line: 1, glow: 3, dot: 2 },
+      medium: { line: 1.35, glow: 5, dot: 2.6 },
+      large: { line: 1.8, glow: 7, dot: 3.2 },
+    }[sizeType] || { line: 1, glow: 3, dot: 2 };
+    const lineY = Math.round(y) - 0.5;
 
-    // Clean, crisp solid line (NO dashed clutter)
-    ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.85)`;
-    ctx.lineWidth = 1.5;
+    // A soft underlay makes large walls visibly stronger without turning the
+    // chart into a heatmap. The crisp core still marks the exact order price.
+    ctx.strokeStyle = `rgba(${rgb.join(',')}, ${sizeType === "large" ? 0.16 : 0.1})`;
+    ctx.lineWidth = visual.glow;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(startX, Math.round(y) - 0.5);
-    ctx.lineTo(endX, Math.round(y) - 0.5);
+    ctx.moveTo(startX, lineY);
+    ctx.lineTo(endX, lineY);
     ctx.stroke();
 
-    if (active && rawStartX >= -80 && rawStartX <= PW - 30) {
-      const timeText = new Date(Number(wall.firstSeenAt) || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      const usd = Number(wall.S) || Number(wall.maxSizeUsd) || 0;
-      const sizeText = usd >= 1000000 ? `$${(usd / 1000000).toFixed(1).replace(/\.0$/, "")}M` : `$${Math.round(usd / 1000)}K`;
-      const label = `${timeText}  ${CHART_EXCHANGE_NAMES[wall.ex] || wall.ex}  ${sizeText}`;
-      ctx.font = "700 9px Inter";
-      const labelW = ctx.measureText(label).width + 12;
-      let labelY = y - 18;
-      while (occupiedLabelY.some(existing => Math.abs(existing - labelY) < 16)) labelY += 16;
-      labelY = Math.max(TOP + 2, Math.min(TOP + PH - 17, labelY));
-      occupiedLabelY.push(labelY);
-      const labelX = Math.max(3, Math.min(PW - labelW - 3, Math.max(3, rawStartX + 5)));
-      roundRect(ctx, labelX, labelY, labelW, 16, 4);
-      ctx.fillStyle = "rgba(15, 18, 24, 0.95)";
+    ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.9)`;
+    ctx.lineWidth = visual.line;
+    ctx.beginPath();
+    ctx.moveTo(startX, lineY);
+    ctx.lineTo(endX, lineY);
+    ctx.stroke();
+
+    // The origin dot makes the wall read as one continuous order level rather
+    // than a generic support/resistance line.
+    if (rawStartX >= 0 && rawStartX <= PW) {
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(${rgb.join(',')}, 0.2)`;
+      ctx.arc(startX, lineY, visual.dot + 2.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.65)`;
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      ctx.beginPath();
       ctx.fillStyle = `rgb(${rgb.join(',')})`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, labelX + labelW / 2, labelY + 8);
+      ctx.arc(startX, lineY, visual.dot, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    if (active) badges.push({ y, price: wall.price, isBid, baseColorArr: rgb });
+    // Walls are score-sorted. When levels are close, keep the strongest label
+    // on its exact line instead of moving weaker labels away from their price.
+    if (!occupiedLabelY.some(existing => Math.abs(existing - lineY) < 20)) {
+      const usd = Number(wall.S) || Number(wall.maxSizeUsd) || 0;
+      const sizeText = formatDensityUsd(usd);
+      const distance = lastPrice > 0 ? Math.abs(Number(wall.price) - lastPrice) / lastPrice * 100 : 0;
+      const distanceText = distance < 0.01 ? "<0.01%" : distance < 1 ? `${distance.toFixed(2)}%` : `${distance.toFixed(1)}%`;
+      const direction = isBid ? "↓" : "↑";
+      const sideText = isBid ? "BID" : "ASK";
+      const detailText = `${sizeText}  ·  ${direction}${distanceText}  ·  ${CHART_EXCHANGE_NAMES[wall.ex] || wall.ex}`;
+      const labelH = 18;
+      const labelY = Math.max(TOP + 2, Math.min(TOP + PH - labelH - 2, lineY - labelH / 2));
+      ctx.font = "800 9px Inter";
+      const sideW = ctx.measureText(sideText).width + 12;
+      ctx.font = "700 9px Inter";
+      const detailW = ctx.measureText(detailText).width + 12;
+      const labelW = sideW + detailW;
+      const labelX = Math.max(5, PW - labelW - 7);
+
+      roundRect(ctx, labelX, labelY, labelW, labelH, 4);
+      ctx.fillStyle = isBid ? "rgba(5, 31, 25, 0.96)" : "rgba(39, 12, 19, 0.96)";
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.72)`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      roundRect(ctx, labelX, labelY, sideW, labelH, 4);
+      ctx.fillStyle = `rgba(${rgb.join(',')}, 0.22)`;
+      ctx.fill();
+      ctx.fillStyle = `rgb(${rgb.join(',')})`;
+      ctx.font = "800 9px Inter";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(sideText, labelX + sideW / 2, labelY + labelH / 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+      ctx.font = "700 9px Inter";
+      ctx.fillText(detailText, labelX + sideW + detailW / 2, labelY + labelH / 2);
+      occupiedLabelY.push(lineY);
+    }
+
+    if (!badges.some(existing => Math.abs(existing.y - y) < 18)) {
+      badges.push({ y, price: wall.price, isBid, baseColorArr: rgb });
+    }
   }
 
   ctx.restore();
@@ -4643,31 +4737,12 @@ function drawChart() {
 
   // Draw price badges on the right price scale for walls (densities)
   if (wallBadges.length > 0) {
-    const badgeH = 20;
-    const badgeW = PR - 8;
-    const badgeX = PW + 4;
+    const badgeH = 18;
+    const badgeW = PR - 4;
+    const badgeX = PW;
 
     for (const badge of wallBadges) {
-      ctx.save();
-      const badgeY = badge.y - badgeH / 2;
-
-      // Draw background
-      roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
-      ctx.fillStyle = "#1e1f2e";
-      ctx.fill();
-
-      // Draw border in wall color
-      ctx.strokeStyle = `rgba(${badge.baseColorArr.join(',')},1)`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Draw exact price
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 10px Inter";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(fP(badge.price), badgeX + badgeW / 2, badge.y);
-      ctx.restore();
+      drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH);
     }
   }
 
@@ -11682,27 +11757,12 @@ class ChartInstance {
     // Draw price badges on the right price scale of this grid cell
     if (gridBadges.length > 0) {
       const PR = 60; // Grid scale width
-      const badgeH = 18;
-      const badgeW = PR - 8;
-      const badgeX = PW + 4;
+      const badgeH = 17;
+      const badgeW = PR - 3;
+      const badgeX = PW;
 
       for (const badge of gridBadges) {
-        ctx.save();
-        const badgeY = badge.y - badgeH / 2;
-        roundRect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
-        ctx.fillStyle = "#1e1f2e";
-        ctx.fill();
-
-        ctx.strokeStyle = `rgba(${badge.baseColorArr.join(',')},1)`;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 10px Inter";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(fP(badge.price), badgeX + badgeW / 2, badge.y);
-        ctx.restore();
+        drawDensityScaleBadge(ctx, badge, badgeX, badgeW, badgeH);
       }
     }
 
