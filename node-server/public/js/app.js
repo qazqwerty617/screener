@@ -2673,7 +2673,10 @@ function formatDensityUsd(value) {
     if (amount < divisor) continue;
     const scaled = amount / divisor;
     const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
-    return `$${scaled.toFixed(digits).replace(/\.?0+$/, "")}${suffix}`;
+    const compact = digits === 0
+      ? scaled.toFixed(0)
+      : scaled.toFixed(digits).replace(/0+$/, "").replace(/\.$/, "");
+    return `$${compact}${suffix}`;
   }
   return `$${Math.round(amount)}`;
 }
@@ -2833,15 +2836,12 @@ function drawDensityTimelineOnChart(ctx, options) {
       const distance = lastPrice > 0 ? Math.abs(Number(wall.price) - lastPrice) / lastPrice * 100 : 0;
       const distanceText = distance < 0.01 ? "<0.01%" : distance < 1 ? `${distance.toFixed(2)}%` : `${distance.toFixed(1)}%`;
       const direction = isBid ? "↓" : "↑";
-      const sideText = isBid ? "BID" : "ASK";
       const detailText = `${sizeText}  ·  ${direction}${distanceText}  ·  ${CHART_EXCHANGE_NAMES[wall.ex] || wall.ex}`;
       const labelH = 18;
       const labelY = Math.max(TOP + 2, Math.min(TOP + PH - labelH - 2, lineY - labelH / 2));
-      ctx.font = "800 9px Inter";
-      const sideW = ctx.measureText(sideText).width + 12;
       ctx.font = "700 9px Inter";
       const detailW = ctx.measureText(detailText).width + 12;
-      const labelW = sideW + detailW;
+      const labelW = detailW;
       const labelX = Math.max(5, PW - labelW - 7);
 
       roundRect(ctx, labelX, labelY, labelW, labelH, 4);
@@ -2850,18 +2850,11 @@ function drawDensityTimelineOnChart(ctx, options) {
       ctx.strokeStyle = `rgba(${rgb.join(',')}, 0.72)`;
       ctx.lineWidth = 1;
       ctx.stroke();
-
-      roundRect(ctx, labelX, labelY, sideW, labelH, 4);
-      ctx.fillStyle = `rgba(${rgb.join(',')}, 0.22)`;
-      ctx.fill();
-      ctx.fillStyle = `rgb(${rgb.join(',')})`;
-      ctx.font = "800 9px Inter";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(sideText, labelX + sideW / 2, labelY + labelH / 2);
       ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
       ctx.font = "700 9px Inter";
-      ctx.fillText(detailText, labelX + sideW + detailW / 2, labelY + labelH / 2);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(detailText, labelX + detailW / 2, labelY + labelH / 2);
       occupiedLabelY.push(lineY);
     }
 

@@ -87,7 +87,7 @@ test("chart density is rendered as one anchored order level with useful inline d
     TOP: 0,
   });
 
-  assert.deepEqual(ctx.labels.map(label => label.text), ["BID", "$10.3M  ·  ↓0.18%  ·  Bybit"]);
+  assert.deepEqual(ctx.labels.map(label => label.text), ["$10.3M  ·  ↓0.18%  ·  Bybit"]);
   assert.deepEqual(ctx.arcs.map(arc => arc.radius), [5.7, 3.2]);
   assert.ok(ctx.strokes.some(stroke => stroke.width === 7), "large wall should have a stronger glow");
   assert.ok(ctx.strokes.some(stroke => stroke.width === 1.8), "large wall should have a stronger core line");
@@ -116,7 +116,8 @@ test("nearby walls keep their lines but do not stack duplicate labels and price 
     TOP: 0,
   });
 
-  assert.equal(ctx.labels.filter(label => label.text === "ASK").length, 1);
+  assert.equal(ctx.labels.filter(label => label.text.includes("$600K")).length, 1);
+  assert.equal(ctx.labels.some(label => /BID|ASK/.test(label.text)), false);
   assert.equal(ctx.strokes.filter(stroke => stroke.width === 1.35).length, 2);
   assert.equal(badges.length, 1);
 });
