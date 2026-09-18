@@ -1566,7 +1566,105 @@ function requestDraw() {
   chartNeedsDraw = true;
 }
 
-// тФАтФА Indicator Calculations (Memoized for max 120fps smooth performance) тФАтФА
+// ═══ Trading Sessions Overlay ═══════════════════════════════════════════════
+// Session times in UTC hours. The user's chartUtcOffset is applied to convert.
+const TRADING_SESSIONS = [
+  { id: "asia",   label: "\ud83c\udf0f Asia",    startUTC: 0,  endUTC: 9,  color: [255, 183, 77],  labelShort: "Asia" },
+  { id: "london", label: "\ud83c\uddec\ud83c\udde7 London",  startUTC: 7,  endUTC: 16, color: [100, 181, 246], labelShort: "London" },
+  { id: "ny",     label: "\ud83c\uddfa\ud83c\uddf8 New York", startUTC: 13, endUTC: 22, color: [129, 199, 132], labelShort: "NY" }
+];
+
+function drawTradingSessions(_ctx, viewStart, s, e, candleW, PW, PH, TOP) {
+  // Skip on daily+ timeframes — sessions don't make sense
+  const tf = typeof activeTf !== "undefined" ? activeTf : "5m";
+  if (tf === "1d" || tf === "3d" || tf === "1w") return;
+  if (!candles || !candles.length) return;
+
+  const offset = window.chartUtcOffset || 0;
+  const nowMs = Date.now();
+  const tfMs = TF_MS[tf] || 60000;
+
+  // Determine visible time range from candle data
+  const firstVisIdx = Math.max(0, Math.floor(viewStart));
+  const lastVisIdx = Math.min(candles.length - 1, Math.ceil(viewStart + PW / candleW) + 1);
+  if (firstVisIdx >= candles.length || lastVisIdx < 0) return;
+
+  const firstT = candles[firstVisIdx] ? candles[firstVisIdx].t : getTimeFromIdx(viewStart);
+  const lastT = candles[lastVisIdx] ? candles[lastVisIdx].t + tfMs : getTimeFromIdx(viewStart + PW / candleW) + tfMs;
+
+  // Scan each session across visible days
+  const DAY_MS = 86400000;
+  // Compute day boundaries in user's local offset
+  const firstDayStart = Math.floor((firstT + offset * 3600000) / DAY_MS) * DAY_MS - offset * 3600000;
+  const lastDayEnd = Math.ceil((lastT + offset * 3600000) / DAY_MS) * DAY_MS - offset * 3600000;
+
+  _ctx.save();
+  _ctx.beginPath();
+  _ctx.rect(0, TOP, PW, PH);
+  _ctx.clip();
+
+  // For each day in range, draw session zones
+  for (let dayStart = firstDayStart - DAY_MS; dayStart <= lastDayEnd; dayStart += DAY_MS) {
+    for (let si = 0; si < TRADING_SESSIONS.length; si++) {
+      const sess = TRADING_SESSIONS[si];
+      // Session start/end in absolute ms (UTC timestamps)
+      const sessStartMs = dayStart + sess.startUTC * 3600000;
+      let sessEndMs = dayStart + sess.endUTC * 3600000;
+      if (sessEndMs <= sessStartMs) sessEndMs += DAY_MS; // wrap midnight
+
+      // Skip if entirely outside visible range
+      if (sessEndMs < firstT || sessStartMs > lastT) continue;
+
+      // Convert to pixel X via candle index
+      const idxStart = getIdxFromTime(sessStartMs);
+      const idxEnd = getIdxFromTime(sessEndMs);
+      const x1 = Math.max(0, (idxStart - viewStart) * candleW);
+      const x2 = Math.min(PW, (idxEnd - viewStart) * candleW);
+      if (x2 <= x1) continue;
+
+      // Check if this session is currently active
+      const isActive = nowMs >= sessStartMs && nowMs < sessEndMs;
+      const baseAlpha = isActive ? 0.07 : 0.04;
+
+      const [r, g, b] = sess.color;
+
+      // Fill session background
+      _ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${baseAlpha})`;
+      _ctx.fillRect(x1, TOP, x2 - x1, PH);
+
+      // Subtle left border (dashed)
+      _ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${isActive ? 0.20 : 0.10})`;
+      _ctx.lineWidth = 1;
+      _ctx.setLineDash([3, 3]);
+      _ctx.beginPath();
+      _ctx.moveTo(x1 + 0.5, TOP);
+      _ctx.lineTo(x1 + 0.5, TOP + PH);
+      _ctx.stroke();
+      _ctx.setLineDash([]);
+
+      // Active session: bright accent bar at top
+      if (isActive) {
+        _ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.25)`;
+        _ctx.fillRect(x1, TOP, x2 - x1, 2);
+      }
+
+      // Label at the top of the zone
+      const labelWidth = x2 - x1;
+      if (labelWidth > 40) {
+        _ctx.font = `${isActive ? "600" : "500"} 9px Inter, sans-serif`;
+        _ctx.textAlign = "left";
+        _ctx.textBaseline = "top";
+        _ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${isActive ? 0.55 : 0.30})`;
+        const labelText = labelWidth > 90 ? sess.label : sess.labelShort;
+        _ctx.fillText(labelText, x1 + 5, TOP + 5);
+      }
+    }
+  }
+
+  _ctx.restore();
+}
+
+
 function clearCandleCaches(data) {
   if (data && data._cache) delete data._cache;
 }
@@ -3471,6 +3569,11 @@ function drawChart() {
     gridPrice += gridStep;
   }
   ctx.stroke();
+
+  // ── Trading Sessions Background ──
+  if (chartActiveIndicators.has("SESSIONS")) {
+    drawTradingSessions(ctx, viewStart, s, e, candleW, PW, PH, TOP);
+  }
 
   // тФАтФА Clipping Area (Pre-render) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   ctx.save();
@@ -9079,7 +9182,8 @@ const indicatorIdToName = {
   "ind-volprofile": "VP",
   "ind-bb": "BB",
   "ind-macd": "MACD",
-  "ind-liqmap": "LIQMAP"
+  "ind-liqmap": "LIQMAP",
+  "ind-sessions": "SESSIONS"
 };
 const formationIdToName = {
   "fmt-cascades": "cascades",
