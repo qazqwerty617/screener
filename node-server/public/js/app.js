@@ -1569,9 +1569,9 @@ function requestDraw() {
 // ═══ Trading Sessions Overlay ═══════════════════════════════════════════════
 // Session times in UTC hours. The user's chartUtcOffset is applied to convert.
 const TRADING_SESSIONS = [
-  { id: "asia",   label: "\ud83c\udf0f Asia",    startUTC: 0,  endUTC: 9,  color: [255, 183, 77],  labelShort: "Asia" },
-  { id: "london", label: "\ud83c\uddec\ud83c\udde7 London",  startUTC: 7,  endUTC: 16, color: [100, 181, 246], labelShort: "London" },
-  { id: "ny",     label: "\ud83c\uddfa\ud83c\uddf8 New York", startUTC: 13, endUTC: 22, color: [129, 199, 132], labelShort: "NY" }
+  { id: "asia",   label: "JP Asia",     startUTC: 0,  endUTC: 9,  color: [255, 183, 77],  labelShort: "Asia" },
+  { id: "london", label: "GB London",   startUTC: 7,  endUTC: 16, color: [100, 181, 246], labelShort: "London" },
+  { id: "ny",     label: "US New York", startUTC: 13, endUTC: 22, color: [129, 199, 132], labelShort: "NY" }
 ];
 
 function drawTradingSessions(_ctx, viewStart, s, e, candleW, PW, PH, TOP) {
@@ -1650,13 +1650,13 @@ function drawTradingSessions(_ctx, viewStart, s, e, candleW, PW, PH, TOP) {
 
       // Label at the top of the zone
       const labelWidth = x2 - x1;
-      if (labelWidth > 40) {
-        _ctx.font = `${isActive ? "600" : "500"} 9px Inter, sans-serif`;
+      if (labelWidth > 35) {
+        _ctx.font = `${isActive ? "600" : "500"} 10px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
         _ctx.textAlign = "left";
         _ctx.textBaseline = "top";
-        _ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${isActive ? 0.55 : 0.30})`;
-        const labelText = labelWidth > 90 ? sess.label : sess.labelShort;
-        _ctx.fillText(labelText, x1 + 5, TOP + 5);
+        _ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${isActive ? 0.75 : 0.48})`;
+        const labelText = labelWidth > 80 ? sess.label : sess.labelShort;
+        _ctx.fillText(labelText, x1 + 6, TOP + 6);
       }
     }
   }
