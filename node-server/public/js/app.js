@@ -16157,15 +16157,26 @@ async function loadReferralProfile() {
   const token = localStorage.getItem("obsidian_auth_token") || (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : "");
   if (!token) return;
   const statsEl = $("profile-referral-stats");
+  const statusEl = $("profile-referral-status");
   try {
     const response = await fetch("/api/referrals/me", { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error("Referral statistics unavailable");
     const data = await response.json();
     const linkEl = $("profile-referral-link");
     if (linkEl) linkEl.value = data.link;
-    if (statsEl) statsEl.textContent = `Перешли: ${data.visits} · Зарегистрировались: ${data.registrations} · Купили PRO: ${data.buyers} · Покупок: ${data.purchases} (1 мес.: ${data.byPlan?.["1m"] || 0}, 3 мес.: ${data.byPlan?.["3m"] || 0}, 12 мес.: ${data.byPlan?.["12m"] || 0}, навсегда: ${data.byPlan?.lifetime || 0})`;
+    const values = {
+      visits: data.visits, registrations: data.registrations,
+      buyers: data.buyers, purchases: data.purchases,
+      "1m": data.byPlan?.["1m"], "3m": data.byPlan?.["3m"],
+      "12m": data.byPlan?.["12m"], lifetime: data.byPlan?.lifetime
+    };
+    if (statsEl) statsEl.querySelectorAll("[data-ref-stat]").forEach(cell => {
+      const value = Number(values[cell.dataset.refStat]);
+      cell.textContent = Number.isFinite(value) && value >= 0 ? value.toLocaleString("ru-RU") : "0";
+    });
+    if (statusEl) statusEl.textContent = "";
   } catch (_) {
-    if (statsEl) statsEl.textContent = "Статистика временно недоступна";
+    if (statusEl) statusEl.textContent = "Статистика временно недоступна";
   }
 }
 

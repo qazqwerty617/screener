@@ -5410,6 +5410,26 @@ body {
     box-shadow: 0 0 8px rgba(124, 58, 237, 0.25);
 }
 
+.profile-referral-caption { margin: 7px 0 8px; color: var(--t2); font-size: 11px; }
+.profile-referral-stats { margin-top: 10px; overflow: hidden; border: 1px solid var(--bd2); border-radius: 9px; background: rgba(255,255,255,.018); }
+.profile-referral-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.profile-referral-cell { display: flex; min-width: 0; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 9px 2px; text-align: center; }
+.profile-referral-cell + .profile-referral-cell { border-left: 1px solid var(--bd2); }
+.profile-referral-cell span { max-width: 100%; overflow: hidden; color: var(--t3); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.profile-referral-cell strong { color: var(--t1); font-size: 16px; line-height: 1; font-variant-numeric: tabular-nums; }
+.profile-referral-plans-title { padding: 6px 10px; border-top: 1px solid var(--bd2); border-bottom: 1px solid var(--bd2); color: var(--t3); background: rgba(255,255,255,.025); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+.profile-referral-plans .profile-referral-cell { padding: 8px 2px; }
+.profile-referral-plans .profile-referral-cell strong { font-size: 13px; color: #c4b5fd; }
+.profile-referral-status { margin: 0; color: var(--t3); font-size: 10px; text-align: center; }
+.profile-referral-status:not(:empty) { padding: 7px; border-top: 1px solid var(--bd2); }
+
+.profile-manager-link { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 5px 10px; border: 1px solid rgba(34,158,217,.22); border-radius: 8px; background: rgba(34,158,217,.045); color: var(--t1); text-decoration: none; font-size: 11px; transition: background .15s, border-color .15s; }
+.profile-manager-link:hover { border-color: rgba(34,158,217,.5); background: rgba(34,158,217,.1); }
+.profile-manager-icon { display: grid; width: 20px; height: 20px; flex: none; place-items: center; border-radius: 6px; background: rgba(34,158,217,.15); color: #4fb8e8; font-size: 12px; }
+.profile-manager-name { min-width: 0; font-weight: 700; white-space: nowrap; }
+.profile-manager-handle { margin-left: auto; color: var(--t2); white-space: nowrap; }
+.profile-manager-arrow { color: #4fb8e8; font-size: 14px; }
+
 #reg-code-field small {
     color: var(--t3);
     line-height: 1.45;

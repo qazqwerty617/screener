@@ -3112,12 +3112,27 @@
             </div>
             <div class="profile-promo-section" id="profile-referral-section">
                 <strong>Пригласить трейдеров</strong>
-                <p style="font-size:12px;color:var(--t2);margin:8px 0;">Ваша личная ссылка:</p>
+                <p class="profile-referral-caption">Ваша личная ссылка</p>
                 <div class="profile-promo-row">
                     <input id="profile-referral-link" type="text" readonly aria-label="Реферальная ссылка" />
                     <button type="button" id="profile-referral-copy">Копировать</button>
                 </div>
-                <p id="profile-referral-stats" style="font-size:12px;color:var(--t2);margin:8px 0;">Загружаем статистику…</p>
+                <div id="profile-referral-stats" class="profile-referral-stats" aria-label="Статистика приглашений">
+                    <div class="profile-referral-grid">
+                        <div class="profile-referral-cell"><span>Переходы</span><strong data-ref-stat="visits">—</strong></div>
+                        <div class="profile-referral-cell"><span>Регистрации</span><strong data-ref-stat="registrations">—</strong></div>
+                        <div class="profile-referral-cell"><span>Купили PRO</span><strong data-ref-stat="buyers">—</strong></div>
+                        <div class="profile-referral-cell"><span>Покупки</span><strong data-ref-stat="purchases">—</strong></div>
+                    </div>
+                    <div class="profile-referral-plans-title">Покупки по срокам</div>
+                    <div class="profile-referral-grid profile-referral-plans">
+                        <div class="profile-referral-cell"><span>1 месяц</span><strong data-ref-stat="1m">—</strong></div>
+                        <div class="profile-referral-cell"><span>3 месяца</span><strong data-ref-stat="3m">—</strong></div>
+                        <div class="profile-referral-cell"><span>12 месяцев</span><strong data-ref-stat="12m">—</strong></div>
+                        <div class="profile-referral-cell"><span>Навсегда</span><strong data-ref-stat="lifetime">—</strong></div>
+                    </div>
+                    <p id="profile-referral-status" class="profile-referral-status" role="status">Загружаем статистику…</p>
+                </div>
             </div>
             <div class="profile-plan-upgrade-banner" id="profile-plan-upgrade-banner" style="display: flex; align-items: center; justify-content: space-between; gap: 14px; background: linear-gradient(135deg, rgba(124, 58, 237, 0.25) 0%, rgba(168, 85, 247, 0.12) 100%); border: 1px solid rgba(168, 85, 247, 0.5); border-radius: 12px; padding: 14px 18px; margin: 16px 0; box-shadow: 0 8px 25px rgba(124, 58, 237, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.15); position: relative; overflow: hidden;">
                 <div style="position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: linear-gradient(180deg, #a855f7 0%, #7c3aed 100%); border-radius: 12px 0 0 12px;"></div>
@@ -3164,9 +3179,11 @@
                 </div>
                 <button type="button" class="tg-bot-link-btn" id="tg-bot-link-btn">Подключить бота</button>
             </div>
-            <a class="profile-tg-bot-card" href="https://t.me/ObsidianSup" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit;display:flex;">
-                <span class="tg-bot-card-info"><strong>Менеджер Obsidian</strong><br><span>Помощь и вопросы: @ObsidianSup</span></span>
-                <span class="tg-bot-link-btn">Написать</span>
+            <a class="profile-manager-link" href="https://t.me/ObsidianSup" target="_blank" rel="noopener noreferrer" aria-label="Написать менеджеру Obsidian в Telegram">
+                <span class="profile-manager-icon" aria-hidden="true">✈</span>
+                <span class="profile-manager-name">Менеджер Obsidian</span>
+                <span class="profile-manager-handle">@ObsidianSup</span>
+                <span class="profile-manager-arrow" aria-hidden="true">↗</span>
             </a>
             <div class="profile-bug-card" onclick="openBugReportModal();">
                 <div class="bug-card-left">
