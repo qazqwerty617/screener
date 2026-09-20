@@ -117,12 +117,28 @@ function normalizeMarkets(markets, venue, now = Date.now()) {
   return [...rows.values()];
 }
 
+function createMarketFetcher(createClient = exchangeId => {
+  const ccxt = require("ccxt");
+  return new ccxt[exchangeId]({ enableRateLimit: true, timeout: 12000 });
+}) {
+  const clients = new Map();
+  const loaded = new Set();
+  const fetchMarkets = async exchangeId => {
+    let client = clients.get(exchangeId);
+    if (!client) { client = createClient(exchangeId); clients.set(exchangeId, client); }
+    const markets = await client.loadMarkets(loaded.has(exchangeId));
+    loaded.add(exchangeId);
+    return markets;
+  };
+  fetchMarkets.close = async () => {
+    await Promise.allSettled([...clients.values()].map(client => client.close?.()));
+    clients.clear(); loaded.clear();
+  };
+  return fetchMarkets;
+}
+
 function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
-  fetchMarkets = async exchangeId => {
-    const ccxt = require("ccxt");
-    const client = new ccxt[exchangeId]({ enableRateLimit: true, timeout: 12000 });
-    try { return await client.loadMarkets(); } finally { await client.close?.(); }
-  }, fetchFeed = async url => {
+  fetchMarkets = null, fetchFeed = async url => {
     const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { "User-Agent": "ObsidianScreener/1.0" } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const length = Number(response.headers.get("content-length"));
@@ -133,6 +149,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }, now = () => Date.now(), translate = translateTitle,
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
   streamKey = process.env.TREE_NEWS_API_KEY || "" } = {}) {
+  const marketFetcher = fetchMarkets || createMarketFetcher();
   let state = { marketVersion: 2, known: {}, active: {}, missing: {}, historySeeded: {}, candidates: {}, listings: [], news: [], venues: {}, marketUpdatedAt: null, newsUpdatedAt: null };
   try {
     const saved = JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -231,10 +248,13 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     marketsRunning = true;
     try {
       const existingById = new Map(state.listings.map(item => [item.id, item]));
-      for (let i = 0; i < VENUES.length; i += 2) {
-        await Promise.all(VENUES.slice(i, i + 2).map(async ([code, name, exchangeId]) => {
+      let cursor = 0;
+      await Promise.all(Array.from({ length: Math.min(6, VENUES.length) }, async () => {
+        while (cursor < VENUES.length) {
+          const [code, name, exchangeId] = VENUES[cursor++];
           try {
-            const rows = normalizeMarkets(await fetchMarkets(exchangeId), code, now());
+            let changed = false;
+            const rows = normalizeMarkets(await marketFetcher(exchangeId), code, now());
             if (!rows.length) throw new Error("Empty market catalog");
             const prior = Array.isArray(state.known[code]) ? new Set(state.known[code]) : null;
             const spotCount = rows.filter(row => row.type === "spot").length;
@@ -261,7 +281,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
                 const [, type, ...symbolParts] = key.split(":");
                 const event = { id: `delist:${key}`, kind: "delisting", exchange: code, type,
                   symbol: symbolParts.join(":"), launchAt: null, detectedAt: now(), timing: "detected" };
-                if (!existingById.has(event.id)) { state.listings.push(event); existingById.set(event.id, event); }
+                if (!existingById.has(event.id)) { state.listings.push(event); existingById.set(event.id, event); changed = true; }
               }
             }
             const candidates = state.candidates[code] || {};
@@ -271,13 +291,14 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
               if (existingById.has(`delist:${row.key}`)) {
                 state.listings = state.listings.filter(event => event.id !== `delist:${row.key}`);
                 existingById.delete(`delist:${row.key}`);
+                changed = true;
               }
               if (!state.historySeeded[code] && (code === "BN" || code === "OX") && row.launchAt &&
                 row.launchAt >= now() - 30 * 86400000 && row.launchAt <= now() + 30 * 86400000 &&
                 !existingById.has(row.key)) {
                 const event = { ...row, id: row.key, kind: "listing", historical: true,
                   detectedAt: now(), timing: "exchange" };
-                state.listings.push(event); existingById.set(event.id, event);
+                state.listings.push(event); existingById.set(event.id, event); changed = true;
               }
               const firstTypeScan = row.type === "spot" ? priorSpot === 0 : priorFutures === 0;
               if (!prior || firstTypeScan) { known.add(row.key); continue; }
@@ -290,8 +311,10 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
                   timing: row.launchAt ? "exchange" : "detected" };
                 const existing = existingById.get(event.id);
                 if (existing) {
-                  if (event.launchAt) { existing.launchAt = event.launchAt; existing.timing = "exchange"; }
-                } else { state.listings.push(event); existingById.set(event.id, event); }
+                  if (event.launchAt && existing.launchAt !== event.launchAt) {
+                    existing.launchAt = event.launchAt; existing.timing = "exchange"; changed = true;
+                  }
+                } else { state.listings.push(event); existingById.set(event.id, event); changed = true; }
               }
             }
             state.candidates[code] = nextCandidates;
@@ -301,12 +324,13 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
             state.known[code] = [...known];
             state.venues[code] = { name, status: "ok", spot: spotCount,
               futures: futuresCount, updatedAt: now() };
+            if (changed) { state.marketUpdatedAt = now(); persist(); emit(); }
           } catch (error) {
             state.venues[code] = { ...state.venues[code], name, status: "error",
               error: String(error.message || error).slice(0, 120), updatedAt: state.venues[code]?.updatedAt || null };
           }
-        }));
-      }
+        }
+      }));
       state.listings = state.listings.filter(row => (row.launchAt || row.detectedAt) > now() - MAX_EVENT_AGE_MS)
         .sort((a, b) => (b.launchAt || b.detectedAt) - (a.launchAt || a.detectedAt)).slice(0, 3000);
       state.marketUpdatedAt = now();
@@ -342,7 +366,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     drainTranslations();
     void Promise.allSettled([refreshMarkets(), refreshNews()]);
     connectStream();
-    marketTimer = setInterval(() => { void refreshMarkets(); }, 5 * 60000);
+    marketTimer = setInterval(() => { void refreshMarkets(); }, 90 * 1000);
     newsTimer = setInterval(() => { void refreshNews(); }, 60000);
     marketTimer.unref?.(); newsTimer.unref?.();
   }
@@ -350,6 +374,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     stream?.close(); stream = null;
+    void marketFetcher.close?.();
     if (marketTimer) clearInterval(marketTimer);
     if (newsTimer) clearInterval(newsTimer);
     marketTimer = null; newsTimer = null;
@@ -358,4 +383,4 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 
-module.exports = { VENUES, FEEDS, parseNews, parseStreamNews, translateTitle, launchTime, normalizeMarkets, createEventsHub };
+module.exports = { VENUES, FEEDS, parseNews, parseStreamNews, translateTitle, launchTime, normalizeMarkets, createMarketFetcher, createEventsHub };

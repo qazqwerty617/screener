@@ -287,12 +287,15 @@
       });
       setTab(selectedTab);
       refreshTimer = window.setInterval(() => {
-        if (byId("events-view")?.style.display === "block") void refresh();
-      }, 30000);
+        const connected = stream?.readyState === 1;
+        if (byId("events-view")?.style.display === "block" &&
+          Date.now() - lastRequest > (connected ? 120000 : 30000)) void refresh();
+      }, 15000);
     }
     if (!stream && typeof window.EventSource === "function") {
       stream = new window.EventSource("/api/events/stream");
       stream.addEventListener("update", () => { void refresh(); });
+      stream.addEventListener("open", () => { void refresh(); });
     }
     render();
     if (!data || Date.now() - lastRequest > 60000) void refresh();

@@ -6,7 +6,62 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { VENUES, createEventsHub, parseNews, parseStreamNews, normalizeMarkets } = require("../eventsHub");
+const { VENUES, createEventsHub, createMarketFetcher, parseNews, parseStreamNews, normalizeMarkets } = require("../eventsHub");
+
+test("market clients are reused and force a fresh catalog after the first scan", async () => {
+  const calls = [];
+  let created = 0, closed = 0;
+  const fetchMarkets = createMarketFetcher(() => {
+    created++;
+    return { async loadMarkets(reload) { calls.push(reload); return {}; }, async close() { closed++; } };
+  });
+  await fetchMarkets("binance"); await fetchMarkets("binance");
+  assert.equal(created, 1);
+  assert.deepEqual(calls, [false, true]);
+  await fetchMarkets.close();
+  assert.equal(closed, 1);
+});
+
+test("all venues scan with bounded parallelism", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  let active = 0, peak = 0;
+  const releases = [];
+  const hub = createEventsHub({ filePath, fetchMarkets: () => new Promise(resolve => {
+    active++; peak = Math.max(peak, active);
+    releases.push(() => { active--; resolve({ btc: { symbol: "BTC/USDT", base: "BTC", quote: "USDT", spot: true } }); });
+  }) });
+  const scan = hub.refreshMarkets();
+  assert.equal(active, 6, "six independent exchanges begin together");
+  releases.splice(0).forEach(release => release());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(peak, 6);
+  assert.equal(releases.length, 5);
+  releases.splice(0).forEach(release => release());
+  await scan;
+  assert.equal(Object.keys(hub.snapshot().venues).length, VENUES.length);
+});
+
+test("a confirmed listing is published before an unrelated slow venue finishes", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  let expanded = false, block = false, releaseSlow;
+  const hub = createEventsHub({ filePath, fetchMarkets: async id => {
+    if (id === "aster" && block) await new Promise(resolve => { releaseSlow = resolve; });
+    return { btc: { symbol: "BTC/USDT", base: "BTC", quote: "USDT", spot: true },
+      ...(id === "binance" && expanded ? { fresh: { symbol: "NEW/USDT", base: "NEW", quote: "USDT", spot: true } } : {}) };
+  } });
+  await hub.refreshMarkets(); expanded = true;
+  await hub.refreshMarkets();
+  let notify;
+  const published = new Promise(resolve => { notify = resolve; });
+  hub.subscribe(() => { if (hub.snapshot().listings.some(item => item.symbol === "NEW/USDT")) notify(); });
+  block = true;
+  const scan = hub.refreshMarkets();
+  await published;
+  assert.equal(typeof releaseSlow, "function", "slow venue remains in flight when listing is published");
+  releaseSlow(); await scan;
+});
 
 test("listing catalog contains only active USDT spot and futures pairs", () => {
   const rows = normalizeMarkets({
