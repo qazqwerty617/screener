@@ -64,24 +64,12 @@ test("timeframe changes rebuild even when the same coins qualify", async t => {
   assert.equal(h.w.chartInstances[0]?.tf, "1h");
 });
 
-test('search, volume and distance filter ready results without downloading maps again', async t => {
+test('rendering ready results does not download formation maps again', async t => {
   const h = build(t);
   await h.w.testRefresh(); await flush();
-  h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
   const before = h.requests.length;
-  const input = h.w.$('formations-volume');
-  input.value = '200000000'; input.dispatchEvent(new h.w.Event('input'));
-  assert.equal(h.w.chartInstances.length, 0);
-  input.value = '0'; input.dispatchEvent(new h.w.Event('input'));
+  h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
   assert.equal(h.w.chartInstances.length, 1);
-  const distance = h.w.$('formations-distance');
-  distance.value = '0.5'; distance.dispatchEvent(new h.w.Event('input'));
-  assert.equal(h.w.chartInstances.length, 0);
-  distance.value = '15'; distance.dispatchEvent(new h.w.Event('input'));
-  const search = h.w.$('formations-search');
-  search.value = 'ETH'; search.dispatchEvent(new h.w.Event('input'));
-  assert.equal(h.w.chartInstances.length, 0);
-  await flush();
   assert.equal(h.requests.length, before);
 });
 
@@ -92,7 +80,7 @@ test('network failure preserves the last snapshot and reports offline state', as
   h.respond(new Error('offline'));
   await h.w.testRefresh(); await flush();
   assert.equal(h.w.chartInstances.length, 1);
-  assert.match(h.w.$('formations-status').textContent, /Нет связи/);
+  assert.match(h.w.$('formations-page-info').textContent, /Нет связи/);
 });
 
 test('reload restores the selected workspace and its warmed chart candles', async t => {

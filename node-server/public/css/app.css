@@ -3573,35 +3573,6 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     gap: 16px;
 }
 
-.formations-workspace-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    overflow-x: auto;
-    white-space: nowrap;
-    flex-shrink: 0;
-    background: var(--bg2);
-    border-bottom: 1px solid var(--bd);
-    color: var(--t2);
-    font-size: 11px;
-}
-.formations-workspace-controls input,
-.formations-workspace-controls button {
-    box-sizing: border-box;
-    height: 28px;
-    border: 1px solid var(--bd2);
-    border-radius: 5px;
-    background: var(--bg3);
-    color: var(--t1);
-    padding: 0 8px;
-    font: inherit;
-}
-.formations-workspace-controls input[type="search"] { width: 130px; }
-.formations-workspace-controls input[type="number"] { width: 82px; }
-.formations-workspace-controls button { cursor: pointer; }
-#formations-status[data-error="true"] { color: var(--rd); }
-
 .formations-title {
     display: flex;
     align-items: center;
@@ -9008,10 +8979,9 @@ body {
 
 [data-appearance-theme] #formations-view { background: var(--formations-bg, var(--bg)); }
 [data-appearance-theme] #formations-grid { background: var(--formations-bg, var(--bg)); }
-[data-appearance-theme] :is(#formations-toolbar, #formations-pagination, .formations-workspace-controls, .formation-chart-card, .formation-mini-canvas) { background: var(--formations-panel, var(--bg2)); border-color: var(--bd); }
+[data-appearance-theme] :is(#formations-toolbar, #formations-pagination, .formation-chart-card, .formation-mini-canvas) { background: var(--formations-panel, var(--bg2)); border-color: var(--bd); }
 [data-appearance-theme] #formations-toolbar { background: color-mix(in srgb, var(--formations-panel, var(--bg2)) 88%, transparent); }
-[data-appearance-theme] .formations-workspace-controls :is(input, button) { background: var(--formations-bg, var(--bg)); border-color: var(--bd); color: var(--formations-text, var(--t1)); }
-[data-appearance-theme] :is(.formations-workspace-controls label, .formations-background-status) { color: var(--formations-muted, var(--t2)); }
+[data-appearance-theme] .formations-background-status { color: var(--formations-muted, var(--t2)); }
 [data-appearance-theme] .formations-background-status strong { color: var(--gr); }
 [data-appearance-theme] :is(.fc-overlay-info, .fc-overlay-footer) { background: color-mix(in srgb, var(--formations-panel, var(--bg2)) 88%, transparent); border-color: var(--bd); }
 [data-appearance-theme] #formations-view .grid-cell { background: var(--formations-panel); border-color: var(--bd); }

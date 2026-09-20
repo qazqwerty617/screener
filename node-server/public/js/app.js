@@ -15988,11 +15988,6 @@ window.addEventListener("resize", () => {
       infoText += ` [${scanProgressText}]`;
     }
     pgEl.textContent = infoText;
-    const status = $('formations-status');
-    if (status) { status.textContent = scanProgressText; status.dataset.error = String(formationLoadError); }
-    const count = $('formations-result-count');
-    if (count) count.textContent = 'Найдено: ' + total + ' · поиск в фоне';
-
     if (prevBtn) prevBtn.disabled = formationsPage === 0;
     if (nextBtn) nextBtn.disabled = formationsPage >= totalPages - 1;
   }
@@ -16019,8 +16014,7 @@ window.addEventListener("resize", () => {
     for (const [key, levels] of Object.entries(selectedMap || {})) formationsCoinsLevelsMap.set(key, levels);
     scanProgressText = formationLoadError ? 'Нет связи — показаны последние результаты' :
       !snapshot?.updatedAt ? 'Сервер готовит результаты' :
-      'Обновлено ' + new Date(snapshot.updatedAt).toLocaleTimeString('ru-RU') +
-      (snapshot.coverage === 'top-300' ? ' · до 300 монет' : '');
+      'Обновлено ' + new Date(snapshot.updatedAt).toLocaleTimeString('ru-RU');
     const checkedEx = [];
     if (fgExcMenu) {
       fgExcMenu.querySelectorAll(".exc-item:not([data-cex='ALL'])").forEach(item => {
