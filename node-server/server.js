@@ -4304,8 +4304,23 @@ app.post("/api/notifications/telegram-photo", telegramNotificationLimit, express
 registerPaymentRoutes(app, { userStore, paymentGateway });
 
 app.get("/api/events", (_req, res) => {
-  res.setHeader("Cache-Control", "public, max-age=30");
+  res.setHeader("Cache-Control", "no-store");
   res.json(eventsHub.snapshot());
+});
+
+let eventStreamClients = 0;
+app.get("/api/events/stream", (req, res) => {
+  if (eventStreamClients >= 200) return res.status(503).end();
+  eventStreamClients++;
+  res.set({ "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive", "X-Accel-Buffering": "no" });
+  res.flushHeaders();
+  res.write("retry: 3000\n\n");
+  const notify = () => { if (!res.destroyed && res.writableLength < 65536) res.write("event: update\ndata: {}\n\n"); };
+  const unsubscribe = eventsHub.subscribe(notify);
+  const heartbeat = setInterval(() => { if (!res.destroyed) res.write(": heartbeat\n\n"); }, 25000);
+  const cleanup = () => { clearInterval(heartbeat); unsubscribe(); eventStreamClients--; };
+  req.on("close", cleanup);
 });
 
 // Formation data is consumed by the screener, so this API route must be

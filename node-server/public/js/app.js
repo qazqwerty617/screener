@@ -12728,6 +12728,7 @@ window.switchView = function switchView(view) {
   const journalEl = document.getElementById("journal-view");
   const arbitrageEl = document.getElementById("arbitrage-view");
   const eventsEl = document.getElementById("events-view");
+  if (view !== "events") window.ObsidianEvents?.deactivate();
   if (eventsEl) eventsEl.style.display = view === "events" ? "block" : "none";
 
   // Highlight active navbar tab

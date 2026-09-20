@@ -11,8 +11,10 @@
   let selectedTab = "news";
   let lastRequest = 0;
   let inFlight = null;
+  let refreshPending = false;
   let wired = false;
   let refreshTimer = null;
+  let stream = null;
   const dateTime = value => Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString("ru-RU", {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
   }) : "Время неизвестно";
@@ -50,7 +52,9 @@
       link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer";
       cardTop(link, item.priority === "urgent" ? "⚡ Срочно" : item.priority === "important" ? "● Важно" : "Новость",
         item.publishedAt, item.priority === "urgent" ? "red" : "");
-      link.append(node("h3", "", item.title), node("small", "", item.source + " · открыть источник ↗"));
+      link.append(node("h3", "", item.titleRu || item.title));
+      if (item.titleRu) link.append(node("p", "events-original", item.title));
+      link.append(node("small", "", item.source + (item.titleRu ? " · перевод · " : /[а-яё]/i.test(item.title) ? " · оригинал · " : " · оригинал EN · ") + "открыть источник ↗"));
       container.append(link);
     }
     urgent.forEach(item => appendItem(urgentBox, item));
@@ -110,7 +114,7 @@
   }
 
   async function refresh() {
-    if (inFlight) return inFlight;
+    if (inFlight) { refreshPending = true; return inFlight; }
     inFlight = (async () => {
       try {
         const response = await fetch("/api/events", { signal: AbortSignal.timeout(10000) });
@@ -121,7 +125,10 @@
       } catch (_) {
         const updated = byId("events-updated");
         if (updated) updated.textContent = "Нет связи · показываем последние данные";
-      } finally { inFlight = null; }
+      } finally {
+        inFlight = null;
+        if (refreshPending) { refreshPending = false; void refresh(); }
+      }
     })();
     return inFlight;
   }
@@ -140,11 +147,16 @@
       setTab(selectedTab);
       refreshTimer = window.setInterval(() => {
         if (byId("events-view")?.style.display === "block") void refresh();
-      }, 60000);
+      }, 30000);
+    }
+    if (!stream && typeof window.EventSource === "function") {
+      stream = new window.EventSource("/api/events/stream");
+      stream.addEventListener("update", () => { void refresh(); });
     }
     if (!data || Date.now() - lastRequest > 60000) void refresh();
     else render();
   }
 
-  window.ObsidianEvents = { activate };
+  function deactivate() { stream?.close(); stream = null; }
+  window.ObsidianEvents = { activate, deactivate };
 })();

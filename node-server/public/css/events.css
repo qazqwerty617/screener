@@ -22,6 +22,7 @@ a.events-card:hover{border-color:var(--ac,#8842ea);background:var(--bgh,#242734)
 .events-pill.red{color:#ff8a94;background:#ef4b5324}.events-pill.green{color:#66d6b0;background:#26b78922}
 .events-card time{color:var(--t2,#939aab);font-size:11px;font-variant-numeric:tabular-nums}
 .events-card h3{font-size:13px;line-height:1.45;margin:0 0 9px;font-weight:650;overflow-wrap:anywhere}
+.events-original{font-size:11px;line-height:1.45;color:var(--t2,#939aab);margin:0 0 8px;overflow-wrap:anywhere}
 .events-card small{color:var(--t2,#939aab);font-size:11px}
 .events-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;padding:14px;background:var(--bg2,#1c2028);border:1px solid var(--bd,#30343d);border-radius:12px}
 .events-filters label{font-size:10px;color:var(--t2,#939aab);display:flex;flex-direction:column;gap:6px}
