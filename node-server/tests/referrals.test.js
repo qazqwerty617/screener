@@ -10,6 +10,8 @@ const userStore = require("../userStore");
 
 test("profile keeps referral statistics and manual reward rules behind a compact disclosure", () => {
   const html = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "../public/css/app.css"), "utf8");
+  const client = fs.readFileSync(path.join(__dirname, "../public/js/app.js"), "utf8");
   const document = new JSDOM(html).window.document;
   const details = document.getElementById("profile-referral-section");
   assert.equal(details.tagName, "DETAILS");
@@ -22,6 +24,9 @@ test("profile keeps referral statistics and manual reward rules behind a compact
   assert.match(details.textContent, /1,5 месяца PRO/);
   assert.match(details.textContent, /Награды не начисляются автоматически/);
   assert.equal(details.querySelector('.profile-referral-rewards a').href, "https://t.me/ObsidianSup");
+  assert.match(css, /@media \(min-width: 900px\)[\s\S]*?\.profile-referral-body\s*\{[\s\S]*?position: fixed/);
+  assert.match(client, /function placeReferralPopover\(\)/);
+  assert.match(client, /window\.setTimeout\([\s\S]*?\}, 500\)/);
 });
 
 test("referral attribution is immutable and purchase totals use paid records", async () => {

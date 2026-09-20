@@ -5456,6 +5456,27 @@ body {
     .profile-referral-summary-title { font-size: 10px; }
 }
 
+/* The compact trigger remains in the profile. On wide screens its details are
+   a side popover, so opening referrals does not make the profile modal taller. */
+@media (min-width: 900px) {
+    .profile-referral-body {
+        position: fixed;
+        top: var(--referral-popover-top, 12px);
+        left: var(--referral-popover-left, 12px);
+        z-index: 100001;
+        box-sizing: border-box;
+        width: min(390px, calc(100vw - 24px));
+        max-height: calc(100dvh - 24px);
+        overflow-y: auto;
+        padding: 10px;
+        border: 1px solid rgba(168,85,247,.42);
+        border-radius: 11px;
+        background: #151322;
+        box-shadow: 0 18px 48px rgba(0,0,0,.58), 0 0 26px rgba(124,58,237,.14);
+    }
+    .profile-referral-caption { margin-top: 0; }
+}
+
 @media (max-height: 900px) {
     #profile-modal .profile-modal-content { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
     #profile-modal .profile-card { padding-top: 8px; padding-bottom: 8px; }

@@ -16186,9 +16186,39 @@ async function loadReferralProfile() {
 }
 
 const referralDetails = document.getElementById("profile-referral-section");
-if (referralDetails && window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) {
-  referralDetails.addEventListener("mouseenter", () => { referralDetails.open = true; });
-  referralDetails.addEventListener("mouseleave", () => { referralDetails.open = false; });
+const referralPopoverMedia = window.matchMedia?.("(min-width: 900px)");
+let referralHoverTimer = null;
+function placeReferralPopover() {
+  if (!referralDetails?.open || !referralPopoverMedia?.matches) return;
+  const trigger = referralDetails.querySelector("summary");
+  const panel = referralDetails.querySelector(".profile-referral-body");
+  if (!trigger || !panel) return;
+  const triggerRect = trigger.getBoundingClientRect();
+  const panelWidth = panel.offsetWidth;
+  const panelHeight = panel.offsetHeight;
+  const edge = 12;
+  const left = Math.min(triggerRect.right + edge, window.innerWidth - panelWidth - edge);
+  const top = Math.max(edge, Math.min(triggerRect.top, window.innerHeight - panelHeight - edge));
+  panel.style.setProperty("--referral-popover-left", `${Math.max(edge, left)}px`);
+  panel.style.setProperty("--referral-popover-top", `${top}px`);
+}
+
+if (referralDetails) {
+  referralDetails.addEventListener("toggle", () => requestAnimationFrame(placeReferralPopover));
+  referralDetails.addEventListener("mouseenter", () => {
+    if (!window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) return;
+    clearTimeout(referralHoverTimer);
+    referralHoverTimer = window.setTimeout(() => {
+      referralDetails.open = true;
+      referralHoverTimer = null;
+    }, 500);
+  });
+  referralDetails.addEventListener("mouseleave", () => {
+    clearTimeout(referralHoverTimer);
+    referralHoverTimer = null;
+    if (window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) referralDetails.open = false;
+  });
+  window.addEventListener("resize", placeReferralPopover, { passive: true });
 }
 
 document.getElementById("profile-referral-copy")?.addEventListener("click", async () => {
