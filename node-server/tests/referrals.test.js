@@ -27,6 +27,8 @@ test("profile keeps referral statistics and manual reward rules behind a compact
   assert.match(css, /@media \(min-width: 900px\)[\s\S]*?\.profile-referral-body\s*\{[\s\S]*?position: fixed/);
   assert.match(client, /function placeReferralPopover\(\)/);
   assert.match(client, /window\.setTimeout\([\s\S]*?\}, 500\)/);
+  assert.match(client, /referralPopoverPanel\?\.addEventListener\("mouseenter", clearReferralHoverTimer\)/);
+  assert.match(client, /function closeReferralPopoverSoon\(\)/);
 });
 
 test("referral attribution is immutable and purchase totals use paid records", async () => {

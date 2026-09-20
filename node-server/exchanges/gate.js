@@ -36,7 +36,8 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changePct,
           quoteTs: p > 0 ? Date.now() : undefined,
           v: +(ticker24h?.volume_24h_quote || ticker24h?.volume_24h_settle || 0), h, l, o,
-          funding: +(ticker24h?.funding_rate || contract.funding_rate || 0) * 100,
+          funding: +(ticker24h?.funding_rate ?? contract.funding_rate ?? 0) * 100,
+          fundingTs: (ticker24h?.funding_rate != null || contract.funding_rate != null) ? Date.now() : 0,
           nextFunding: +(ticker24h?.funding_rate_next_apply || contract.funding_next_apply || 0) * 1000,
           fundingInterval: +contract.funding_interval > 0 ? +contract.funding_interval / 3600 : 8,
           takerFeePct: +contract.taker_fee_rate > 0 ? +contract.taker_fee_rate * 100 : 0,
@@ -63,7 +64,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         for (const tick of tickersResp) {
           const t = tickers.get("GT:" + tick.contract);
           if (!t) continue;
-          if (tick.funding_rate) t.funding = +tick.funding_rate * 100;
+          if (tick.funding_rate != null) { t.funding = +tick.funding_rate * 100; t.fundingTs = Date.now(); }
           if (tick.funding_rate_next_apply) t.nextFunding = +tick.funding_rate_next_apply * 1000;
           if (tick.total_size && tick.quanto_multiplier) {
             t.oi = (+tick.total_size) * (+tick.quanto_multiplier) * t.p;
@@ -87,7 +88,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (t) {
             const bp = +tick.b, ap = +tick.a;
             if (bp > 0 && ap > 0) {
-              t.bid = bp; t.ask = ap; t.quoteTs = Date.now();
+              t.bid = bp; t.ask = ap; t.quoteTs = Date.now(); t.bboTs = t.quoteTs;
               const midP = (bp + ap) / 2;
               t.p = midP;
               if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;

@@ -19,7 +19,7 @@ test("payment modal exposes promo validation and BEP20 selection", () => {
 });
 
 test("invoice creation has a bounded client timeout and always restores its button", () => {
-  const start = app.match(/async function startPayInvoice[\s\S]*?\n}\n\nfunction renderPayInvoiceStep/)?.[0] || "";
+  const start = app.match(/async function startPayInvoice[\s\S]*?\r?\n}\r?\n\r?\nfunction renderPayInvoiceStep/)?.[0] || "";
   assert.match(start, /AbortController/);
   assert.match(start, /setTimeout\(\(\) => controller\.abort\(\), 15_000\)/);
   assert.match(start, /finally\s*\{/);
@@ -33,13 +33,13 @@ test("guests cannot open payment modal or checkout without registering / logging
   assert.match(app, /window\.pendingPayAfterAuth/);
 
   // openPayModal must check isUserLoggedIn and redirect unauthenticated users to auth modal
-  const openPay = app.match(/function openPayModal\(\)[\s\S]*?\n}\n\nasync function refreshAvailablePaymentMethods/)?.[0] || "";
+  const openPay = app.match(/function openPayModal\(\)[\s\S]*?\r?\n}\r?\n\r?\nasync function refreshAvailablePaymentMethods/)?.[0] || "";
   assert.match(openPay, /isUserLoggedIn/);
   assert.match(openPay, /openAuthModal\(/);
   assert.match(openPay, /pendingPayAfterAuth\s*=\s*true/);
 
   // startPayInvoice must guard against unauthenticated checkout
-  const startPay = app.match(/async function startPayInvoice[\s\S]*?\n}\n\nfunction renderPayInvoiceStep/)?.[0] || "";
+  const startPay = app.match(/async function startPayInvoice[\s\S]*?\r?\n}\r?\n\r?\nfunction renderPayInvoiceStep/)?.[0] || "";
   assert.match(startPay, /isUserLoggedIn/);
   assert.match(startPay, /openAuthModal\(/);
 });
@@ -108,5 +108,4 @@ test("tariff cards update dynamically with discount price and per-month rate whe
   assert.equal(card3m._priceEl.innerHTML, "$80");
   assert.equal(card3m._descEl.innerHTML, "$26.60 / месяц");
 });
-
 

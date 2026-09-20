@@ -46,7 +46,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
             if (h > 0) existing.h = h;
             if (l > 0) existing.l = l;
             if (+d.quoteVolume > 0) existing.v = +d.quoteVolume;
-            if (prem.r) existing.funding = prem.r;
+            if (prem.T && Number.isFinite(prem.r)) { existing.funding = prem.r; existing.fundingTs = Date.now(); }
             if (prem.T) existing.nextFunding = prem.T;
             existing.fundingInterval = fundingIntervalMap.get(d.symbol) || existing.fundingInterval || 8;
             if (+d.count) existing.trades = +d.count;
@@ -54,8 +54,8 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
             tickers.set("BN:" + d.symbol, {
               key: "BN:" + d.symbol, ex: "BN", sym: d.symbol, base: d.symbol.replace(/USDT$/, ""),
               p, chg: (() => { const v = parseFloat(d.priceChangePercent); return (!isNaN(v) && v !== 0) ? v : (o > 0 && p > 0 ? ((p - o) / o) * 100 : 0); })(),
-              v: +d.quoteVolume || 0, h: h || p, l: l || p, o: o || p, funding: prem.r, nextFunding: prem.T, trades: +d.count || 0,
-              bid: +d.bidPrice || 0, ask: +d.askPrice || 0, quoteTs: Date.now(), fundingInterval: fundingIntervalMap.get(d.symbol) || 8,
+              v: +d.quoteVolume || 0, h: h || p, l: l || p, o: o || p, funding: prem.r, fundingTs: prem.T ? Date.now() : 0, nextFunding: prem.T, trades: +d.count || 0,
+              bid: +d.bidPrice || 0, ask: +d.askPrice || 0, quoteTs: Date.now(), bboTs: +d.bidPrice > 0 && +d.askPrice > 0 ? Date.now() : 0, fundingInterval: fundingIntervalMap.get(d.symbol) || 8,
             });
           }
           dirtyKeys.add("BN:" + d.symbol);
@@ -89,11 +89,11 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
               key: "BN:" + d.s, ex: "BN", sym: d.s, base: d.s.replace(/USDT$/, ""),
               p: midP, chg: 0, v: 0, h: midP, l: midP, o: midP,
               funding: 0, nextFunding: 0, trades: 0,
-              bid: bp, ask: ap, quoteTs: Date.now(), fundingInterval: 8,
+              bid: bp, ask: ap, quoteTs: Date.now(), bboTs: Date.now(), fundingInterval: 8,
             };
             tickers.set("BN:" + d.s, t);
           } else {
-            t.bid = bp; t.ask = ap; t.quoteTs = Date.now();
+            t.bid = bp; t.ask = ap; t.quoteTs = Date.now(); t.bboTs = t.quoteTs;
             t.p = midP;
             if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;
           }
@@ -172,7 +172,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
         const batch = JSON.parse(raw.toString());
         for (const d of batch) {
           const t = tickers.get("BN:" + d.s);
-          if (t) { t.funding = +d.r * 100; t.nextFunding = +d.T; dirtyKeys.add(t.key); }
+          if (t && d.r != null && +d.T > 0) { t.funding = +d.r * 100; t.fundingTs = Date.now(); t.nextFunding = +d.T; dirtyKeys.add(t.key); }
         }
       } catch (_) { }
     });

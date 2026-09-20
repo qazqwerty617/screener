@@ -24,7 +24,7 @@ test("chart-animation switch controls the interpolation path instead of a dead v
 });
 
 test("reset all restores every settings section and its visible controls", () => {
-  const reset = app.match(/resetBtn\.onclick\s*=\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\};\n\s*\}/)?.[1] || "";
+  const reset = app.match(/resetBtn\.onclick\s*=\s*\(\)\s*=>\s*\{([\s\S]*?)\r?\n\s*\};\r?\n\s*\}/)?.[1] || "";
   assert.match(reset, /selectAppearanceTheme\("obsidian"\)/);
   assert.match(reset, /Object\.assign\(formationColorState, DEFAULT_FORMATION_COLORS\)/);
   assert.match(reset, /visibleCols\s*=\s*\{\s*\.\.\.defaultCols\s*\}/);

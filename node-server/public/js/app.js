@@ -58,6 +58,9 @@ function showToast(options, typeArg, titleArg, durationArg) {
   // Clean strings
   if (title === "undefined" || title === "null") title = "";
   if (typeof message === "string" && (message === "undefined" || message === "null")) message = "";
+  message = String(message);
+  if (!validTypes.includes(type)) type = "info";
+  durationMs = Number.isFinite(Number(durationMs)) ? Math.max(1000, Math.min(60000, Number(durationMs))) : 8000;
 
   // Fallback icon & title
   let icon = "";
@@ -100,14 +103,26 @@ function showToast(options, typeArg, titleArg, durationArg) {
       }
     });
   }
-  card.innerHTML = `
-    <div class="toast-header">
-      <span class="toast-title">${icon ? icon + " " : ""}${title}</span>
-      <button class="toast-close" onclick="this.closest('.toast-card').remove()">×</button>
-    </div>
-    ${message ? `<div class="toast-body">${message}</div>` : ""}
-    <div class="toast-progress"></div>
-  `;
+  const header = document.createElement("div");
+  header.className = "toast-header";
+  const titleEl = document.createElement("span");
+  titleEl.className = "toast-title";
+  titleEl.textContent = `${icon ? icon + " " : ""}${title}`;
+  const close = document.createElement("button");
+  close.className = "toast-close";
+  close.textContent = "×";
+  close.addEventListener("click", () => card.remove());
+  header.append(titleEl, close);
+  card.appendChild(header);
+  if (message) {
+    const body = document.createElement("div");
+    body.className = "toast-body";
+    body.textContent = message;
+    card.appendChild(body);
+  }
+  const progressBar = document.createElement("div");
+  progressBar.className = "toast-progress";
+  card.appendChild(progressBar);
   
   const progress = card.querySelector(".toast-progress");
   if (progress) {
@@ -4162,7 +4177,9 @@ function drawChart() {
         const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
 
         const vRatio = Math.min(1.0, val / scaleCeiling);
-        const vh = Math.max(1.5, vRatio * usableHeight);
+        // Preserve subpixel heights: a minimum height flattens different small
+        // volumes into an identical row whenever a large spike is visible.
+        const vh = vRatio * usableHeight;
         const fillY = volumeYStart + volumeHeight - vh;
 
         const up = c.c >= c.o;
@@ -6118,7 +6135,7 @@ function copyCoinNameToClipboard(rawText) {
   }
 
   doCopy(cleanName);
-  showToast(`Скопировано: <b style="color:#26c97a; margin-left:4px;">${cleanName}</b>`);
+  showToast(`Скопировано: ${cleanName}`);
 
   const symBtn = $("sym-btn");
   if (symBtn) {
@@ -7181,6 +7198,7 @@ canvas.addEventListener("dblclick", (e) => {
 // тХРтХРтХР WebSocket connection to Node aggregator тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 let wsPingTimer = null;
 let wsReconnectTimer = null;
+let initialSnapshotTimer = null;
 let lastWsMsg = 0;
 
 // Watchdog: if no data for 15s while connected — force auto-reconnect cleanly
@@ -7226,13 +7244,12 @@ function fetchInitialTickersSnapshot() {
 function connectWS() {
   // Cancel any pending reconnect
   if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+  if (initialSnapshotTimer) { clearTimeout(initialSnapshotTimer); initialSnapshotTimer = null; }
 
-  const curToken = (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : (localStorage.getItem("obsidian_auth_token") || "")) || "";
-  const tokenQuery = curToken ? `?token=${encodeURIComponent(curToken)}` : "";
   const wsUrl =
     location.protocol === "file:"
-      ? `ws://localhost:3000/ws${tokenQuery}`
-      : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws${tokenQuery}`;
+      ? "ws://localhost:3000/ws"
+      : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 
   // Tear down old connection cleanly
   if (ws) {
@@ -7243,7 +7260,14 @@ function connectWS() {
   if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
 
   $("cd-label").textContent = "Connecting...";
-  fetchInitialTickersSnapshot();
+  // The server sends the same market snapshot immediately after opening the
+  // socket. Keep HTTP as a fallback instead of downloading and parsing both.
+  if (coins.size === 0) {
+    initialSnapshotTimer = setTimeout(() => {
+      initialSnapshotTimer = null;
+      if (coins.size === 0) fetchInitialTickersSnapshot();
+    }, 1500);
+  }
   ws = new WebSocket(wsUrl);
   window.ws = ws;
   ws.binaryType = "arraybuffer";
@@ -7411,6 +7435,7 @@ function connectWS() {
       return;
     }
     if (msg.type === "snapshot") {
+      if (initialSnapshotTimer) { clearTimeout(initialSnapshotTimer); initialSnapshotTimer = null; }
       const flat = msg.data;
       const start = flat[0] === "s" ? 1 : 0;
       const count = (flat.length - start) / 11;
@@ -7830,17 +7855,17 @@ async function fetchDirectKlines(ex, sym, tf, signal) {
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[7] || +k[6] || +k[5] })));
     } else if (ex === "BG") {
-      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${encSym}&granularity=${TFOK[tf] || "1H"}&limit=1000`, { signal: controller.signal });
+      const r = await fetch(`https://api.bitget.com/api/v2/mix/market/candles?productType=USDT-FUTURES&symbol=${encSym}&granularity=${TFOK[tf] || "1H"}&limit=300`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: +k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[6] || +k[5] })));
     } else if (ex === "GT") {
-      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=1000`, { signal: controller.signal });
+      const r = await fetch(`https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=${encSym}&interval=${tf}&limit=300`, { signal: controller.signal });
       const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t * 1000, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +(k.a || k.v) })));
     } else if (ex === "MX") {
       const mxSym = sym.includes("_") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/i, "_USDT") : sym + "_USDT");
       const mxTfMap = { "1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30", "1h": "Min60", "4h": "Hour4", "1d": "Day1", "3d": "Day3", "1w": "Week1" };
-      const startSec = Math.floor((now - 1000 * tfMs) / 1000);
+      const startSec = Math.floor((now - 300 * tfMs) / 1000);
       const endSec = Math.floor(now / 1000);
       const r = await fetch(`https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(mxSym)}?interval=${mxTfMap[tf] || "Min60"}&start=${startSec}&end=${endSec}`, { signal: controller.signal });
       const data = await r.json();
@@ -7864,11 +7889,11 @@ async function fetchDirectKlines(ex, sym, tf, signal) {
       if (merged.length > 0) resultCandles = sanitizeCandles(merged.map(k => ({ t: +(k.time || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.close || k.c || 0), v: +(k.volume || k.v || 0) * +(k.close || k.c || 0) })));
     } else if (ex === "HT") {
       const htTfMap = { "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "60min", "4h": "4hour", "1d": "1day", "1w": "1week" };
-      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${encSym}&period=${htTfMap[tf] || "60min"}&size=1000`, { signal: controller.signal });
+      const r = await fetch(`https://api.hbdm.com/linear-swap-ex/market/history/kline?contract_code=${encSym}&period=${htTfMap[tf] || "60min"}&size=300`, { signal: controller.signal });
       const data = await r.json();
       if (data.data) resultCandles = sanitizeCandles(data.data.map(k => ({ t: k.id * 1000, o: +k.open, h: +k.high, l: +k.l, c: +k.close, v: +(k.trade_turnover || k.amount || k.vol) })));
     } else if (ex === "HL") {
-      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: Date.now() - (2000 * tfMs), endTime: Date.now() } }) });
+      const r = await fetch("https://api.hyperliquid.xyz/info", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ type: "candleSnapshot", req: { coin: sym, interval: tf.toLowerCase(), startTime: now - (300 * tfMs), endTime: now } }) });
       const data = await r.json();
       if (Array.isArray(data)) resultCandles = sanitizeCandles(data.map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c })));
     }
@@ -7953,6 +7978,7 @@ function fetchGridKlines(ex, sym, tf, signal) {
     if (KLINE_REQUESTS.get(key) === request) KLINE_REQUESTS.delete(key);
     group.items.delete(sym);
     group.pending?.delete(sym);
+    group.cancelDirect?.(sym);
     if (group.pending && !group.pending.size) group.controller?.abort();
     resolveRequest([]);
   };
@@ -7968,10 +7994,52 @@ async function flushGridKlines(group) {
   const timer = setTimeout(() => controller.abort(), 12000);
   const pending = new Map(group.items);
   group.pending = pending;
+  const directControllers = new Map();
+  group.cancelDirect = sym => {
+    directControllers.get(sym)?.abort();
+    directControllers.delete(sym);
+  };
+  const cancelDirect = () => {
+    for (const direct of directControllers.values()) direct.abort();
+    directControllers.clear();
+  };
+  controller.signal.addEventListener('abort', cancelDirect, { once: true });
+  const deliver = (sym, data) => {
+    const resolve = pending.get(sym);
+    if (!resolve || !data?.length) return;
+    pending.delete(sym);
+    group.cancelDirect(sym);
+    resolve(data);
+    if (!pending.size) controller.abort();
+  };
+  // Give the shared server cache a head start. Only slow cells hedge directly
+  // against their own exchange, with at most three requests per group.
+  const hedgeTimer = setTimeout(() => {
+    const queue = [...pending.keys()];
+    const worker = async () => {
+      while (queue.length && !controller.signal.aborted) {
+        const sym = queue.shift();
+        if (!pending.has(sym)) continue;
+        const direct = new AbortController();
+        directControllers.set(sym, direct);
+        try {
+          const data = await fetchDirectKlines(group.ex, sym, group.tf, direct.signal);
+          if (!direct.signal.aborted) deliver(sym, data);
+        } catch (_) {
+          // CORS or an unavailable exchange must not discard the server path.
+        } finally {
+          if (directControllers.get(sym) === direct) directControllers.delete(sym);
+        }
+      }
+    };
+    const workerCount = Math.min(3, queue.length);
+    for (let i = 0; i < workerCount; i++) void worker();
+  }, 450);
   const recover = sym => {
     const resolve = pending.get(sym);
     if (!resolve) return;
     pending.delete(sym);
+    group.cancelDirect(sym);
     fetchChartKlines(group.ex, sym, group.tf).then(resolve, () => resolve([]));
   };
   const consume = line => {
@@ -7979,8 +8047,7 @@ async function flushGridKlines(group) {
     const row = JSON.parse(line);
     const data = decodeKlinePayload(row.data);
     if (data.length > 0 && pending.has(row.sym)) {
-      pending.get(row.sym)(data);
-      pending.delete(row.sym);
+      deliver(row.sym, data);
     } else if (row.pending) {
       recover(row.sym);
     }
@@ -8010,6 +8077,7 @@ async function flushGridKlines(group) {
     // Completed cells remain usable if a different cell times out.
   } finally {
     clearTimeout(timer);
+    clearTimeout(hedgeTimer);
     controller.abort();
     for (const sym of [...pending.keys()]) recover(sym);
   }
@@ -8662,7 +8730,7 @@ function connectKlWs(ex, sym, tf) {
   } else if (ex === "BX") {
     const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
     try {
-      klWs = new WebSocket("wss://open-api-swap.bingx.com/swap-market");
+      const bxWs = klWs = new WebSocket("wss://open-api-swap.bingx.com/swap-market");
       klWs.binaryType = "arraybuffer";
       klWs.onopen = () => {
         applyMainMarketStatus("live");
@@ -8679,7 +8747,12 @@ function connectKlWs(ex, sym, tf) {
           } else if (typeof e.data === "string") {
             str = e.data;
           }
-          if (!str) return;
+          if (!str || klWs !== bxWs) return;
+          // BingX heartbeat is a gzip-compressed text frame, not JSON.
+          if (str === "Ping") {
+            if (bxWs.readyState === 1) bxWs.send("Pong");
+            return;
+          }
           const d = JSON.parse(str);
           if (d.ping && klWs?.readyState === 1) { klWs.send(JSON.stringify({ pong: d.ping })); return; }
           if (d.dataType?.includes("@trade") && d.data) {
@@ -12452,7 +12525,12 @@ function renderMiniSearchItem(c) {
   const div = document.createElement("div");
   div.className = "mini-search-item";
   const fullName = EX_NAMES[c.ex] || c.ex;
-  div.innerHTML = `<span>${c.sym}</span><span class="msi-ex">${fullName}</span>`;
+  const symbol = document.createElement("span");
+  symbol.textContent = c.sym;
+  const exchange = document.createElement("span");
+  exchange.className = "msi-ex";
+  exchange.textContent = fullName;
+  div.append(symbol, exchange);
   div.onclick = () => {
     manualGridCoins.set(miniSearchActiveIndex, { ex: c.ex, sym: c.sym });
     const inst = chartInstances[miniSearchActiveIndex];
@@ -12603,6 +12681,23 @@ const featureTitles = {
   backtest: "Бэктестинг стратегий",
   journal: "Дневник трейдера"
 };
+let backtestModulePromise = null;
+function loadBacktestModule() {
+  if (window.CryptoBacktest) return Promise.resolve(window.CryptoBacktest);
+  if (!backtestModulePromise) {
+    backtestModulePromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/js/backtest.js?v=2015";
+      script.onload = () => {
+        if (window.CryptoBacktest) resolve(window.CryptoBacktest);
+        else { script.remove(); reject(new Error("Модуль бэктеста не запустился")); }
+      };
+      script.onerror = () => { script.remove(); reject(new Error("Не удалось загрузить бэктест")); };
+      document.head.appendChild(script);
+    }).catch(error => { backtestModulePromise = null; throw error; });
+  }
+  return backtestModulePromise;
+}
 
 window.switchView = function switchView(view) {
   if (view !== "screener") {
@@ -12697,7 +12792,9 @@ window.switchView = function switchView(view) {
     if (backtestEl) backtestEl.style.display = "flex";
     if (journalEl) journalEl.style.display = "none";
     if (arbitrageEl) arbitrageEl.style.display = "none";
-    if (window.CryptoBacktest) window.CryptoBacktest.activate();
+    loadBacktestModule()
+      .then(module => { if (activeView === "backtest") module.activate(); })
+      .catch(error => showToast({ title: "Бэктест", message: error.message, type: "error" }));
   } else if (view === "journal") {
     if (mainEl) mainEl.style.display = "none";
     if (densityEl) densityEl.style.display = "none";
@@ -16187,7 +16284,22 @@ async function loadReferralProfile() {
 
 const referralDetails = document.getElementById("profile-referral-section");
 const referralPopoverMedia = window.matchMedia?.("(min-width: 900px)");
+const referralPopoverPanel = referralDetails?.querySelector(".profile-referral-body");
 let referralHoverTimer = null;
+const usesFinePointer = () => window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches;
+function clearReferralHoverTimer() {
+  clearTimeout(referralHoverTimer);
+  referralHoverTimer = null;
+}
+function closeReferralPopoverSoon() {
+  clearReferralHoverTimer();
+  referralHoverTimer = window.setTimeout(() => {
+    if (!referralDetails?.matches(":hover") && !referralPopoverPanel?.matches(":hover")) {
+      referralDetails.open = false;
+    }
+    referralHoverTimer = null;
+  }, 180);
+}
 function placeReferralPopover() {
   if (!referralDetails?.open || !referralPopoverMedia?.matches) return;
   const trigger = referralDetails.querySelector("summary");
@@ -16206,17 +16318,19 @@ function placeReferralPopover() {
 if (referralDetails) {
   referralDetails.addEventListener("toggle", () => requestAnimationFrame(placeReferralPopover));
   referralDetails.addEventListener("mouseenter", () => {
-    if (!window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) return;
-    clearTimeout(referralHoverTimer);
+    if (!usesFinePointer()) return;
+    clearReferralHoverTimer();
     referralHoverTimer = window.setTimeout(() => {
       referralDetails.open = true;
       referralHoverTimer = null;
     }, 500);
   });
   referralDetails.addEventListener("mouseleave", () => {
-    clearTimeout(referralHoverTimer);
-    referralHoverTimer = null;
-    if (window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) referralDetails.open = false;
+    if (usesFinePointer()) closeReferralPopoverSoon();
+  });
+  referralPopoverPanel?.addEventListener("mouseenter", clearReferralHoverTimer);
+  referralPopoverPanel?.addEventListener("mouseleave", () => {
+    if (usesFinePointer()) closeReferralPopoverSoon();
   });
   window.addEventListener("resize", placeReferralPopover, { passive: true });
 }
@@ -17667,7 +17781,7 @@ function updatePayTariffCards(promo = null) {
     } else if (promo.type === "days" && Number(promo.bonusDays) > 0) {
       priceEl.innerHTML = info.defaultPrice;
       if (info.months) {
-        descEl.innerHTML = `<span class="pay-t-desc-discounted">${info.defaultDesc} (+${promo.bonusDays} дн. бонуса)</span>`;
+        descEl.innerHTML = `<span class="pay-t-desc-discounted">${info.defaultDesc} (+${Number(promo.bonusDays)} дн. бонуса)</span>`;
       } else {
         descEl.innerHTML = info.defaultDesc;
       }
@@ -19402,7 +19516,7 @@ if (document.readyState === "loading") {
       try {
         showToast({
           title: `${dirLabelRu}: ${sym} (${pctStr})`,
-          message: `<b>${sym}</b> · ${exFull}<br><span style="color:${isPump ? '#22c55e' : '#ef4444'};font-weight:700;">${pctStr}</span> за <b>${periodLabel}</b> · $${priceStr}<div style="margin-top:5px;font-size:11px;color:#a78bfa;font-weight:600;display:flex;align-items:center;gap:4px;"><span>Открыть график</span> ↗</div>`,
+          message: `${sym} · ${exFull} · ${pctStr} за ${periodLabel} · $${priceStr} · Открыть график ↗`,
           type: "price_alert",
           durationMs: 8000,
           hint: "Нажмите, чтобы открыть график монеты",
@@ -19445,28 +19559,37 @@ if (document.readyState === "loading") {
     const panel = document.getElementById("pd-alerts-list");
     if (!panel) return;
     if (pdAlertCards.length === 0) {
-      panel.innerHTML = `<div class="pd-empty">Алертов пока нет. Сканер активен.<br><span style="color:var(--t3);font-size:11px;">Ожидаем движение ≥ ${pdSettings.minPct}% за ${pdSettings.periodMinutes}м...</span></div>`;
+      const empty = document.createElement("div");
+      empty.className = "pd-empty";
+      empty.append("Алертов пока нет. Сканер активен.", document.createElement("br"));
+      const detail = document.createElement("span");
+      detail.style.cssText = "color:var(--t3);font-size:11px;";
+      detail.textContent = `Ожидаем движение ≥ ${pdSettings.minPct}% за ${pdSettings.periodMinutes}м...`;
+      empty.appendChild(detail);
+      panel.replaceChildren(empty);
       return;
     }
-    panel.innerHTML = pdAlertCards.map(c => `
-      <div class="pd-alert-card ${c.pct > 0 ? "pd-pump" : "pd-dump"}" onclick="window.openCoinChart('${c.ex}','${c.sym}')">
-        <div class="pd-card-left">
-          <div class="pd-card-icon-badge ${c.pct > 0 ? "pd-badge-pump" : "pd-badge-dump"}">
-            ${c.pct > 0
-              ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>'
-              : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>'
-            }
-          </div>
-          <div class="pd-card-info">
-            <div class="pd-card-sym">${c.sym}<span class="pd-card-ex">${c.exFull}</span></div>
-            <div class="pd-card-meta">${c.dateStr} ${c.timeStr} · ${c.periodLabel} · Vol: $${c.volStr}</div>
-          </div>
-        </div>
-        <div class="pd-card-right">
-          <div class="pd-card-pct ${c.pct > 0 ? "pd-up" : "pd-down"}">${c.pctStr}</div>
-          <div class="pd-card-price">$${c.price}</div>
-        </div>
-      </div>`).join("");
+    const cards = pdAlertCards.map(c => {
+      const card = document.createElement("div");
+      card.className = `pd-alert-card ${c.pct > 0 ? "pd-pump" : "pd-dump"}`;
+      card.innerHTML = '<div class="pd-card-left"><div class="pd-card-icon-badge"></div><div class="pd-card-info"><div class="pd-card-sym"><span class="pd-card-ex"></span></div><div class="pd-card-meta"></div></div></div><div class="pd-card-right"><div class="pd-card-pct"></div><div class="pd-card-price"></div></div>';
+      const badge = card.querySelector(".pd-card-icon-badge");
+      badge.classList.add(c.pct > 0 ? "pd-badge-pump" : "pd-badge-dump");
+      badge.innerHTML = c.pct > 0
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>';
+      const symbol = card.querySelector(".pd-card-sym");
+      symbol.prepend(document.createTextNode(c.sym));
+      card.querySelector(".pd-card-ex").textContent = c.exFull;
+      card.querySelector(".pd-card-meta").textContent = `${c.dateStr} ${c.timeStr} · ${c.periodLabel} · Vol: $${c.volStr}`;
+      const pct = card.querySelector(".pd-card-pct");
+      pct.classList.add(c.pct > 0 ? "pd-up" : "pd-down");
+      pct.textContent = c.pctStr;
+      card.querySelector(".pd-card-price").textContent = `$${c.price}`;
+      card.addEventListener("click", () => window.openCoinChart(c.ex, c.sym));
+      return card;
+    });
+    panel.replaceChildren(...cards);
   }
 
 

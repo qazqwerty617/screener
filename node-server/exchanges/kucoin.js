@@ -31,7 +31,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
           p, chg: Number.isFinite(changeRate) ? changeRate * 100 : (o > 0 && p > 0 ? ((p - o) / o) * 100 : 0),
           quoteTs: p > 0 ? Date.now() : undefined,
           v: Number.isFinite(v) ? v : 0, h: h > 0 ? h : p, l: l > 0 ? l : p, o,
-          funding: +d.fundingFeeRate * 100 || 0, nextFunding: d.nextFundingRateTime ? Date.now() + d.nextFundingRateTime : 0,
+          funding: +d.fundingFeeRate * 100 || 0, fundingTs: d.fundingFeeRate != null ? Date.now() : 0, nextFunding: d.nextFundingRateTime ? Date.now() + d.nextFundingRateTime : 0,
           fundingInterval: +(d.currentFundingRateGranularity || d.fundingRateGranularity) > 0
             ? +(d.currentFundingRateGranularity || d.fundingRateGranularity) / 3600000
             : 8,
@@ -87,7 +87,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
               const bid = +(tick.bestBidPrice || 0);
               const ask = +(tick.bestAskPrice || 0);
               if (bid > 0 && ask > 0) {
-                t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
+                t.bid = bid; t.ask = ask; t.quoteTs = Date.now(); t.bboTs = t.quoteTs;
                 t.p = (bid + ask) / 2;
               } else {
                 const lp = +(tick.price || 0);
@@ -111,7 +111,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
               const bid = +(tick.bestBidPrice || 0);
               const ask = +(tick.bestAskPrice || 0);
               if (bid > 0 && ask > 0) {
-                t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
+                t.bid = bid; t.ask = ask; t.quoteTs = Date.now(); t.bboTs = t.quoteTs;
                 t.p = (bid + ask) / 2;
               } else {
                 const lp = +(tick.price || tick.lastTradePrice || 0);
@@ -191,7 +191,7 @@ module.exports = function (tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus)
           t.l = l > 0 ? l : t.l;
           t.o = o > 0 ? o : t.o;
           t.v = Number.isFinite(v) ? v : t.v;
-          if (d.fundingFeeRate !== undefined) t.funding = +d.fundingFeeRate * 100;
+          if (d.fundingFeeRate !== undefined) { t.funding = +d.fundingFeeRate * 100; t.fundingTs = Date.now(); }
           if (d.nextFundingRateTime) t.nextFunding = Date.now() + +d.nextFundingRateTime;
           const fundingGranularity = +(d.currentFundingRateGranularity || d.fundingRateGranularity);
           if (fundingGranularity > 0) t.fundingInterval = fundingGranularity / 3600000;

@@ -42,8 +42,8 @@ test("deduplicates ticker aliases that point to one object", () => {
 test("normalizes funding intervals before comparing venues", () => {
   const now = Date.now();
   const map = new Map([
-    ["HL:BTC", { ex: "HL", sym: "BTC", base: "BTC", p: 100, funding: 0.005, fundingInterval: 1, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
-    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, funding: 0.02, fundingInterval: 8, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+    ["HL:BTC", { ex: "HL", sym: "BTC", base: "BTC", p: 100, funding: 0.005, fundingTs: now, fundingInterval: 1, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+    ["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", base: "BTC", p: 100, funding: 0.02, fundingTs: now, fundingInterval: 8, nextFunding: now + 7200000, v: 1e6, quoteTs: now }],
   ]);
   const row = buildRows(map, now).funding[0];
   assert.equal(row.longEx, "BN");
@@ -54,8 +54,8 @@ test("normalizes funding intervals before comparing venues", () => {
 test("funding rows describe the next settlement and fee payback without long projections", () => {
   const now = Date.now();
   const map = new Map([
-    ["BN:EDGEUSDT", { ex: "BN", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: -0.08, fundingInterval: 4, nextFunding: now + 3600000, v: 3e6, quoteTs: now }],
-    ["BB:EDGEUSDT", { ex: "BB", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: 0.04, fundingInterval: 8, nextFunding: now + 3600000 + 120000, v: 2e6, quoteTs: now }],
+    ["BN:EDGEUSDT", { ex: "BN", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: -0.08, fundingTs: now, fundingInterval: 4, nextFunding: now + 3600000, v: 3e6, quoteTs: now }],
+    ["BB:EDGEUSDT", { ex: "BB", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: 0.04, fundingTs: now, fundingInterval: 8, nextFunding: now + 3600000 + 120000, v: 2e6, quoteTs: now }],
   ]);
 
   const row = buildRows(map, now).funding[0];
@@ -74,16 +74,39 @@ test("funding rows describe the next settlement and fee payback without long pro
 test("funding rows reject stale market prices and implausibly distant settlements", () => {
   const now = Date.now();
   const fresh = new Map([
-    ["BN:FRESHUSDT", { ex: "BN", sym: "FRESHUSDT", base: "FRESH", p: 100, funding: -0.08, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
-    ["BB:FRESHUSDT", { ex: "BB", sym: "FRESHUSDT", base: "FRESH", p: 100, funding: 0.08, nextFunding: now + 3600000, v: 1e6, quoteTs: now - 181000 }],
+    ["BN:FRESHUSDT", { ex: "BN", sym: "FRESHUSDT", base: "FRESH", p: 100, funding: -0.08, fundingTs: now, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+    ["BB:FRESHUSDT", { ex: "BB", sym: "FRESHUSDT", base: "FRESH", p: 100, funding: 0.08, fundingTs: now, nextFunding: now + 3600000, v: 1e6, quoteTs: now - 181000 }],
   ]);
   assert.equal(buildRows(fresh, now).funding.length, 0);
+
+  for (const ticker of fresh.values()) ticker.quoteTs = now;
+  fresh.get("BB:FRESHUSDT").fundingTs = now - 181000;
+  assert.equal(buildRows(fresh, now).funding.length, 0, "a fresh quote cannot revive a stale rate");
+  fresh.get("BB:FRESHUSDT").fundingTs = now;
 
   for (const ticker of fresh.values()) {
     ticker.quoteTs = now;
     ticker.nextFunding = now + 25 * 3600000;
   }
   assert.equal(buildRows(fresh, now).funding.length, 0);
+});
+
+test("funding never treats an absent rate as a zero-rate opportunity", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["BN:MISSUSDT", { ex: "BN", sym: "MISSUSDT", base: "MISS", p: 100, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+    ["BB:MISSUSDT", { ex: "BB", sym: "MISSUSDT", base: "MISS", p: 100, funding: 0.1, fundingTs: now, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+  ]);
+  assert.equal(buildRows(map, now).funding.length, 0);
+});
+
+test("funding excludes routes whose nearest settlement pays the wrong way", () => {
+  const now = Date.now();
+  const map = new Map([
+    ["BN:EDGEUSDT", { ex: "BN", sym: "EDGEUSDT", base: "EDGE", p: 100, funding: 0.08, fundingTs: now, fundingInterval: 8, nextFunding: now + 1800000, v: 1e6, quoteTs: now }],
+    ["HL:EDGE", { ex: "HL", sym: "EDGE", base: "EDGE", p: 100, funding: 0.03, fundingTs: now, fundingInterval: 1, nextFunding: now + 3600000, v: 1e6, quoteTs: now }],
+  ]);
+  assert.equal(buildRows(map, now).funding.length, 0);
 });
 
 test("spread rows require fresh two-sided BBO from both venues", () => {

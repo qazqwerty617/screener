@@ -56,6 +56,88 @@
     return `${h}ч ${String(m).padStart(2, "0")}м`;
   }
 
+  function syncCompactSelect(select) {
+    const wrap = select.closest(".arb-select-wrap");
+    if (!wrap) return;
+    const button = wrap.querySelector(".arb-select-trigger");
+    if (button) button.querySelector(".arb-select-value").textContent = select.selectedOptions[0]?.textContent || "—";
+    wrap.querySelectorAll(".arb-select-option").forEach(option => {
+      const active = option.dataset.value === select.value;
+      option.classList.toggle("on", active);
+      option.setAttribute("aria-selected", String(active));
+    });
+    select.querySelectorAll("option").forEach(option => {
+      const mirror = [...wrap.querySelectorAll(".arb-select-option")].find(item => item.dataset.value === option.value);
+      if (mirror) mirror.textContent = option.textContent;
+    });
+  }
+
+  function initCompactSelects() {
+    const closeAll = () => document.querySelectorAll(".arb-select-wrap.open").forEach(wrap => {
+      wrap.classList.remove("open");
+      wrap.querySelector(".arb-select-trigger")?.setAttribute("aria-expanded", "false");
+    });
+    document.querySelectorAll(".arb-select-wrap select").forEach(select => {
+      const wrap = select.closest(".arb-select-wrap");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "arb-select-trigger";
+      button.setAttribute("aria-haspopup", "listbox");
+      button.setAttribute("aria-expanded", "false");
+      button.setAttribute("aria-labelledby", `${select.getAttribute("aria-labelledby")} ${select.id}-value`);
+      button.innerHTML = `<span class="arb-select-value" id="${select.id}-value"></span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="m2.5 4.5 3.5 3 3.5-3"/></svg>`;
+      const menu = document.createElement("div");
+      menu.className = "arb-select-menu";
+      menu.id = `${select.id}-menu`;
+      menu.setAttribute("role", "listbox");
+      menu.setAttribute("aria-labelledby", select.getAttribute("aria-labelledby"));
+      button.setAttribute("aria-controls", menu.id);
+      for (const option of select.options) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "arb-select-option";
+        item.setAttribute("role", "option");
+        item.dataset.value = option.value;
+        item.textContent = option.textContent;
+        menu.append(item);
+      }
+      wrap.append(button, menu);
+      wrap.classList.add("enhanced");
+      select.tabIndex = -1;
+      select.setAttribute("aria-hidden", "true");
+      syncCompactSelect(select);
+      select.addEventListener("change", () => syncCompactSelect(select));
+      button.addEventListener("click", () => {
+        const opening = !wrap.classList.contains("open");
+        closeAll();
+        wrap.classList.toggle("open", opening);
+        button.setAttribute("aria-expanded", String(opening));
+      });
+      menu.addEventListener("click", event => {
+        const item = event.target.closest(".arb-select-option");
+        if (!item) return;
+        select.value = item.dataset.value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        closeAll();
+        button.focus();
+      });
+      button.addEventListener("keydown", event => {
+        const values = [...select.options].map(option => option.value);
+        const index = values.indexOf(select.value);
+        const next = event.key === "ArrowDown" ? Math.min(index + 1, values.length - 1)
+          : event.key === "ArrowUp" ? Math.max(index - 1, 0)
+          : event.key === "Home" ? 0 : event.key === "End" ? values.length - 1 : -1;
+        if (event.key === "Escape") { closeAll(); return; }
+        if (next < 0) return;
+        event.preventDefault();
+        select.value = values[next];
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    });
+    document.addEventListener("click", event => { if (!event.target.closest(".arb-select-wrap")) closeAll(); });
+    document.addEventListener("keydown", event => { if (event.key === "Escape") closeAll(); });
+  }
+
   function init() {
     if (state.initialized) return;
     state.initialized = true;
@@ -75,6 +157,7 @@
     ["arb-search", "arb-min-net"].forEach(id => { const el = $(id); if (el) el.addEventListener("input", debounce(() => fetchData(true), 250)); });
     const minVol = $("arb-min-volume"); if (minVol) minVol.addEventListener("change", () => fetchData(true));
     const sortEl = $("arb-sort"); if (sortEl) sortEl.addEventListener("change", render);
+    initCompactSelects();
     const bboEl = $("arb-bbo-only"); if (bboEl) bboEl.addEventListener("change", render);
     const favEl = $("arb-favorites-only"); if (favEl) favEl.addEventListener("change", render);
     const transferEl = $("arb-transfer-only"); if (transferEl) transferEl.addEventListener("change", render);
@@ -113,6 +196,7 @@
     if ($("arb-transfer-only")) $("arb-transfer-only").checked = false;
     if ($("arb-favorites-only")) $("arb-favorites-only").checked = false;
     if ($("arb-sort")) $("arb-sort").value = "score";
+    document.querySelectorAll(".arb-select-wrap select").forEach(syncCompactSelect);
     state.selectedExchanges = new Set(Object.keys(EX));
     document.querySelectorAll(".arb-exchange").forEach(x => x.classList.remove("off"));
     fetchData(true);
@@ -137,10 +221,15 @@
     if ($("arb-min-label")) $("arb-min-label").textContent = mode === "funding" ? "Мин. выплата" : "Мин. net";
     const netOption = $("arb-sort")?.querySelector('option[value="net"]');
     const grossOption = $("arb-sort")?.querySelector('option[value="gross"]');
-    if (netOption) netOption.textContent = mode === "spreads" ? "Net при схождении" : mode === "funding" ? "Ближ. выплата" : "DEX net";
+    const scoreOption = $("arb-sort")?.querySelector('option[value="score"]');
+    const freshnessOption = $("arb-sort")?.querySelector('option[value="freshness"]');
+    if (netOption) netOption.textContent = mode === "spreads" ? "Net при схождении" : mode === "funding" ? "Ближ. выплата" : "Edge после costs";
     if (grossOption) grossOption.textContent = mode === "funding" ? "Edge / час" : "Валовый спред";
+    if (scoreOption) scoreOption.textContent = mode === "dex" ? "Оценка edge" : "Edge Score";
+    if (freshnessOption) freshnessOption.textContent = mode === "dex" ? "Свежесть CEX" : "Свежесть";
+    if ($("arb-sort")) syncCompactSelect($("arb-sort"));
     if ($("arb-method-note")) $("arb-method-note").innerHTML = mode === "dex"
-      ? '<i class="bbo"></i> Exact = сеть и адрес контракта совпали · перед сделкой запросите wallet quote'
+      ? '<i class="indicative"></i> *Индикативно: цена пула и оценка влияния объёма · газ, вывод и закрытие хеджа не включены · проверьте wallet quote'
       : '<i class="bbo"></i> D — депозит · W — вывод · зелёный маршрут имеет общую открытую сеть';
     render();
     if (mode !== previousMode) fetchData(true);
@@ -164,7 +253,7 @@
         if (!dexResponse.ok) throw new Error(`HTTP ${dexResponse.status}`);
         state.dexData = await dexResponse.json();
         if ($("arb-dex-badge")) $("arb-dex-badge").textContent = state.dexData.total ?? state.dexData.rows?.length ?? 0;
-        updateFreshness(state.dexData.generatedAt);
+        updateFreshness(state.dexData.generatedAt, state.dexData.poolGeneratedAt);
         render();
         return;
       }
@@ -239,6 +328,7 @@
       const rows = [...(state.dexData?.rows || [])];
       if (sort === "liquidity") rows.sort((a, b) => b.liquidityUsd - a.liquidityUsd);
       else if (sort === "gross") rows.sort((a, b) => b.grossPct - a.grossPct);
+      else if (sort === "freshness") rows.sort((a, b) => a.cexAgeMs - b.cexAgeMs || b.netPct - a.netPct);
       else rows.sort((a, b) => b.netPct - a.netPct);
       return rows.slice(0, 400);
     }
@@ -393,17 +483,19 @@
         <td class="arb-num">${price(r.dexPrice)}</td>
         <td class="arb-num arb-positive">${pct(r.grossPct)}</td>
         <td class="arb-num arb-cost">−${Number(r.estimatedCostsPct || 0).toFixed(3)}%</td>
-        <td class="arb-num arb-net">${pct(r.netPct)}</td>
+        <td class="arb-num arb-dex-edge" title="Индикативная оценка до газа, вывода и закрытия хеджа">${pct(r.netPct)}</td>
         <td class="arb-num">${money(r.liquidityUsd)}</td>
         <td class="arb-num">${money(r.volume24hUsd)}</td>
       </tr>`).join("");
   }
 
-  function updateFreshness(generatedAt) {
+  function updateFreshness(generatedAt, poolGeneratedAt = 0) {
     const target = $("arb-update-age");
     if (!target) return;
     const age = Math.max(0, Date.now() - Number(generatedAt || 0));
-    target.textContent = age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;
+    target.textContent = poolGeneratedAt
+      ? `CEX сейчас · пул ${Math.round(Math.max(0, Date.now() - Number(poolGeneratedAt)) / 1000)}с назад`
+      : age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;
   }
 
   function fundingHourly(r) {
@@ -529,7 +621,7 @@
     if ($("arb-detail-kind")) $("arb-detail-kind").textContent = "CEX ↔ DEX · EXACT CONTRACT";
     if ($("arb-detail-title")) $("arb-detail-title").textContent = `${row.base}/USDT`;
     if ($("arb-detail-score")) $("arb-detail-score").textContent = score;
-    if ($("arb-detail-summary")) $("arb-detail-summary").textContent = `${row.buyVenue} → ${row.sellVenue}: ${pct(row.netPct)} после оценки комиссий и влияния на пул. Сеть ${row.network}, контракт проверен по адресу.`;
+    if ($("arb-detail-summary")) $("arb-detail-summary").textContent = `${row.buyVenue} → ${row.sellVenue}: индикативный edge ${pct(row.netPct)} после оценки комиссий и влияния на пул. Газ, вывод и закрытие хеджа не включены.`;
     if ($("arb-detail-legs")) {
       $("arb-detail-legs").innerHTML = detailLeg("КУПИТЬ", row.buyVenue, price(buyPrice), "long")
         + detailLeg("ПРОДАТЬ", row.sellVenue, price(sellPrice), "short");
@@ -538,7 +630,8 @@
       $("arb-detail-breakdown").innerHTML = breakdown([
         ["Валовая разница", pct(row.grossPct)],
         ["Комиссии + impact", `−${Number(row.estimatedCostsPct || 0).toFixed(3)}%`],
-        ["Расчётный net", pct(row.netPct)],
+        ["Impact для $" + Number(row.notionalUsd || 0).toFixed(0), pct(row.estimatedImpactPct || 0)],
+        ["Индикативный edge*", pct(row.netPct)],
         ["Ликвидность пула", money(row.liquidityUsd)],
         ["Объём пула 24ч", money(row.volume24hUsd)],
         ["Сеть", row.network],
@@ -550,7 +643,7 @@
       $("arb-detail-actions").innerHTML = urls.map(([url, label]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>`).join("");
     }
     if ($("arb-transfer-card")) $("arb-transfer-card").hidden = true;
-    if ($("arb-risk-warning")) $("arb-risk-warning").innerHTML = "<b>Контроль риска</b><p>DEX-цена индикативная. Перед сделкой получите исполнимую wallet quote и проверьте gas, price impact, MEV, сеть и адрес контракта.</p>";
+    if ($("arb-risk-warning")) $("arb-risk-warning").innerHTML = "<b>Контроль риска</b><p>DEX-цена индикативная. Перед сделкой получите исполнимую wallet quote и проверьте газ, MEV, комиссию вывода, возможность перевода, сеть, контракт и цену закрытия хеджа.</p>";
     if ($("arb-drawer-backdrop")) $("arb-drawer-backdrop").hidden = false;
     if ($("arb-drawer")) {
       $("arb-drawer").classList.add("open");

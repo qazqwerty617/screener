@@ -709,16 +709,16 @@
           <td style="font-size:11px; color:var(--t3);">${escapeHtml(t.exchange)}</td>
           <td style="font-size:11px;">
             <div style="color:var(--t2); font-size:10px;">${escapeHtml(t.entryTime ? new Date(t.entryTime).toISOString().slice(0, 16).replace("T", " ") : t.date)}</div>
-            <div style="font-family:monospace; font-weight:600;">$${t.entry}</div>
+            <div style="font-family:monospace; font-weight:600;">$${escapeHtml(t.entry)}</div>
           </td>
           <td style="font-size:11px;">
             <div style="color:var(--t2); font-size:10px;">${escapeHtml(t.exitTime ? new Date(t.exitTime).toISOString().slice(0, 16).replace("T", " ") : t.date)}</div>
-            <div style="font-family:monospace; font-weight:600;">$${t.exit}</div>
+            <div style="font-family:monospace; font-weight:600;">$${escapeHtml(t.exit)}</div>
           </td>
-          <td style="font-size:11px; color:var(--t2);">${formatDuration(t.durationMs)}</td>
+          <td style="font-size:11px; color:var(--t2);">${escapeHtml(formatDuration(t.durationMs))}</td>
           <td><span class="j-side-badge ${sideClass}">${escapeHtml(t.side)}</span></td>
           <td class="${pnlClass}" style="font-family:monospace; font-weight:700;">
-            ${pnlSign}${t.pnlPercent}%
+            ${pnlSign}${escapeHtml(t.pnlPercent)}%
           </td>
           <td class="${pnlClass}" style="font-family:monospace; font-weight:700;">
             ${pnlSign}$${t.pnl.toFixed(2)}
@@ -982,7 +982,7 @@
       const wr = ((stat.wins / stat.total) * 100).toFixed(0);
       return `
         <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; background:var(--bg3); border-radius:6px; font-size:12px;">
-          <span style="font-weight:700; color:#fff;">${sym} <span style="font-size:10px; color:var(--t2); font-weight:normal;">(${stat.total} сдел., WR ${wr}%)</span></span>
+          <span style="font-weight:700; color:#fff;">${escapeHtml(sym)} <span style="font-size:10px; color:var(--t2); font-weight:normal;">(${stat.total} сдел., WR ${wr}%)</span></span>
           <span style="font-weight:700; color:${isWin ? 'var(--gr)' : 'var(--rd)'};">${isWin ? '+' : ''}$${stat.pnl.toFixed(2)}</span>
         </div>
       `;
@@ -1016,7 +1016,7 @@
       const wr = ((stat.wins / stat.total) * 100).toFixed(0);
       return `
         <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 10px; background:var(--bg3); border-radius:6px; font-size:12px;">
-          <span class="j-tag-pill" style="background:${tInfo.color}22; color:${tInfo.color}; border:1px solid ${tInfo.color}44;">${tInfo.label} (${stat.total})</span>
+          <span class="j-tag-pill" style="background:${tInfo.color}22; color:${tInfo.color}; border:1px solid ${tInfo.color}44;">${escapeHtml(tInfo.label)} (${stat.total})</span>
           <span style="font-weight:700; color:${isWin ? 'var(--gr)' : 'var(--rd)'};">${isWin ? '+' : ''}$${stat.pnl.toFixed(2)} (WR ${wr}%)</span>
         </div>
       `;
@@ -1395,11 +1395,11 @@
 
     // Populate PnL summary grid
     detailsEl.innerHTML = `
-      <div><span style="color:rgba(255,255,255,0.45)">Направление</span><br><span class="${trade.side === 'LONG' ? 'j-pnl-win' : 'j-pnl-loss'}" style="font-weight:700;">${trade.side}</span></div>
-      <div><span style="color:rgba(255,255,255,0.45)">PnL</span><br><span class="${isWin ? 'j-pnl-win' : 'j-pnl-loss'}" style="font-weight:700;">${isWin ? '+' : ''}$${totalPnl.toFixed(2)} (${trade.pnlPercent}%)</span></div>
+      <div><span style="color:rgba(255,255,255,0.45)">Направление</span><br><span class="${trade.side === 'LONG' ? 'j-pnl-win' : 'j-pnl-loss'}" style="font-weight:700;">${escapeHtml(trade.side)}</span></div>
+      <div><span style="color:rgba(255,255,255,0.45)">PnL</span><br><span class="${isWin ? 'j-pnl-win' : 'j-pnl-loss'}" style="font-weight:700;">${isWin ? '+' : ''}$${totalPnl.toFixed(2)} (${escapeHtml(trade.pnlPercent)}%)</span></div>
       <div><span style="color:rgba(255,255,255,0.45)">Вход (Avg)</span><br><span style="color:#fff; font-weight:600;">$${avgEntry.toFixed(avgEntry > 10 ? 2 : 5)}</span></div>
-      <div><span style="color:rgba(255,255,255,0.45)">Выход</span><br><span style="color:#fff; font-weight:600;">$${trade.exit}</span></div>
-      <div><span style="color:rgba(255,255,255,0.45)">Объем</span><br><span style="color:#fff;">${totalQty || trade.size}</span></div>
+      <div><span style="color:rgba(255,255,255,0.45)">Выход</span><br><span style="color:#fff; font-weight:600;">$${escapeHtml(trade.exit)}</span></div>
+      <div><span style="color:rgba(255,255,255,0.45)">Объем</span><br><span style="color:#fff;">${escapeHtml(totalQty || trade.size)}</span></div>
       <div><span style="color:rgba(255,255,255,0.45)">Комиссия</span><br><span style="color:#fff;">$${(relatedExecs.reduce((s, t) => s + (t.fee || 0), 0)).toFixed(2)}</span></div>
     `;
 
@@ -1414,8 +1414,8 @@
         const vol = ((parseFloat(b.entry) || 0) * (parseFloat(b.size) || 0)).toFixed(2);
         rows += `<tr style="color:#fff; border-bottom:1px solid rgba(255,255,255,0.04);">
           <td style="padding:5px 2px;"><span style="color:#26c97a;">↑ BUY</span> <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff4560;margin-left:2px;"></span></td>
-          <td style="padding:5px 2px;">${time || "—"}</td>
-          <td style="padding:5px 2px;">$${b.entry}</td>
+          <td style="padding:5px 2px;">${escapeHtml(time || "—")}</td>
+          <td style="padding:5px 2px;">$${escapeHtml(b.entry)}</td>
           <td style="padding:5px 2px;">${vol}</td>
           <td style="padding:5px 2px;">0</td>
         </tr>`;
@@ -1428,8 +1428,8 @@
         const pnlVal = s.pnl || 0;
         rows += `<tr style="color:#fff; border-bottom:1px solid rgba(255,255,255,0.04);">
           <td style="padding:5px 2px;"><span style="color:#ff4560;">↓ SELL</span> <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff4560;margin-left:2px;"></span></td>
-          <td style="padding:5px 2px;">${time || "—"}</td>
-          <td style="padding:5px 2px;">$${s.exit || s.entry}</td>
+          <td style="padding:5px 2px;">${escapeHtml(time || "—")}</td>
+          <td style="padding:5px 2px;">$${escapeHtml(s.exit || s.entry)}</td>
           <td style="padding:5px 2px;">${vol}</td>
           <td style="padding:5px 2px;"><span class="${pnlVal >= 0 ? 'j-pnl-win' : 'j-pnl-loss'}">${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}&nbsp;$</span></td>
         </tr>`;
@@ -1441,8 +1441,8 @@
         const vol = ((trade.exit || 0) * (totalQty || trade.size || 0)).toFixed(2);
         rows += `<tr style="color:#fff; border-bottom:1px solid rgba(255,255,255,0.04);">
           <td style="padding:5px 2px;"><span style="color:#ff4560;">↓ SELL</span> <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff4560;margin-left:2px;"></span></td>
-          <td style="padding:5px 2px;">${time || "—"}</td>
-          <td style="padding:5px 2px;">$${trade.exit}</td>
+          <td style="padding:5px 2px;">${escapeHtml(time || "—")}</td>
+          <td style="padding:5px 2px;">$${escapeHtml(trade.exit)}</td>
           <td style="padding:5px 2px;">${vol}</td>
           <td style="padding:5px 2px;"><span class="${totalPnl >= 0 ? 'j-pnl-win' : 'j-pnl-loss'}">${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}&nbsp;$</span></td>
         </tr>`;

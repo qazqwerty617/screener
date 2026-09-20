@@ -40,6 +40,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           h: mid, l: mid, o,
           quoteTs: Date.now(),
           funding: ctx ? +ctx.funding * 100 : 0,
+          fundingTs: ctx?.funding != null ? Date.now() : 0,
           nextFunding: Date.now() + (3600000 - (Date.now() % 3600000)),
           oi: ctx ? +ctx.openInterest * mid : 0,
         });
@@ -68,6 +69,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const t = tickers.get("HL:" + s.name);
             if (t && ctx) {
               t.funding = +ctx.funding * 100;
+              t.fundingTs = Date.now();
               t.oi = +ctx.openInterest * t.p;
               t.v = +ctx.dayNtlVlm || 0;
               const prevO = +ctx.prevDayPx;

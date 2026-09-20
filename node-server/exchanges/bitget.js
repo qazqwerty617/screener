@@ -37,9 +37,9 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         tickers.set("BG:" + d.symbol, {
           key: "BG:" + d.symbol, ex: "BG", sym: d.symbol, base: d.symbol.replace(/USDT$/, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : 0,
-          v: +d.usdtVolume, h, l, o, funding: +d.fundingRate * 100 || 0, nextFunding: +d.nextFundingTime || 0,
+          v: +d.usdtVolume, h, l, o, funding: +d.fundingRate * 100 || 0, fundingTs: d.fundingRate != null && +d.nextFundingTime > 0 ? Date.now() : 0, nextFunding: +d.nextFundingTime || 0,
           oi: +d.openInterest * p || 0,
-          bid: +d.bidPr || 0, ask: +d.askPr || 0, quoteTs: Date.now(), fundingInterval: +contract?.fundInterval || 8,
+          bid: +d.bidPr || 0, ask: +d.askPr || 0, quoteTs: Date.now(), bboTs: +d.bidPr > 0 && +d.askPr > 0 ? Date.now() : 0, fundingInterval: +contract?.fundInterval || 8,
           takerFeePct: +contract?.takerFeeRate > 0 ? +contract.takerFeeRate * 100 : 0,
           isRwa: rwaSymbols.has(d.symbol),
         });
@@ -63,7 +63,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         for (const d of data.data) {
           const t = tickers.get("BG:" + d.symbol);
           if (!t) continue;
-          if (d.fundingRate) t.funding = +d.fundingRate * 100;
+          if (d.fundingRate != null) { t.funding = +d.fundingRate * 100; t.fundingTs = Date.now(); }
           if (d.nextFundingTime) t.nextFunding = +d.nextFundingTime;
           if (d.openInterest) t.oi = +d.openInterest * t.p;
           dirtyKeys.add(t.key);
@@ -92,6 +92,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             if (tick.lastPr) t.p = +tick.lastPr; // LTP Anchor
             if (+tick.bidPr > 0) t.bid = +tick.bidPr;
             if (+tick.askPr > 0) t.ask = +tick.askPr;
+            if (+tick.bidPr > 0 && +tick.askPr > 0) t.bboTs = now;
             if (tick.lastPr || tick.bidPr || tick.askPr) t.quoteTs = now;
             if (tick.usdtVolume) t.v = +tick.usdtVolume; // USDT Turnover
             if (tick.high24h) t.h = +tick.high24h;

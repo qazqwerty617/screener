@@ -60,9 +60,9 @@ test('rapid switching across all eight timeframes sends only the final visible g
   const result=await Promise.all(tasks);assert.equal(urls.length,1);assert.ok(urls[0].includes('tf=1w'));assert.equal(result.filter(x=>x.length).length,12);
 });
 
-function serverRoute(refresh){
+function serverRoute(refresh, cache = new Map()){
   const src=fs.readFileSync(path.join(__dirname,'../server.js'),'utf8');let handler;
-  const ctx=vm.createContext({app:{get:(_,fn)=>handler=fn},klinesCache:new Map(),startKlinesRefresh:refresh,setPublicCors(){},
+  const ctx=vm.createContext({app:{get:(_,fn)=>handler=fn},klinesCache:cache,startKlinesRefresh:refresh,setPublicCors(){},
     normalizeExchangeSymbol:(_,sym)=>sym,cacheKey:(...parts)=>parts.join('|'),KLINES_RESPONSE_DEADLINE_MS:6000,raceWithTimeout:p=>p,setTimeout});
   for(const name of ['mapConcurrent','encodeFlatCandles'])vm.runInContext(new RegExp(`(?:async )?function ${name}\\([^]*?\\n\\}`).exec(src)[0],ctx);
   vm.runInContext(/app\.get\("\/api\/klines\/batch", async \(req, res\) => \{[^]*?\n\}\);/.exec(src)[0],ctx);return handler;
@@ -79,4 +79,107 @@ test('server stops starting queued symbols when the grid connection is discarded
   const route=serverRoute(async()=>{calls++;if(calls===6)res.destroyed=true;return []});
   await route({query:{ex:'BN',symbols:Array.from({length:12},(_,i)=>'COIN'+i).join(','),tf:'1m',stream:'1'}},res);
   assert.equal(calls,6);
+});
+
+test('a cached grid cell is delivered before six earlier cold requests finish', async () => {
+  const cache = new Map([['BN|WARM|1m|true', { at: Date.now(), data: [bar.t,1,2,1,2,1] }]]);
+  const releases = [], rows = [];
+  const route = serverRoute(() => new Promise(resolve => releases.push(resolve)), cache);
+  const res = { setHeader(){}, flushHeaders(){}, write(line){ rows.push(JSON.parse(line)); }, flush(){}, end(){} };
+  const work = route({query:{ex:'BN',symbols:'COLD1,COLD2,COLD3,COLD4,COLD5,COLD6,WARM',tf:'1m',lite:'1',stream:'1'}},res);
+  await new Promise(resolve => setImmediate(resolve));
+  const early = rows.map(row => row.sym);
+  for (const release of releases) release([bar]);
+  await work;
+  assert.ok(early.includes('WARM'), 'Cached history must not queue behind upstream fetches');
+});
+
+test('a stalled grid stream can display exchange history within 800ms', async () => {
+  let opened, directCalls = 0;
+  const ready = new Promise(resolve => opened = resolve);
+  const ctx = harness(async (url, {signal}) => new Response(new ReadableStream({ start(controller) {
+    signal.addEventListener('abort', () => controller.error(new Error('aborted')), {once:true});
+    opened();
+  } })));
+  ctx.fetchDirectKlines = async () => { directCalls++; return [bar]; };
+  const abort = new AbortController();
+  let result;
+  const started = performance.now();
+  const work = ctx.fetchGridKlines('BN','BTCUSDT','1m',abort.signal).then(data => result=data);
+  await ready;
+  let deadline;
+  await Promise.race([work, new Promise(resolve => deadline=setTimeout(resolve,800))]);
+  clearTimeout(deadline);
+  const renderedAt = performance.now() - started;
+  const displayed = result?.length;
+  abort.abort();
+  await work;
+  assert.equal(displayed,1,'The chart should render while the server stream remains stalled');
+  assert.equal(directCalls,1);
+  assert.ok(renderedAt < 800);
+});
+
+test('warm grid history does not trigger extra exchange requests', async () => {
+  let directCalls = 0;
+  const ctx = harness(async () => new Response(JSON.stringify({sym:'BTCUSDT',data:[bar]})+'\n'));
+  ctx.fetchDirectKlines = async () => { directCalls++; return [bar]; };
+  await ctx.fetchGridKlines('BN','BTCUSDT','1m');
+  await new Promise(resolve=>setTimeout(resolve,500));
+  assert.equal(directCalls,0);
+});
+
+test('grid hedges limit concurrency and cancel obsolete cells without cancelling neighbours', async () => {
+  let opened, active = 0, peak = 0;
+  const ready = new Promise(resolve=>opened=resolve), calls=[];
+  const ctx = harness(async (url,{signal}) => new Response(new ReadableStream({start(controller){
+    signal.addEventListener('abort',()=>controller.error(new Error('aborted')),{once:true});opened();
+  }})));
+  ctx.fetchDirectKlines = (ex,sym,tf,signal) => new Promise(resolve=>{
+    active++; peak=Math.max(peak,active);
+    let settled=false;
+    const finish=data=>{if(settled)return;settled=true;active--;resolve(data)};
+    calls.push({sym,signal,finish});
+    signal.addEventListener('abort',()=>finish([]),{once:true});
+  });
+  const page=new AbortController(), cell=new AbortController();
+  const tasks=Array.from({length:6},(_,i)=>ctx.fetchGridKlines('BN','COIN'+i,'1m',i===0?cell.signal:page.signal));
+  await ready;
+  await new Promise(resolve=>setTimeout(resolve,500));
+  const initialCalls=calls.length;
+  cell.abort();
+  await new Promise(resolve=>setImmediate(resolve));
+  const neighboursSurvived=calls.filter(c=>c.sym==='COIN1'||c.sym==='COIN2').every(c=>!c.signal.aborted);
+  page.abort();
+  await Promise.all(tasks);
+  assert.equal(initialCalls,3);
+  assert.equal(peak,3);
+  assert.ok(neighboursSurvived);
+  assert.ok(calls.every(c=>c.signal.aborted));
+  assert.equal(active,0);
+});
+
+test('a failed direct hedge retains the server stream and displays its eventual result', async () => {
+  let stream, opened, failed;
+  const ready = new Promise(resolve=>opened=resolve), attempted=new Promise(resolve=>failed=resolve);
+  const ctx = harness(async (url,{signal}) => new Response(new ReadableStream({start(controller){
+    stream=controller;signal.addEventListener('abort',()=>controller.error(new Error('aborted')),{once:true});opened();
+  }})));
+  ctx.fetchDirectKlines=async()=>{failed();throw new Error('CORS blocked')};
+  const work=ctx.fetchGridKlines('BN','BTCUSDT','1m');
+  await ready;await attempted;
+  stream.enqueue(new TextEncoder().encode(JSON.stringify({sym:'BTCUSDT',data:[bar]})+'\n'));
+  assert.equal((await work).length,1);
+});
+
+test('direct previews request a small first page while older history remains on demand', async () => {
+  const urls=[];
+  const ctx=vm.createContext({AbortController,setTimeout,clearTimeout,TF_MS:{'1m':60000},TFOK:{'1m':'1m'},
+    sanitizeCandles:x=>x,fetch:async(url,options)=>{urls.push({url:new URL(url),body:options.body&&JSON.parse(options.body)});return {json:async()=>({data:[]})}}});
+  vm.runInContext(block('fetchDirectKlines'),ctx);
+  for(const ex of ['BG','GT','MX','HT','HL'])await ctx.fetchDirectKlines(ex,'BTCUSDT','1m');
+  assert.equal(urls[0].url.searchParams.get('limit'),'300');
+  assert.equal(urls[1].url.searchParams.get('limit'),'300');
+  assert.equal(+urls[2].url.searchParams.get('end')-+urls[2].url.searchParams.get('start'),300*60);
+  assert.equal(urls[3].url.searchParams.get('size'),'300');
+  assert.equal(urls[4].body.req.endTime-urls[4].body.req.startTime,300*60000);
 });

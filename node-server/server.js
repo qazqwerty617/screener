@@ -938,24 +938,9 @@ wss.on("connection", (ws, req) => {
   } catch (err) {
     console.error("[WS CLIENT] Error sending initial data:", err.message);
   }
-  try {
-    const urlObj = new URL(req.url, "http://localhost");
-    const token = urlObj.searchParams.get("token") || urlObj.searchParams.get("auth");
-    const clientIp = ws._clientIp;
-    if (token) {
-      const u = userStore.getUserByToken(token, { ip: clientIp });
-      if (u) {
-        ws._userId = u.id;
-        userStore.registerActiveSocket(u.id, ws, clientIp);
-      } else {
-        userStore.registerActiveSocket(null, ws, clientIp);
-      }
-    } else {
-      userStore.registerActiveSocket(null, ws, clientIp);
-    }
-  } catch (_) {
-    userStore.registerActiveSocket(null, ws, ws._clientIp);
-  }
+  // Authentication arrives in the first WebSocket message. URL query strings
+  // are logged by reverse proxies and must never contain session tokens.
+  userStore.registerActiveSocket(null, ws, ws._clientIp);
 
   ws.on("message", (data) => {
     try {
@@ -1394,7 +1379,7 @@ function connectKlineWs(sub) {
     }).catch(() => { if (!sub.closing && sub.generation === generation) startKlinePolling(sub); });
   } else if (ex === "BX") {
     const bxSym = sym.includes("-") ? sym : (sym.endsWith("USDT") ? sym.replace(/USDT$/, "-USDT") : sym + "-USDT");
-    sub.ws = new WebSocket("wss://open-api-swap.bingx.com/swap-market", { perMessageDeflate: false });
+    const bxWs = sub.ws = new WebSocket("wss://open-api-swap.bingx.com/swap-market", { perMessageDeflate: false });
     sub.ws.on("error", (e) => {
       console.warn(`[KL ERROR] BX:${sym}:`, e.message);
       startKlinePolling(sub); 
@@ -1404,13 +1389,18 @@ function connectKlineWs(sub) {
       // BingX expects symbol WITH hyphen (e.g. BTC-USDT@kline_1m)
       sub.ws.send(JSON.stringify({ id: "id1", reqType: "sub", dataType: `${bxSym}@kline_${tf}` }));
       sub.ws.send(JSON.stringify({ id: "id2", reqType: "sub", dataType: `${bxSym}@trade` }));
-      sub.pingTimer = setInterval(() => { if (sub.ws?.readyState === 1) sub.ws.send(JSON.stringify({ ping: Date.now() })); }, 20000);
     });
     sub.ws.on("message", (raw) => {
       zlib.gunzip(raw, (err, buf) => {
-        if (err) return;
+        if (err || sub.ws !== bxWs) return;
         try {
-          const d = JSON.parse(buf.toString());
+          const message = buf.toString();
+          // Reply to BingX's text heartbeat before attempting JSON decoding.
+          if (message === "Ping") {
+            if (bxWs.readyState === 1) bxWs.send("Pong");
+            return;
+          }
+          const d = JSON.parse(message);
           // Handle BingX Ping-Pong
           if (d.ping) {
             sub.ws.send(JSON.stringify({ pong: d.ping }));
@@ -2756,9 +2746,16 @@ app.get("/api/klines/batch", async (req, res) => {
 
   // Stagger MEXC requests by 80ms to avoid MEXC anti-DDoS rate-limit tarpit; parallelize others
   const isPaced = (ex === "MX");
-  await mapConcurrent(rawList, streaming ? 6 : rawList.length, async (rawSym, i) => {
-    if (res.destroyed || res.writableEnded) return;
-    if (isPaced && i > 0) await new Promise(r => setTimeout(r, i * 80));
+  let nextPacedAt = 0;
+  // A warm cell must never wait for six cold upstream requests to complete.
+  // Full history is also a usable cache hit for the initial grid preview.
+  const hasHistory = rawSym => {
+    const sym = normalizeExchangeSymbol(ex, rawSym);
+    return !!(klinesCache.get(cacheKey(ex, sym, tf, useLite))?.data?.length ||
+      (useLite && klinesCache.get(cacheKey(ex, sym, tf, false))?.data?.length));
+  };
+  rawList.sort((a, b) => Number(hasHistory(b)) - Number(hasHistory(a)));
+  await mapConcurrent(rawList, streaming ? 6 : rawList.length, async (rawSym) => {
     if (res.destroyed || res.writableEnded) return;
     const sym = normalizeExchangeSymbol(ex, rawSym);
     const key = cacheKey(ex, sym, tf, useLite);
@@ -2803,6 +2800,14 @@ app.get("/api/klines/batch", async (req, res) => {
       }
     }
 
+    // Pace network work only; cached cells above are delivered immediately.
+    if (isPaced) {
+      const at = Date.now();
+      const delay = Math.max(0, nextPacedAt - at);
+      nextPacedAt = Math.max(at, nextPacedAt) + 80;
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+      if (res.destroyed || res.writableEnded) return;
+    }
     try {
       const candles = await raceWithTimeout(
         startKlinesRefresh(ex, sym, tf, useLite, key),
@@ -2947,7 +2952,7 @@ app.get("/api/arbitrage/snapshot", (req, res) => {
     funding,
     methodology: {
       spread: "fresh buy ask -> sell bid; roundTripNet includes estimated taker fees for opening and closing both legs",
-      funding: "next scheduled funding event at current exchange estimates; rates can change before settlement and are never projected for 30 days",
+      funding: "fresh rates and market prices on both venues; only positive next settlement; rates can change before settlement and are never projected for 30 days",
       quoteQuality: "spread rows require fresh executable best bid/ask from both venues",
     },
   });
@@ -2987,12 +2992,12 @@ app.get("/api/arbitrage/dex", async (req, res) => {
     const snapshot = await dexArbitrage.getSnapshot({
       search: String(req.query.search || "").slice(0, 32),
       minNet: Math.max(0, Math.min(20, Number(req.query.minNet) || 0)),
-      minLiquidityUsd: Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0)),
+      minVolume24hUsd: Math.max(0, Math.min(1e12, Number(req.query.minVolume) || 0)),
       exchanges: String(req.query.exchanges || "").split(",").filter(code => /^[A-Z0-9]{2}$/.test(code)),
       limit: Math.max(25, Math.min(500, Number(req.query.limit) || 250)),
       force: req.query.force === "1",
     });
-    res.setHeader("Cache-Control", "public, max-age=10, stale-while-revalidate=20");
+    res.setHeader("Cache-Control", "no-store");
     res.json(snapshot);
   } catch (error) {
     res.status(502).json({ error: "DEX market data unavailable", detail: String(error?.message || error).slice(0, 160) });
@@ -3614,6 +3619,12 @@ app.get("/api/user/formation-alerts", (req, res) => {
 
 app.get("/api/orchestrator/status", (req, res) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");
+  const peerIp = securityShield.normalizeIp(req.socket.remoteAddress);
+  const forwardedIp = req.headers["x-real-ip"] && securityShield.normalizeIp(req.headers["x-real-ip"]);
+  if ((peerIp !== "127.0.0.1" && peerIp !== "::1") ||
+      (forwardedIp && forwardedIp !== "127.0.0.1" && forwardedIp !== "::1")) {
+    return res.status(403).json({ error: "Доступ запрещён" });
+  }
   const memUsage = process.memoryUsage();
   res.json({
     success: true,

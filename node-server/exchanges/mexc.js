@@ -57,9 +57,11 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           key: "MX:" + d.symbol, ex: "MX", sym: d.symbol, base: d.symbol.replace(/_USDT$/, ""),
           p, bid: hasBbo ? bid : undefined, ask: hasBbo ? ask : undefined,
           quoteTs: p > 0 ? Date.now() : undefined,
+          bboTs: hasBbo ? Date.now() : 0,
           chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : changeRate * 100,
           v: +d.amount24, h, l, o,
           funding: +(fm?.fundingRate ?? d.fundingRate ?? 0) * 100,
+          fundingTs: fm?.fundingRate != null || d.fundingRate != null ? Date.now() : 0,
           nextFunding: +(fm?.nextSettleTime || d.nextFundingTime || 0),
           fundingInterval: +(fm?.collectCycle || 0) || 8,
           takerFeePct: detail?.takerFeePct || 0,
@@ -101,6 +103,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (bid > 0 && ask > 0) {
             t.bid = bid;
             t.ask = ask;
+            t.bboTs = Date.now();
             t.p = (bid + ask) / 2;
             t.quoteTs = Date.now();
           } else {
@@ -116,8 +119,8 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (tick.riseFallRate && t.p > 0) t.o = t.p / (1 + +tick.riseFallRate);
           if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;
           const fm = fundingMap.get(tick.symbol);
-          if (fm?.fundingRate !== undefined) t.funding = +fm.fundingRate * 100;
-          else if (tick.fundingRate !== undefined) t.funding = +tick.fundingRate * 100;
+          if (fm?.fundingRate !== undefined) { t.funding = +fm.fundingRate * 100; t.fundingTs = Date.now(); }
+          else if (tick.fundingRate !== undefined) { t.funding = +tick.fundingRate * 100; t.fundingTs = Date.now(); }
           if (fm?.nextSettleTime) t.nextFunding = +fm.nextSettleTime;
           else if (tick.nextFundingTime) t.nextFunding = +tick.nextFundingTime;
           if (+fm?.collectCycle > 0) t.fundingInterval = +fm.collectCycle;
@@ -146,7 +149,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const bid = +(tick.bid1 || 0);
             const ask = +(tick.ask1 || 0);
             if (bid > 0 && ask > 0) {
-              t.bid = bid; t.ask = ask; t.quoteTs = Date.now();
+              t.bid = bid; t.ask = ask; t.quoteTs = Date.now(); t.bboTs = t.quoteTs;
               t.p = (bid + ask) / 2;
               t._wsMid = true;
             } else {

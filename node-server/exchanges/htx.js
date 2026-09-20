@@ -51,7 +51,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         tickers.set("HT:" + sym, {
           key: "HT:" + sym, ex: "HT", sym, base: sym.split("-")[0],
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : 0,
-          v, h, l, o, funding: fm ? +fm.funding_rate * 100 : 0, nextFunding: fm ? +fm.next_funding_time : 0,
+          v, h, l, o, funding: fm ? +fm.funding_rate * 100 : 0, fundingTs: fm?.funding_rate != null ? Date.now() : 0, nextFunding: fm ? +fm.next_funding_time : 0,
           quoteTs: p > 0 ? Date.now() : undefined,
           cs
         });
@@ -93,6 +93,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
                           const fm = fundingMap.get(sym);
                           if (fm) {
                               t.funding = +fm.funding_rate * 100;
+                              t.fundingTs = Date.now();
                               t.nextFunding = +fm.next_funding_time;
                           }
                           if (t.o > 0 && t.p > 0) t.chg = ((t.p - t.o) / t.o) * 100;

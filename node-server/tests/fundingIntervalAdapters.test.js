@@ -25,6 +25,7 @@ test("Gate uses the contract funding interval and taker fee", async () => {
     const ticker = tickers.get("GT:BREW_USDT");
     assert.equal(ticker.fundingInterval, 1);
     assert.equal(ticker.takerFeePct, 0.075);
+    assert.ok(ticker.fundingTs > 0);
   } finally {
     global.setInterval = originalSetInterval;
   }
@@ -46,6 +47,7 @@ test("BingX uses fundingIntervalHours from premium index", async () => {
     await createBingx(tickers, new Set(), websocketStub, apiFetch, () => {}).init();
     await intervals.at(-1)();
     assert.equal(tickers.get("BX:BTC-USDT").fundingInterval, 4);
+    assert.ok(tickers.get("BX:BTC-USDT").fundingTs > 0);
   } finally {
     global.setInterval = originalSetInterval;
     global.setTimeout = originalSetTimeout;
@@ -68,6 +70,7 @@ test("OKX derives the current interval from adjacent funding timestamps", async 
     await createOkx(tickers, new Set(), websocketStub, apiFetch, () => {}).init();
     await intervals.at(-1)();
     assert.equal(tickers.get("OX:BTC-USDT-SWAP").fundingInterval, 4);
+    assert.ok(tickers.get("OX:BTC-USDT-SWAP").fundingTs > 0);
   } finally {
     global.setInterval = originalSetInterval;
     global.setTimeout = originalSetTimeout;
@@ -86,6 +89,7 @@ test("Binance applies per-symbol funding interval adjustments", async () => {
   createBinance(tickers, new Set(), websocketStub, apiFetch, () => {}).init();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(tickers.get("BN:LPTUSDT").fundingInterval, 4);
+  assert.ok(tickers.get("BN:LPTUSDT").fundingTs > 0);
 });
 
 test("Bitget uses contract funding interval and taker fee", async () => {
@@ -99,6 +103,7 @@ test("Bitget uses contract funding interval and taker fee", async () => {
     await createBitget(tickers, new Set(), websocketStub, apiFetch, () => {}).init();
     assert.equal(tickers.get("BG:TONUSDT").fundingInterval, 4);
     assert.ok(Math.abs(tickers.get("BG:TONUSDT").takerFeePct - 0.07) < 1e-12);
+    assert.ok(tickers.get("BG:TONUSDT").fundingTs > 0);
   } finally {
     global.setInterval = originalSetInterval;
   }
@@ -115,6 +120,7 @@ test("KuCoin uses the contract's current funding granularity and taker fee", asy
     await createKucoin(tickers, new Set(), websocketStub, apiFetch, () => {}).init();
     assert.equal(tickers.get("KC:LABUSDTM").fundingInterval, 1);
     assert.equal(tickers.get("KC:LABUSDTM").takerFeePct, 0.08);
+    assert.ok(tickers.get("KC:LABUSDTM").fundingTs > 0);
   } finally {
     global.setInterval = originalSetInterval;
   }

@@ -51,7 +51,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         tickers.set("AD:" + sym, {
           key: "AD:" + sym, ex: "AD", sym, base: sym.replace(/USDT$/, "").replace(/1000/g, ""),
           p, chg: o > 0 && p > 0 ? ((p - o) / o) * 100 : +d.priceChangePercent,
-          v: +d.quoteVolume, h, l, o, funding: fm ? +fm.lastFundingRate * 100 : 0, nextFunding: fm ? +fm.nextFundingTime : 0,
+          v: +d.quoteVolume, h, l, o, funding: fm ? +fm.lastFundingRate * 100 : 0, fundingTs: fm?.lastFundingRate != null ? Date.now() : 0, nextFunding: fm ? +fm.nextFundingTime : 0,
           quoteTs: p > 0 ? Date.now() : undefined,
         });
         added++;
@@ -82,6 +82,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
                       const t = tickers.get("AD:" + fm.symbol);
                       if (t) {
                           t.funding = +fm.lastFundingRate * 100;
+                          t.fundingTs = Date.now();
                           t.nextFunding = +fm.nextFundingTime;
                           dirtyKeys.add(t.key);
                       }

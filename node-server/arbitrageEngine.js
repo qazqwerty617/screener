@@ -17,6 +17,7 @@ const EXCHANGES = Object.freeze({
 const ALIASES = Object.freeze({ XBT: "BTC", XDG: "DOGE", POL: "MATIC", LUNA2: "LUNA" });
 const MAX_EXECUTABLE_AGE_MS = 30000;
 const MAX_FUNDING_MARKET_AGE_MS = 3 * 60000;
+const MAX_FUNDING_RATE_AGE_MS = 3 * 60000;
 const FUNDING_EVENT_SYNC_MS = 5 * 60000;
 const MAX_FUNDING_EVENT_AHEAD_MS = 24 * 60 * 60000;
 
@@ -156,6 +157,8 @@ function quoteFor(ticker, now, excludedBases = null) {
 
   const quoteTs = finitePositive(ticker.quoteTs);
   const ageMs = quoteTs ? Math.max(0, now - quoteTs) : Infinity;
+  const fundingTs = finitePositive(ticker.fundingTs);
+  const fundingAgeMs = fundingTs ? Math.max(0, now - fundingTs) : Infinity;
 
   const volume = finitePositive(ticker.v);
   // Exclude dead phantom markets with zero or sub-$1000 24h volume
@@ -180,12 +183,14 @@ function quoteFor(ticker, now, excludedBases = null) {
     mid,
     volume,
     oi: finitePositive(ticker.oi),
-    funding: Number.isFinite(Number(ticker.funding)) ? Number(ticker.funding) : 0,
+    funding: ticker.funding != null && ticker.funding !== "" && Number.isFinite(Number(ticker.funding)) ? Number(ticker.funding) : null,
     nextFunding: finitePositive(ticker.nextFunding),
     interval: finitePositive(ticker.fundingInterval) || EXCHANGES[ticker.ex]?.interval || 8,
     takerFee: finitePositive(ticker.takerFeePct) || EXCHANGES[ticker.ex]?.fee || 0.055,
     quoteTs,
     ageMs,
+    fundingAgeMs,
+    fundingFresh: fundingTs > 0 && fundingAgeMs <= MAX_FUNDING_RATE_AGE_MS,
     marketFresh: quoteTs > 0 && ageMs <= MAX_FUNDING_MARKET_AGE_MS,
     executable: rawBid > 0 && rawAsk > 0 && quoteTs > 0 && ageMs <= MAX_EXECUTABLE_AGE_MS,
   };
@@ -359,11 +364,12 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
         const basis = ((short.mid - long.mid) / long.mid) * 100;
 
         // Discard absurd basis differences (>15%) which create uncontrollable price risk
-        if (long.marketFresh && short.marketFresh && hourlyEdge > 0 && Math.abs(hourlyEdge) <= 1.5 && Math.abs(basis) <= 15) {
+        if (long.marketFresh && short.marketFresh && long.fundingFresh && short.fundingFresh && long.funding !== null && short.funding !== null &&
+            long.nextFunding > now && short.nextFunding > now && hourlyEdge > 0 && Math.abs(hourlyEdge) <= 1.5 && Math.abs(basis) <= 15) {
           const fundingLiquidity = Math.min(long.volume || 0, short.volume || 0);
           if (fundingLiquidity >= 5000) {
             const event = nextFundingEvent(long, short, now);
-            if (!event.at || !Number.isFinite(event.edge)) continue;
+            if (!event.at || !Number.isFinite(event.edge) || event.edge <= 0) continue;
             const roundTripFees = 2 * (long.takerFee + short.takerFee);
             const breakEvenHours = hourlyEdge > 0 ? roundTripFees / hourlyEdge : Infinity;
             const fundingVolBonus = Math.min(25, Math.max(0, Math.log10(fundingLiquidity / 1000)) * 6.5);

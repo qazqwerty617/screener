@@ -88,7 +88,14 @@
     const hint = $("bt-size-hint");
     const maxSize = maxPositionSize();
     if (sizeInput) sizeInput.max = String(maxSize);
-    if (leverageInput) leverageInput.value = String(state.leverage);
+    if (leverageInput) {
+      leverageInput.value = String(state.leverage);
+      leverageInput.style.setProperty("--bt-leverage-fill", `${(state.leverage - 1) / 49 * 100}%`);
+      leverageInput.setAttribute("aria-valuetext", `${state.leverage}×`);
+      leverageInput.closest(".bt-leverage-control")?.querySelectorAll(".bt-leverage-mark").forEach(mark => {
+        mark.classList.toggle("is-passed", state.leverage >= Number(mark.dataset.leverage));
+      });
+    }
     if (leverageValue) leverageValue.textContent = `${state.leverage}×`;
     if (hint) hint.textContent = `Макс. объём: ${money(maxSize)} · маржа: объём / ${state.leverage}×`;
   }
@@ -116,7 +123,11 @@
   function showResult(title, text, kind = "") {
     const el = $("bt-result");
     el.className = `bt-result ${kind}`;
-    el.innerHTML = `<strong>${title}</strong><span>${text}</span>`;
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    const detail = document.createElement("span");
+    detail.textContent = text;
+    el.replaceChildren(heading, detail);
     el.hidden = false;
   }
 
@@ -487,7 +498,10 @@
     const resetButton = $("bt-reset-balance");
     if (resetButton) resetButton.disabled = Boolean(p);
     const leverageInput = $("bt-leverage");
-    if (leverageInput) leverageInput.disabled = Boolean(p);
+    if (leverageInput) {
+      leverageInput.disabled = Boolean(p);
+      leverageInput.closest(".bt-leverage-control")?.classList.toggle("is-disabled", Boolean(p));
+    }
     if (balEl) balEl.textContent = money(state.balance);
     updatePositionLimits();
     if (pnlEl) {

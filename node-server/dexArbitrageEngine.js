@@ -136,7 +136,7 @@ function cexQuotes(rows, options = {}) {
       const identity = extractBaseAndMultiplier(row);
       const base = String(identity.base || "").toUpperCase();
       const factor = Number(identity.multiplier) || 1;
-      const quoteTs = Number(row.quoteTs) || 0;
+      const quoteTs = Number(row.bboTs ?? row.quoteTs) || 0;
       const ageMs = quoteTs ? Math.max(0, now - quoteTs) : Infinity;
       const ask = Number(row.ask) / factor;
       const bid = Number(row.bid) / factor;
@@ -168,16 +168,16 @@ function cexQuotes(rows, options = {}) {
 
 function buildDexOpportunities(cexRows, dexPairs, options = {}) {
   const minLiquidityUsd = Math.max(1, Number(options.minLiquidityUsd) || 25_000);
-  const minVolume24hUsd = Math.max(0, Number(options.minVolume24hUsd) || 5_000);
+  const minVolume24hUsd = Math.max(0, Number(options.minVolume24hUsd ?? 5_000));
   const maxAbsGrossPct = Math.max(1, Number(options.maxAbsGrossPct) || 12);
   const notionalUsd = Math.max(10, Number(options.notionalUsd) || 1_000);
-  const dexFeePct = Math.max(0, Number(options.dexFeePct) || 0.30);
-  const cexFeePct = Math.max(0, Number(options.cexFeePct) || 0.06);
+  const dexFeePct = Math.max(0, Number(options.dexFeePct ?? 0.30));
+  const cexFeePct = Math.max(0, Number(options.cexFeePct ?? 0.06));
   const quotes = cexQuotes(cexRows, options);
   const rows = [];
   for (const pair of Array.isArray(dexPairs) ? dexPairs : []) {
     if (!pair.contractVerified || pair.liquidityUsd < minLiquidityUsd || pair.volume24hUsd < minVolume24hUsd) continue;
-    if ((Number(pair.transactions5m) || 0) < 1 && (Number(pair.transactions1h) || 0) < 2) continue;
+    if ((Number(pair.transactions5m) || 0) < 1) continue;
     const verifiedSources = new Set(pair.contractSources || []);
     const available = [...(quotes.get(String(pair.base || "").toUpperCase())?.values() || [])]
       .filter(quote => verifiedSources.has(quote.ex));
@@ -190,7 +190,11 @@ function buildDexOpportunities(cexRows, dexPairs, options = {}) {
     const direction = cexToDexGross >= dexToCexGross ? "cex_to_dex" : "dex_to_cex";
     const grossPct = direction === "cex_to_dex" ? cexToDexGross : dexToCexGross;
     if (!Number.isFinite(grossPct) || Math.abs(grossPct) > maxAbsGrossPct) continue;
-    const priceImpactPct = Math.min(3, notionalUsd / pair.liquidityUsd * 100);
+    // DexScreener reports both sides of pool liquidity. A trade consumes one
+    // reserve, so using the total USD liquidity understates its price impact.
+    const reserveUsd = pair.liquidityUsd / 2;
+    if (notionalUsd >= reserveUsd * 0.1) continue;
+    const priceImpactPct = notionalUsd / (reserveUsd - notionalUsd) * 100;
     const costsPct = cexFeePct + dexFeePct + priceImpactPct;
     const netPct = grossPct - costsPct;
     if (!(netPct > 0)) continue;
@@ -208,6 +212,7 @@ function buildDexOpportunities(cexRows, dexPairs, options = {}) {
       sellVenue: direction === "cex_to_dex" ? pair.dexName : cex.name,
       cexEx: cex.ex,
       cexName: cex.name,
+      cexAgeMs: cex.ageMs,
       cexUrl: cex.url,
       cexPrice: direction === "cex_to_dex" ? cex.ask : cex.bid,
       dexId: pair.dexId,
@@ -218,12 +223,13 @@ function buildDexOpportunities(cexRows, dexPairs, options = {}) {
       quoteSymbol: pair.quoteSymbol,
       grossPct: Math.round(grossPct * 10000) / 10000,
       estimatedCostsPct: Math.round(costsPct * 10000) / 10000,
+      estimatedImpactPct: Math.round(priceImpactPct * 10000) / 10000,
       netPct: Math.round(netPct * 10000) / 10000,
       liquidityUsd: pair.liquidityUsd,
       volume24hUsd: pair.volume24hUsd,
       notionalUsd,
       quality: "indicative",
-      warning: "DEX price is an indexed pool price; verify an executable wallet quote before trading",
+      warning: "Indicative pool price and constant-product impact estimate; gas, withdrawal and hedge closing costs are excluded. Verify a wallet swap quote before trading.",
     });
   }
   return rows.sort((a, b) => b.netPct - a.netPct || b.liquidityUsd - a.liquidityUsd);
@@ -235,7 +241,8 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
   const historyLimit = Math.max(2, Math.min(2_160, Number(options.historyLimit) || 720));
   const clock = typeof options.clock === "function" ? options.clock : Date.now;
   const history = new Map();
-  let cache = { generatedAt: 0, rows: [], contracts: 0, pools: 0, venues: [], sources: ["DEX Screener"] };
+  let cache = { generatedAt: 0, contracts: 0, pools: 0, venues: [], sources: ["DEX Screener"] };
+  let cachedPools = [];
   let pending = null;
 
   function recordHistory(rows, generatedAt) {
@@ -273,11 +280,9 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
         pools.push(...normalizeDexPairs(result.value.contract, result.value.payload));
       }
       const generatedAt = clock();
-      const rows = buildDexOpportunities(cexRows, pools, { ...options, now: generatedAt });
-      recordHistory(rows, generatedAt);
+      cachedPools = pools;
       cache = {
         generatedAt,
-        rows,
         contracts: contracts.length,
         pools: pools.length,
         venues: [...new Set(pools.map(pool => pool.dexName))].sort(),
@@ -290,15 +295,20 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
 
   async function getSnapshot(filters = {}) {
     const current = await refresh(Boolean(filters.force));
+    const generatedAt = clock();
+    const cexRows = getCexRows();
+    const allRows = buildDexOpportunities(cexRows instanceof Map || Array.isArray(cexRows) ? cexRows : [], cachedPools, { ...options, now: generatedAt });
+    recordHistory(allRows, generatedAt);
     const search = String(filters.search || "").toUpperCase();
     const minNet = Number(filters.minNet) || 0;
     const minLiquidityUsd = Number(filters.minLiquidityUsd) || 0;
+    const minVolume24hUsd = Number(filters.minVolume24hUsd) || 0;
     const exchanges = new Set(Array.isArray(filters.exchanges) ? filters.exchanges : []);
     const limit = Math.max(1, Math.min(500, Number(filters.limit) || 200));
-    const rows = current.rows.filter(row => (!search || row.base.includes(search) || row.dexName.toUpperCase().includes(search))
+    const rows = allRows.filter(row => (!search || row.base.includes(search) || row.dexName.toUpperCase().includes(search))
       && (!exchanges.size || exchanges.has(row.cexEx))
-      && row.netPct >= minNet && row.liquidityUsd >= minLiquidityUsd).slice(0, limit);
-    return { ...current, rows, total: current.rows.length, methodology: "contract + chain exact match; indicative pool price; fees and liquidity impact estimated" };
+      && row.netPct >= minNet && row.liquidityUsd >= minLiquidityUsd && row.volume24hUsd >= minVolume24hUsd).slice(0, limit);
+    return { ...current, generatedAt, poolGeneratedAt: current.generatedAt, rows, total: allRows.length, methodology: "chain and contract exact match; indicative pool price and constant-product impact; gas, withdrawal and hedge exit excluded" };
   }
 
   function getHistory(key) {

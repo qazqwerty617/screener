@@ -61,6 +61,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (p > 0) t.p = p;
           if (+tick.bidPx > 0) t.bid = +tick.bidPx;
           if (+tick.askPx > 0) t.ask = +tick.askPx;
+          if (+tick.bidPx > 0 && +tick.askPx > 0) t.bboTs = Date.now();
           if (p > 0 || tick.bidPx || tick.askPx) t.quoteTs = Date.now();
           if (tick.open24h) t.o = +tick.open24h;
           if (tick.high24h) t.h = +tick.high24h;
@@ -103,6 +104,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             const t = tickers.get("OX:" + d.instId);
             if (t) {
               t.funding = +d.fundingRate * 100;
+              t.fundingTs = Date.now();
               t.nextFunding = +d.nextFundingTime;
               const intervalMs = +d.nextFundingTime - +d.fundingTime;
               if (intervalMs > 0) t.fundingInterval = intervalMs / 3600000;
@@ -143,6 +145,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             if (tick.last) { const p = +tick.last; if (p > 0) t.p = p; }
             if (+tick.bidPx > 0) t.bid = +tick.bidPx;
             if (+tick.askPx > 0) t.ask = +tick.askPx;
+            if (+tick.bidPx > 0 && +tick.askPx > 0) t.bboTs = Date.now();
             if (tick.last || tick.bidPx || tick.askPx) t.quoteTs = Date.now();
             if (tick.high24h) t.h = +tick.high24h;
             if (tick.low24h) t.l = +tick.low24h;

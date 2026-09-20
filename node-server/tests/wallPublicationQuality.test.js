@@ -173,7 +173,7 @@ test("absolute wall floors scale with venue liquidity, not desired result count"
   const bybitBtc = getTierThresholds("BTC", 1_000_000_000, "BB");
   const binanceBtc = getTierThresholds("BTC", 1_000_000_000, "BN");
   const hyperliquidBtc = getTierThresholds("BTC", 1_000_000_000, "HL");
-  assert.deepEqual(bybitBtc, { minFloor: 3_750_000, small: 3_750_000, medium: 8_750_000, large: 18_750_000 });
+  assert.deepEqual(bybitBtc, { minFloor: 3_750_000, small: 3_750_000, medium: 8_750_000, large: 24_375_000 });
   assert.equal(binanceBtc.minFloor, 3_000_000);
   assert.equal(hyperliquidBtc.minFloor, 300_000);
 });

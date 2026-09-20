@@ -170,7 +170,7 @@
     if ($('arb-chart-title')) {
       $('arb-chart-title').textContent = pro.view === 'index'
         ? `${l.buyName} / ${l.sellName} · индекс 100`
-        : pro.isDex ? 'Расчётный net и валовая разница' : pro.isFunding ? 'Текущая разница ставок / час' : `${isBbo ? 'Исполнимый' : 'Ориентировочный'} спред · ${isBbo ? 'BBO' : 'Mid'}`;
+        : pro.isDex ? 'Индикативный edge и валовая разница' : pro.isFunding ? 'Текущая разница ставок / час' : `${isBbo ? 'Исполнимый' : 'Ориентировочный'} спред · ${isBbo ? 'BBO' : 'Mid'}`;
     }
     const modes = document.querySelector('.arb-chart-modes');
     if (modes) modes.hidden = pro.isFunding || pro.isDex || pro.view === 'index';

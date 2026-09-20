@@ -71,7 +71,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           if (dataType.includes("bookTicker")) {
             const bp = +tick.b, ap = +tick.a;
             if (bp > 0 && ap > 0) {
-              t.bid = bp; t.ask = ap; t.quoteTs = Date.now();
+              t.bid = bp; t.ask = ap; t.quoteTs = Date.now(); t.bboTs = t.quoteTs;
               const midP = (bp + ap) / 2;
               t.p = midP;
               if (t.o > 0) t.chg = ((midP - t.o) / t.o) * 100;
@@ -131,6 +131,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
           const fm = fundingMap.get(tick.symbol);
           if (fm) {
             t.funding = +fm.lastFundingRate * 100;
+            t.fundingTs = Date.now();
             t.nextFunding = +fm.nextFundingTime;
             if (+fm.fundingIntervalHours > 0) t.fundingInterval = +fm.fundingIntervalHours;
           }

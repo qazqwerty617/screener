@@ -1,0 +1,47 @@
+[
+  {
+    "scenario": "9 mixed exchanges / slow stream",
+    "before": {
+      "firstMs": 1543,
+      "allMs": 1564,
+      "serverCalls": 8,
+      "directCalls": 0
+    },
+    "after": {
+      "firstMs": 605,
+      "allMs": 623,
+      "serverCalls": 8,
+      "directCalls": 9
+    }
+  },
+  {
+    "scenario": "12 same exchange / slow stream",
+    "before": {
+      "firstMs": 1529,
+      "allMs": 1529,
+      "serverCalls": 1,
+      "directCalls": 0
+    },
+    "after": {
+      "firstMs": 593,
+      "allMs": 966,
+      "serverCalls": 1,
+      "directCalls": 12
+    }
+  },
+  {
+    "scenario": "9 mixed exchanges / warm cache",
+    "before": {
+      "firstMs": 45,
+      "allMs": 45,
+      "serverCalls": 8,
+      "directCalls": 0
+    },
+    "after": {
+      "firstMs": 45,
+      "allMs": 45,
+      "serverCalls": 8,
+      "directCalls": 0
+    }
+  }
+]
