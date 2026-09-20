@@ -154,6 +154,7 @@ const MIN_SIGNIFICANCE = envNum("WALL_MIN_SIGNIFICANCE", 0.34, 0.05, 0.95);
 const MIN_SYMBOL_VOLUME_USD_OVERRIDE = process.env.WALL_MIN_SYMBOL_VOLUME_USD !== undefined
   ? envNum("WALL_MIN_SYMBOL_VOLUME_USD", 2000000, 0, 1e12)
   : null;
+const LARGE_TIER_MULTIPLIER = 1.30;
 
 /**
  * Professional Tiered Wall Floor and Classification.
@@ -164,7 +165,7 @@ function getTierThresholds(base, vol24h = 0, ex = "") {
   if (process.env.WALL_MIN_ABS_USD !== undefined) {
     const override = Number(process.env.WALL_MIN_ABS_USD);
     if (Number.isFinite(override) && override >= 0) {
-      return { minFloor: override, small: override, medium: override * 2.5, large: override * 5 };
+      return { minFloor: override, small: override, medium: override * 2.5, large: override * 5 * LARGE_TIER_MULTIPLIER };
     }
   }
 
@@ -197,6 +198,7 @@ function getTierThresholds(base, vol24h = 0, ex = "") {
   } else {
     thresholds = { minFloor: 30_000, small: 30_000, medium: 80_000, large: 200_000 };
   }
+  thresholds.large = Math.round(thresholds.large * LARGE_TIER_MULTIPLIER);
 
   const scale = qualityProfileFor(ex).floorScale;
   if (!ex || scale === 1) return thresholds;

@@ -9,11 +9,12 @@ test("BTC density tiers require >=$3M and scale correctly", () => {
   assert.equal(t.minFloor, 3_000_000, "BTC floor must be 3M");
   assert.equal(t.small, 3_000_000);
   assert.equal(t.medium, 7_000_000);
-  assert.equal(t.large, 15_000_000);
+  assert.equal(t.large, 19_500_000);
 
   assert.equal(classifyWallTier(3_500_000, "BTC", 1_000_000_000), "small");
   assert.equal(classifyWallTier(8_000_000, "BTC", 1_000_000_000), "medium");
-  assert.equal(classifyWallTier(16_000_000, "BTC", 1_000_000_000), "large");
+  assert.equal(classifyWallTier(16_000_000, "BTC", 1_000_000_000), "medium");
+  assert.equal(classifyWallTier(20_000_000, "BTC", 1_000_000_000), "large");
 });
 
 test("ETH density tiers require >=$1.5M and scale correctly", () => {
@@ -21,7 +22,8 @@ test("ETH density tiers require >=$1.5M and scale correctly", () => {
   assert.equal(t.minFloor, 1_500_000, "ETH floor must be 1.5M");
   assert.equal(classifyWallTier(2_000_000, "ETH", 500_000_000), "small");
   assert.equal(classifyWallTier(5_000_000, "ETH", 500_000_000), "medium");
-  assert.equal(classifyWallTier(10_000_000, "ETH", 500_000_000), "large");
+  assert.equal(classifyWallTier(10_000_000, "ETH", 500_000_000), "medium");
+  assert.equal(classifyWallTier(11_000_000, "ETH", 500_000_000), "large");
 });
 
 test("SOL density tiers require >=$800k and scale correctly", () => {
@@ -29,7 +31,8 @@ test("SOL density tiers require >=$800k and scale correctly", () => {
   assert.equal(t.minFloor, 800_000, "SOL floor must be 800k");
   assert.equal(classifyWallTier(1_000_000, "SOL", 200_000_000), "small");
   assert.equal(classifyWallTier(3_000_000, "SOL", 200_000_000), "medium");
-  assert.equal(classifyWallTier(6_000_000, "SOL", 200_000_000), "large");
+  assert.equal(classifyWallTier(6_000_000, "SOL", 200_000_000), "medium");
+  assert.equal(classifyWallTier(7_000_000, "SOL", 200_000_000), "large");
 });
 
 test("Mid-cap and small-cap token tiers", () => {
@@ -49,7 +52,8 @@ test("Mid-cap and small-cap token tiers", () => {
   assert.equal(tail.minFloor, 30_000);
   assert.equal(classifyWallTier(50_000, "XYZ", 1_000_000), "small");
   assert.equal(classifyWallTier(120_000, "XYZ", 1_000_000), "medium");
-  assert.equal(classifyWallTier(250_000, "XYZ", 1_000_000), "large");
+  assert.equal(classifyWallTier(250_000, "XYZ", 1_000_000), "medium");
+  assert.equal(classifyWallTier(300_000, "XYZ", 1_000_000), "large");
 });
 
 test("buildWallSnapshot filters out sub-3M BTC walls and attaches tier", () => {
