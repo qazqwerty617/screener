@@ -33,6 +33,18 @@
   let journalSession = '';
   let journalOwner = '';
 
+  // Exchange responses, synced history and local storage are all untrusted at
+  // HTML render boundaries. Keep a single context-appropriate encoder for the
+  // journal's legacy template strings.
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function journalToken() {
     return (typeof window.getStoredAuthToken === 'function' ? window.getStoredAuthToken() : localStorage.getItem('obsidian_auth_token')) || '';
   }
@@ -688,23 +700,23 @@
 
       const tagsHtml = (t.tags || []).map(tagId => {
         const tInfo = MISTAKE_TAGS.find(m => m.id === tagId) || { label: tagId, color: "#7c3aed" };
-        return `<span class="j-tag-pill" style="background:${tInfo.color}22; color:${tInfo.color}; border:1px solid ${tInfo.color}44;">${tInfo.label}</span>`;
+        return `<span class="j-tag-pill" style="background:${tInfo.color}22; color:${tInfo.color}; border:1px solid ${tInfo.color}44;">${escapeHtml(tInfo.label)}</span>`;
       }).join(" ");
 
       return `
-        <tr data-trade-id="${t.id}">
-          <td style="font-weight:700; color:#fff;">${t.symbol}</td>
-          <td style="font-size:11px; color:var(--t3);">${t.exchange}</td>
+        <tr data-trade-id="${escapeHtml(t.id)}">
+          <td style="font-weight:700; color:#fff;">${escapeHtml(t.symbol)}</td>
+          <td style="font-size:11px; color:var(--t3);">${escapeHtml(t.exchange)}</td>
           <td style="font-size:11px;">
-            <div style="color:var(--t2); font-size:10px;">${t.entryTime ? new Date(t.entryTime).toISOString().slice(0, 16).replace("T", " ") : t.date}</div>
+            <div style="color:var(--t2); font-size:10px;">${escapeHtml(t.entryTime ? new Date(t.entryTime).toISOString().slice(0, 16).replace("T", " ") : t.date)}</div>
             <div style="font-family:monospace; font-weight:600;">$${t.entry}</div>
           </td>
           <td style="font-size:11px;">
-            <div style="color:var(--t2); font-size:10px;">${t.exitTime ? new Date(t.exitTime).toISOString().slice(0, 16).replace("T", " ") : t.date}</div>
+            <div style="color:var(--t2); font-size:10px;">${escapeHtml(t.exitTime ? new Date(t.exitTime).toISOString().slice(0, 16).replace("T", " ") : t.date)}</div>
             <div style="font-family:monospace; font-weight:600;">$${t.exit}</div>
           </td>
           <td style="font-size:11px; color:var(--t2);">${formatDuration(t.durationMs)}</td>
-          <td><span class="j-side-badge ${sideClass}">${t.side}</span></td>
+          <td><span class="j-side-badge ${sideClass}">${escapeHtml(t.side)}</span></td>
           <td class="${pnlClass}" style="font-family:monospace; font-weight:700;">
             ${pnlSign}${t.pnlPercent}%
           </td>
@@ -713,12 +725,12 @@
           </td>
           <td><div class="j-tags-cell">${tagsHtml || '<span style="color:var(--t3); font-size:11px;">—</span>'}</div></td>
           <td style="font-size:11px; color:var(--t2); max-width:180px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">
-            ${t.note || "—"}
+            ${escapeHtml(t.note || "—")}
           </td>
           <td style="text-align:right;">
-            <button class="j-act-btn j-view-chart-btn" data-id="${t.id}" title="График сделки">График</button>
-            <button class="j-act-btn j-edit-btn" data-id="${t.id}" title="Редактировать">Изменить</button>
-            <button class="j-act-btn j-del-btn" data-id="${t.id}" title="Удалить">Удалить</button>
+            <button class="j-act-btn j-view-chart-btn" data-id="${escapeHtml(t.id)}" title="График сделки">График</button>
+            <button class="j-act-btn j-edit-btn" data-id="${escapeHtml(t.id)}" title="Редактировать">Изменить</button>
+            <button class="j-act-btn j-del-btn" data-id="${escapeHtml(t.id)}" title="Удалить">Удалить</button>
           </td>
         </tr>
       `;

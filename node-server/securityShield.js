@@ -20,6 +20,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const net = require("net");
 const https = require("https");
 const { execSync, exec } = require("child_process");
 
@@ -60,9 +61,18 @@ const WHITELISTED_IPS = new Set([
   "localhost"
 ]);
 
+// `req.ip` can be derived from X-Forwarded-For when a trusted proxy is enabled.
+// Never interpolate a header-derived value into a firewall command unless it is
+// a canonical IPv4/IPv6 address. This also avoids persisting arbitrary strings
+// into the ban list.
+function normalizeIp(ip) {
+  const clean = String(ip || "").replace(/^::ffff:/, "").trim();
+  return (WHITELISTED_IPS.has(clean) || net.isIP(clean)) ? clean : "";
+}
+
 function isPrivateOrLocalIp(ip) {
-  if (!ip) return true;
-  const cleanIp = ip.replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return true;
   if (WHITELISTED_IPS.has(cleanIp)) return true;
   if (cleanIp.startsWith("10.") || cleanIp.startsWith("192.168.")) return true;
   if (cleanIp.startsWith("172.")) {
@@ -217,7 +227,8 @@ function initKernelFirewallChain() {
 
 // ═══ Strike Recording System ══════════════════════════════════════════════════
 function recordStrike(ip, reason) {
-  const cleanIp = ip.replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return false;
   if (isPrivateOrLocalIp(cleanIp)) return false;
 
   const now = Date.now();
@@ -244,8 +255,8 @@ function recordStrike(ip, reason) {
 
 // ═══ Ban & Unban Actions ══════════════════════════════════════════════════════
 function banIp(ip, reason = "Excessive traffic / Malicious activity", durationSeconds = LIMITS.DEFAULT_BAN_DURATION_SEC) {
-  if (!ip) return false;
-  const cleanIp = ip.replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return false;
   if (isPrivateOrLocalIp(cleanIp)) return false;
 
   const now = Date.now();
@@ -285,8 +296,8 @@ function banIp(ip, reason = "Excessive traffic / Malicious activity", durationSe
 }
 
 function unbanIp(ip) {
-  if (!ip) return false;
-  const cleanIp = ip.replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return false;
   if (!bannedIpsMap.has(cleanIp)) return false;
 
   bannedIpsMap.delete(cleanIp);
@@ -313,8 +324,8 @@ function clearAllBans() {
 }
 
 function isIpBanned(ip) {
-  if (!ip) return false;
-  const cleanIp = ip.replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return false;
   const banInfo = bannedIpsMap.get(cleanIp);
   if (!banInfo) return false;
 
@@ -377,7 +388,7 @@ if (cleanupTimer && typeof cleanupTimer.unref === "function") {
 // ═══ Express & HTTP Request Inspector Middleware ══════════════════════════════
 function securityShieldMiddleware(req, res, next) {
   const rawIp = req.ip || req.connection?.remoteAddress || req.socket?.remoteAddress || "";
-  const cleanIp = rawIp.replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(rawIp);
 
   // 1. Immediate drop if IP is explicitly banned
   if (isIpBanned(cleanIp)) {
@@ -457,7 +468,8 @@ function securityShieldMiddleware(req, res, next) {
 
 // ═══ Multi-User & Multi-Tab WebSocket Connection Guard ════════════════════════
 function registerWsConnection(ip) {
-  const cleanIp = (ip || "").replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return false;
   if (isPrivateOrLocalIp(cleanIp)) return true;
 
   if (isIpBanned(cleanIp)) return false;
@@ -474,7 +486,8 @@ function registerWsConnection(ip) {
 }
 
 function unregisterWsConnection(ip) {
-  const cleanIp = (ip || "").replace(/^::ffff:/, "").trim();
+  const cleanIp = normalizeIp(ip);
+  if (!cleanIp) return;
   const currentCount = wsConnectionsPerIp.get(cleanIp) || 0;
   if (currentCount <= 1) {
     wsConnectionsPerIp.delete(cleanIp);
@@ -499,5 +512,6 @@ module.exports = {
   unregisterWsConnection,
   initKernelFirewallChain,
   getBannedIpsList: () => Array.from(bannedIpsMap.entries()).map(([ip, info]) => ({ ip, ...info })),
-  isPrivateOrLocalIp
+  isPrivateOrLocalIp,
+  normalizeIp
 };

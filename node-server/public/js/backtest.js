@@ -2,12 +2,25 @@
 
 (() => {
   const $ = id => document.getElementById(id);
-  const DEFAULT_TOOL_COLORS = { line: "#facc15", "h-ray": "#a78bfa", rect: "#fb7185", ruler: "#facc15", fibgrid: "#8b5cf6", brush: "#facc15" };
+  const DEFAULT_TOOL_COLORS = { line: "#facc15", "h-ray": "#a78bfa", alert: "#2bd98a", rect: "#fb7185", ruler: "#facc15", fibgrid: "#8b5cf6", brush: "#facc15" };
   const DRAW_COLOR_PALETTE = ["#ff4d7a", "#34d399", "#7c3aed", "#38bdf8", "#fb923c", "#facc15", "#ec4899", "#22c55e", "#818cf8", "#a855f7", "#f87171", "#06b6d4", "#84cc16", "#f59e0b", "#64748b"];
   const loadToolColors = () => {
     try { return { ...DEFAULT_TOOL_COLORS, ...JSON.parse(localStorage.getItem("crypto_tool_colors") || "{}") }; }
     catch (_) { return { ...DEFAULT_TOOL_COLORS }; }
   };
+  const BACKTEST_ACCOUNT_KEY = "obsidian_backtest_account_v1";
+  function loadBacktestAccount() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(BACKTEST_ACCOUNT_KEY) || "null");
+      const balance = Number(saved?.balance);
+      const leverage = Number(saved?.leverage);
+      return {
+        balance: Number.isFinite(balance) && balance >= 0 && balance <= 1e12 ? balance : 10000,
+        leverage: Number.isInteger(leverage) && leverage >= 1 && leverage <= 50 ? leverage : 1,
+      };
+    } catch (_) { return { balance: 10000, leverage: 1 }; }
+  }
+  const savedAccount = loadBacktestAccount();
   const state = {
     tf: "5m",
     exchange: "BB",
@@ -44,7 +57,8 @@
     magnet: false,
     plannedDirection: null,
     levelModes: { sl: "percent", tp: "percent" },
-    balance: 10000,
+    balance: savedAccount.balance,
+    leverage: savedAccount.leverage,
     position: null,
     trades: [],
     caseTradeStart: 0,
@@ -56,6 +70,26 @@
   const ctx = canvas.getContext("2d");
   const vCtx = volCv ? volCv.getContext("2d") : null;
   const wrap = $("bt-canvas-wrap");
+
+  function saveBacktestAccount() {
+    try {
+      localStorage.setItem(BACKTEST_ACCOUNT_KEY, JSON.stringify({ balance: state.balance, leverage: state.leverage }));
+    } catch (_) {}
+  }
+
+  function maxPositionSize() {
+    return Math.max(0, Math.floor(state.balance * state.leverage * 100) / 100);
+  }
+
+  function updatePositionLimits() {
+    const sizeInput = $("bt-size");
+    const leverageInput = $("bt-leverage");
+    const hint = $("bt-size-hint");
+    const maxSize = maxPositionSize();
+    if (sizeInput) sizeInput.max = String(maxSize);
+    if (leverageInput) leverageInput.value = String(state.leverage);
+    if (hint) hint.textContent = `Макс. объём: ${money(maxSize)} · маржа: объём / ${state.leverage}×`;
+  }
 
   const parseCandle = row => ({ t: +row[0], o: +row[1], h: +row[2], l: +row[3], c: +row[4], v: +row[5] });
   const money = value => `${value < 0 ? "-" : ""}$${Math.abs(value).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -105,6 +139,9 @@
 
   function resetCase() {
     stopPlaying();
+    if (state.position && state.candles.length) {
+      closePosition(state.candles[state.candles.length - 1].c, "Смена сценария");
+    }
     state.session = null;
     state.candles = [];
     state.stepBuffer = [];
@@ -337,6 +374,13 @@
     if (state.panBars > 0) state.panBars++;
     state.candles.push(candle);
     updateTrade(candle);
+    for (const alert of state.drawings) {
+      if (alert.type !== "alert" || alert.triggered) continue;
+      if (alert.direction === "gte" ? candle.h >= alert.a.p : candle.l <= alert.a.p) {
+        alert.triggered = true;
+        showResult("Учебный алерт сработал", `Цена достигла ${price(alert.a.p)} USDT.`, "good");
+      }
+    }
     updateProgressUI();
     draw();
   }
@@ -373,10 +417,17 @@
     if (!state.session || state.position || state.done || !state.candles.length) return;
     if (!direction) return;
     const entry = state.candles[state.candles.length - 1].c;
-    const size = Math.max(10, +$("bt-size").value || 1000);
+    const size = Number($("bt-size").value);
+    const leverage = state.leverage;
+    if (!Number.isFinite(size) || size < 10 || size > maxPositionSize() ||
+        !Number.isInteger(leverage) || leverage < 1 || leverage > 50) {
+      showResult("Недостаточно средств", `Объём должен быть от $10 до ${money(maxPositionSize())} при плече ${leverage}×.`, "warn");
+      updatePositionLimits();
+      return;
+    }
     const levels = getPlannedLevels();
     state.position = {
-      direction, entry, size, qty: size / entry,
+      direction, entry, size, leverage, qty: size / entry,
       sl: levels.sl,
       tp: levels.tp,
       openedAt: state.candles[state.candles.length - 1].t,
@@ -391,6 +442,10 @@
     const p = state.position;
     if (!p) { $("bt-position").innerHTML = ""; return; }
     const isLong = p.direction === "long";
+    const liquidationPrice = isLong ? p.entry * (1 - 1 / p.leverage) : p.entry * (1 + 1 / p.leverage);
+    if (liquidationPrice > 0 && (isLong ? candle.l <= liquidationPrice : candle.h >= liquidationPrice)) {
+      return closePosition(liquidationPrice, "Ликвидация");
+    }
     // Conservative handling when SL and TP are touched in the same candle: SL first.
     if (p.sl && (isLong ? candle.l <= p.sl : candle.h >= p.sl)) return closePosition(p.sl, "Стоп-лосс");
     if (p.tp && (isLong ? candle.h >= p.tp : candle.l <= p.tp)) return closePosition(p.tp, "Тейк-профит");
@@ -405,6 +460,7 @@
     const pnl = (exitPrice - p.entry) * p.qty * (p.direction === "long" ? 1 : -1);
     const trade = { ...p, exit: exitPrice, pnl, reason, closedAt: last?.t || Date.now() };
     state.balance += pnl;
+    saveBacktestAccount();
     state.trades.push(trade);
     state.position = null;
     state.plannedDirection = null;
@@ -426,7 +482,12 @@
     if (posEmpty) posEmpty.hidden = Boolean(p);
     if (posEl) posEl.hidden = !p;
     if (closeBtn) closeBtn.disabled = !p;
+    const resetButton = $("bt-reset-balance");
+    if (resetButton) resetButton.disabled = Boolean(p);
+    const leverageInput = $("bt-leverage");
+    if (leverageInput) leverageInput.disabled = Boolean(p);
     if (balEl) balEl.textContent = money(state.balance);
+    updatePositionLimits();
     if (pnlEl) {
       pnlEl.textContent = money(p?.unrealized || 0);
       pnlEl.style.color = !p ? "" : p.unrealized >= 0 ? "var(--gr)" : "var(--rd)";
@@ -434,7 +495,7 @@
     if (!p || !posEl) return;
     posEl.innerHTML = `
       <span>Направление<b style="color:${p.direction === "long" ? "var(--gr)" : "var(--rd)"}">${p.direction.toUpperCase()}</b></span>
-      <span>Вход<b>${price(p.entry)}</b></span>
+      <span>Вход · ${p.leverage}×<b>${price(p.entry)}</b></span>
       <span>Стоп<b>${p.sl ? price(p.sl) : "—"}</b></span>
       <span>Тейк<b>${p.tp ? price(p.tp) : "—"}</b></span>`;
   }
@@ -969,27 +1030,51 @@
     const rect = canvas.getBoundingClientRect();
     const x = Math.max(0, Math.min(m.plot.w, event.clientX - rect.left));
     const y = Math.max(0, Math.min(m.plot.priceH, event.clientY - rect.top));
-    const local = Math.max(0, Math.min(m.data.length - 1, Math.floor(x / Math.max(1, m.stepX))));
+    const local = Math.max(0, Math.floor(x / Math.max(1, m.stepX)));
     const candle = m.data[local];
     let p = m.max - y / m.plot.priceH * (m.max - m.min);
     if (state.magnet && candle) {
       p = [candle.o, candle.h, candle.l, candle.c].reduce((best, value) => Math.abs(value - p) < Math.abs(best - p) ? value : best, candle.c);
     }
-    return { t: candle?.t || Date.now(), p, x, y };
+    const last = m.data[m.data.length - 1];
+    const previous = m.data[m.data.length - 2];
+    const interval = last && previous ? Math.max(1, last.t - previous.t) : 60_000;
+    const t = candle?.t ?? (last ? last.t + Math.max(0, local - m.data.length + 1) * interval : Date.now());
+    return { t, p, x, y };
+  }
+
+  function drawingTimeToX(t, m) {
+    const index = m.data.findIndex(c => c.t === t);
+    if (index >= 0) return m.xForIndex(index);
+    if (!m.data.length) return -999;
+    const first = m.data[0];
+    const last = m.data[m.data.length - 1];
+    const interval = m.data.length > 1 ? Math.max(1, last.t - m.data[m.data.length - 2].t) : 60_000;
+    if (t >= last.t) return m.xForIndex(m.data.length - 1 + (t - last.t) / interval);
+    if (t <= first.t) return m.xForIndex((t - first.t) / interval);
+    let right = m.data.findIndex(c => c.t > t);
+    if (right < 1) right = 1;
+    const left = right - 1;
+    const fraction = (t - m.data[left].t) / Math.max(1, m.data[right].t - m.data[left].t);
+    return m.xForIndex(left + fraction);
   }
 
   function drawUserObjects(m) {
     const objects = state.draft ? [...state.drawings, state.draft] : state.drawings;
-    const timeToX = t => {
-      const index = m.data.findIndex(c => c.t === t);
-      if (index >= 0) return m.xForIndex(index);
-      if (!m.data.length) return -999;
-      return (t - m.data[0].t) / Math.max(1, m.data[m.data.length - 1].t - m.data[0].t) * (m.plot.w - m.stepX) + m.stepX / 2;
-    };
+    const timeToX = t => drawingTimeToX(t, m);
     objects.forEach(o => {
       ctx.save(); ctx.strokeStyle = o.color; ctx.fillStyle = o.color; ctx.lineWidth = 1.4;
       const x1 = timeToX(o.a.t), y1 = m.yForPrice(o.a.p);
-      if (o.type === "h-ray") {
+      if (o.type === "alert") {
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.moveTo(0, y1); ctx.lineTo(m.plot.w, y1); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#12141a";
+        ctx.fillRect(Math.max(8, x1 - 36), y1 - 9, 72, 18);
+        ctx.fillStyle = o.color;
+        ctx.font = "bold 9px Inter";
+        ctx.fillText(`🔔 ${price(o.a.p)}`, Math.max(12, x1 - 32), y1 + 3);
+      } else if (o.type === "h-ray") {
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(m.plot.w, y1); ctx.stroke();
         ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, Math.PI * 2); ctx.fill();
         const badgeW = m.axisR.w - 6;
@@ -1010,32 +1095,99 @@
         ctx.restore();
       } else if (o.type === "brush" && o.points?.length) {
         ctx.lineWidth = o.lineWidth || 2; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.beginPath();
-        o.points.forEach((point, index) => { const x = timeToX(point.t), y = m.yForPrice(point.p); index ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+        const stride = Math.max(1, Math.floor(o.points.length / 200));
+        for (let index = 0; index < o.points.length; index += stride) {
+          const point = o.points[index], x = timeToX(point.t), y = m.yForPrice(point.p);
+          index ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        const last = o.points[o.points.length - 1];
+        ctx.lineTo(timeToX(last.t), m.yForPrice(last.p));
         ctx.stroke();
       } else if (o.b) {
         const x2 = timeToX(o.b.t), y2 = m.yForPrice(o.b.p);
         if (o.type === "line") { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.beginPath(); ctx.arc(x1,y1,3.5,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(x2,y2,3.5,0,Math.PI*2); ctx.fill(); }
         if (o.type === "rect") { ctx.globalAlpha = .12; ctx.fillRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1)); ctx.globalAlpha = .8; ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1)); }
         if (o.type === "ruler") {
-          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-          const change = (o.b.p / o.a.p - 1) * 100;
+          const up = o.b.p >= o.a.p;
+          const accent = up ? "rgba(38,201,122," : "rgba(255,69,96,";
+          const left = Math.min(x1, x2), top = Math.min(y1, y2);
+          const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
+          ctx.fillStyle = `${accent}0.15)`;
+          ctx.fillRect(left, top, width, height);
+          ctx.strokeStyle = `${accent}0.6)`;
+          ctx.strokeRect(left, top, width, height);
+          ctx.strokeStyle = `${accent}0.8)`;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath(); ctx.moveTo(left, y2); ctx.lineTo(left + width, y2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(x2, top); ctx.lineTo(x2, top + height); ctx.stroke();
+          ctx.setLineDash([]);
+          const change = o.a.p ? (o.b.p - o.a.p) / o.a.p * 100 : 0;
+          const delta = o.b.p - o.a.p;
           const bars = Math.max(0, Math.round(Math.abs(x2 - x1) / Math.max(1, m.stepX)));
-          const label = `${change >= 0 ? "+" : ""}${change.toFixed(2)}% · ${bars} свеч.`;
-          ctx.font = "700 9px Inter"; const tw = ctx.measureText(label).width;
-          ctx.globalAlpha = .92; ctx.fillStyle = "#181b26"; ctx.fillRect((x1+x2)/2-tw/2-5,(y1+y2)/2-16,tw+10,16);
-          ctx.fillStyle = o.color; ctx.fillText(label,(x1+x2)/2-tw/2,(y1+y2)/2-5);
+          const elapsed = Math.abs(o.b.t - o.a.t);
+          const duration = elapsed >= 86_400_000 ? `${Math.round(elapsed / 86_400_000)}д`
+            : elapsed >= 3_600_000 ? `${Math.round(elapsed / 3_600_000)}ч`
+            : `${Math.round(elapsed / 60_000)}м`;
+          const line1 = `${change >= 0 ? "+" : ""}${change.toFixed(2)}% (${delta >= 0 ? "+" : ""}${price(delta)})`;
+          const line2 = `${bars} свеч. · ${duration}`;
+          ctx.font = "bold 12px Inter";
+          const line1Width = ctx.measureText(line1).width;
+          ctx.font = "11px Inter";
+          const boxWidth = Math.max(line1Width, ctx.measureText(line2).width) + 20;
+          const boxX = Math.max(2, Math.min(m.plot.w - boxWidth - 2, (x1 + x2 - boxWidth) / 2));
+          const boxY = Math.max(2, Math.min(m.plot.priceH - 44, (y1 + y2) / 2 - 22));
+          ctx.fillStyle = "rgba(20,23,32,.94)";
+          ctx.fillRect(boxX, boxY, boxWidth, 44);
+          ctx.strokeStyle = `${accent}0.7)`;
+          ctx.strokeRect(boxX, boxY, boxWidth, 44);
+          ctx.fillStyle = up ? "#26c97a" : "#ff4560";
+          ctx.font = "bold 12px Inter";
+          ctx.fillText(line1, boxX + 10, boxY + 17);
+          ctx.fillStyle = "#d1d4dc";
+          ctx.font = "11px Inter";
+          ctx.fillText(line2, boxX + 10, boxY + 34);
         }
         if (o.type === "fibgrid") {
-          [0,.236,.382,.5,.618,.786,1].forEach(level => {
+          const rows = typeof window.getSharedFibRows === "function"
+            ? window.getSharedFibRows(o)
+            : [0,.236,.382,.5,.618,.786,1].map(value => ({ value, color: o.color }));
+          const levels = rows.map(row => row.value);
+          const left = Math.min(x1, x2), top = Math.min(y1, y2);
+          const width = Math.abs(x2 - x1), height = Math.abs(y2 - y1);
+          ctx.globalAlpha = .12;
+          ctx.fillRect(left, top, width, height);
+          ctx.globalAlpha = 1;
+          levels.forEach((level, index) => {
             const yp = y1 + (y2-y1) * level;
-            ctx.globalAlpha = level === 0 || level === 1 ? .9 : .55;
+            if (index < levels.length - 1) {
+              const nextY = y1 + (y2-y1) * levels[index + 1];
+              ctx.globalAlpha = index % 2 === 0 ? .04 : .09;
+              ctx.fillRect(left, Math.min(yp, nextY), width, Math.abs(nextY - yp));
+            }
+            ctx.strokeStyle = o.useSingleColor === false ? (rows[index].color || o.color) : o.color;
+            ctx.fillStyle = o.useSingleColor === false ? (rows[index].color || o.color) : o.color;
+            ctx.globalAlpha = level === .5 ? .9 : .7;
             ctx.beginPath(); ctx.moveTo(Math.min(x1,x2),yp); ctx.lineTo(Math.max(x1,x2),yp); ctx.stroke();
-            ctx.font = "8px Inter"; ctx.fillText(String(level),Math.max(x1,x2)+4,yp+3);
+            ctx.font = "10px Inter"; ctx.fillText(level.toFixed(3), left + 6, yp - 4);
           });
+          ctx.globalAlpha = 1;
+          ctx.strokeRect(left, top, width, height);
+          ctx.beginPath(); ctx.arc(x1, y1, 4, 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(x2, y2, 4, 0, Math.PI * 2); ctx.fill();
         }
       }
       ctx.restore();
     });
+    if ((state.tool === "h-ray" || state.tool === "alert") && state.hover &&
+        state.hover.x >= 0 && state.hover.x <= m.plot.w &&
+        state.hover.y >= 0 && state.hover.y <= m.plot.priceH) {
+      ctx.save();
+      ctx.strokeStyle = getToolColor(state.tool);
+      ctx.globalAlpha = .65;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(0, state.hover.y); ctx.lineTo(m.plot.w, state.hover.y); ctx.stroke();
+      ctx.restore();
+    }
   }
 
   function drawCrosshair(m) {
@@ -1070,12 +1222,7 @@
   }
 
   function drawingScreenPoints(drawing, m) {
-    const timeToX = t => {
-      const index = m.data.findIndex(c => c.t === t);
-      if (index >= 0) return m.xForIndex(index);
-      if (!m.data.length) return -999;
-      return (t - m.data[0].t) / Math.max(1, m.data[m.data.length - 1].t - m.data[0].t) * (m.plot.w - m.stepX) + m.stepX / 2;
-    };
+    const timeToX = t => drawingTimeToX(t, m);
     return {
       x1: timeToX(drawing.a.t), y1: m.yForPrice(drawing.a.p),
       x2: drawing.b ? timeToX(drawing.b.t) : 0, y2: drawing.b ? m.yForPrice(drawing.b.p) : 0,
@@ -1095,9 +1242,9 @@
     const points = drawingScreenPoints(drawing, m);
     const { x1, y1, x2, y2 } = points;
     if (Math.hypot(px - x1, py - y1) <= 9) return "p1";
-    if (drawing.type !== "h-ray" && drawing.b && Math.hypot(px - x2, py - y2) <= 9) return "p2";
+    if (drawing.type !== "h-ray" && drawing.type !== "alert" && drawing.b && Math.hypot(px - x2, py - y2) <= 9) return "p2";
     if (drawing.type === "line" || drawing.type === "ruler") return pointSegmentDistance(px, py, x1, y1, x2, y2) < 7 ? "move" : null;
-    if (drawing.type === "h-ray") return px >= x1 - 6 && Math.abs(py - y1) < 7 ? "move" : null;
+    if (drawing.type === "h-ray" || drawing.type === "alert") return Math.abs(py - y1) < 7 ? "move" : null;
     if (drawing.type === "rect" || drawing.type === "fibgrid") {
       const left = Math.min(x1,x2), right = Math.max(x1,x2), top = Math.min(y1,y2), bottom = Math.max(y1,y2);
       return px >= left - 6 && px <= right + 6 && py >= top - 6 && py <= bottom + 6 ? "move" : null;
@@ -1178,7 +1325,7 @@
 
   function drawingIsValid(drawing) {
     if (!drawing?.a) return false;
-    if (drawing.type === "h-ray") return true;
+    if (drawing.type === "h-ray" || drawing.type === "alert") return true;
     if (!drawing.b) return false;
     const dt = Math.abs(drawing.b.t - drawing.a.t);
     const dp = Math.abs(drawing.b.p - drawing.a.p);
@@ -1203,6 +1350,12 @@
     }
     if (event.button !== 0) return;
 
+    if (event.shiftKey && state.tool === "none") {
+      const point = drawingPointFromMouse(event);
+      state.draft = { type: "ruler", color: getToolColor("ruler"), a: point, b: { ...point } };
+      draw();
+      return;
+    }
     if (state.tool === "none") {
       const m = metrics();
       const rect = canvas.getBoundingClientRect();
@@ -1233,6 +1386,13 @@
     const point = drawingPointFromMouse(event);
     if (state.tool === "h-ray") {
       state.drawings.push({ type: "h-ray", color: getToolColor("h-ray"), a: point, b: { ...point } });
+      setBtTool("none");
+      return;
+    }
+    if (state.tool === "alert") {
+      const current = state.candles[state.candles.length - 1].c;
+      state.drawings.push({ type: "alert", color: getToolColor("alert"), a: point,
+        direction: point.p >= current ? "gte" : "lte", triggered: false });
       setBtTool("none");
       return;
     }
@@ -1272,6 +1432,11 @@
         if (drag.b) drawing.b = { ...drag.b, t: drag.b.t + dt, p: drag.b.p + dp };
         if (drag.points) drawing.points = drag.points.map(item => ({ ...item, t: item.t + dt, p: item.p + dp }));
       }
+      if (drawing.type === "alert") {
+        const current = state.candles[state.candles.length - 1]?.c || drawing.a.p;
+        drawing.direction = drawing.a.p >= current ? "gte" : "lte";
+        drawing.triggered = false;
+      }
       canvas.style.cursor = "grabbing";
     } else if (state.panning) {
       const dx = event.clientX - state.panning.x;
@@ -1291,7 +1456,7 @@
       if (!last || last.t !== point.t || Math.abs(last.p - point.p) > 1e-12) state.draft.points.push(point);
     } else if (state.draft) {
       const point = drawingPointFromMouse(event);
-      state.draft.b = state.draft.type === "ruler" ? { ...point, t: state.draft.a.t } : point;
+      state.draft.b = point;
     } else if (state.tool === "none") {
       const found = findDrawingAt(state.hover.x, state.hover.y, metrics());
       state.hoverDrawingIdx = found ? found.idx : -1;
@@ -1305,7 +1470,7 @@
     if (state.tool === "brush" && state.draft) {
       if (state.draft.points?.length > 1) state.drawings.push({ ...state.draft });
       setBtTool("none");
-    } else if (state.tool === "ruler") {
+    } else if (state.draft?.type === "ruler") {
       state.draft = null;
       state.drawingPhase = 0;
       setBtTool("none");
@@ -1328,7 +1493,24 @@
     }
     draw();
   }, { passive: false });
-  canvas.addEventListener("dblclick", () => { state.panBars = 0; state.priceOffset = 0; state.priceZoom = 1; state.viewBars = 170; draw(); });
+  canvas.addEventListener("dblclick", event => {
+    const rect = canvas.getBoundingClientRect();
+    const found = findDrawingAt(event.clientX - rect.left, event.clientY - rect.top, metrics());
+    const drawing = found && state.drawings[found.idx];
+    if (drawing?.type === "fibgrid" && typeof window.openSharedFibEditor === "function") {
+      const adapter = { ...drawing, t1: drawing.a.t, p1: drawing.a.p, t2: drawing.b.t, p2: drawing.b.p };
+      window.openSharedFibEditor(adapter, event.pageX, event.pageY, edited => {
+        drawing.color = edited.color;
+        drawing.levelRows = edited.levelRows.map(row => ({ ...row }));
+        drawing.levels = [...edited.levels];
+        drawing.verticals = [...edited.verticals];
+        drawing.useSingleColor = edited.useSingleColor;
+        draw();
+      });
+      return;
+    }
+    state.panBars = 0; state.priceOffset = 0; state.priceZoom = 1; state.viewBars = 170; draw();
+  });
 
   // Touch event handlers for Backtest canvas
   function handleBtTouch(e) {
@@ -1493,6 +1675,29 @@
   addEvt("bt-short", "click", () => selectDirection("short"));
   addEvt("bt-commit-plan", "click", () => openPosition());
   addEvt("bt-close-position", "click", () => state.position && closePosition(state.candles[state.candles.length - 1].c));
+  const leverageSelect = $("bt-leverage");
+  if (leverageSelect) {
+    for (let leverage = 1; leverage <= 50; leverage++) {
+      const option = document.createElement("option");
+      option.value = String(leverage);
+      option.textContent = `${leverage}×`;
+      leverageSelect.appendChild(option);
+    }
+    leverageSelect.value = String(state.leverage);
+    leverageSelect.addEventListener("change", () => {
+      const leverage = Number(leverageSelect.value);
+      if (!Number.isInteger(leverage) || leverage < 1 || leverage > 50) return;
+      state.leverage = leverage;
+      saveBacktestAccount();
+      updatePositionLimits();
+    });
+  }
+  addEvt("bt-reset-balance", "click", () => {
+    if (state.position || !window.confirm("Сбросить учебный баланс до $10,000?")) return;
+    state.balance = 10000;
+    saveBacktestAccount();
+    renderPosition();
+  });
   addEvt("bt-undo", "click", () => { state.drawings.pop(); draw(); });
   addEvt("bt-clear", "click", () => { state.drawings = []; draw(); });
   addEvt("bt-sl-mode", "click", () => toggleLevelMode("sl"));
@@ -1509,6 +1714,7 @@
     if (event.key === "Escape") { if (state.drawingPhase) { state.draft = null; state.drawingPhase = 0; draw(); } else setBtTool("none"); }
     if (key === "v") setBtTool("none");
     if (key === "h") setBtTool("h-ray");
+    if (key === "a") setBtTool("alert");
     if (key === "l") setBtTool("line");
     if (key === "x") setBtTool("rect");
     if (key === "b") setBtTool("brush");
@@ -1536,6 +1742,8 @@
   window.addEventListener("appearancechange", draw);
   window.CryptoBacktest = {
     activate() {
+      state.toolColors = loadToolColors();
+      applyToolButtonColors();
       draw();
       if (!state.activated) { state.activated = true; newCase(); }
     },

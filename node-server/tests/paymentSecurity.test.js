@@ -56,7 +56,7 @@ test("payment methods fail closed when their server configuration is absent", as
     startCleanupTimer: false,
     notifyPayment: false
   });
-  assert.deepEqual(gateway.getAvailableMethods(), ["bep20"]);
+  assert.deepEqual(gateway.getAvailableMethods(), []);
   await assert.rejects(
     gateway.createInvoice("USR-A", "1m", "trc20"),
     error => error instanceof PaymentError && error.code === "METHOD_UNAVAILABLE"
@@ -129,6 +129,28 @@ test("an owner can explicitly replace an unpaid active invoice", async t => {
   assert.equal(replacement.planId, "3m");
   assert.equal(gateway._test.getInvoice(first.id).status, "cancelled");
   assert.equal(gateway._test.getInvoice(replacement.id).status, "pending");
+});
+
+test("a transfer to a replaced on-chain invoice still grants its original plan", async t => {
+  const store = createUserStore();
+  const now = Date.now();
+  let transfer = null;
+  const gateway = createPaymentGateway({
+    dataDir: createTempDir(t), env: { PAYMENT_TRC20_WALLET: TEST_WALLET },
+    userStore: store, now: () => now,
+    fetchImpl: async () => jsonResponse({ data: transfer ? [transfer] : [] }),
+    startCleanupTimer: false, notifyPayment: false
+  });
+  const oldInvoice = await gateway.createInvoice("USR-A", "1m", "trc20");
+  await gateway.createInvoice("USR-A", "3m", "trc20", { replaceActive: true });
+  const oldAmount = gateway._test.getInvoice(oldInvoice.id).amountMinor;
+  transfer = {
+    transaction_id: "8".repeat(64), to: TEST_WALLET, type: "Transfer",
+    block_timestamp: now + 1000, value: String(BigInt(oldAmount) * 10_000n),
+    token_info: { address: TRC20_USDT_CONTRACT_FOR_TEST(), symbol: "USDT", decimals: 6 }
+  };
+  assert.equal((await gateway.getInvoiceStatus(oldInvoice.id, "USR-A")).status, "success");
+  assert.deepEqual(store.grants.map(grant => grant.days), [30]);
 });
 
 test("TRC20 grants only for confirmed exact USDT contract transfer in the invoice window", async t => {
@@ -207,6 +229,46 @@ test("TRC20 rejects a lookalike token and an old transfer", async t => {
   }];
   assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-REJECT")).status, "pending");
   assert.equal(store.grants.length, 0);
+});
+
+test("shared-wallet invoice ranges never overlap within the 30-cent tolerance", async t => {
+  const gateway = createPaymentGateway({
+    dataDir: createTempDir(t),
+    env: { PAYMENT_TRC20_WALLET: TEST_WALLET },
+    userStore: createUserStore(),
+    fetchImpl: async () => jsonResponse({ data: [] }),
+    startCleanupTimer: false,
+    notifyPayment: false
+  });
+  const first = await gateway.createInvoice("USR-A", "1m", "trc20");
+  const second = await gateway.createInvoice("USR-B", "1m", "trc20");
+  assert.ok(Math.abs(Number(second.amountStr) - Number(first.amountStr)) > 0.60);
+  await assert.rejects(gateway.createInvoice("USR-C", "1m", "trc20"),
+    error => error.code === "PAYMENT_CAPACITY_REACHED");
+});
+
+test("confirmed TRC20 transfer accepts a 30-cent shortfall once, but rejects 31 cents", async t => {
+  const store = createUserStore();
+  const now = Date.now();
+  let paidMinor = 0;
+  const gateway = createPaymentGateway({
+    dataDir: createTempDir(t), env: { PAYMENT_TRC20_WALLET: TEST_WALLET }, userStore: store,
+    now: () => now,
+    fetchImpl: async () => jsonResponse({ data: [{
+      transaction_id: "9".repeat(64), to: TEST_WALLET, type: "Transfer",
+      block_timestamp: now + 1000, value: String(BigInt(paidMinor) * 10_000n),
+      token_info: { address: TRC20_USDT_CONTRACT_FOR_TEST(), symbol: "USDT", decimals: 6 }
+    }] }), startCleanupTimer: false, notifyPayment: false
+  });
+  const invoice = await gateway.createInvoice("USR-A", "1m", "trc20");
+  paidMinor = gateway._test.getInvoice(invoice.id).amountMinor - 31;
+  assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-A")).status, "pending");
+  gateway._test.getInvoice(invoice.id).nextVerificationAt = 0;
+  paidMinor++;
+  assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-A")).status, "success");
+  assert.equal(store.grants.length, 1);
+  assert.equal(gateway.getAllPayments()[0].amountMinor, paidMinor);
+  assert.equal(gateway.getAllPayments()[0].planId, "1m");
 });
 
 test("restart recovery verifies an expired-window invoice before expiring it", async t => {
@@ -413,7 +475,7 @@ test("day promos keep the price and extend the granted subscription", async t =>
   assert.equal(store.grants[0].days, 37);
 });
 
-test("BEP20 verifies exact official-token transfer on BSC with finality", async t => {
+test("BEP20 verifies a confirmed official-token transfer within tolerance", async t => {
   const now = Date.now();
   const store = createUserStore();
   let expectedRaw = null;
@@ -451,10 +513,11 @@ test("BEP20 verifies exact official-token transfer on BSC with finality", async 
   });
   const invoice = await gateway.createInvoice("USR-BSC", "1m", "bep20");
   const internal = gateway._test.getInvoice(invoice.id);
-  expectedRaw = BigInt(internal.amountMinor) * 10_000_000_000_000_000n;
+  expectedRaw = BigInt(internal.amountMinor - 30) * 10_000_000_000_000_000n;
   assert.equal(invoice.address, TEST_BEP20_WALLET);
   assert.equal((await gateway.getInvoiceStatus(invoice.id, "USR-BSC")).status, "success");
   assert.equal(store.grants.length, 1);
+  assert.equal(gateway.getAllPayments()[0].amountMinor, internal.amountMinor - 30);
   const logCall = calls.find(call => call.method === "eth_getLogs");
   assert.equal(logCall.params[0].address, "0x55d398326f99059ff775485246999027b3197955");
   assert.equal(logCall.params[0].toBlock, "0x3e8");

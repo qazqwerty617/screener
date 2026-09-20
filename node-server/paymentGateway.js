@@ -10,8 +10,8 @@ const TRC20_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 const TRON_ADDRESS_REGEX = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
 const EVM_ADDRESS_REGEX = /^0x[a-fA-F0-9]{40}$/;
 const BSC_USDT_CONTRACT = "0x55d398326f99059ff775485246999027b3197955";
-const DEFAULT_BEP20_WALLET = "0xe0b42e5c4fa2170bb347074ec6f96fec600ef84b";
 const DEFAULT_BSC_RPC_URL = "https://bsc-rpc.publicnode.com";
+const PAYMENT_TOLERANCE_MINOR = 30;
 const BSC_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const BSC_CHAIN_ID = "0x38";
 const BSC_CONFIRMATIONS = 15;
@@ -124,7 +124,7 @@ function createPaymentGateway(options = {}) {
 
   const wallets = {
     trc20: safeString(env.PAYMENT_TRC20_WALLET, 128),
-    bep20: safeString(env.PAYMENT_BEP20_WALLET, 128) || DEFAULT_BEP20_WALLET
+    bep20: safeString(env.PAYMENT_BEP20_WALLET, 128)
   };
   if (wallets.trc20 && !TRON_ADDRESS_REGEX.test(wallets.trc20)) {
     throw new Error("PAYMENT_TRC20_WALLET is not a valid TRON address");
@@ -221,7 +221,7 @@ function createPaymentGateway(options = {}) {
       reconcileExpiredInvoices().catch(error => {
         console.error("[PAYMENT RECONCILIATION] Failed:", error.message);
       });
-    }, 30 * 1000);
+    }, 10 * 1000);
     reconcileTimer.unref();
     const initialReconciliation = setTimeout(() => {
       reconcileExpiredInvoices().catch(error => {
@@ -256,7 +256,17 @@ function createPaymentGateway(options = {}) {
       const amountMinor = baseAmountMinor + cents;
       const amountStr = minorToDecimal(amountMinor);
       const key = `${network}:${amountStr}`;
-      if (!amountReservations.has(key)) return { amountMinor, amountStr, key };
+      // One shared wallet cannot attribute a transfer that fits two invoice
+      // windows. Retain cancelled/expired windows until their payment window
+      // has elapsed, including a late provider confirmation.
+      const overlaps = Array.from(invoices.values()).some(other =>
+        other.method === network &&
+        !["success"].includes(other.status) &&
+        other.expiresAt + PAYMENT_GRACE_MS >= clock() &&
+        Number.isSafeInteger(other.amountMinor) &&
+        Math.abs(other.amountMinor - amountMinor) <= PAYMENT_TOLERANCE_MINOR * 2
+      );
+      if (!overlaps) return { amountMinor, amountStr, key };
     }
     throw new PaymentError(
       "PAYMENT_CAPACITY_REACHED",
@@ -533,7 +543,13 @@ function createPaymentGateway(options = {}) {
         ),
         2048
       );
-      if (!CRYPTO_PAY_INVOICE_ID_REGEX.test(providerId) || !/^https:\/\//i.test(payUrl)) {
+      let validPayUrl = false;
+      try {
+        const target = new URL(payUrl);
+        validPayUrl = target.protocol === "https:" && target.hostname === "t.me" &&
+          /^\/(?:CryptoBot|CryptoTestnetBot)(?:\/|$)/.test(target.pathname);
+      } catch (_) {}
+      if (!CRYPTO_PAY_INVOICE_ID_REGEX.test(providerId) || !validPayUrl) {
         throw new PaymentError("INVALID_PROVIDER_RESPONSE", "Crypto Pay вернул некорректный счёт.", 502);
       }
       invoice.cryptoPayInvoiceId = providerId;
@@ -582,7 +598,7 @@ function createPaymentGateway(options = {}) {
 
   async function verifyTronInvoice(invoice) {
     const query = new URLSearchParams({
-      limit: "50",
+      limit: "200",
       contract_address: TRC20_USDT_CONTRACT,
       only_confirmed: "true",
       order_by: "block_timestamp,desc",
@@ -591,18 +607,19 @@ function createPaymentGateway(options = {}) {
     });
     const headers = { "Accept": "application/json" };
     if (tronGridApiKey) headers["TRON-PRO-API-KEY"] = tronGridApiKey;
-    const url = `https://api.trongrid.io/v1/accounts/${encodeURIComponent(invoice.address)}/transactions/trc20?${query}`;
-    let response;
-    try {
-      response = await fetchJson(url, { headers });
-    } catch (_) {
-      throw new PaymentError("PROVIDER_UNAVAILABLE", "Проверка сети TRON временно недоступна.", 502);
-    }
-    if (!response || !Array.isArray(response.data)) return false;
-
     const expectedRaw = BigInt(invoice.amountMinor) * 10_000n;
     const createdMs = Date.parse(invoice.createdAt);
-    for (const transaction of response.data) {
+    const seenFingerprints = new Set();
+    for (let page = 0; page < 5; page++) {
+      const url = `https://api.trongrid.io/v1/accounts/${encodeURIComponent(invoice.address)}/transactions/trc20?${query}`;
+      let response;
+      try { response = await fetchJson(url, { headers }); } catch (_) {
+        throw new PaymentError("PROVIDER_UNAVAILABLE", "Проверка сети TRON временно недоступна.", 502);
+      }
+      if (!response || !Array.isArray(response.data)) {
+        throw new PaymentError("PROVIDER_UNAVAILABLE", "Проверка сети TRON вернула некорректный ответ.", 502);
+      }
+      for (const transaction of response.data) {
       if (!transaction || transaction.to !== invoice.address) continue;
       if (transaction.type !== "Transfer") continue;
       const tokenInfo = transaction.token_info;
@@ -615,18 +632,28 @@ function createPaymentGateway(options = {}) {
       if (!Number.isFinite(timestamp) || timestamp < createdMs) continue;
       if (timestamp > invoice.expiresAt + PAYMENT_GRACE_MS) continue;
       if (typeof transaction.value !== "string" || !/^\d+$/.test(transaction.value)) continue;
-      if (BigInt(transaction.value) !== expectedRaw) continue;
+      const paidRaw = BigInt(transaction.value);
+      if (paidRaw < expectedRaw - BigInt(PAYMENT_TOLERANCE_MINOR) * 10_000n ||
+          paidRaw > expectedRaw + BigInt(PAYMENT_TOLERANCE_MINOR) * 10_000n) continue;
+      const paidMinor = Number(paidRaw / 10_000n);
       await completeSuccessfulPayment(invoice, {
         txId: transactionId.toLowerCase(),
-        amountMinor: invoice.amountMinor,
+        amountMinor: paidMinor,
         currency: "USDT TRC-20",
         method: "trc20",
         provider: "trongrid",
         confirmedAt: new Date(timestamp).toISOString()
       });
       return true;
+      }
+      const fingerprint = String(response.meta && response.meta.fingerprint || "");
+      if (response.data.length < 200 || !fingerprint) return false;
+      if (seenFingerprints.has(fingerprint)) throw new PaymentError("PROVIDER_UNAVAILABLE", "Ошибка пагинации TRON.", 502);
+      seenFingerprints.add(fingerprint);
+      query.set("fingerprint", fingerprint);
     }
-    return false;
+    // Never mark an invoice finally unpaid after an incomplete history scan.
+    throw new PaymentError("PROVIDER_UNAVAILABLE", "История TRON слишком велика для безопасной проверки.", 502);
   }
 
   async function verifyBscInvoice(invoice) {
@@ -643,7 +670,8 @@ function createPaymentGateway(options = {}) {
     const logs = await bscRpcRequest("eth_getLogs", [filter]);
     if (!Array.isArray(logs)) return false;
 
-    const expectedRaw = BigInt(invoice.amountMinor) * 10_000_000_000_000_000n;
+    const tokenMinor = 10_000_000_000_000_000n;
+    const expectedRaw = BigInt(invoice.amountMinor) * tokenMinor;
     const createdMs = Date.parse(invoice.createdAt);
     for (const log of logs) {
       if (!log || log.removed === true) continue;
@@ -651,7 +679,10 @@ function createPaymentGateway(options = {}) {
       if (!Array.isArray(log.topics) || String(log.topics[0] || "").toLowerCase() !== BSC_TRANSFER_TOPIC) continue;
       if (String(log.topics[2] || "").toLowerCase() !== recipientTopic) continue;
       if (typeof log.data !== "string" || !/^0x[0-9a-f]{64}$/i.test(log.data)) continue;
-      if (BigInt(log.data) !== expectedRaw) continue;
+      const paidRaw = BigInt(log.data);
+      if (paidRaw < expectedRaw - BigInt(PAYMENT_TOLERANCE_MINOR) * tokenMinor ||
+          paidRaw > expectedRaw + BigInt(PAYMENT_TOLERANCE_MINOR) * tokenMinor) continue;
+      const paidMinor = Number(paidRaw / tokenMinor);
       const blockNumber = parseRpcQuantity(log.blockNumber);
       if (blockNumber === null || blockNumber < invoice.bscStartBlock || blockNumber > confirmedBlock) continue;
       const txHash = String(log.transactionHash || "").toLowerCase();
@@ -668,8 +699,8 @@ function createPaymentGateway(options = {}) {
       if (!Number.isFinite(timestamp) || timestamp < createdMs || timestamp > invoice.expiresAt + PAYMENT_GRACE_MS) continue;
 
       await completeSuccessfulPayment(invoice, {
-        txId: `bsc:${txHash}`,
-        amountMinor: invoice.amountMinor,
+        txId: `bsc:${txHash}:${String(log.logIndex || "0x0").toLowerCase()}`,
+        amountMinor: paidMinor,
         currency: "USDT BEP-20",
         method: "bep20",
         provider: "bsc-rpc",
@@ -729,14 +760,14 @@ function createPaymentGateway(options = {}) {
     const existingPromise = verificationPromises.get(invoice.id);
     if (existingPromise) return existingPromise;
     if (!force && Number(invoice.nextVerificationAt) > clock()) return false;
-    invoice.nextVerificationAt = clock() + STATUS_CHECK_INTERVAL_MS;
+    invoice.nextVerificationAt = clock() + (invoice.status === "cancelled" ? 60_000 : STATUS_CHECK_INTERVAL_MS);
     const promise = (async () => {
       try {
         let verified = false;
         if (invoice.method === "trc20") verified = await verifyTronInvoice(invoice);
         else if (invoice.method === "bep20") verified = await verifyBscInvoice(invoice);
         else if (invoice.method === "cryptobot") verified = await verifyCryptoPayInvoice(invoice);
-        if (!verified && clock() >= invoice.expiresAt + PAYMENT_GRACE_MS) {
+        if (!verified && ["pending", "processing"].includes(invoice.status) && clock() >= invoice.expiresAt + PAYMENT_GRACE_MS) {
           invoice.finalVerificationAt = clock();
           invoice.updatedAt = new Date(clock()).toISOString();
           persistInvoices();
@@ -763,9 +794,10 @@ function createPaymentGateway(options = {}) {
     if (invoice.userId !== userId) {
       throw new PaymentError("INVOICE_NOT_FOUND", "Счёт не найден.", 404);
     }
-    if (["pending", "processing"].includes(invoice.status)) {
+    if (["pending", "processing"].includes(invoice.status) ||
+        (invoice.status === "cancelled" && invoice.method !== "cryptobot")) {
       const requiresFinalCheck = clock() >= invoice.expiresAt + PAYMENT_GRACE_MS;
-      try { await verifyInvoice(invoice, requiresFinalCheck); } catch (error) {
+      try { await verifyInvoice(invoice, requiresFinalCheck || invoice.status === "cancelled"); } catch (error) {
         if (!(error instanceof PaymentError) || error.code !== "PROVIDER_UNAVAILABLE") throw error;
       }
       cleanupExpiredInvoices();
@@ -775,16 +807,17 @@ function createPaymentGateway(options = {}) {
 
   async function reconcileExpiredInvoices() {
     const candidates = Array.from(invoices.values()).filter(invoice => (
-      ["pending", "processing"].includes(invoice.status) &&
       Number.isFinite(invoice.expiresAt) &&
-      invoice.expiresAt + PAYMENT_GRACE_MS <= clock()
+      (["pending", "processing"].includes(invoice.status) ||
+        (invoice.status === "cancelled" && invoice.method !== "cryptobot" &&
+          invoice.expiresAt + 24 * 60 * 60 * 1000 >= clock()))
     ));
     for (const invoice of candidates) {
       try {
-        await verifyInvoice(invoice, true);
+        await verifyInvoice(invoice, invoice.status !== "cancelled");
       } catch (error) {
         // A provider outage must never turn an unverified invoice into expired.
-        if (!(error instanceof PaymentError) || error.code !== "PROVIDER_UNAVAILABLE") throw error;
+        console.error("[PAYMENT RECONCILIATION] Invoice check failed:", error.message);
       }
     }
     cleanupExpiredInvoices();
@@ -818,9 +851,14 @@ function createPaymentGateway(options = {}) {
         return existingByTx;
       }
       if (processedTransactionIds.has(txId)) throw new Error("Transaction was already processed");
-      if (!["pending", "processing"].includes(invoice.status)) return null;
+      if (!["pending", "processing"].includes(invoice.status) &&
+          !(invoice.status === "cancelled" && invoice.method !== "cryptobot")) return null;
       if (evidence.method !== invoice.method) throw new Error("Payment method mismatch");
-      if (evidence.amountMinor !== invoice.amountMinor) throw new Error("Payment amount mismatch");
+      const allowedDifference = invoice.method === "cryptobot" ? 0 : PAYMENT_TOLERANCE_MINOR;
+      if (!Number.isSafeInteger(evidence.amountMinor) ||
+          Math.abs(evidence.amountMinor - invoice.amountMinor) > allowedDifference) {
+        throw new Error("Payment amount mismatch");
+      }
       if (typeof gatewayUserStore.grantPlanForPayment !== "function") {
         throw new Error("Idempotent subscription grant is not configured");
       }
@@ -857,6 +895,7 @@ function createPaymentGateway(options = {}) {
         status: "success",
         txId,
         days: invoice.days,
+        planId: invoice.planId,
         planTitle: invoice.planTitle,
         promo: invoice.promo ? { ...invoice.promo } : null,
         confirmedAt: evidence.confirmedAt,
@@ -948,13 +987,6 @@ function createPaymentGateway(options = {}) {
     return payments.map(payment => ({ ...payment }));
   }
 
-  function setMasterTronAddress(address) {
-    const cleanAddress = safeString(address, 128);
-    if (!TRON_ADDRESS_REGEX.test(cleanAddress)) return false;
-    wallets.trc20 = cleanAddress;
-    return true;
-  }
-
   function getOfficialWallets() {
     return Object.freeze({ trc20: wallets.trc20 || null, bep20: wallets.bep20 || null });
   }
@@ -971,7 +1003,6 @@ function createPaymentGateway(options = {}) {
     getAllPayments,
     getPromoQuote,
     redeemGiftPromo,
-    setMasterTronAddress,
     getOfficialWallets,
     getPublicConfig,
     getAvailableMethods,

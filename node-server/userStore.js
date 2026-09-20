@@ -9,6 +9,8 @@ const excelExporter = require("./excelExporter");
 const USERS_FILE = path.join(__dirname, "users.json");
 const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const LOGS_FILE = path.join(__dirname, "auth_logs.json");
+const REFERRAL_VISITS_FILE = path.join(__dirname, "referral_visits.json");
+const REFERRAL_VISIT_SECRET = process.env.ADMIN_API_SECRET || crypto.randomBytes(32);
 
 const PASSWORD_ALGORITHM = "scrypt-v1";
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365-day (1 year) persistent session TTL
@@ -150,6 +152,64 @@ function loadJSON(filePath, fallback = {}) {
 let users = loadJSON(USERS_FILE, {}); // userId -> userObject
 let sessions = loadJSON(SESSIONS_FILE, {}); // token -> { userId, createdAt }
 let authLogs = loadJSON(LOGS_FILE, []); // Array of log objects, oldest first
+let referralVisits = loadJSON(REFERRAL_VISITS_FILE, {});
+if (!referralVisits || typeof referralVisits !== "object" || Array.isArray(referralVisits)) referralVisits = {};
+
+function referralOwner(code) {
+  if (typeof code !== "string" || !/^[a-f0-9]{24}$/.test(code)) return null;
+  return Object.values(users).find(user => user.referralCode === code) || null;
+}
+
+function getReferralCode(userId) {
+  const user = users[userId];
+  if (!user) return null;
+  if (!/^[a-f0-9]{24}$/.test(user.referralCode || "")) {
+    user.referralCode = crypto.randomBytes(12).toString("hex");
+    if (!saveJSON(USERS_FILE, users)) throw new Error("Could not save referral code");
+  }
+  return user.referralCode;
+}
+
+function recordReferralVisit(code, ip, userAgent) {
+  const owner = referralOwner(code);
+  if (!owner) return false;
+  const key = crypto.createHmac("sha256", REFERRAL_VISIT_SECRET)
+    .update(`${code}\0${String(ip).slice(0, 64)}\0${String(userAgent).slice(0, 256)}`)
+    .digest("hex");
+  const entry = referralVisits[code] || { count: 0, visitors: {} };
+  if (entry.visitors[key]) return true;
+  // Bound persistent telemetry. Counts are unique browser/network estimates,
+  // not a security decision; registrations and payments use server records.
+  if (Object.keys(entry.visitors).length >= 10000) return true;
+  entry.visitors[key] = Date.now();
+  entry.count++;
+  referralVisits[code] = entry;
+  saveJSONDebounced(REFERRAL_VISITS_FILE, referralVisits);
+  return true;
+}
+
+function getReferralStats(userId, successfulPayments = []) {
+  const code = getReferralCode(userId);
+  if (!code) return null;
+  const referred = Object.values(users).filter(user => user.referredBy === userId);
+  const referredIds = new Set(referred.map(user => user.id));
+  const paid = successfulPayments.filter(payment => payment.status === "success" && referredIds.has(payment.userId));
+  const buyers = new Set(paid.map(payment => payment.userId));
+  const byPlan = {};
+  for (const payment of paid) {
+    const planId = String(payment.planId || "unknown");
+    byPlan[planId] = (byPlan[planId] || 0) + 1;
+  }
+  return { code, visits: referralVisits[code]?.count || 0, registrations: referred.length,
+    buyers: buyers.size, purchases: paid.length, byPlan };
+}
+
+function getAllReferralStats(successfulPayments = []) {
+  const referredOwners = new Set(Object.values(users).map(user => user.referredBy).filter(Boolean));
+  return Object.values(users).filter(user => user.referralCode || referredOwners.has(user.id))
+    .map(user => ({ userId: user.id, username: user.username, ...getReferralStats(user.id, successfulPayments) }))
+    .sort((a, b) => b.purchases - a.purchases || b.registrations - a.registrations);
+}
 
 // Older builds stored auth logs newest-first (they used `unshift`). Storage order
 // is now ascending so appends are O(1); normalise a legacy file once on load.
@@ -501,7 +561,7 @@ function validatePassword(password) {
 
 // Register user with email/username & password.
 // Async because scrypt (32 MB / ~100 ms) must not block the event loop.
-async function registerUser({ username, email, password, ip = "" }) {
+async function registerUser({ username, email, password, ip = "", referralCode = "" }) {
   if (!username || !email || !password) {
     throw new Error("Заполните все обязательные поля");
   }
@@ -559,6 +619,9 @@ async function registerUser({ username, email, password, ip = "" }) {
     lastIp: ip,
     avatar: ""
   };
+
+  const referrer = referralOwner(referralCode);
+  if (referrer && referrer.id !== userId) newUser.referredBy = referrer.id;
 
   users[userId] = newUser;
   // Registration is rare and must be durable before the token is handed out.
@@ -640,7 +703,7 @@ async function loginUser({ emailOrUsername, password, ip = "" }) {
 }
 
 // Telegram Authorization (Register / Login)
-function telegramAuth(tgData, chatId = null, ip = "") {
+function telegramAuth(tgData, chatId = null, ip = "", referralCode = "") {
   if (!tgData || !tgData.id) {
     throw new Error("Некорректные данные авторизации Telegram");
   }
@@ -687,6 +750,9 @@ function telegramAuth(tgData, chatId = null, ip = "") {
       lastIp: ip,
       avatar: tgData.photo_url || ""
     };
+
+    const referrer = referralOwner(referralCode);
+    if (referrer && referrer.id !== userId) foundUser.referredBy = referrer.id;
 
     users[userId] = foundUser;
     modified = true;
@@ -844,19 +910,14 @@ function isTelegramAlertsEnabled(chatId) {
   return true;
 }
 
-// Persist a Telegram chat id entered manually in the web UI. Routes must call
-// this instead of assigning onto the object returned by getUserByToken, which is
-// a sanitized *copy* — writes to it are silently discarded and the user ends up
-// subscribed with no deliverable address.
+// A chat destination is an identity binding, not a profile preference.  It may
+// only be written by `linkTelegramBot` after the bot has verified ownership.
+// Keep this legacy export fail-closed so a future route cannot reintroduce an
+// account-takeover path by accepting a client-supplied Telegram ID.
 function setTelegramChatId(userId, chatId) {
   if (!userId || !users[userId]) return false;
   const strId = String(chatId || "").trim();
-  if (!strId) return false;
-  if (users[userId].telegramChatId === strId && users[userId].telegramId === strId) return true;
-  users[userId].telegramChatId = strId;
-  users[userId].telegramId = strId;
-  // Request path (settings save) — debounced.
-  return saveJSONDebounced(USERS_FILE, users);
+  return Boolean(strId && users[userId].telegramChatId === strId);
 }
 
 // Persist a user's price alert list on the real record.
@@ -977,6 +1038,7 @@ function grantPlanForPayment(userId, paymentKey, days) {
     throw new Error("Failed to persist paid entitlement");
   }
   logAuthEvent({ event: "PAYMENT_PLAN_GRANT", userId: target.id, paymentKey: cleanKey, days: validDays });
+  broadcastUserUpdate(target.id);
   return { user: sanitizeUser(target), applied: true };
 }
 
@@ -1466,6 +1528,11 @@ function expireProSubscriptions() {
 }
 
 module.exports = {
+  validateEmail,
+  getReferralCode,
+  recordReferralVisit,
+  getReferralStats,
+  getAllReferralStats,
   registerUser,
   loginUser,
   telegramAuth,

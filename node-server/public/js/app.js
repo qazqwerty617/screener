@@ -417,6 +417,7 @@ let chartFovTypes = new Set(chartActiveFormations && chartActiveFormations.size 
 let chartFovCascadesMin = 2;                 // min touches for cascades (default 2+)
 let chartFovBreakoutMin = 2;                 // min touches for horiz levels (default 2+)
 let chartFovTrendlineMin = 2;                // min touches for trendlines (default 2+)
+let chartFovRetestMin = 2;                   // min touches for retests (default 2+)
 let chartFovRetestApproaching = false;       // approach to retest toggle
 let chartFovNearest = false;                 // show nearest level only
 let chartFovShowLabels = true;               // show Resistance / Support labels
@@ -433,6 +434,7 @@ function loadFovSettingsFromStorage() {
     if (typeof saved.cascadesMin === 'number') chartFovCascadesMin = saved.cascadesMin;
     if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
     if (typeof saved.trendlineMin === 'number') chartFovTrendlineMin = saved.trendlineMin;
+    if (typeof saved.retestMin === 'number') chartFovRetestMin = saved.retestMin;
     if (typeof saved.retestApproaching === 'boolean') chartFovRetestApproaching = saved.retestApproaching;
     if (typeof saved.nearest === 'boolean') chartFovNearest = saved.nearest;
     if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
@@ -440,6 +442,22 @@ function loadFovSettingsFromStorage() {
   } catch (_) {}
 }
 loadFovSettingsFromStorage();
+
+function saveFovSettings() {
+  localStorage.setItem('fov_settings', JSON.stringify({
+    enabled: chartFormationsOnChart,
+    types: Array.from(chartActiveFormations),
+    cascadesMin: chartFovCascadesMin,
+    breakoutMin: chartFovBreakoutMin,
+    trendlineMin: chartFovTrendlineMin,
+    retestMin: chartFovRetestMin,
+    retestApproaching: chartFovRetestApproaching,
+    nearest: chartFovNearest,
+    showLabels: chartFovShowLabels,
+    showTouches: chartFovShowTouches
+  }));
+  if (typeof schedulePreferencesSync === "function") schedulePreferencesSync();
+}
 
 // Formation detection is substantially more expensive than drawing. Cache a
 // result until the current candle materially changes, so live charts can keep
@@ -586,6 +604,7 @@ let dragDrawing = null;       // { idx, handle:'p1'|'p2'|'move', ... }
 let hoverDrawingIdx = -1;     // index of drawing under cursor (-1 = none)
 let quickMeasure = null;
 let editingFibDrawing = null;
+let externalFibOnChange = null;
 let brushLineWidth = 2;       // brush line width in pixels (1-10)
 let brushDrawThrottle = null;  // throttle for brush drawing requests
 let showMultichartDrawings = localStorage.getItem("show_multichart_drawings") !== "false";
@@ -828,6 +847,7 @@ async function syncPreferencesToServer() {
         cascadesMin: chartFovCascadesMin,
         breakoutMin: chartFovBreakoutMin,
         trendlineMin: chartFovTrendlineMin,
+        retestMin: chartFovRetestMin,
         retestApproaching: chartFovRetestApproaching,
         nearest: chartFovNearest,
         showLabels: chartFovShowLabels,
@@ -883,6 +903,7 @@ function applyAccountPreferences(prefs) {
     if (typeof f.cascadesMin === 'number') chartFovCascadesMin = f.cascadesMin;
     if (typeof f.breakoutMin === 'number') chartFovBreakoutMin = f.breakoutMin;
     if (typeof f.trendlineMin === 'number') chartFovTrendlineMin = f.trendlineMin;
+    if (typeof f.retestMin === 'number') chartFovRetestMin = f.retestMin;
     if (typeof f.retestApproaching === 'boolean') chartFovRetestApproaching = f.retestApproaching;
     if (typeof f.nearest === 'boolean') chartFovNearest = f.nearest;
     if (typeof f.showLabels === 'boolean') chartFovShowLabels = f.showLabels;
@@ -893,6 +914,7 @@ function applyAccountPreferences(prefs) {
       cascadesMin: chartFovCascadesMin,
       breakoutMin: chartFovBreakoutMin,
       trendlineMin: chartFovTrendlineMin,
+      retestMin: chartFovRetestMin,
       retestApproaching: chartFovRetestApproaching,
       nearest: chartFovNearest,
       showLabels: chartFovShowLabels,
@@ -3051,7 +3073,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const hasType = (name) => wantTypes
     ? wantTypes.has(name)
     : (chartActiveFormations.has(name) || chartFovTypes.has(name));
-  const fovMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovCascadesMin;
+  const cascadeMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovCascadesMin;
   const fovNearest = (cfg && typeof cfg.nearest === "boolean") ? cfg.nearest : chartFovNearest;
   const fovShowTouches = (cfg && typeof cfg.showTouches === "boolean") ? cfg.showTouches : chartFovShowTouches;
   const wantApproaching = !!(cfg && cfg.approaching);
@@ -3090,7 +3112,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const hasCascades = hasType('cascades');
   if (hasCascades) {
     let levels = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:cascades:${fovMin}`, () => window.FormationEngine.detectCascades(candles, fovMin))
+      ? getCachedFormationDetection(candles, `overlay:cascades:${cascadeMin}`, () => window.FormationEngine.detectCascades(candles, cascadeMin))
       : [];
 
     levels = levels.filter(lv => Math.abs(lv.price - lastPrice) / lastPrice <= 0.15);
@@ -3252,10 +3274,11 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
   const hasTrendlines = hasType('trendlines');
   if (hasTrendlines) {
+    const trendlineMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovTrendlineMin;
     let trendlines = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:trendline:${fovMin}`, () => window.FormationEngine.detectTrendlines(candles, fovMin))
+      ? getCachedFormationDetection(candles, `overlay:trendline:${trendlineMin}`, () => window.FormationEngine.detectTrendlines(candles, trendlineMin))
       : [];
-    const minTouches = Math.max(1, fovMin || 2);
+    const minTouches = Math.max(1, trendlineMin || 2);
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= minTouches && Math.abs(tl.endPrice - lastPrice) / lastPrice <= 0.15);
 
     if (fovNearest && trendlines.length > 0) {
@@ -3360,7 +3383,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         : getCachedFormationDetection(candles, 'overlay:retest', () => window.FormationEngine.detectRetests(candles));
     }
 
-    retests = retests.filter(rt => Math.abs(rt.price - lastPrice) / lastPrice <= 0.15);
+    const retestMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovRetestMin;
+    retests = retests.filter(rt => (Number(rt.touches) || 0) >= retestMin && Math.abs(rt.price - lastPrice) / lastPrice <= 0.15);
 
     if (fovNearest && retests.length > 0) {
       retests.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
@@ -5457,9 +5481,10 @@ function renderFibLevelEditor() {
   });
 }
 
-function configureFibDrawing(d, pageX = window.innerWidth / 2, pageY = window.innerHeight / 2) {
+function configureFibDrawing(d, pageX = window.innerWidth / 2, pageY = window.innerHeight / 2, onChange = null) {
   if (!d || d.type !== "fibgrid") return;
   closeMenus();
+  externalFibOnChange = typeof onChange === "function" ? onChange : null;
   editingFibDrawing = d;
   editingFibDrawing.levelRows = normalizeFibLevelRows(
     editingFibDrawing.levelRows || editingFibDrawing.levels,
@@ -5472,6 +5497,8 @@ function configureFibDrawing(d, pageX = window.innerWidth / 2, pageY = window.in
   menu.style.top = Math.min(pageY, window.innerHeight - 560) + "px";
   menu.style.display = "block";
 }
+window.openSharedFibEditor = configureFibDrawing;
+window.getSharedFibRows = getActiveFibLevelRows;
 
 function applyToolButtonColors() {
   document.querySelectorAll(".dt-btn[data-tool]").forEach((btn) => {
@@ -6413,7 +6440,18 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (profileAvatar && user.avatar) {
-        profileAvatar.innerHTML = `<img src="${user.avatar}" alt="Avatar" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" />`;
+        // Profile data is server-provided but still untrusted at this DOM sink.
+        // Construct the element instead of interpolating an attribute string.
+        try {
+          const avatarUrl = new URL(String(user.avatar), window.location.origin);
+          if (avatarUrl.protocol === "https:" || avatarUrl.protocol === "http:") {
+            const avatar = document.createElement("img");
+            avatar.src = avatarUrl.href;
+            avatar.alt = "Avatar";
+            avatar.style.cssText = "width: 100%; height: 100%; border-radius: 50%; object-fit: cover;";
+            profileAvatar.replaceChildren(avatar);
+          }
+        } catch (_) {}
       }
 
       if (Array.isArray(user.notifications) && user.notifications.length > 0) {
@@ -6637,6 +6675,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   var _auth401Count = 0;
+  window.refreshAuthSession = checkAuthSession;
   async function checkAuthSession() {
     authToken = getStoredAuthToken();
     if (!authToken) {
@@ -9208,9 +9247,10 @@ function syncIndicatorButtonsUI() {
     if (smcName && chartActiveSmc.has(smcName)) isActive = true;
     btn.classList.toggle("on", isActive);
   });
-  document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
-    const val = parseInt(btn.dataset.fmtTouches, 10);
-    btn.classList.toggle("on", val === chartFovCascadesMin);
+  const touchMinimums = { cascades: chartFovCascadesMin, levels: chartFovBreakoutMin,
+    trendlines: chartFovTrendlineMin, retests: chartFovRetestMin };
+  document.querySelectorAll("#chart-density-panel [data-fmt-touch-type]").forEach(select => {
+    select.value = String(touchMinimums[select.dataset.fmtTouchType] || 2);
   });
 }
 window.syncIndicatorButtonsUI = syncIndicatorButtonsUI;
@@ -9247,19 +9287,7 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
       }
       chartFormationsOnChart = chartActiveFormations.size > 0;
       saveActiveFormations();
-      try {
-        localStorage.setItem('fov_settings', JSON.stringify({
-          enabled: chartFormationsOnChart,
-          types: Array.from(chartActiveFormations),
-          cascadesMin: chartFovCascadesMin,
-          breakoutMin: chartFovCascadesMin,
-          trendlineMin: chartFovCascadesMin,
-          retestApproaching: chartFovRetestApproaching,
-          nearest: chartFovNearest,
-          showLabels: chartFovShowLabels,
-          showTouches: chartFovShowTouches
-        }));
-      } catch (_) {}
+      try { saveFovSettings(); } catch (_) {}
       requestAnimationFrame(drawChart);
     }
     requestAnimationFrame(drawChart);
@@ -9280,34 +9308,19 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
 
 syncIndicatorButtonsUI();
 
-// Touches filter buttons inside main settings panel
-document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(btn => {
-  btn.onclick = () => {
-    document.querySelectorAll("#chart-density-panel [data-fmt-touches]").forEach(b => b.classList.remove("on"));
-    btn.classList.add("on");
-    const val = parseInt(btn.dataset.fmtTouches, 10);
-    if (val) {
-      chartFovCascadesMin = val;
-      chartFovBreakoutMin = val;
-      chartFovTrendlineMin = val;
-      formationsMinTouches = val;
-      formationsMinCascade = val;
-      try {
-        localStorage.setItem('fov_settings', JSON.stringify({
-          enabled: chartFormationsOnChart,
-          types: Array.from(chartFovTypes),
-          cascadesMin: chartFovCascadesMin,
-          breakoutMin: chartFovBreakoutMin,
-          trendlineMin: chartFovTrendlineMin,
-          retestApproaching: chartFovRetestApproaching,
-          nearest: chartFovNearest,
-          showLabels: chartFovShowLabels,
-          showTouches: chartFovShowTouches
-        }));
-      } catch (_) {}
-      if (typeof schedulePreferencesSync === "function") schedulePreferencesSync();
+// Each chart formation keeps its own compact touch threshold.
+document.querySelectorAll("#chart-density-panel [data-fmt-touch-type]").forEach(select => {
+  select.onchange = () => {
+    const val = Number(select.value);
+    if (!Number.isInteger(val) || val < 1 || val > 4 || (select.dataset.fmtTouchType === "retests" && val < 2)) return;
+    switch (select.dataset.fmtTouchType) {
+      case "cascades": chartFovCascadesMin = val; break;
+      case "levels": chartFovBreakoutMin = val; break;
+      case "trendlines": chartFovTrendlineMin = val; break;
+      case "retests": chartFovRetestMin = val; break;
+      default: return;
     }
-    if (typeof window.loadFormations === "function") window.loadFormations();
+    try { saveFovSettings(); } catch (_) {}
     requestAnimationFrame(drawChart);
   };
 });
@@ -9462,6 +9475,7 @@ if (settingsBtn && settingsOverlay) {
       if (typeof saved.cascadesMin === 'number') chartFovCascadesMin = saved.cascadesMin;
       if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
       if (typeof saved.trendlineMin === 'number') chartFovTrendlineMin = saved.trendlineMin;
+      if (typeof saved.retestMin === 'number') chartFovRetestMin = saved.retestMin;
       if (typeof saved.retestApproaching === 'boolean') chartFovRetestApproaching = saved.retestApproaching;
       if (typeof saved.nearest === 'boolean') chartFovNearest = saved.nearest;
       if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
@@ -9469,17 +9483,7 @@ if (settingsBtn && settingsOverlay) {
     } catch(e) {}
 
     function saveSettings() {
-      localStorage.setItem(LS_KEY, JSON.stringify({
-        enabled: chartFormationsOnChart,
-        types: Array.from(chartActiveFormations),
-        cascadesMin: chartFovCascadesMin,
-        breakoutMin: chartFovCascadesMin,
-        trendlineMin: chartFovCascadesMin,
-        retestApproaching: chartFovRetestApproaching,
-        nearest: chartFovNearest,
-        showLabels: chartFovShowLabels,
-        showTouches: chartFovShowTouches
-      }));
+      saveFovSettings();
     }
 
     function syncUI() {
@@ -10612,6 +10616,7 @@ function closeMenus() {
   if (fibSettingsMenu) fibSettingsMenu.style.display = "none";
   drawColorSelectHandler = null;
   editingFibDrawing = null;
+  externalFibOnChange = null;
 }
 
 $("tag-clear-btn").onclick = () => {
@@ -10641,6 +10646,7 @@ $("fib-settings-reset").onclick = () => {
   editingFibDrawing.verticals = [];
   editingFibDrawing.useSingleColor = true;
   renderFibLevelEditor();
+  if (externalFibOnChange) externalFibOnChange(editingFibDrawing);
   requestAnimationFrame(drawChart);
 };
 $("fib-settings-apply").onclick = () => {
@@ -10652,7 +10658,8 @@ $("fib-settings-apply").onclick = () => {
   );
   editingFibDrawing.levels = editingFibDrawing.levelRows.map((row) => row.value);
   normalizeDrawing(editingFibDrawing);
-  saveDrawings();
+  if (externalFibOnChange) externalFibOnChange(editingFibDrawing);
+  else saveDrawings();
   requestAnimationFrame(drawChart);
   closeMenus();
 };
@@ -16046,10 +16053,32 @@ function openProfileModal() {
     modal.style.display = "flex";
     if (typeof renderProfile === "function") renderProfile(window.currentUser || currentUser);
   }
-  if (typeof checkAuthSession === "function") {
-    checkAuthSession();
+  if (typeof window.refreshAuthSession === "function") {
+    window.refreshAuthSession();
+  }
+  loadReferralProfile();
+}
+
+async function loadReferralProfile() {
+  const token = localStorage.getItem("obsidian_auth_token") || (typeof getStoredAuthToken === "function" ? getStoredAuthToken() : "");
+  if (!token) return;
+  const statsEl = $("profile-referral-stats");
+  try {
+    const response = await fetch("/api/referrals/me", { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error("Referral statistics unavailable");
+    const data = await response.json();
+    const linkEl = $("profile-referral-link");
+    if (linkEl) linkEl.value = data.link;
+    if (statsEl) statsEl.textContent = `Перешли: ${data.visits} · Зарегистрировались: ${data.registrations} · Купили PRO: ${data.buyers} · Покупок: ${data.purchases} (1 мес.: ${data.byPlan?.["1m"] || 0}, 3 мес.: ${data.byPlan?.["3m"] || 0}, 12 мес.: ${data.byPlan?.["12m"] || 0}, навсегда: ${data.byPlan?.lifetime || 0})`;
+  } catch (_) {
+    if (statsEl) statsEl.textContent = "Статистика временно недоступна";
   }
 }
+
+document.getElementById("profile-referral-copy")?.addEventListener("click", async () => {
+  const link = $("profile-referral-link")?.value;
+  if (link) await navigator.clipboard.writeText(link);
+});
 
 function closeProfileModal() {
   const modal = $("profile-modal");
@@ -16934,15 +16963,7 @@ async function captureChartSnapshot(sym = activeSym, priceVal = 0, alertPriceVal
 
 async function sendTelegramAlert(message, photoDataUrl = null) {
   const activeUser = window.currentUser || {};
-  const inputFmt = document.getElementById("fmt-tg-chat-id-input");
-  const inputPd = document.getElementById("pd-tg-chat-id-input");
-  const inputChatId = (inputFmt && inputFmt.value.trim()) || (inputPd && inputPd.value.trim()) || "";
-  const chatId = inputChatId || activeUser.telegramChatId || activeUser.telegramId || activeUser.tgChatId || localStorage.getItem("obsidian_tg_chat_id") || localStorage.getItem("obsidian_telegram_id") || "";
-  if (inputChatId) {
-    localStorage.setItem("obsidian_tg_chat_id", inputChatId);
-    if (inputFmt && !inputFmt.value) inputFmt.value = inputChatId;
-    if (inputPd && !inputPd.value) inputPd.value = inputChatId;
-  }
+  const chatId = activeUser.telegramChatId || "";
 
   const headers = { "Content-Type": "application/json" };
   const token = (typeof authToken === "string" && authToken) ? authToken : (localStorage.getItem("obsidian_auth_token") || "");
@@ -16953,8 +16974,8 @@ async function sendTelegramAlert(message, photoDataUrl = null) {
   const hasPhoto = photoDataUrl && typeof photoDataUrl === "string" && photoDataUrl.startsWith("data:image");
   const endpoint = hasPhoto ? "/api/notifications/telegram-photo" : "/api/notifications/telegram";
   const body = hasPhoto
-    ? { chatId: chatId || undefined, caption: message, photoDataUrl }
-    : { chatId: chatId || undefined, message };
+    ? { caption: message, photoDataUrl }
+    : { message };
 
   try {
     const r = await fetch(endpoint, {
@@ -16971,7 +16992,7 @@ async function sendTelegramAlert(message, photoDataUrl = null) {
       const r2 = await fetch("/api/notifications/telegram", {
         method: "POST",
         headers,
-        body: JSON.stringify({ chatId: chatId || undefined, message })
+        body: JSON.stringify({ message })
       });
       const d2 = await r2.json().catch(() => ({}));
       if (r2.ok && (d2.success || d2.messageId)) {
@@ -17788,8 +17809,8 @@ async function checkCurrentInvoiceStatus(invoiceId) {
       }
 
       const token = localStorage.getItem("obsidian_auth_token");
-      if (token && typeof checkCurrentAuthSession === "function") {
-        checkCurrentAuthSession();
+      if (token && typeof window.refreshAuthSession === "function") {
+        window.refreshAuthSession();
       }
 
       setTimeout(() => {
@@ -17887,13 +17908,11 @@ function loadFormationAlertSettings() {
 function saveFormationAlertSettings(settings) {
   localStorage.setItem("obsidian_formation_alerts_user_configured", "true");
   currentFormationAlertSettings = settings || currentFormationAlertSettings;
-  const inputFmt = $("fmt-tg-chat-id-input");
-  const inputPd = $("pd-tg-chat-id-input");
-  const tgId = (inputFmt && inputFmt.value.trim()) || (inputPd && inputPd.value.trim()) || localStorage.getItem("obsidian_tg_chat_id") || "";
-  if (tgId) {
-    currentFormationAlertSettings.telegramChatId = tgId;
-    localStorage.setItem("obsidian_tg_chat_id", tgId);
-  }
+  // Telegram destinations are bound only through the bot-link flow.  Do not
+  // persist a manually entered chat ID into the server-synchronised payload.
+  delete currentFormationAlertSettings.telegramChatId;
+  delete currentFormationAlertSettings.tgChatId;
+  delete currentFormationAlertSettings.chatId;
   localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
   window.formationAlertSettings = currentFormationAlertSettings;
   return syncFormationAlertSettingsToServer(currentFormationAlertSettings);

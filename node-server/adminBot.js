@@ -287,6 +287,9 @@ function buildMainMenu() {
         { text: "🚨 Система", callback_data: "adm:sys:main" }
       ],
       [
+        { text: "🔗 Рефералы", callback_data: "adm:refs:main" }
+      ],
+      [
         { text: "📝 Журнал действий", callback_data: "adm:log:main" },
         { text: "⚙️ Настройки", callback_data: "adm:set:main" }
       ],
@@ -1066,25 +1069,7 @@ async function handleAdminMessageText(msg) {
   }
 
   if (text.startsWith("/setwallet")) {
-    const paymentGateway = require("./paymentGateway");
-    const newWallet = text.replace("/setwallet", "").trim();
-    const success = paymentGateway.setMasterTronAddress(newWallet);
-    if (success) {
-      logAdminAction("Администратор #1", `Смена TRON кошелька на ${newWallet}`);
-      await sendAdminMessage(
-        `<b>✅ TRON Кошелёк успешно обновлён!</b>\n\n` +
-        `Новый адрес: <code>${newWallet}</code>\n\n` +
-        `Все новые счета на сайте будут создаваться для этого кошелька.`,
-        { inline_keyboard: [[{ text: "💳 Меню платежей", callback_data: "adm:payments:main" }]] }
-      );
-    } else {
-      await sendAdminMessage(
-        `<b>❌ Ошибка формата TRON кошелька!</b>\n\n` +
-        `Введённый адрес: <code>${newWallet}</code>\n` +
-        `Убедитесь, что адрес начинается на <b>T</b> и содержит 34 символа (TRC-20 Base58).\n\n` +
-        `<i>Пример:</i> <code>/setwallet TQn9Y2khEsLJW1ChVWFMSMeSTow5K47ZUS</code>`
-      );
-    }
+    await sendAdminMessage("Адрес оплаты задаётся владельцем в конфигурации сервера. Изменение через Telegram отключено.");
     return;
   }
 
@@ -1451,6 +1436,21 @@ async function handleAdminCallbackQuery(query) {
         { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "adm:menu" }]] }
       );
     }
+  }
+  else if (domain === "refs") {
+    const rows = userStore.getAllReferralStats(payments);
+    const total = rows.reduce((sum, row) => sum + row.visits, 0);
+    const registered = rows.reduce((sum, row) => sum + row.registrations, 0);
+    const buyers = rows.reduce((sum, row) => sum + row.buyers, 0);
+    const plans = rows.reduce((sum, row) => {
+      for (const [plan, count] of Object.entries(row.byPlan)) sum[plan] = (sum[plan] || 0) + count;
+      return sum;
+    }, {});
+    const top = rows.slice(0, 20).map((row, index) =>
+      `${index + 1}. <code>${row.userId}</code> — ${row.visits} перешли, ${row.registrations} зарегистрировались, ${row.buyers} купили (${row.purchases} покупок)`
+    ).join("\n");
+    const summary = `<b>🔗 Реферальная статистика</b>\n\nПереходы: ${total}\nРегистрации: ${registered}\nПокупатели PRO: ${buyers}\nПланы: 1 мес. ${plans["1m"] || 0}, 3 мес. ${plans["3m"] || 0}, 12 мес. ${plans["12m"] || 0}, навсегда ${plans.lifetime || 0}\n\n${top || "Пока нет рефералов"}`;
+    await editAdminMessage(messageId, summary, { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "adm:menu" }]] });
   }
   
   // 2. USERS & USER CARDS

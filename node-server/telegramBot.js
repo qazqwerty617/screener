@@ -48,10 +48,10 @@ function createLinkToken(userId) {
 }
 
 // Generate registration/login start token
-function createRegToken() {
+function createRegToken(referralCode = "") {
   if (!getBotToken()) throw new Error("Telegram bot is not configured");
   const token = "reg_" + crypto.randomBytes(24).toString("base64url");
-  regTokens.set(token, { status: "pending", token: null, user: null, createdAt: Date.now() });
+  regTokens.set(token, { status: "pending", token: null, user: null, referralCode, createdAt: Date.now() });
   setTimeout(() => regTokens.delete(token), 10 * 60 * 1000).unref();
   return token;
 }
@@ -308,7 +308,8 @@ async function handleUpdate(update) {
           username: tgUser.username,
           photo_url: ""
         };
-        const authResult = userStore.telegramAuth(tgData, chatId);
+        const pending = regTokens.get(startParam);
+        const authResult = userStore.telegramAuth(tgData, chatId, "", pending.referralCode || "");
         regTokens.set(startParam, {
           status: "approved",
           token: authResult.token,

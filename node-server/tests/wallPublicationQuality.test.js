@@ -171,7 +171,16 @@ test("snapshot honours hysteresis only for walls admitted by the lifecycle", () 
 
 test("absolute wall floors scale with venue liquidity, not desired result count", () => {
   const bybitBtc = getTierThresholds("BTC", 1_000_000_000, "BB");
+  const binanceBtc = getTierThresholds("BTC", 1_000_000_000, "BN");
   const hyperliquidBtc = getTierThresholds("BTC", 1_000_000_000, "HL");
-  assert.equal(bybitBtc.minFloor, 3_000_000);
+  assert.deepEqual(bybitBtc, { minFloor: 3_750_000, small: 3_750_000, medium: 8_750_000, large: 18_750_000 });
+  assert.equal(binanceBtc.minFloor, 3_000_000);
   assert.equal(hyperliquidBtc.minFloor, 300_000);
+});
+
+test("Bybit drops a borderline BTC wall that remains eligible on Binance", () => {
+  const candidate = { base: "BTC", sym: "BTCUSDT", S: 3_500_000, v: 1_000_000_000 };
+  assert.equal(buildWallSnapshot([wall({ ...candidate, ex: "BB" })]).length, 0);
+  assert.equal(buildWallSnapshot([wall({ ...candidate, ex: "BN" })]).length, 1);
+  assert.equal(buildWallSnapshot([wall({ ...candidate, ex: "BB", S: 4_000_000 })]).length, 1);
 });

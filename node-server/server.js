@@ -41,8 +41,13 @@ const fs = require("fs");
 const { WebSocketServer, WebSocket } = require("ws");
 const zlib = require("zlib");
 const { randomUUID, timingSafeEqual, createHash } = require("crypto");
+const { createEmailVerification } = require("./emailVerification");
 
 const PORT = process.env.PORT || 3000;
+// In production nginx is the public TLS/WAF boundary. Binding Node to loopback
+// closes the direct-origin bypass by default; an unusual topology must opt in
+// explicitly with BIND_HOST after its firewall has been verified.
+const BIND_HOST = process.env.BIND_HOST || (process.env.NODE_ENV === "production" ? "127.0.0.1" : undefined);
 
 // тФАтФАтФА Persistent HTTPS agent тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 const httpsAgent = new https.Agent({
@@ -732,7 +737,7 @@ setInterval(() => userStore.expireProSubscriptions(), 60 * 60 * 1000).unref?.();
 const telegramBot = require("./telegramBot");
 const paymentGateway = require("./paymentGateway");
 const adminBot = require("./adminBot");
-const { registerPaymentRoutes, createSlidingWindowLimiter } = require("./paymentRoutes");
+const { registerPaymentRoutes, createSlidingWindowLimiter, getBearerToken } = require("./paymentRoutes");
 const { renderServerChartSnapshot } = require("./serverChartRenderer");
 const telegramQueue = require("./telegramQueue");
 const priceHistoryStore = require("./priceHistoryStore");
@@ -891,8 +896,21 @@ function getSnapshotPayload() {
 }
 
 const wsClientsByIp = new Map();
+
+// WebSocket requests do not pass through Express, so `req.ip` is unavailable.
+// Trust nginx's X-Real-IP only when the TCP peer is loopback; a client that can
+// reach the Node port directly must not be able to choose its own rate-limit key.
+function getWebSocketClientIp(req) {
+  const remoteIp = securityShield.normalizeIp(req.socket && req.socket.remoteAddress);
+  const isLoopbackProxy = remoteIp === "127.0.0.1" || remoteIp === "::1";
+  if (trustProxyHops > 0 && isLoopbackProxy) {
+    return securityShield.normalizeIp(req.headers && req.headers["x-real-ip"]) || remoteIp;
+  }
+  return remoteIp;
+}
+
 wss.on("connection", (ws, req) => {
-  const ip = String(req.socket.remoteAddress || "unknown");
+  const ip = getWebSocketClientIp(req);
   if (!securityShield.registerWsConnection(ip)) {
     return ws.close(1008, "Banned by Security Shield");
   }
@@ -3333,16 +3351,92 @@ const telegramAuthLimit = createSlidingWindowLimiter({
   max: 30,
   key: req => req.ip
 });
+const registrationCodeLimit = createSlidingWindowLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 8,
+  key: req => req.ip
+});
+const emailVerification = createEmailVerification();
+// Kept off until a transactional email provider is configured. The complete
+// verification flow remains available and is enabled deliberately via secrets.
+const REQUIRE_EMAIL_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION === "true";
+
+const referralVisitLimit = createSlidingWindowLimiter({
+  windowMs: 60_000, max: 30, key: req => req.ip
+});
+
+function referralCodeFromCookie(req) {
+  const raw = String(req.headers.cookie || "");
+  const match = /(?:^|;\s*)obsidian_ref=([a-f0-9]{24})(?:;|$)/.exec(raw);
+  return match ? match[1] : "";
+}
+
+app.get("/r/:code", referralVisitLimit, (req, res) => {
+  const code = String(req.params.code || "");
+  if (!userStore.recordReferralVisit(code, req.ip, req.headers["user-agent"] || "")) {
+    return res.status(404).send("Referral link not found");
+  }
+  res.setHeader("Set-Cookie", `obsidian_ref=${code}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
+  res.setHeader("Cache-Control", "no-store");
+  return res.redirect(302, "/");
+});
+
+app.get("/api/referrals/me", (req, res) => {
+  const user = userStore.getUserByToken(getBearerToken(req));
+  if (!user) return res.status(401).json({ error: "Необходима авторизация" });
+  const stats = userStore.getReferralStats(user.id, paymentGateway.getAllPayments());
+  const origin = String(process.env.PUBLIC_SITE_ORIGIN || "https://obsidianscreener.com").replace(/\/$/, "");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ...stats, link: `${origin}/r/${stats.code}` });
+});
+
+app.get("/api/admin/referrals", requireAdminApi, (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ referrals: userStore.getAllReferralStats(paymentGateway.getAllPayments()) });
+});
+const telegramNotificationLimit = createSlidingWindowLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  key: req => req.ip
+});
+const bugReportLimit = createSlidingWindowLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 8,
+  key: req => req.ip
+});
 
 // ── Authentication Endpoints ──
 // `registerUser`/`loginUser` are async because scrypt runs on the threadpool
 // instead of blocking the event loop. Express 4 does not catch rejected async
 // handlers (the client would hang until requestTimeout), so both are wrapped.
-app.post("/api/auth/register", registrationLimit, async (req, res) => {
+app.post("/api/auth/register/request-code", registrationCodeLimit, async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const check = userStore.validateEmail(email);
+  if (!check.valid) return res.status(400).json({ error: check.error });
   try {
-    const result = await userStore.registerUser({ ...(req.body || {}), ip: req.ip });
+    const challenge = await emailVerification.requestCode(email);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, ...challenge });
+  } catch (err) {
+    const deliveryFailure = !emailVerification.configured() || /Не удалось отправить|Отправка писем|Некорректный SMTP_PORT/.test(err.message);
+    res.status(deliveryFailure ? 503 : 429).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/register", registrationLimit, async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const challengeId = String(req.body?.challengeId || "");
+  const verification = REQUIRE_EMAIL_VERIFICATION
+    ? emailVerification.take(email, challengeId, req.body?.code)
+    : null;
+  if (REQUIRE_EMAIL_VERIFICATION && !verification) {
+    return res.status(400).json({ error: "Неверный или просроченный код. Запросите новый код." });
+  }
+  try {
+    const result = await userStore.registerUser({ ...(req.body || {}), ip: req.ip, referralCode: referralCodeFromCookie(req) });
     res.json({ success: true, ...result });
   } catch (err) {
+    if (verification) emailVerification.restore(challengeId, verification);
     res.status(400).json({ error: err.message });
   }
 });
@@ -3362,7 +3456,7 @@ app.post("/api/auth/telegram", telegramAuthLimit, (req, res) => {
     if (!telegramBot.verifyTelegramAuth(tgData)) {
       return res.status(400).json({ error: "Подпись Telegram не прошла проверку подлинности" });
     }
-    const result = userStore.telegramAuth(tgData, null, req.ip);
+    const result = userStore.telegramAuth(tgData, null, req.ip, referralCodeFromCookie(req));
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -3380,7 +3474,7 @@ app.post("/api/auth/telegram-verify", telegramAuthLimit, (req, res) => {
     if (!isValid) {
       return res.status(400).json({ error: "Подпись Telegram не прошла проверку подлинности" });
     }
-    const result = userStore.telegramAuth(tgData);
+    const result = userStore.telegramAuth(tgData, null, req.ip, referralCodeFromCookie(req));
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -3389,7 +3483,7 @@ app.post("/api/auth/telegram-verify", telegramAuthLimit, (req, res) => {
 
 app.post("/api/auth/telegram-start", telegramAuthLimit, (req, res) => {
   try {
-    const regToken = telegramBot.createRegToken();
+    const regToken = telegramBot.createRegToken(referralCodeFromCookie(req));
     const botUrl = `https://t.me/${telegramBot.BOT_USERNAME}?start=${regToken}`;
     res.json({ success: true, regToken, botUrl, botUsername: telegramBot.BOT_USERNAME });
   } catch (err) {
@@ -3575,41 +3669,24 @@ function getFormationChatPrefs(chatId) {
 
 app.post("/api/user/formation-alerts", formationAlertsBodyParser, (req, res) => {
   setPublicCors(req, res);
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   const settings = req.body || {};
   const tgId = String(settings.telegramChatId || settings.tgChatId || settings.chatId || "").trim();
+  const user = userStore.getUserByToken(getBearerToken(req), { ip: req.ip });
+  if (!user) return res.status(401).json({ error: "Требуется авторизация" });
 
-  let user = token ? userStore.getUserByToken(token) : null;
-  if (!user && tgId && typeof userStore.getAllUsersRaw === "function") {
-    const all = userStore.getAllUsersRaw() || {};
-    for (const id in all) {
-      const u = all[id];
-      if (u && (String(u.telegramChatId) === tgId || String(u.telegramId) === tgId)) {
-        user = u;
-        break;
-      }
-    }
+  // A chat ID is an authorization target, not a user-editable preference.
+  // It is bound only by the verified Telegram bot-link flow.  Looking up an
+  // account by a submitted ID let anyone overwrite that account's alerts.
+  const verifiedChatId = String(user.telegramChatId || "").trim();
+  if (tgId && tgId !== verifiedChatId) {
+    return res.status(403).json({ error: "Telegram chat ID must be linked through the bot" });
   }
 
-  if (user) {
-    if (tgId) {
-      // Must go through userStore: `user` may be a sanitized copy whose fields
-      // are never persisted.
-      userStore.setTelegramChatId(user.id, tgId);
-    }
-    const currentPrefs = userStore.getUserPreferences(user.id) || {};
-    currentPrefs.formationAlerts = settings;
-    const updated = userStore.updateUserPreferences(user.id, currentPrefs);
-    if (tgId) setFormationChatPrefs(tgId, settings);
-    return res.json({ success: true, preferences: updated });
-  }
-
-  // No session and no account owns this chat id: refuse instead of silently
-  // registering an unauthenticated alert subscriber.
-  return res.status(401).json({
-    error: "Требуется авторизация или привязанный Telegram-аккаунт"
-  });
+  const currentPrefs = userStore.getUserPreferences(user.id) || {};
+  currentPrefs.formationAlerts = settings;
+  const updated = userStore.updateUserPreferences(user.id, currentPrefs);
+  if (verifiedChatId) setFormationChatPrefs(verifiedChatId, settings);
+  return res.json({ success: true, preferences: updated });
 });
 
 app.get("/api/user/pump-alerts", (req, res) => {
@@ -3645,7 +3722,9 @@ app.post("/api/user/pump-alerts", express.json({ limit: "5mb" }), (req, res) => 
   console.log(`[USER PREFS] Updated pumpAlerts for user ${user.id}:`, JSON.stringify(settings));
 
   const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
-  const isUserAdmin = (user.telegramChatId && user.telegramChatId === adminChatId) || user.role === "admin" || user.id === "USR-284895";
+  // Do not authorize from a mutable chat ID, a display role, or a hard-coded
+  // account ID. `telegramId` is assigned only after Telegram signature checks.
+  const isUserAdmin = Boolean(adminChatId && user.telegramLinked && String(user.telegramId || "") === adminChatId);
   if (isUserAdmin) {
     try {
       const _fs = require("fs"), _path = require("path");
@@ -3695,7 +3774,13 @@ app.post("/api/user/notification-settings", express.json({ limit: "2mb" }), (req
   if (!user) {
     return res.status(401).json({ error: "Неавторизован" });
   }
-  const incoming = req.body || {};
+  const incoming = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? { ...req.body } : null;
+  if (!incoming) return res.status(400).json({ error: "Некорректные настройки" });
+  // The client may display this value, but must never be able to bind or
+  // replace a Telegram destination. Linking happens after bot verification.
+  delete incoming.telegramChatId;
+  delete incoming.telegramId;
+  delete incoming.chatId;
   const preferences = userStore.getUserPreferences(user.id) || {};
   preferences.notifications = {
     ...(preferences.notifications || {}),
@@ -3711,10 +3796,6 @@ app.post("/api/user/notification-settings", express.json({ limit: "2mb" }), (req
       ...(preferences.pumpAlerts || {}),
       ...incoming.pumpAlerts
     };
-  }
-
-  if (incoming.telegramChatId && String(incoming.telegramChatId).trim()) {
-    userStore.setTelegramChatId(user.id, String(incoming.telegramChatId).trim());
   }
 
   const updated = userStore.updateUserPreferences(user.id, preferences);
@@ -3944,8 +4025,8 @@ app.post("/api/admin/promos/create", requireAdminApi, express.json(), (req, res)
   }
 });
 
-app.post("/api/bug-report", express.json({
-  limit: "15mb",
+app.post("/api/bug-report", bugReportLimit, express.json({
+  limit: "2mb",
   verify(req, _res, buffer) {
     req.rawBody = Buffer.from(buffer);
   }
@@ -3953,11 +4034,7 @@ app.post("/api/bug-report", express.json({
   try {
     const authHeader = req.headers.authorization || "";
     const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-    let user = userStore.getUserByToken(token);
-
-    if (!user && req.body && req.body.userId) {
-      user = userStore.getUserById ? userStore.getUserById(req.body.userId) : null;
-    }
+    let user = userStore.getUserByToken(token, { ip: req.ip });
 
     if (!user) {
       user = {
@@ -3971,9 +4048,13 @@ app.post("/api/bug-report", express.json({
 
     const { description, image } = req.body || {};
     const cleanDesc = String(description || "").trim();
-    if (!cleanDesc || cleanDesc.length < 3) {
+    if (!cleanDesc || cleanDesc.length < 3 || cleanDesc.length > 4000) {
       return res.status(400).json({ error: "Пожалуйста, опишите проблему (минимум 3 символа)" });
     }
+    const cleanImage = typeof image === "string" && /^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(image)
+      ? image
+      : null;
+    if (image && !cleanImage) return res.status(400).json({ error: "Допустимы только PNG, JPEG или WebP изображения" });
 
     const reportId = "bug_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
     const reportData = {
@@ -3985,7 +4066,7 @@ app.post("/api/bug-report", express.json({
       email: user.email || "—",
       plan: user.plan || "free",
       description: cleanDesc,
-      image: image || null,
+      image: cleanImage,
       status: "pending",
       createdAt: new Date().toISOString()
     };
@@ -4073,34 +4154,27 @@ function sendTextMessage(token, chatId, text, res, disableHtmlRetry = false) {
 }
 
 function resolveTelegramTargetChatId(req) {
-  const bodyChatId = req.body && req.body.chatId ? String(req.body.chatId).trim() : "";
-  if (bodyChatId) return bodyChatId;
-
-  const authHeader = req.headers && req.headers.authorization ? req.headers.authorization : "";
-  const bearerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
-  if (bearerToken && typeof userStore.getUserByToken === "function") {
-    const user = userStore.getUserByToken(bearerToken);
-    if (user && (user.telegramChatId || user.telegramId || user.tgChatId || user.chatId)) {
-      return String(user.telegramChatId || user.telegramId || user.tgChatId || user.chatId).trim();
-    }
+  const user = userStore.getUserByToken(getBearerToken(req), { ip: req.ip });
+  if (!user) return { error: "Необходима авторизация" };
+  const chatId = String(user.telegramChatId || "").trim();
+  if (!chatId) return { error: "Подключите Telegram-бота к аккаунту" };
+  const requestedChatId = String(req.body && req.body.chatId || "").trim();
+  if (requestedChatId && requestedChatId !== chatId) {
+    return { error: "Нельзя отправлять уведомления в чужой Telegram chat" };
   }
-
-  // No explicit target and no authenticated caller: refuse rather than guess.
-  // Falling back to "the first user that has a Telegram id" delivered one
-  // person's alerts into an unrelated stranger's chat and let unauthenticated
-  // callers push arbitrary HTML through the bot.
-  return "";
+  return { user, chatId };
 }
 
-app.post("/api/notifications/telegram", express.json(), (req, res) => {
+app.post("/api/notifications/telegram", telegramNotificationLimit, express.json({ limit: "32kb" }), (req, res) => {
   setPublicCors(req, res);
-  const { message, botToken } = req.body || {};
-  const token = botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
-  const targetChatId = resolveTelegramTargetChatId(req);
+  const { message } = req.body || {};
+  const token = process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
+  const target = resolveTelegramTargetChatId(req);
 
   if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
-  if (!targetChatId) return res.status(400).json({ error: "Chat ID не указан. Подключите бота или введите ваш Telegram Chat ID" });
-  if (!message) return res.status(400).json({ error: "Message is required" });
+  if (target.error) return res.status(403).json({ error: target.error });
+  if (typeof message !== "string" || !message.trim() || message.length > 4000) return res.status(400).json({ error: "Message is required" });
+  const targetChatId = target.chatId;
 
   if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
     return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
@@ -4109,21 +4183,22 @@ app.post("/api/notifications/telegram", express.json(), (req, res) => {
   return sendTextMessage(token, targetChatId, message, res);
 });
 
-app.post("/api/notifications/telegram-photo", express.json({ limit: "15mb" }), async (req, res) => {
+app.post("/api/notifications/telegram-photo", telegramNotificationLimit, express.json({ limit: "2mb" }), async (req, res) => {
   setPublicCors(req, res);
-  const { caption, photoDataUrl, botToken } = req.body || {};
-  const token = botToken || process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
-  const targetChatId = resolveTelegramTargetChatId(req);
+  const { caption, photoDataUrl } = req.body || {};
+  const token = process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN;
+  const target = resolveTelegramTargetChatId(req);
 
   if (!token) return res.status(400).json({ error: "Telegram bot token is not configured on server" });
-  if (!targetChatId) return res.status(400).json({ error: "Chat ID не указан. Подключите бота или введите ваш Telegram Chat ID" });
-  if (!caption) return res.status(400).json({ error: "Caption is required" });
+  if (target.error) return res.status(403).json({ error: target.error });
+  if (typeof caption !== "string" || !caption.trim() || caption.length > 1000) return res.status(400).json({ error: "Caption is required" });
+  const targetChatId = target.chatId;
 
   if (typeof userStore.isTelegramAlertsEnabled === "function" && !userStore.isTelegramAlertsEnabled(targetChatId)) {
     return res.json({ success: false, disabled: true, reason: "Alerts muted in Telegram bot" });
   }
 
-  if (!photoDataUrl || typeof photoDataUrl !== "string" || !photoDataUrl.includes(";base64,")) {
+  if (!photoDataUrl || typeof photoDataUrl !== "string" || !/^data:image\/(?:png|jpe?g|webp);base64,[A-Za-z0-9+/=\s]+$/i.test(photoDataUrl)) {
     return sendTextMessage(token, targetChatId, caption, res);
   }
 
@@ -4519,7 +4594,7 @@ const exchanges = {
 };
 
 // тФАтФАтФА Start тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-server.listen(PORT, () => {
+server.listen(PORT, BIND_HOST, () => {
   console.log(`\nтХФтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХЧ`);
   console.log(`тХС  CryptoScreen Pro  тЖТ  port ${PORT}                      тХС`);
   console.log(`тХС  Exchanges: ${Object.keys(exchanges).length} modules (parallel init)            тХС`);

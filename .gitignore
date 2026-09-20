@@ -40,8 +40,11 @@ node-server/payments.json
 node-server/payment_invoices.json
 node-server/users.json
 node-server/sessions.json
+node-server/sessions.json.bak
 node-server/auth_logs.json
+node-server/auth_logs.json.bak
 node-server/journal_credentials.json
+node-server/referral_visits.json
 node-server/users_database.csv
 node-server/data/
 
@@ -78,7 +81,4 @@ node-server/tests/test_remote_fetch.py
 node-server/correlation_cache.json
 node-server/admin_audit*.json
 *.corrupted.*
-
-
-
 

@@ -33,9 +33,9 @@
          otherwise show while fonts.css is still being parsed. -->
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/js/app.js?v=2097" as="script" />
+    <link rel="preload" href="/js/app.js?v=2098" as="script" />
     <link rel="stylesheet" href="/css/fonts.css?v=3" />
-    <link rel="stylesheet" href="/css/app.css?v=1016" />
+    <link rel="stylesheet" href="/css/app.css?v=1017" />
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
          `media="print"` + onload swap is the standard non-blocking stylesheet
          pattern: the browser fetches it at low priority without blocking paint. -->
@@ -564,14 +564,11 @@
                                 <button class="chart-indicator-grid-btn" id="fmt-retests" title="Подтвержденный ретест"
                                     data-desc="Ретест — уровни истинного пробоя с подтвержденным ретестом.">Ретест</button>
                             </div>
-                            <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center; justify-content: space-between;">
-                                <span style="font-size: 11px; color: var(--t3, #94a3b8); font-weight: 500;">Мин. касаний:</span>
-                                <div class="chart-density-filter-row" style="margin: 0; gap: 4px;">
-                                    <button class="chart-density-filter-btn" data-fmt-touches="1" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">1+</button>
-                                    <button class="chart-density-filter-btn on" data-fmt-touches="2" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">2+</button>
-                                    <button class="chart-density-filter-btn" data-fmt-touches="3" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">3+</button>
-                                    <button class="chart-density-filter-btn" data-fmt-touches="4" style="padding: 2px 8px; font-size: 11px; min-width: 26px;">4+</button>
-                                </div>
+                            <div class="fmt-touch-grid" aria-label="Минимум касаний для каждого типа формации">
+                                <label class="fmt-touch-card">Каскады <select data-fmt-touch-type="cascades" aria-label="Минимум касаний: каскады"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
+                                <label class="fmt-touch-card">Горизонталки <select data-fmt-touch-type="levels" aria-label="Минимум касаний: горизонталки"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
+                                <label class="fmt-touch-card">Наклонки <select data-fmt-touch-type="trendlines" aria-label="Минимум касаний: наклонки"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
+                                <label class="fmt-touch-card">Ретест <select data-fmt-touch-type="retests" aria-label="Минимум касаний: ретест" title="Для подтверждённого ретеста нужны минимум два касания уровня"><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
                             </div>
                         </div>
 
@@ -1330,6 +1327,12 @@
                                     <line x1="5.75" y1="9" x2="16.5" y2="9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
                                 </svg>
                             </button>
+                            <button class="dt-btn bt-dt-btn" data-bt-tool="alert" title="Учебный ценовой алерт (A)">
+                                <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
+                                    <path d="M9 2.5C6.5 2.5 4.5 4.5 4.5 7V11L3 12.5H15L13.5 11V7C13.5 4.5 11.5 2.5 9 2.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                                    <path d="M7.5 14C7.8 14.9 8.3 15.5 9 15.5C9.7 15.5 10.2 14.9 10.5 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+                                </svg>
+                            </button>
                             <button class="dt-btn bt-dt-btn" data-bt-tool="line" title="Линия (L)">
                                 <svg width="17" height="17" viewBox="0 0 18 18" fill="none">
                                     <circle cx="3.5" cy="14.5" r="1.5" stroke="currentColor" stroke-width="1.4" fill="none"/>
@@ -1438,6 +1441,8 @@
                     <div class="bt-plan-grid">
                         <label class="bt-field"><span>ОБЪЁМ, USDT</span><input id="bt-size" type="number" min="10"
                                 step="10" value="1000"></label>
+                        <label class="bt-field"><span>ПЛЕЧО</span><select id="bt-leverage" aria-label="Плечо учебной сделки"></select></label>
+                        <div id="bt-size-hint" class="bt-size-hint" aria-live="polite"></div>
                         <label class="bt-field"><span>СТОП</span>
                             <div class="bt-level-input"><input id="bt-sl" type="number" min="0" step="0.1"
                                     placeholder="1.0"><button id="bt-sl-mode" type="button"
@@ -1453,6 +1458,7 @@
                     <div class="bt-account-strip"><span>Учебный счёт <b
                                 id="bt-balance">$10,000.00</b></span><span>Текущий PnL <b id="bt-pnl">$0.00</b></span>
                     </div>
+                    <button id="bt-reset-balance" class="bt-reset-balance" type="button" title="Сбросить учебный счёт до $10,000">↻ Обновить баланс до $10,000</button>
                     <div class="bt-panel-heading">АКТИВНЫЙ ПРОГНОЗ</div>
                     <div id="bt-position-empty" class="bt-empty">Разметьте график, выберите направление и зафиксируйте
                         идею</div>
@@ -3110,6 +3116,15 @@
                     <span class="profile-stat-val" id="profile-stat-days">∞ (Бессрочно)</span>
                 </div>
             </div>
+            <div class="profile-promo-section" id="profile-referral-section">
+                <strong>Пригласить трейдеров</strong>
+                <p style="font-size:12px;color:var(--t2);margin:8px 0;">Ваша личная ссылка:</p>
+                <div class="profile-promo-row">
+                    <input id="profile-referral-link" type="text" readonly aria-label="Реферальная ссылка" />
+                    <button type="button" id="profile-referral-copy">Копировать</button>
+                </div>
+                <p id="profile-referral-stats" style="font-size:12px;color:var(--t2);margin:8px 0;">Загружаем статистику…</p>
+            </div>
             <div class="profile-plan-upgrade-banner" id="profile-plan-upgrade-banner" style="display: flex; align-items: center; justify-content: space-between; gap: 14px; background: linear-gradient(135deg, rgba(124, 58, 237, 0.25) 0%, rgba(168, 85, 247, 0.12) 100%); border: 1px solid rgba(168, 85, 247, 0.5); border-radius: 12px; padding: 14px 18px; margin: 16px 0; box-shadow: 0 8px 25px rgba(124, 58, 237, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.15); position: relative; overflow: hidden;">
                 <div style="position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: linear-gradient(180deg, #a855f7 0%, #7c3aed 100%); border-radius: 12px 0 0 12px;"></div>
                 <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">
@@ -3155,6 +3170,10 @@
                 </div>
                 <button type="button" class="tg-bot-link-btn" id="tg-bot-link-btn">Подключить бота</button>
             </div>
+            <a class="profile-tg-bot-card" href="https://t.me/ObsidianSup" target="_blank" rel="noopener noreferrer" style="text-decoration:none;color:inherit;display:flex;">
+                <span class="tg-bot-card-info"><strong>Менеджер Obsidian</strong><br><span>Помощь и вопросы: @ObsidianSup</span></span>
+                <span class="tg-bot-link-btn">Написать</span>
+            </a>
             <div class="profile-bug-card" onclick="openBugReportModal();">
                 <div class="bug-card-left">
                     <div class="bug-card-icon-box">🐛</div>
@@ -3596,10 +3615,10 @@
     <script defer src="/js/formationEngine.js?v=2013"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
-    <script defer src="/js/app.js?v=2097"></script>
+    <script defer src="/js/app.js?v=2098"></script>
     <script defer src="/js/arbitrage.js?v=2015"></script>
     <script defer src="/js/arbitrage-pro.js?v=2016"></script>
-    <script defer src="/js/backtest.js?v=2012"></script>
+    <script defer src="/js/backtest.js?v=2013"></script>
     <script defer src="/js/journal.js?v=2017"></script>
 </body>
 
