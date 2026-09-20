@@ -1131,13 +1131,13 @@
             </div>
             <div id="events-listings-panel" class="events-panel" hidden>
                 <div class="events-filters">
-                    <label>Биржа <select id="events-exchange"><option value="all">Все 11 бирж</option></select></label>
-                    <label>Рынок <select id="events-market"><option value="all">Спот и фьючерсы</option><option value="spot">Спот</option><option value="futures">Фьючерсы</option></select></label>
+                    <div class="events-picker" data-picker="exchange"><span class="events-picker-label">Биржа</span><button id="events-exchange" class="events-picker-btn" type="button" aria-haspopup="listbox" aria-expanded="false"><img src="/img/ALL.svg" alt=""><span>Все 11 бирж</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Биржа"></div></div>
+                    <div class="events-picker" data-picker="market"><span class="events-picker-label">Рынок</span><button id="events-market" class="events-picker-btn" type="button" aria-haspopup="listbox" aria-expanded="false"><span class="events-market-icon">◈</span><span>Спот и фьючерсы</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Рынок"></div></div>
                     <span id="events-coverage" class="events-coverage"></span>
                 </div>
-                <div class="events-section-title"><div><h2>Предстоящие</h2><p>Только с датой запуска, опубликованной биржей</p></div></div>
+                <div class="events-section-title"><div><h2>Предстоящие</h2><p>Подтверждённые новые USDT пары с датой из каталога биржи</p></div></div>
                 <div id="events-upcoming" class="events-feed"></div>
-                <div class="events-section-title"><div><h2>Недавние</h2><p>Время обнаружения новой пары указано отдельно от времени запуска</p></div></div>
+                <div class="events-section-title"><div><h2>Недавние</h2><p>Новые USDT пары после двух сканирований; существующие рынки не считаются листингами</p></div></div>
                 <div id="events-past" class="events-feed"></div>
             </div>
         </section>
@@ -3686,7 +3686,7 @@
     <script defer src="/js/arbitrage.js?v=2016"></script>
     <script defer src="/js/arbitrage-pro.js?v=2017"></script>
     <script defer src="/js/journal.js?v=2018"></script>
-    <script defer src="/js/events.js?v=2"></script>
+    <script defer src="/js/events.js?v=3"></script>
 </body>
 
 </html>

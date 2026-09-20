@@ -89,8 +89,9 @@ async function translateTitle(title, key = process.env.DEEPL_API_KEY || "") {
   return result.responseData?.translatedText || null;
 }
 
-function launchTime(info, now = Date.now()) {
-  const keys = ["listingTime", "onboardDate", "launchTime", "launchDate", "openTime", "listTime"];
+function launchTime(info, now = Date.now(), venue = "") {
+  const keys = { BN: ["onboardDate"], OX: ["listTime"], BX: ["launchTime"],
+    AD: ["onboardDate"] }[venue] || [];
   for (const key of keys) {
     const raw = info?.[key];
     if (raw == null || raw === "") continue;
@@ -104,12 +105,14 @@ function launchTime(info, now = Date.now()) {
 function normalizeMarkets(markets, venue, now = Date.now()) {
   const rows = new Map();
   for (const market of Object.values(markets || {})) {
-    if (!market || !(market.spot || market.swap || market.future) || !market.symbol || !market.base) continue;
+    if (!market || !(market.spot || market.swap) || !market.symbol || !market.base ||
+      market.quote !== "USDT" || market.swap && market.settle && market.settle !== "USDT" ||
+      market.active === false) continue;
     const type = market.spot ? "spot" : "futures";
     const symbol = String(market.symbol).slice(0, 80);
     const key = `${venue}:${type}:${symbol}`;
     rows.set(key, { key, exchange: venue, type, symbol,
-      base: String(market.base).slice(0, 40), launchAt: launchTime(market.info, now) });
+      base: String(market.base).slice(0, 40), launchAt: launchTime(market.info, now, venue) });
   }
   return [...rows.values()];
 }
@@ -130,11 +133,15 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }, now = () => Date.now(), translate = translateTitle,
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
   streamKey = process.env.TREE_NEWS_API_KEY || "" } = {}) {
-  let state = { known: {}, listings: [], news: [], venues: {}, marketUpdatedAt: null, newsUpdatedAt: null };
+  let state = { marketVersion: 2, known: {}, candidates: {}, listings: [], news: [], venues: {}, marketUpdatedAt: null, newsUpdatedAt: null };
   try {
     const saved = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    if (saved && typeof saved === "object") state = { ...state, ...saved };
+    if (saved && typeof saved === "object") state = { ...state, ...saved, marketVersion: saved.marketVersion || 1 };
   } catch (_) {}
+  if (state.marketVersion !== 2) {
+    state = { ...state, marketVersion: 2, known: {}, candidates: {}, listings: [], venues: {}, marketUpdatedAt: null };
+  }
+  state.candidates ||= {};
   let marketsRunning = false;
   let newsRunning = false;
   let marketTimer = null;
@@ -227,14 +234,28 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
             const rows = normalizeMarkets(await fetchMarkets(exchangeId), code, now());
             if (!rows.length) throw new Error("Empty market catalog");
             const prior = Array.isArray(state.known[code]) ? new Set(state.known[code]) : null;
-            if (prior && prior.size > 100 && rows.length < prior.size * 0.8) {
+            const spotCount = rows.filter(row => row.type === "spot").length;
+            const futuresCount = rows.length - spotCount;
+            const priorSpot = prior ? [...prior].filter(key => key.startsWith(`${code}:spot:`)).length : 0;
+            const priorFutures = prior ? prior.size - priorSpot : 0;
+            const lastSpot = state.venues[code]?.spot ?? priorSpot;
+            const lastFutures = state.venues[code]?.futures ?? priorFutures;
+            if (prior && ((lastSpot && spotCount < lastSpot * 0.8) ||
+              (lastFutures && futuresCount < lastFutures * 0.8))) {
               throw new Error("Incomplete market catalog");
             }
-            const known = new Set(rows.map(row => row.key));
-            // Initial discovery is a baseline, never an invented listing event.
+            const known = new Set(prior || []);
+            const candidates = state.candidates[code] || {};
+            const nextCandidates = {};
+            // A new market must survive a second scan; one incomplete catalog is not a listing.
             for (const row of rows) {
-              const scheduled = row.launchAt && row.launchAt >= now() - 7 * 86400000;
-              if ((prior && !prior.has(row.key)) || scheduled) {
+              const firstTypeScan = row.type === "spot" ? priorSpot === 0 : priorFutures === 0;
+              if (!prior || firstTypeScan) { known.add(row.key); continue; }
+              if (prior && !prior.has(row.key) && !candidates[row.key]) {
+                nextCandidates[row.key] = now();
+              }
+              if (prior && !prior.has(row.key) && candidates[row.key]) {
+                known.add(row.key);
                 const event = { ...row, id: row.key, detectedAt: now(),
                   timing: row.launchAt ? "exchange" : "detected" };
                 const existing = existingById.get(event.id);
@@ -243,9 +264,10 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
                 } else { state.listings.push(event); existingById.set(event.id, event); }
               }
             }
+            state.candidates[code] = nextCandidates;
             state.known[code] = [...known];
-            state.venues[code] = { name, status: "ok", spot: rows.filter(row => row.type === "spot").length,
-              futures: rows.filter(row => row.type === "futures").length, updatedAt: now() };
+            state.venues[code] = { name, status: "ok", spot: spotCount,
+              futures: futuresCount, updatedAt: now() };
           } catch (error) {
             state.venues[code] = { ...state.venues[code], name, status: "error",
               error: String(error.message || error).slice(0, 120), updatedAt: state.venues[code]?.updatedAt || null };
@@ -287,7 +309,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     drainTranslations();
     void Promise.allSettled([refreshMarkets(), refreshNews()]);
     connectStream();
-    marketTimer = setInterval(() => { void refreshMarkets(); }, 15 * 60000);
+    marketTimer = setInterval(() => { void refreshMarkets(); }, 5 * 60000);
     newsTimer = setInterval(() => { void refreshNews(); }, 60000);
     marketTimer.unref?.(); newsTimer.unref?.();
   }

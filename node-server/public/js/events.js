@@ -7,8 +7,13 @@
     ["HT", "HTX"], ["HL", "Hyperliquid"], ["AD", "Aster"]
   ];
   const byId = id => document.getElementById(id);
+  const VENUE_ICONS = { BN: "BN", BB: "BB", OX: "OK", BG: "BG", GT: "GT", MX: "MX",
+    KC: "KC", BX: "BX", HT: "HX", HL: "HL", AD: "AS" };
+  const MARKET_OPTIONS = [["all", "Спот и фьючерсы", "◈"], ["spot", "Спот", "●"], ["futures", "Фьючерсы", "◆"]];
   let data = null;
   let selectedTab = "news";
+  let selectedExchange = "all";
+  let selectedMarket = "all";
   let lastRequest = 0;
   let inFlight = null;
   let refreshPending = false;
@@ -28,6 +33,65 @@
 
   function clearWithEmpty(target, message) {
     target.replaceChildren(node("div", "events-empty", message));
+  }
+
+  function closePickers() {
+    document.querySelectorAll(".events-picker.open").forEach(picker => {
+      picker.classList.remove("open");
+      picker.querySelector(".events-picker-btn").setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function wirePicker(kind, options) {
+    const picker = document.querySelector(`.events-picker[data-picker="${kind}"]`);
+    const button = picker.querySelector(".events-picker-btn");
+    const menu = picker.querySelector(".events-picker-menu");
+    const select = value => {
+      if (kind === "exchange") selectedExchange = value;
+      else selectedMarket = value;
+      const chosen = options.find(option => option[0] === value);
+      const icon = kind === "exchange" ? node("img", "") : node("span", "events-market-icon", chosen[2]);
+      if (kind === "exchange") { icon.src = `/img/${chosen[2]}.svg`; icon.alt = ""; }
+      button.replaceChildren(icon, node("span", "", chosen[1]), node("span", "events-picker-arrow", "⌄"));
+      menu.querySelectorAll("button").forEach(item => {
+        const active = item.dataset.value === value;
+        item.classList.toggle("on", active);
+        item.setAttribute("aria-selected", String(active));
+      });
+      closePickers(); renderListings();
+    };
+    for (const [value, label, glyph] of options) {
+      const item = node("button", "events-picker-option");
+      item.type = "button"; item.dataset.value = value; item.setAttribute("role", "option");
+      const icon = kind === "exchange" ? node("img", "") : node("span", "events-market-icon", glyph);
+      if (kind === "exchange") { icon.src = `/img/${glyph}.svg`; icon.alt = ""; }
+      item.append(icon, node("span", "", label));
+      item.addEventListener("click", () => select(value));
+      menu.append(item);
+    }
+    menu.querySelector(`[data-value="all"]`).classList.add("on");
+    menu.querySelector(`[data-value="all"]`).setAttribute("aria-selected", "true");
+    button.addEventListener("click", () => {
+      const open = !picker.classList.contains("open"); closePickers();
+      picker.classList.toggle("open", open);
+      button.setAttribute("aria-expanded", String(open));
+    });
+    button.addEventListener("keydown", event => {
+      if (event.key === "Escape") closePickers();
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        if (!picker.classList.contains("open")) button.click();
+        menu.querySelector("button.on")?.focus();
+      }
+    });
+    menu.addEventListener("keydown", event => {
+      if (event.key === "Escape") { closePickers(); button.focus(); }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const items = [...menu.querySelectorAll("button")];
+        items[(items.indexOf(document.activeElement) + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+      }
+    });
   }
 
   function cardTop(card, label, time, tone = "") {
@@ -68,8 +132,8 @@
     const pastBox = byId("events-past");
     if (!upcomingBox || !pastBox) return;
     upcomingBox.replaceChildren(); pastBox.replaceChildren();
-    const exchange = byId("events-exchange")?.value || "all";
-    const market = byId("events-market")?.value || "all";
+    const exchange = selectedExchange;
+    const market = selectedMarket;
     const now = Date.now();
     const rows = (Array.isArray(data?.listings) ? data.listings : [])
       .filter(item => (exchange === "all" || item.exchange === exchange) && (market === "all" || item.type === market));
@@ -82,16 +146,21 @@
       cardTop(card, `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"}`,
         item.launchAt || item.detectedAt, future ? "green" : "");
       card.append(node("h3", "", item.symbol), node("small", "",
-        item.launchAt ? "Время запуска указано биржей" : "Новая пара обнаружена сканером; точное время запуска не опубликовано"));
+        item.launchAt ? "Время из каталога биржи; пара подтверждена двумя сканированиями" : "Новая пара подтверждена двумя сканированиями; время запуска не опубликовано"));
       container.append(card);
     }
     upcoming.forEach(item => appendItem(upcomingBox, item, true));
     past.forEach(item => appendItem(pastBox, item, false));
-    if (!upcomingBox.children.length) clearWithEmpty(upcomingBox, "Биржи пока не опубликовали время будущих запусков для выбранного рынка.");
-    if (!pastBox.children.length) clearWithEmpty(pastBox, "История появится после обнаружения новых пар. Первое сканирование создаёт исходный список рынка.");
+    if (!upcomingBox.children.length) clearWithEmpty(upcomingBox, "Подтверждённых предстоящих USDT листингов пока нет.");
+    if (!pastBox.children.length) clearWithEmpty(pastBox, "Новых USDT пар пока не обнаружено. Существующие рынки не выдаются за листинги.");
     const ready = Object.values(data?.venues || {}).filter(item => item?.status === "ok").length;
     const coverage = byId("events-coverage");
-    if (coverage) coverage.textContent = `Каталоги бирж: ${ready}/11 доступны`;
+    if (coverage) {
+      const selected = exchange === "all" ? Object.values(data?.venues || {}) : [data?.venues?.[exchange]];
+      const spot = selected.reduce((sum, venue) => sum + (venue?.status === "ok" ? Number(venue.spot) || 0 : 0), 0);
+      const futures = selected.reduce((sum, venue) => sum + (venue?.status === "ok" ? Number(venue.futures) || 0 : 0), 0);
+      coverage.textContent = `Каталоги: ${ready}/11 · USDT спот: ${spot} · фьючерсы: ${futures}`;
+    }
   }
 
   function render() {
@@ -136,14 +205,11 @@
   function activate() {
     if (!wired) {
       wired = true;
-      const select = byId("events-exchange");
-      for (const [code, name] of VENUES) {
-        const option = node("option", "", name); option.value = code; select.append(option);
-      }
+      wirePicker("exchange", [["all", "Все 11 бирж", "ALL"], ...VENUES.map(([code, name]) => [code, name, VENUE_ICONS[code]])]);
+      wirePicker("market", MARKET_OPTIONS);
+      document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
       byId("events-tab-listings").addEventListener("click", () => setTab("listings"));
-      select.addEventListener("change", renderListings);
-      byId("events-market").addEventListener("change", renderListings);
       setTab(selectedTab);
       refreshTimer = window.setInterval(() => {
         if (byId("events-view")?.style.display === "block") void refresh();

@@ -12,6 +12,7 @@ test("events tab renders sourced news and filters spot and futures listings", as
   const dom = new JSDOM(html, { url: "https://obsidianscreener.com", runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const w = dom.window;
+  assert.equal(w.document.querySelector(".events-filters select"), null, "event filters use the screener-style menu");
   let stream;
   w.EventSource = class {
     constructor(url) { assert.equal(url, "/api/events/stream"); stream = this; }
@@ -36,10 +37,15 @@ test("events tab renders sourced news and filters spot and futures listings", as
   assert.equal(typeof stream.notify, "function");
   w.document.getElementById("events-tab-listings").click();
   assert.match(w.document.getElementById("events-upcoming").textContent, /NEXT\/USDT/);
-  w.document.getElementById("events-market").value = "spot";
-  w.document.getElementById("events-market").dispatchEvent(new w.Event("change"));
+  w.document.getElementById("events-market").click();
+  assert.equal(w.document.getElementById("events-market").getAttribute("aria-expanded"), "true");
+  w.document.querySelector('.events-picker[data-picker="market"] [data-value="spot"]').click();
+  assert.equal(w.document.getElementById("events-market").getAttribute("aria-expanded"), "false");
   assert.doesNotMatch(w.document.getElementById("events-upcoming").textContent, /NEXT\/USDT/);
   assert.match(w.document.getElementById("events-past").textContent, /NEW\/USDT/);
+  w.document.getElementById("events-exchange").click();
+  w.document.querySelector('.events-picker[data-picker="exchange"] [data-value="BB"]').click();
+  assert.doesNotMatch(w.document.getElementById("events-past").textContent, /NEW\/USDT/);
   w.ObsidianEvents.deactivate();
   assert.equal(stream.closed, true);
 });
