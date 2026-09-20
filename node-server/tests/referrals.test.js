@@ -93,3 +93,42 @@ test("referral visits and signups from the same source cannot be farmed", async 
   assert.equal(stats.buyers, 1);
   assert.equal(stats.purchases, 1);
 });
+
+test("admin partner links keep an immutable click-to-payment funnel separate from referrals", async () => {
+  const suffix = crypto.randomBytes(6).toString("hex");
+  const partner = userStore.createPartner({
+    name: `Partner ${suffix}`, contact: "@partner", label: "test campaign", createdBy: "test"
+  });
+  assert.match(partner.id, /^PTN-[a-f0-9]{12}$/);
+  assert.match(partner.code, /^p_[A-Za-z0-9_-]{16}$/);
+  assert.equal(userStore.recordPartnerVisit(partner.code, "203.0.113.71", "browser one"), true);
+  assert.equal(userStore.recordPartnerVisit(partner.code, "203.0.113.71", "browser two"), true);
+  assert.equal(userStore.recordPartnerVisit(partner.code, "203.0.113.72", "browser three"), true);
+
+  const first = (await userStore.registerUser({
+    username: `PartnerLead${suffix}`, email: `partner_lead_${suffix}@gmail.com`, password: "StrongPassword123!", referralCode: partner.code, ip: "203.0.113.71"
+  })).user;
+  const duplicate = (await userStore.registerUser({
+    username: `PartnerDup${suffix}`, email: `partner_dup_${suffix}@gmail.com`, password: "StrongPassword123!", referralCode: partner.code, ip: "203.0.113.71"
+  })).user;
+  assert.equal(first.partnerLinkId, partner.id);
+  assert.equal(duplicate.partnerLinkId, undefined, "one source cannot create multiple attributed leads");
+
+  const stats = userStore.getPartnerStats(partner.id, [
+    { userId: first.id, status: "success", planId: "3m", amount: 79 },
+    { userId: first.id, status: "success", planId: "12m", amount: 199 },
+    { userId: duplicate.id, status: "success", planId: "1m", amount: 29 }
+  ]);
+  assert.equal(stats.clicks, 3);
+  assert.equal(stats.visits, 2);
+  assert.equal(stats.eligibleVisits, 2);
+  assert.equal(stats.registrations, 1);
+  assert.equal(stats.buyers, 1);
+  assert.equal(stats.purchases, 2);
+  assert.equal(stats.revenue, 278);
+  assert.equal(stats.byPlan["3m"], 1);
+  assert.equal(stats.byPlan["12m"], 1);
+
+  userStore.setPartnerStatus(partner.id, "paused");
+  assert.equal(userStore.recordPartnerVisit(partner.code, "203.0.113.73", "paused"), false);
+});

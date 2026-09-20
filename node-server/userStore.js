@@ -10,6 +10,8 @@ const USERS_FILE = path.join(__dirname, "users.json");
 const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const LOGS_FILE = path.join(__dirname, "auth_logs.json");
 const REFERRAL_VISITS_FILE = path.join(__dirname, "referral_visits.json");
+const PARTNERS_FILE = path.join(__dirname, "partners.json");
+const PARTNER_VISITS_FILE = path.join(__dirname, "partner_visits.json");
 const REFERRAL_SECRET_FILE = path.join(__dirname, "referral_fingerprint.key");
 function loadReferralSecret() {
   if (process.env.ADMIN_API_SECRET) return process.env.ADMIN_API_SECRET;
@@ -164,10 +166,58 @@ let sessions = loadJSON(SESSIONS_FILE, {}); // token -> { userId, createdAt }
 let authLogs = loadJSON(LOGS_FILE, []); // Array of log objects, oldest first
 let referralVisits = loadJSON(REFERRAL_VISITS_FILE, {});
 if (!referralVisits || typeof referralVisits !== "object" || Array.isArray(referralVisits)) referralVisits = {};
+let partners = loadJSON(PARTNERS_FILE, {});
+if (!partners || typeof partners !== "object" || Array.isArray(partners)) partners = {};
+let partnerVisits = loadJSON(PARTNER_VISITS_FILE, {});
+if (!partnerVisits || typeof partnerVisits !== "object" || Array.isArray(partnerVisits)) partnerVisits = {};
+
+const PARTNER_CODE_RE = /^p_[A-Za-z0-9_-]{16}$/;
+const PARTNER_ID_RE = /^PTN-[a-f0-9]{12}$/;
 
 function referralOwner(code) {
   if (typeof code !== "string" || !/^[a-f0-9]{24}$/.test(code)) return null;
   return Object.values(users).find(user => user.referralCode === code) || null;
+}
+
+function getPartnerByCode(code) {
+  if (typeof code !== "string" || !PARTNER_CODE_RE.test(code)) return null;
+  return Object.values(partners).find(partner => partner && partner.code === code) || null;
+}
+
+function getPartner(partnerId) {
+  return PARTNER_ID_RE.test(String(partnerId || "")) ? partners[partnerId] || null : null;
+}
+
+function cleanPartnerText(value, field, maxLength) {
+  const text = String(value || "").trim().replace(/[\u0000-\u001F\u007F]/g, " ");
+  if (!text || text.length > maxLength) throw new Error(`Некорректное поле партнёра: ${field}`);
+  return text;
+}
+
+function createPartner({ name, contact = "", label = "", createdBy = "" } = {}) {
+  const partnerName = cleanPartnerText(name, "имя", 80);
+  const partnerContact = contact ? cleanPartnerText(contact, "контакт", 120) : "";
+  const partnerLabel = label ? cleanPartnerText(label, "метка", 80) : "";
+  let id;
+  do { id = `PTN-${crypto.randomBytes(6).toString("hex")}`; } while (partners[id]);
+  let code;
+  do { code = `p_${crypto.randomBytes(12).toString("base64url")}`; } while (getPartnerByCode(code));
+  const now = new Date().toISOString();
+  const partner = { id, code, name: partnerName, contact: partnerContact, label: partnerLabel,
+    status: "active", createdAt: now, updatedAt: now, createdBy: String(createdBy || "").slice(0, 80) };
+  partners[id] = partner;
+  if (!saveJSON(PARTNERS_FILE, partners)) throw new Error("Не удалось сохранить партнёра");
+  return { ...partner };
+}
+
+function setPartnerStatus(partnerId, status) {
+  const partner = getPartner(partnerId);
+  if (!partner) throw new Error("Партнёр не найден");
+  if (!["active", "paused"].includes(status)) throw new Error("Некорректный статус партнёра");
+  partner.status = status;
+  partner.updatedAt = new Date().toISOString();
+  if (!saveJSON(PARTNERS_FILE, partners)) throw new Error("Не удалось обновить партнёра");
+  return { ...partner };
 }
 
 function getReferralCode(userId) {
@@ -198,6 +248,14 @@ function canAttributeReferral(owner, code, ip, telegramId = "") {
   ));
 }
 
+function canAttributePartner(partner, code, ip, telegramId = "") {
+  if (!partner || partner.status !== "active" || (!ip && !telegramId)) return false;
+  const key = referralSourceKey(code, ip, telegramId);
+  return !Object.values(users).some(user => user.partnerLinkId === partner.id && (
+    user.partnerSourceKey === key || (ip && (user.registrationIp === ip || user.lastIp === ip))
+  ));
+}
+
 function recordReferralVisit(code, ip, userAgent, visitorUserId = "") {
   const owner = referralOwner(code);
   if (!owner) return false;
@@ -218,6 +276,38 @@ function recordReferralVisit(code, ip, userAgent, visitorUserId = "") {
   if (!entry.visitors?.[legacyKey]) entry.count = (Number(entry.count) || 0) + 1;
   referralVisits[code] = entry;
   saveJSONDebounced(REFERRAL_VISITS_FILE, referralVisits);
+  return true;
+}
+
+function recordPartnerVisit(code, ip, userAgent = "") {
+  const partner = getPartnerByCode(code);
+  if (!partner || partner.status !== "active") return false;
+  const key = referralSourceKey(code, ip);
+  if (!key) return true;
+  const entry = partnerVisits[partner.id] || { hits: 0, count: 0, uniqueIps: {}, visitors: {} };
+  entry.hits = (Number(entry.hits) || 0) + 1;
+  if (entry.uniqueIps[key]) {
+    partnerVisits[partner.id] = entry;
+    saveJSONDebounced(PARTNER_VISITS_FILE, partnerVisits);
+    return true;
+  }
+  if (Object.keys(entry.uniqueIps).length >= 100000) return true;
+  entry.uniqueIps[key] = Date.now();
+  const visitKey = crypto.createHmac("sha256", REFERRAL_VISIT_SECRET)
+    .update(`${code}\0${String(ip).slice(0, 64)}\0${String(userAgent).slice(0, 256)}`)
+    .digest("hex");
+  if (!entry.visitors[visitKey]) entry.count = (Number(entry.count) || 0) + 1;
+  entry.visitors[visitKey] = Date.now();
+  partnerVisits[partner.id] = entry;
+  saveJSONDebounced(PARTNER_VISITS_FILE, partnerVisits);
+  return true;
+}
+
+function attributePartner(user, code, ip, telegramId = "") {
+  const partner = getPartnerByCode(code);
+  if (!partner || !canAttributePartner(partner, code, ip, telegramId)) return false;
+  user.partnerLinkId = partner.id;
+  user.partnerSourceKey = referralSourceKey(code, ip, telegramId);
   return true;
 }
 
@@ -244,6 +334,41 @@ function getAllReferralStats(successfulPayments = []) {
   return Object.values(users).filter(user => user.referralCode || referredOwners.has(user.id))
     .map(user => ({ userId: user.id, username: user.username, ...getReferralStats(user.id, successfulPayments) }))
     .sort((a, b) => b.purchases - a.purchases || b.registrations - a.registrations);
+}
+
+function paymentAmount(payment) {
+  const amount = Number(payment && payment.amount);
+  return Number.isFinite(amount) && amount > 0 ? amount : 0;
+}
+
+function getPartnerStats(partnerId, successfulPayments = []) {
+  const partner = getPartner(partnerId);
+  if (!partner) return null;
+  const registrations = Object.values(users).filter(user => user.partnerLinkId === partner.id);
+  const ids = new Set(registrations.map(user => user.id));
+  const paid = successfulPayments.filter(payment => payment && payment.status === "success" && ids.has(payment.userId));
+  const buyers = new Set(paid.map(payment => payment.userId));
+  const byPlan = {};
+  let revenue = 0;
+  for (const payment of paid) {
+    const planId = String(payment.planId || "unknown");
+    byPlan[planId] = (byPlan[planId] || 0) + 1;
+    revenue += paymentAmount(payment);
+  }
+  const visitEntry = partnerVisits[partner.id] || {};
+  const visits = Number(visitEntry.count) || 0;
+  const clicks = Number(visitEntry.hits) || visits;
+  const eligibleVisits = Object.keys(visitEntry.uniqueIps || {}).length;
+  return { ...partner, clicks, visits, eligibleVisits, registrations: registrations.length,
+    buyers: buyers.size, purchases: paid.length, revenue, byPlan,
+    registrationRate: visits ? registrations.length / visits : 0,
+    buyerRate: registrations.length ? buyers.size / registrations.length : 0 };
+}
+
+function getAllPartnerStats(successfulPayments = []) {
+  return Object.values(partners).map(partner => getPartnerStats(partner.id, successfulPayments))
+    .filter(Boolean)
+    .sort((a, b) => (a.status === b.status ? b.revenue - a.revenue || b.registrations - a.registrations : (a.status === "active" ? -1 : 1)));
 }
 
 // Older builds stored auth logs newest-first (they used `unshift`). Storage order
@@ -477,7 +602,7 @@ function createSession(userId) {
 
 function sanitizeUser(user) {
   if (!user) return null;
-  const { passwordHash, salt, passwordAlgorithm, appliedPaymentIds, referralSourceKey, registrationIp, ...safe } = user;
+  const { passwordHash, salt, passwordAlgorithm, appliedPaymentIds, referralSourceKey, partnerSourceKey, registrationIp, ...safe } = user;
   if (!safe.plan) safe.plan = "free";
   // Auto-downgrade expired PRO subscriptions
   if (safe.plan === "pro" && user.proExpiresAt && Number.isFinite(user.proExpiresAt) && user.proExpiresAt <= Date.now()) {
@@ -660,6 +785,8 @@ async function registerUser({ username, email, password, ip = "", referralCode =
   if (referrer && referrer.id !== userId && canAttributeReferral(referrer, referralCode, ip)) {
     newUser.referredBy = referrer.id;
     newUser.referralSourceKey = referralSourceKey(referralCode, ip);
+  } else {
+    attributePartner(newUser, referralCode, ip);
   }
 
   users[userId] = newUser;
@@ -795,6 +922,8 @@ function telegramAuth(tgData, chatId = null, ip = "", referralCode = "") {
     if (referrer && referrer.id !== userId && canAttributeReferral(referrer, referralCode, ip, tgId)) {
       foundUser.referredBy = referrer.id;
       foundUser.referralSourceKey = referralSourceKey(referralCode, ip, tgId);
+    } else {
+      attributePartner(foundUser, referralCode, ip, tgId);
     }
 
     users[userId] = foundUser;
@@ -1576,6 +1705,13 @@ module.exports = {
   recordReferralVisit,
   getReferralStats,
   getAllReferralStats,
+  createPartner,
+  setPartnerStatus,
+  getPartner,
+  getPartnerByCode,
+  recordPartnerVisit,
+  getPartnerStats,
+  getAllPartnerStats,
   registerUser,
   loginUser,
   telegramAuth,

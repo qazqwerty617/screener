@@ -85,16 +85,14 @@ function getDefaultKeyboard(chatId, tgUser) {
   };
 }
 
-const https = require("https");
-// Shared keep-alive agent for both poll loops. Reusing TLS connections plus
-// TCP keepalive probes keeps the 20s Telegram long-poll alive through NATs
-// that silently drop idle sockets (the source of constant read ETIMEDOUT).
-const tgPollAgent = new https.Agent({
-  keepAlive: true,
-  keepAliveMsecs: 15000,
-  maxSockets: 8,
-  scheduling: "fifo"
-});
+// Native fetch ignores Node's `https.Agent`. Give Telegram its own Undici pool
+// so long polling and command replies reuse warm TLS connections even when the
+// bot is started outside server.js (tests, worker process, local development).
+let telegramDispatcher = null;
+try {
+  const { Agent } = require("undici");
+  telegramDispatcher = new Agent({ connections: 8, pipelining: 1, keepAliveTimeout: 30_000, keepAliveMaxTimeout: 60_000 });
+} catch (_) {}
 
 async function userApiCall(method, payload) {
   const token = getBotToken();
@@ -104,6 +102,7 @@ async function userApiCall(method, payload) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {}),
+      dispatcher: telegramDispatcher || undefined,
       signal: AbortSignal.timeout(10000)
     });
     return await res.json();
@@ -157,8 +156,8 @@ async function pollUpdates() {
   isPollingUser = true;
 
   try {
-    const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(35000) });
+    const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent('["message","edited_message","callback_query"]')}`;
+    const res = await fetch(url, { dispatcher: telegramDispatcher || undefined, signal: AbortSignal.timeout(35000) });
     if (res.status === 200) {
       const data = await res.json();
       if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
@@ -173,12 +172,12 @@ async function pollUpdates() {
       }
     } else if (res.status === 409) {
       console.warn("[USER BOT POLL] 409 Conflict: waiting 2s before retry...");
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1000));
     }
   } catch (err) {
     if (err.name !== "TimeoutError" && !err.message?.includes("aborted")) {
       console.error("[USER BOT POLL ERR]", err.message);
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 250));
     }
   } finally {
     isPollingUser = false;
@@ -250,7 +249,7 @@ function handleCallbackQuery(cb) {
 async function getTelegramFileUrl(botToken, fileId) {
   if (!botToken || !fileId) return null;
   try {
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`, { dispatcher: telegramDispatcher || undefined, signal: AbortSignal.timeout(8000) });
     if (res.ok) {
       const data = await res.json();
       if (data.ok && data.result && data.result.file_path) {
@@ -426,6 +425,7 @@ async function sendAdminNotification(user, details = {}) {
     await fetch(`https://api.telegram.org/bot${adminToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      dispatcher: telegramDispatcher || undefined,
       body: JSON.stringify({
         chat_id: adminChatId,
         text,
@@ -448,8 +448,8 @@ async function pollAdminUpdates() {
   isPollingAdmin = true;
 
   try {
-    const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=25`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(35000) });
+    const url = `https://api.telegram.org/bot${adminToken}/getUpdates?offset=${adminOffset}&timeout=25&allowed_updates=${encodeURIComponent('["message","callback_query"]')}`;
+    const res = await fetch(url, { dispatcher: telegramDispatcher || undefined, signal: AbortSignal.timeout(35000) });
     if (res.status === 200) {
       const data = await res.json();
       if (data.ok && Array.isArray(data.result) && data.result.length > 0) {
@@ -464,12 +464,12 @@ async function pollAdminUpdates() {
       }
     } else if (res.status === 409) {
       console.warn("[ADMIN BOT POLL] 409 Conflict: waiting 2s before retry...");
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1000));
     }
   } catch (err) {
     if (err.name !== "TimeoutError" && !err.message?.includes("aborted")) {
       console.error("[ADMIN BOT POLL ERR]", err.message);
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 250));
     }
   } finally {
     isPollingAdmin = false;
@@ -494,6 +494,7 @@ async function sendAdminBotMessage(chatId, text) {
     await fetch(`https://api.telegram.org/bot${adminToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      dispatcher: telegramDispatcher || undefined,
       body: JSON.stringify({
         chat_id: chatId,
         text,
@@ -660,6 +661,7 @@ async function sendDigestToAllUsers() {
       const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        dispatcher: telegramDispatcher || undefined,
         body: JSON.stringify({
           chat_id: u.telegramChatId,
           text: digestText,

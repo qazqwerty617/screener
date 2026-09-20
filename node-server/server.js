@@ -3372,8 +3372,12 @@ const referralVisitLimit = createSlidingWindowLimiter({
 
 function referralCodeFromCookie(req) {
   const raw = String(req.headers.cookie || "");
-  const match = /(?:^|;\s*)obsidian_ref=([a-f0-9]{24})(?:;|$)/.exec(raw);
+  const match = /(?:^|;\s*)obsidian_ref=([a-f0-9]{24}|p_[A-Za-z0-9_-]{16})(?:;|$)/.exec(raw);
   return match ? match[1] : "";
+}
+
+function setAttributionCookie(res, code) {
+  res.setHeader("Set-Cookie", `obsidian_ref=${code}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
 }
 
 app.get("/r/:code", referralVisitLimit, (req, res) => {
@@ -3382,7 +3386,17 @@ app.get("/r/:code", referralVisitLimit, (req, res) => {
   if (!userStore.recordReferralVisit(code, req.ip, req.headers["user-agent"] || "", visitor?.id || "")) {
     return res.status(404).send("Referral link not found");
   }
-  res.setHeader("Set-Cookie", `obsidian_ref=${code}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
+  setAttributionCookie(res, code);
+  res.setHeader("Cache-Control", "no-store");
+  return res.redirect(302, "/");
+});
+
+app.get("/p/:code", referralVisitLimit, (req, res) => {
+  const code = String(req.params.code || "");
+  if (!userStore.recordPartnerVisit(code, req.ip, req.headers["user-agent"] || "")) {
+    return res.status(404).send("Partner link not found");
+  }
+  setAttributionCookie(res, code);
   res.setHeader("Cache-Control", "no-store");
   return res.redirect(302, "/");
 });
@@ -3399,6 +3413,36 @@ app.get("/api/referrals/me", (req, res) => {
 app.get("/api/admin/referrals", requireAdminApi, (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ referrals: userStore.getAllReferralStats(paymentGateway.getAllPayments()) });
+});
+
+app.get("/api/admin/partners", requireAdminApi, (_req, res) => {
+  const origin = String(process.env.PUBLIC_SITE_ORIGIN || "https://obsidianscreener.com").replace(/\/$/, "");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ partners: userStore.getAllPartnerStats(paymentGateway.getAllPayments()).map(partner => ({
+    ...partner, link: `${origin}/p/${partner.code}`
+  })) });
+});
+
+app.post("/api/admin/partners", requireAdminApi, (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+    const partner = userStore.createPartner({ name: body.name, contact: body.contact, label: body.label, createdBy: "admin-api" });
+    const origin = String(process.env.PUBLIC_SITE_ORIGIN || "https://obsidianscreener.com").replace(/\/$/, "");
+    res.status(201).json({ partner: { ...userStore.getPartnerStats(partner.id, paymentGateway.getAllPayments()), link: `${origin}/p/${partner.code}` } });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Не удалось создать партнёра" });
+  }
+});
+
+app.patch("/api/admin/partners/:partnerId", requireAdminApi, (req, res) => {
+  try {
+    const status = String(req.body?.status || "");
+    const partner = userStore.setPartnerStatus(req.params.partnerId, status);
+    const origin = String(process.env.PUBLIC_SITE_ORIGIN || "https://obsidianscreener.com").replace(/\/$/, "");
+    res.json({ partner: { ...userStore.getPartnerStats(partner.id, paymentGateway.getAllPayments()), link: `${origin}/p/${partner.code}` } });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Не удалось обновить партнёра" });
+  }
 });
 const telegramNotificationLimit = createSlidingWindowLimiter({
   windowMs: 15 * 60 * 1000,

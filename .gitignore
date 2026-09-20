@@ -46,6 +46,8 @@ node-server/auth_logs.json.bak
 node-server/journal_credentials.json
 node-server/referral_visits.json
 node-server/referral_fingerprint.key
+node-server/partners.json
+node-server/partner_visits.json
 node-server/users_database.csv
 node-server/data/
 

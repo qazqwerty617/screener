@@ -76,13 +76,11 @@ function logAdminAction(adminName, actionName, details = {}) {
   saveJSON(AUDIT_FILE, adminAudit);
 }
 
-const https = require("https");
-const httpsAgent = new https.Agent({
-  keepAlive: true,
-  keepAliveMsecs: 60000,
-  maxSockets: 100,
-  scheduling: "fifo"
-});
+let telegramDispatcher = null;
+try {
+  const { Agent } = require("undici");
+  telegramDispatcher = new Agent({ connections: 8, pipelining: 1, keepAliveTimeout: 30_000, keepAliveMaxTimeout: 60_000 });
+} catch (_) {}
 
 async function apiCall(method, payload) {
   const token = getAdminBotToken();
@@ -93,6 +91,7 @@ async function apiCall(method, payload) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {}),
+      dispatcher: telegramDispatcher || undefined,
       signal: AbortSignal.timeout(10000)
     });
     return await res.json();
@@ -233,6 +232,70 @@ function formatDateTime(isoString) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function getLivePayments() {
+  try { return require("./paymentGateway").getAllPayments(); } catch (_) { return payments; }
+}
+
+function partnerLink(partner) {
+  const origin = String(process.env.PUBLIC_SITE_ORIGIN || "https://obsidianscreener.com").replace(/\/$/, "");
+  return `${origin}/p/${partner.code}`;
+}
+
+function partnerPlanText(byPlan = {}) {
+  return `1м ${byPlan["1m"] || 0} · 3м ${byPlan["3m"] || 0} · 12м ${byPlan["12m"] || 0} · ∞ ${byPlan.lifetime || 0}`;
+}
+
+function buildPartnerCard(partnerId) {
+  const partner = userStore.getPartnerStats(partnerId, getLivePayments());
+  if (!partner) return { text: "❌ Партнёр не найден.", keyboard: { inline_keyboard: [[{ text: "🤝 К партнёрам", callback_data: "adm:refs:main" }]] } };
+  const active = partner.status === "active";
+  const text =
+    `<b>🤝 Партнёр: ${escapeHtml(partner.name)}</b>\n\n` +
+    `<b>Статус:</b> ${active ? "🟢 Активна" : "⏸ Приостановлена"}\n` +
+    `<b>Контакт:</b> ${escapeHtml(partner.contact || "—")}\n` +
+    `<b>Метка:</b> ${escapeHtml(partner.label || "—")}\n` +
+    `<b>Создана:</b> ${formatDateTime(partner.createdAt)}\n\n` +
+    `<b>Личная ссылка:</b>\n<code>${partnerLink(partner)}</code>\n\n` +
+    `<b>Воронка:</b>\n` +
+    `• Переходы: <b>${partner.clicks}</b> (уникальные: ${partner.eligibleVisits})\n` +
+    `• Регистрации: <b>${partner.registrations}</b> (${(partner.registrationRate * 100).toFixed(1)}% от переходов)\n` +
+    `• Покупатели: <b>${partner.buyers}</b> (${(partner.buyerRate * 100).toFixed(1)}% от регистраций)\n` +
+    `• Покупки: <b>${partner.purchases}</b> · <b>$${partner.revenue.toFixed(2)}</b>\n` +
+    `• Тарифы: ${partnerPlanText(partner.byPlan)}`;
+  const nextStatus = active ? "paused" : "active";
+  const keyboard = { inline_keyboard: [
+    [{ text: active ? "⏸ Приостановить ссылку" : "▶️ Активировать ссылку", callback_data: `adm:refs:status:${partner.id}:${nextStatus}` }],
+    [{ text: "🔄 Обновить статистику", callback_data: `adm:refs:view:${partner.id}` }],
+    [{ text: "← Все партнёры", callback_data: "adm:refs:list" }, { text: "🏠 Меню", callback_data: "adm:menu" }]
+  ] };
+  return { text, keyboard };
+}
+
+function buildPartnersMenu() {
+  const rows = userStore.getAllPartnerStats(getLivePayments());
+  const totals = rows.reduce((acc, row) => ({
+    clicks: acc.clicks + row.clicks, visits: acc.visits + row.visits, registrations: acc.registrations + row.registrations,
+    buyers: acc.buyers + row.buyers, purchases: acc.purchases + row.purchases, revenue: acc.revenue + row.revenue
+  }), { clicks: 0, visits: 0, registrations: 0, buyers: 0, purchases: 0, revenue: 0 });
+  const text =
+    `<b>🤝 Партнёрская программа</b>\n\n` +
+    `Активных ссылок: <b>${rows.filter(row => row.status === "active").length}</b> из ${rows.length}\n` +
+    `Переходы: <b>${totals.clicks}</b> (уникальные: ${totals.visits}) · Регистрации: <b>${totals.registrations}</b>\n` +
+    `Покупатели: <b>${totals.buyers}</b> · Покупки: <b>${totals.purchases}</b>\n` +
+    `Выручка по партнёрам: <b>$${totals.revenue.toFixed(2)}</b>\n\n` +
+    `<i>Партнёрская ссылка — отдельный канал. Её атрибуция фиксируется при регистрации.</i>`;
+  return { text, keyboard: { inline_keyboard: [
+    [{ text: "➕ Создать партнёрскую ссылку", callback_data: "adm:refs:create_prompt" }],
+    [{ text: "📋 Все партнёры и воронки", callback_data: "adm:refs:list" }],
+    [{ text: "↗ Обычные рефералы", callback_data: "adm:refs:legacy" }],
+    [{ text: "🏠 Главное меню", callback_data: "adm:menu" }]
+  ] } };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1077,7 +1140,21 @@ async function handleAdminMessageText(msg) {
   const currentState = adminState.get(chatId);
 
   if (currentState) {
-    if (currentState.action === "search_user") {
+    if (currentState.action === "partner_create") {
+      adminState.delete(chatId);
+      const [nameRaw, contactRaw = "", labelRaw = ""] = text.split("|").map(value => value.trim());
+      try {
+        const partner = userStore.createPartner({ name: nameRaw, contact: contactRaw, label: labelRaw, createdBy: "telegram-admin" });
+        logAdminAction("Администратор #1", `Создана партнёрская ссылка ${partner.id}`, { partnerId: partner.id, partnerName: partner.name });
+        const card = buildPartnerCard(partner.id);
+        await sendAdminMessage(`✅ <b>Партнёр создан.</b>\n\n${card.text}`, card.keyboard);
+      } catch (error) {
+        await sendAdminMessage(`❌ ${escapeHtml(error.message || "Не удалось создать партнёра")}`, {
+          inline_keyboard: [[{ text: "↩️ Повторить", callback_data: "adm:refs:create_prompt" }, { text: "🤝 К партнёрам", callback_data: "adm:refs:main" }]]
+        });
+      }
+      return;
+    } else if (currentState.action === "search_user") {
       adminState.delete(chatId);
       const results = userStore.searchUsers(text);
       if (results.length === 1) {
@@ -1438,20 +1515,51 @@ async function handleAdminCallbackQuery(query) {
     }
   }
   else if (domain === "refs") {
-    const rows = userStore.getAllReferralStats(payments);
-    const total = rows.reduce((sum, row) => sum + row.visits, 0);
-    const eligibleTotal = rows.reduce((sum, row) => sum + (row.eligibleVisits || 0), 0);
-    const registered = rows.reduce((sum, row) => sum + row.registrations, 0);
-    const buyers = rows.reduce((sum, row) => sum + row.buyers, 0);
-    const plans = rows.reduce((sum, row) => {
-      for (const [plan, count] of Object.entries(row.byPlan)) sum[plan] = (sum[plan] || 0) + count;
-      return sum;
-    }, {});
-    const top = rows.slice(0, 20).map((row, index) =>
-      `${index + 1}. <code>${row.userId}</code> — ${row.visits} перешли (${row.eligibleVisits || 0} проверяемых), ${row.registrations} зарегистрировались, ${row.buyers} купили (${row.purchases} покупок)`
-    ).join("\n");
-    const summary = `<b>🔗 Реферальная статистика</b>\n\nПереходы: ${total} (проверяемых: ${eligibleTotal})\nРегистрации: ${registered}\nПокупатели PRO: ${buyers}\nПланы: 1 мес. ${plans["1m"] || 0}, 3 мес. ${plans["3m"] || 0}, 12 мес. ${plans["12m"] || 0}, навсегда ${plans.lifetime || 0}\n\nНаграды только после ручной проверки.\n\n${top || "Пока нет рефералов"}`;
-    await editAdminMessage(messageId, summary, { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "adm:menu" }]] });
+    if (action === "main") {
+      const menu = buildPartnersMenu();
+      await editAdminMessage(messageId, menu.text, menu.keyboard);
+    } else if (action === "create_prompt") {
+      adminState.set(chatId, { action: "partner_create" });
+      await editAdminMessage(messageId,
+        `<b>➕ Новая партнёрская ссылка</b>\n\nОтправьте одной строкой:\n<code>Имя партнёра | Контакт | Метка</code>\n\nПример:\n<code>Иван Петров | @ivan | YouTube сентябрь</code>\n\nКонтакт и метка необязательны.`,
+        { inline_keyboard: [[{ text: "← Назад", callback_data: "adm:refs:main" }]] });
+    } else if (action === "list") {
+      const rows = userStore.getAllPartnerStats(getLivePayments());
+      const buttons = rows.slice(0, 30).map(row => [{
+        text: `${row.status === "active" ? "🟢" : "⏸"} ${row.name} · ${row.registrations} рег. · $${row.revenue.toFixed(0)}`.slice(0, 58),
+        callback_data: `adm:refs:view:${row.id}`
+      }]);
+      const text = `<b>📋 Партнёры (${rows.length})</b>\n\n` + (rows.length ? `Ссылки отсортированы по текущей выручке и регистрациям.` : `Партнёров пока нет.`);
+      buttons.push([{ text: "➕ Создать", callback_data: "adm:refs:create_prompt" }, { text: "← Назад", callback_data: "adm:refs:main" }]);
+      await editAdminMessage(messageId, text, { inline_keyboard: buttons });
+    } else if (action === "view") {
+      const card = buildPartnerCard(param1);
+      await editAdminMessage(messageId, card.text, card.keyboard);
+    } else if (action === "status") {
+      try {
+        const updated = userStore.setPartnerStatus(param1, param2);
+        logAdminAction("Администратор #1", `${updated.status === "active" ? "Активирована" : "Приостановлена"} партнёрская ссылка ${updated.id}`, { partnerId: updated.id });
+        const card = buildPartnerCard(updated.id);
+        await editAdminMessage(messageId, card.text, card.keyboard);
+      } catch (error) {
+        await answerCallback(query.id, error.message || "Не удалось обновить статус", true);
+      }
+    } else if (action === "legacy") {
+      const rows = userStore.getAllReferralStats(getLivePayments());
+      const total = rows.reduce((sum, row) => sum + row.visits, 0);
+      const eligibleTotal = rows.reduce((sum, row) => sum + (row.eligibleVisits || 0), 0);
+      const registered = rows.reduce((sum, row) => sum + row.registrations, 0);
+      const buyers = rows.reduce((sum, row) => sum + row.buyers, 0);
+      const plans = rows.reduce((sum, row) => {
+        for (const [plan, count] of Object.entries(row.byPlan)) sum[plan] = (sum[plan] || 0) + count;
+        return sum;
+      }, {});
+      const top = rows.slice(0, 15).map((row, index) =>
+        `${index + 1}. <code>${row.userId}</code> — ${row.visits} перешли, ${row.registrations} зарегистрировались, ${row.buyers} купили (${row.purchases} покупок)`
+      ).join("\n");
+      const summary = `<b>↗ Обычные рефералы</b>\n\nПереходы: ${total} (уникальные: ${eligibleTotal})\nРегистрации: ${registered}\nПокупатели PRO: ${buyers}\nПланы: ${partnerPlanText(plans)}\n\n${top || "Пока нет рефералов"}`;
+      await editAdminMessage(messageId, summary, { inline_keyboard: [[{ text: "🤝 К партнёрам", callback_data: "adm:refs:main" }, { text: "🏠 Меню", callback_data: "adm:menu" }]] });
+    }
   }
   
   // 2. USERS & USER CARDS
