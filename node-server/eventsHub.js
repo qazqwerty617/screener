@@ -133,14 +133,17 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }, now = () => Date.now(), translate = translateTitle,
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
   streamKey = process.env.TREE_NEWS_API_KEY || "" } = {}) {
-  let state = { marketVersion: 2, known: {}, candidates: {}, listings: [], news: [], venues: {}, marketUpdatedAt: null, newsUpdatedAt: null };
+  let state = { marketVersion: 2, known: {}, active: {}, missing: {}, historySeeded: {}, candidates: {}, listings: [], news: [], venues: {}, marketUpdatedAt: null, newsUpdatedAt: null };
   try {
     const saved = JSON.parse(fs.readFileSync(filePath, "utf8"));
     if (saved && typeof saved === "object") state = { ...state, ...saved, marketVersion: saved.marketVersion || 1 };
   } catch (_) {}
   if (state.marketVersion !== 2) {
-    state = { ...state, marketVersion: 2, known: {}, candidates: {}, listings: [], venues: {}, marketUpdatedAt: null };
+    state = { ...state, marketVersion: 2, known: {}, active: {}, missing: {}, historySeeded: {}, candidates: {}, listings: [], venues: {}, marketUpdatedAt: null };
   }
+  state.active ||= {};
+  state.missing ||= {};
+  state.historySeeded ||= {};
   state.candidates ||= {};
   let marketsRunning = false;
   let newsRunning = false;
@@ -245,10 +248,37 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
               throw new Error("Incomplete market catalog");
             }
             const known = new Set(prior || []);
+            const current = new Map(rows.map(row => [row.key, row]));
+            const priorActive = state.active[code];
+            const missing = state.missing[code] || {};
+            const nextMissing = {};
+            if (Array.isArray(priorActive)) {
+              for (const key of new Set([...priorActive, ...Object.keys(missing)])) {
+                if (current.has(key)) continue;
+                const count = (missing[key] || 0) + 1;
+                nextMissing[key] = count;
+                if (count !== 3) continue;
+                const [, type, ...symbolParts] = key.split(":");
+                const event = { id: `delist:${key}`, kind: "delisting", exchange: code, type,
+                  symbol: symbolParts.join(":"), launchAt: null, detectedAt: now(), timing: "detected" };
+                if (!existingById.has(event.id)) { state.listings.push(event); existingById.set(event.id, event); }
+              }
+            }
             const candidates = state.candidates[code] || {};
             const nextCandidates = {};
             // A new market must survive a second scan; one incomplete catalog is not a listing.
             for (const row of rows) {
+              if (existingById.has(`delist:${row.key}`)) {
+                state.listings = state.listings.filter(event => event.id !== `delist:${row.key}`);
+                existingById.delete(`delist:${row.key}`);
+              }
+              if (!state.historySeeded[code] && (code === "BN" || code === "OX") && row.launchAt &&
+                row.launchAt >= now() - 30 * 86400000 && row.launchAt <= now() + 30 * 86400000 &&
+                !existingById.has(row.key)) {
+                const event = { ...row, id: row.key, kind: "listing", historical: true,
+                  detectedAt: now(), timing: "exchange" };
+                state.listings.push(event); existingById.set(event.id, event);
+              }
               const firstTypeScan = row.type === "spot" ? priorSpot === 0 : priorFutures === 0;
               if (!prior || firstTypeScan) { known.add(row.key); continue; }
               if (prior && !prior.has(row.key) && !candidates[row.key]) {
@@ -265,6 +295,9 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
               }
             }
             state.candidates[code] = nextCandidates;
+            state.historySeeded[code] = true;
+            state.missing[code] = nextMissing;
+            state.active[code] = [...current.keys()];
             state.known[code] = [...known];
             state.venues[code] = { name, status: "ok", spot: spotCount,
               futures: futuresCount, updatedAt: now() };

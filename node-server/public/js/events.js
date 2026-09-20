@@ -14,6 +14,10 @@
   let selectedTab = "news";
   let selectedExchange = "all";
   let selectedMarket = "all";
+  let selectedKind = "all";
+  let selectedPhase = "all";
+  let month = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  let selectedDay;
   let lastRequest = 0;
   let inFlight = null;
   let refreshPending = false;
@@ -23,6 +27,8 @@
   const dateTime = value => Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString("ru-RU", {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
   }) : "Время неизвестно";
+  const dayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  selectedDay = dayKey(new Date());
 
   function node(tag, className, value) {
     const element = document.createElement(tag);
@@ -128,31 +134,79 @@
   }
 
   function renderListings() {
-    const upcomingBox = byId("events-upcoming");
-    const pastBox = byId("events-past");
-    if (!upcomingBox || !pastBox) return;
-    upcomingBox.replaceChildren(); pastBox.replaceChildren();
+    const calendar = byId("events-calendar");
+    const dayList = byId("events-day-list");
+    if (!calendar || !dayList) return;
     const exchange = selectedExchange;
     const market = selectedMarket;
     const now = Date.now();
+    const query = byId("events-search")?.value.trim().toLowerCase() || "";
     const rows = (Array.isArray(data?.listings) ? data.listings : [])
-      .filter(item => (exchange === "all" || item.exchange === exchange) && (market === "all" || item.type === market));
-    const upcoming = rows.filter(item => Number(item.launchAt) > now).sort((a, b) => a.launchAt - b.launchAt).slice(0, 40);
-    const past = rows.filter(item => !(Number(item.launchAt) > now))
-      .sort((a, b) => (b.launchAt || b.detectedAt) - (a.launchAt || a.detectedAt)).slice(0, 80);
-    function appendItem(container, item, future) {
-      const card = node("article", `events-card ${future ? "scheduled" : ""}`);
-      const venue = VENUES.find(([code]) => code === item.exchange)?.[1] || item.exchange;
-      cardTop(card, `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"}`,
-        item.launchAt || item.detectedAt, future ? "green" : "");
-      card.append(node("h3", "", item.symbol), node("small", "",
-        item.launchAt ? "Время из каталога биржи; пара подтверждена двумя сканированиями" : "Новая пара подтверждена двумя сканированиями; время запуска не опубликовано"));
-      container.append(card);
+      .filter(item => {
+        const time = Number(item.kind === "delisting" ? item.detectedAt : item.launchAt || item.detectedAt);
+        return Number.isFinite(time) && time > 0 &&
+          (exchange === "all" || item.exchange === exchange) && (market === "all" || item.type === market) &&
+          (selectedKind === "all" || (item.kind || "listing") === selectedKind) &&
+          (selectedPhase === "all" || (selectedPhase === "upcoming" ? time > now : time <= now)) &&
+          (!query || String(item.symbol || "").toLowerCase().includes(query));
+      });
+    const byDay = new Map();
+    for (const item of rows) {
+      const time = item.kind === "delisting" ? item.detectedAt : item.launchAt || item.detectedAt;
+      const key = dayKey(new Date(Number(time)));
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(item);
     }
-    upcoming.forEach(item => appendItem(upcomingBox, item, true));
-    past.forEach(item => appendItem(pastBox, item, false));
-    if (!upcomingBox.children.length) clearWithEmpty(upcomingBox, "Подтверждённых предстоящих USDT листингов пока нет.");
-    if (!pastBox.children.length) clearWithEmpty(pastBox, "Новых USDT пар пока не обнаружено. Существующие рынки не выдаются за листинги.");
+    calendar.replaceChildren();
+    for (const label of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", label));
+    const year = month.getFullYear(), monthIndex = month.getMonth();
+    const label = byId("events-month-label");
+    if (label) label.textContent = month.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+    const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
+    for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
+    const days = new Date(year, monthIndex + 1, 0).getDate();
+    for (let day = 1; day <= days; day++) {
+      const date = new Date(year, monthIndex, day);
+      const key = dayKey(date);
+      const items = byDay.get(key) || [];
+      const cell = node("button", "events-calendar-day");
+      cell.type = "button"; cell.dataset.date = key;
+      cell.setAttribute("aria-label", `${date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}, событий: ${items.length}`);
+      if (key === selectedDay) cell.classList.add("selected");
+      if (key === dayKey(new Date())) cell.classList.add("today");
+      const head = node("span", "events-calendar-day-head");
+      head.append(node("strong", "", day));
+      if (items.length) head.append(node("b", "", items.length));
+      cell.append(head);
+      for (const item of items.slice(0, 2)) {
+        const ticker = String(item.symbol || "").split("/")[0];
+        const entry = node("span", `events-calendar-entry ${item.kind === "delisting" ? "removed" : ""}`);
+        entry.append(node("i", ""), node("span", "", ticker), node("small", "", item.exchange));
+        cell.append(entry);
+      }
+      if (items.length > 2) cell.append(node("span", "events-more", `+${items.length - 2}`));
+      cell.addEventListener("click", () => { selectedDay = key; renderListings(); });
+      calendar.append(cell);
+    }
+    const selectedDate = new Date(`${selectedDay}T12:00:00`);
+    byId("events-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+    const selectedItems = (byDay.get(selectedDay) || []).sort((a, b) =>
+      Number(a.launchAt || a.detectedAt) - Number(b.launchAt || b.detectedAt));
+    byId("events-day-count").textContent = selectedItems.length ? `${selectedItems.length} событий` : "";
+    dayList.replaceChildren();
+    for (const item of selectedItems.slice(0, 100)) {
+      const removed = item.kind === "delisting";
+      const card = node("article", `events-agenda-item ${removed ? "removed" : ""}`);
+      const icon = node("img", ""); icon.src = `/img/${VENUE_ICONS[item.exchange] || "ALL"}.svg`; icon.alt = "";
+      const text = node("div", "events-agenda-text");
+      const venue = VENUES.find(([code]) => code === item.exchange)?.[1] || item.exchange;
+      text.append(node("strong", "", item.symbol), node("small", "", `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"} · ${removed ? "исчезла из каталога" : item.launchAt ? "дата из каталога" : "обнаружено"}`));
+      const time = item.kind === "delisting" ? item.detectedAt : item.launchAt || item.detectedAt;
+      card.append(icon, text, node("time", "", new Date(Number(time)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
+      dayList.append(card);
+    }
+    if (!selectedItems.length) clearWithEmpty(dayList, "На эту дату событий нет");
+    if (selectedItems.length > 100) dayList.append(node("div", "events-more", `Ещё ${selectedItems.length - 100} событий`));
     const ready = Object.values(data?.venues || {}).filter(item => item?.status === "ok").length;
     const coverage = byId("events-coverage");
     if (coverage) {
@@ -210,6 +264,27 @@
       document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
       byId("events-tab-listings").addEventListener("click", () => setTab("listings"));
+      byId("events-search").addEventListener("input", renderListings);
+      for (const [attribute, update] of [["kind", value => { selectedKind = value; }],
+        ["phase", value => { selectedPhase = value; }]]) {
+        document.querySelectorAll(`.events-segment [data-${attribute}]`).forEach(button => button.addEventListener("click", () => {
+          update(button.dataset[attribute]);
+          button.parentElement.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
+          renderListings();
+        }));
+      }
+      for (const [id, offset] of [["events-prev-month", -1], ["events-next-month", 1]]) {
+        byId(id).addEventListener("click", () => {
+          month = new Date(month.getFullYear(), month.getMonth() + offset, 1);
+          selectedDay = dayKey(month);
+          renderListings();
+        });
+      }
+      byId("events-today").addEventListener("click", () => {
+        const today = new Date();
+        month = new Date(today.getFullYear(), today.getMonth(), 1);
+        selectedDay = dayKey(today); renderListings();
+      });
       setTab(selectedTab);
       refreshTimer = window.setInterval(() => {
         if (byId("events-view")?.style.display === "block") void refresh();
@@ -219,8 +294,8 @@
       stream = new window.EventSource("/api/events/stream");
       stream.addEventListener("update", () => { void refresh(); });
     }
+    render();
     if (!data || Date.now() - lastRequest > 60000) void refresh();
-    else render();
   }
 
   function deactivate() { stream?.close(); stream = null; }

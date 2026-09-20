@@ -41,7 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/events.css?v=1" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=2" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1116,7 +1116,7 @@
         <!-- Cross-exchange futures and funding arbitrage -->
         <section id="events-view" class="events-view" style="display:none" aria-label="Новости и листинги">
             <div class="events-heading">
-                <div><span class="events-eyebrow">OBSIDIAN RADAR</span><h1>События рынка</h1><p>Важные новости и новые торговые пары на подключённых биржах</p></div>
+                <div><h1>События</h1></div>
                 <span id="events-updated" class="events-updated">Загрузка данных…</span>
             </div>
             <div class="events-tabs" role="tablist" aria-label="Разделы событий">
@@ -1124,21 +1124,24 @@
                 <button id="events-tab-listings" type="button" aria-selected="false">Листинги</button>
             </div>
             <div id="events-news-panel" class="events-panel">
-                <div class="events-section-title"><div><h2>Важное сейчас</h2><p>Публикации источников с указанием времени и первоисточника</p></div></div>
+                <div class="events-section-title"><div><h2>Срочно</h2></div></div>
                 <div id="events-urgent-list" class="events-urgent-grid"></div>
-                <div class="events-section-title"><div><h2>Лента новостей</h2><p>Свежие события крипторынка</p></div></div>
+                <div class="events-section-title"><div><h2>Лента</h2></div></div>
                 <div id="events-news-list" class="events-feed"></div>
             </div>
             <div id="events-listings-panel" class="events-panel" hidden>
                 <div class="events-filters">
+                    <input id="events-search" class="events-search" type="search" placeholder="Поиск монеты" aria-label="Поиск монеты" autocomplete="off">
+                    <div class="events-segment" role="group" aria-label="Тип события"><button type="button" class="on" data-kind="all">Все</button><button type="button" data-kind="listing">Листинги</button><button type="button" data-kind="delisting">Делистинги</button></div>
+                    <div class="events-segment" role="group" aria-label="Время события"><button type="button" class="on" data-phase="all">Все</button><button type="button" data-phase="upcoming">Будут</button><button type="button" data-phase="past">Прошли</button></div>
                     <div class="events-picker" data-picker="exchange"><span class="events-picker-label">Биржа</span><button id="events-exchange" class="events-picker-btn" type="button" aria-haspopup="listbox" aria-expanded="false"><img src="/img/ALL.svg" alt=""><span>Все 11 бирж</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Биржа"></div></div>
                     <div class="events-picker" data-picker="market"><span class="events-picker-label">Рынок</span><button id="events-market" class="events-picker-btn" type="button" aria-haspopup="listbox" aria-expanded="false"><span class="events-market-icon">◈</span><span>Спот и фьючерсы</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Рынок"></div></div>
                     <span id="events-coverage" class="events-coverage"></span>
                 </div>
-                <div class="events-section-title"><div><h2>Предстоящие</h2><p>Подтверждённые новые USDT пары с датой из каталога биржи</p></div></div>
-                <div id="events-upcoming" class="events-feed"></div>
-                <div class="events-section-title"><div><h2>Недавние</h2><p>Новые USDT пары после двух сканирований; существующие рынки не считаются листингами</p></div></div>
-                <div id="events-past" class="events-feed"></div>
+                <div class="events-calendar-bar"><button id="events-prev-month" type="button" aria-label="Предыдущий месяц">‹</button><strong id="events-month-label"></strong><button id="events-next-month" type="button" aria-label="Следующий месяц">›</button><button id="events-today" type="button">Сегодня</button><span class="events-calendar-legend"><i></i> Листинг <i></i> Пара исчезла</span></div>
+                <div class="events-calendar-scroll"><div id="events-calendar" class="events-calendar" role="grid" aria-label="Календарь событий"></div></div>
+                <div class="events-day-heading"><h2 id="events-day-label"></h2><span id="events-day-count"></span></div>
+                <div id="events-day-list" class="events-day-list"></div>
             </div>
         </section>
         <div id="arbitrage-view" class="arb-view" style="display:none">
@@ -3686,7 +3689,7 @@
     <script defer src="/js/arbitrage.js?v=2016"></script>
     <script defer src="/js/arbitrage-pro.js?v=2017"></script>
     <script defer src="/js/journal.js?v=2018"></script>
-    <script defer src="/js/events.js?v=3"></script>
+    <script defer src="/js/events.js?v=4"></script>
 </body>
 
 </html>

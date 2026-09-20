@@ -12,6 +12,8 @@ test("events tab renders sourced news and filters spot and futures listings", as
   const dom = new JSDOM(html, { url: "https://obsidianscreener.com", runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const w = dom.window;
+  assert.ok(w.document.getElementById("events-calendar"), "listings have a month calendar");
+  assert.doesNotMatch(w.document.querySelector(".events-heading").textContent, /Важные новости и новые торговые пары/);
   assert.equal(w.document.querySelector(".events-filters select"), null, "event filters use the screener-style menu");
   let stream;
   w.EventSource = class {
@@ -26,7 +28,8 @@ test("events tab renders sourced news and filters spot and futures listings", as
       publishedAt: Date.now(), priority: "urgent" }],
     listings: [
       { exchange: "BN", type: "spot", symbol: "NEW/USDT", detectedAt: Date.now() },
-      { exchange: "BB", type: "futures", symbol: "NEXT/USDT:USDT", detectedAt: Date.now(), launchAt: Date.now() + 86400000 }
+      { exchange: "BB", type: "futures", symbol: "NEXT/USDT:USDT", detectedAt: Date.now(), launchAt: Date.now() + 86400000 },
+      { exchange: "BN", type: "spot", symbol: "GONE/USDT", kind: "delisting", detectedAt: Date.now(), launchAt: null }
     ]
   }) });
   w.eval(script);
@@ -36,16 +39,26 @@ test("events tab renders sourced news and filters spot and futures listings", as
   assert.match(w.document.getElementById("events-urgent-list").textContent, /Биржу взломали/);
   assert.equal(typeof stream.notify, "function");
   w.document.getElementById("events-tab-listings").click();
-  assert.match(w.document.getElementById("events-upcoming").textContent, /NEXT\/USDT/);
+  assert.match(w.document.getElementById("events-day-list").textContent, /NEW\/USDT/);
+  assert.match(w.document.getElementById("events-day-list").textContent, /GONE\/USDT/);
+  w.document.querySelector('.events-segment [data-kind="delisting"]').click();
+  assert.doesNotMatch(w.document.getElementById("events-day-list").textContent, /NEW\/USDT/);
+  assert.match(w.document.getElementById("events-day-list").textContent, /исчезла из каталога/);
+  w.document.querySelector('.events-segment [data-kind="all"]').click();
   w.document.getElementById("events-market").click();
   assert.equal(w.document.getElementById("events-market").getAttribute("aria-expanded"), "true");
   w.document.querySelector('.events-picker[data-picker="market"] [data-value="spot"]').click();
   assert.equal(w.document.getElementById("events-market").getAttribute("aria-expanded"), "false");
-  assert.doesNotMatch(w.document.getElementById("events-upcoming").textContent, /NEXT\/USDT/);
-  assert.match(w.document.getElementById("events-past").textContent, /NEW\/USDT/);
+  assert.match(w.document.getElementById("events-day-list").textContent, /NEW\/USDT/);
   w.document.getElementById("events-exchange").click();
   w.document.querySelector('.events-picker[data-picker="exchange"] [data-value="BB"]').click();
-  assert.doesNotMatch(w.document.getElementById("events-past").textContent, /NEW\/USDT/);
+  assert.doesNotMatch(w.document.getElementById("events-day-list").textContent, /NEW\/USDT/);
+  w.document.querySelector('.events-picker[data-picker="market"] [data-value="futures"]').click();
+  const tomorrow = new Date(Date.now() + 86400000);
+  const key = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+  if (!w.document.querySelector(`[data-date="${key}"]`)) w.document.getElementById("events-next-month").click();
+  w.document.querySelector(`[data-date="${key}"]`).click();
+  assert.match(w.document.getElementById("events-day-list").textContent, /NEXT\/USDT/);
   w.ObsidianEvents.deactivate();
   assert.equal(stream.closed, true);
 });

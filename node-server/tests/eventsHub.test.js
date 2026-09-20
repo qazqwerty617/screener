@@ -70,6 +70,60 @@ test("legacy non-USDT listing history is discarded while news is retained", t =>
   assert.equal(hub.snapshot().news[0].title, "Kept news");
 });
 
+test("persistent market removal is an observed delisting, and a recovered pair retracts it", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  let present = true;
+  let tick = Date.parse("2026-09-21T12:00:00Z");
+  const hub = createEventsHub({ filePath, now: () => tick,
+    fetchMarkets: async id => ({
+      ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`base${i}`,
+        { symbol: `B${i}/USDT`, base: `B${i}`, quote: "USDT", spot: true }])),
+      future: { symbol: "BTC/USDT:USDT", base: "BTC", quote: "USDT", settle: "USDT", swap: true },
+      ...(id === "binance" && present ? { extra: { symbol: "NEW/USDT", base: "NEW", quote: "USDT", spot: true } } : {})
+    }) });
+  await hub.refreshMarkets(); present = false;
+  for (let n = 0; n < 2; n++) { tick += 300000; await hub.refreshMarkets(); }
+  assert.equal(hub.snapshot().listings.length, 0, "a short gap is not a delisting");
+  tick += 300000; await hub.refreshMarkets();
+  const [event] = hub.snapshot().listings;
+  assert.equal(event.kind, "delisting");
+  assert.equal(event.symbol, "NEW/USDT");
+  assert.equal(event.launchAt, null, "catalog removal has no claimed official delisting time");
+  present = true; tick += 300000; await hub.refreshMarkets();
+  assert.equal(hub.snapshot().listings.length, 0, "catalog recovery retracts the observation");
+});
+
+test("trusted exchange launch dates seed limited history without inventing events for other venues", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  const now = Date.parse("2026-09-21T12:00:00Z");
+  const date = now - 2 * 86400000;
+  const hub = createEventsHub({ filePath, now: () => now,
+    fetchMarkets: async id => ({ current: { symbol: "NEW/USDT:USDT", base: "NEW", quote: "USDT",
+      settle: "USDT", swap: true, info: id === "binance" ? { onboardDate: date } : { openTime: date } } }) });
+  await hub.refreshMarkets();
+  const events = hub.snapshot().listings;
+  assert.equal(events.length, 1);
+  assert.equal(events[0].exchange, "BN");
+  assert.equal(events[0].historical, true);
+  await hub.refreshMarkets();
+  assert.equal(hub.snapshot().listings.length, 1);
+});
+
+test("an existing version-two catalog receives its dated history once", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  const now = Date.parse("2026-09-21T12:00:00Z");
+  fs.writeFileSync(filePath, JSON.stringify({ marketVersion: 2, known: { BN: ["BN:spot:NEW/USDT"] },
+    venues: { BN: { status: "ok", spot: 1, futures: 0 } }, listings: [] }));
+  const hub = createEventsHub({ filePath, now: () => now,
+    fetchMarkets: async () => ({ spot: { symbol: "NEW/USDT", base: "NEW", quote: "USDT", spot: true,
+      info: { listTime: now - 86400000, onboardDate: now - 86400000 } } }) });
+  await hub.refreshMarkets(); await hub.refreshMarkets();
+  assert.equal(hub.snapshot().listings.filter(item => item.exchange === "BN").length, 1);
+});
+
 test("all eleven exchanges establish a spot and futures baseline before recording new listings", async t => {
   const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
   t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
