@@ -1440,6 +1440,7 @@ async function handleAdminCallbackQuery(query) {
   else if (domain === "refs") {
     const rows = userStore.getAllReferralStats(payments);
     const total = rows.reduce((sum, row) => sum + row.visits, 0);
+    const eligibleTotal = rows.reduce((sum, row) => sum + (row.eligibleVisits || 0), 0);
     const registered = rows.reduce((sum, row) => sum + row.registrations, 0);
     const buyers = rows.reduce((sum, row) => sum + row.buyers, 0);
     const plans = rows.reduce((sum, row) => {
@@ -1447,9 +1448,9 @@ async function handleAdminCallbackQuery(query) {
       return sum;
     }, {});
     const top = rows.slice(0, 20).map((row, index) =>
-      `${index + 1}. <code>${row.userId}</code> — ${row.visits} перешли, ${row.registrations} зарегистрировались, ${row.buyers} купили (${row.purchases} покупок)`
+      `${index + 1}. <code>${row.userId}</code> — ${row.visits} перешли (${row.eligibleVisits || 0} проверяемых), ${row.registrations} зарегистрировались, ${row.buyers} купили (${row.purchases} покупок)`
     ).join("\n");
-    const summary = `<b>🔗 Реферальная статистика</b>\n\nПереходы: ${total}\nРегистрации: ${registered}\nПокупатели PRO: ${buyers}\nПланы: 1 мес. ${plans["1m"] || 0}, 3 мес. ${plans["3m"] || 0}, 12 мес. ${plans["12m"] || 0}, навсегда ${plans.lifetime || 0}\n\n${top || "Пока нет рефералов"}`;
+    const summary = `<b>🔗 Реферальная статистика</b>\n\nПереходы: ${total} (проверяемых: ${eligibleTotal})\nРегистрации: ${registered}\nПокупатели PRO: ${buyers}\nПланы: 1 мес. ${plans["1m"] || 0}, 3 мес. ${plans["3m"] || 0}, 12 мес. ${plans["12m"] || 0}, навсегда ${plans.lifetime || 0}\n\nНаграды только после ручной проверки.\n\n${top || "Пока нет рефералов"}`;
     await editAdminMessage(messageId, summary, { inline_keyboard: [[{ text: "🏠 Главное меню", callback_data: "adm:menu" }]] });
   }
   

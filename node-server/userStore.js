@@ -10,7 +10,17 @@ const USERS_FILE = path.join(__dirname, "users.json");
 const SESSIONS_FILE = path.join(__dirname, "sessions.json");
 const LOGS_FILE = path.join(__dirname, "auth_logs.json");
 const REFERRAL_VISITS_FILE = path.join(__dirname, "referral_visits.json");
-const REFERRAL_VISIT_SECRET = process.env.ADMIN_API_SECRET || crypto.randomBytes(32);
+const REFERRAL_SECRET_FILE = path.join(__dirname, "referral_fingerprint.key");
+function loadReferralSecret() {
+  if (process.env.ADMIN_API_SECRET) return process.env.ADMIN_API_SECRET;
+  try {
+    fs.writeFileSync(REFERRAL_SECRET_FILE, crypto.randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 });
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+  }
+  return fs.readFileSync(REFERRAL_SECRET_FILE, "utf8").trim();
+}
+const REFERRAL_VISIT_SECRET = loadReferralSecret();
 
 const PASSWORD_ALGORITHM = "scrypt-v1";
 const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 365-day (1 year) persistent session TTL
@@ -170,19 +180,42 @@ function getReferralCode(userId) {
   return user.referralCode;
 }
 
-function recordReferralVisit(code, ip, userAgent) {
+function referralSourceKey(code, ip, telegramId = "") {
+  if (!ip && !telegramId) return "";
+  const source = ip ? `ip:${String(ip).slice(0, 64)}` : `telegram:${String(telegramId).slice(0, 64)}`;
+  return crypto.createHmac("sha256", REFERRAL_VISIT_SECRET)
+    .update(`${code}\0${source}`)
+    .digest("hex");
+}
+
+function canAttributeReferral(owner, code, ip, telegramId = "") {
+  if (!owner || (!ip && !telegramId)) return false;
+  if (ip && (owner.lastIp === ip || owner.registrationIp === ip)) return false;
+  if (telegramId && owner.telegramId === String(telegramId)) return false;
+  const key = referralSourceKey(code, ip, telegramId);
+  return !Object.values(users).some(user => user.referredBy === owner.id && (
+    user.referralSourceKey === key || (ip && (user.registrationIp === ip || user.lastIp === ip))
+  ));
+}
+
+function recordReferralVisit(code, ip, userAgent, visitorUserId = "") {
   const owner = referralOwner(code);
   if (!owner) return false;
-  const key = crypto.createHmac("sha256", REFERRAL_VISIT_SECRET)
+  if (visitorUserId === owner.id || (ip && (owner.lastIp === ip || owner.registrationIp === ip))) return true;
+  const key = referralSourceKey(code, ip);
+  if (!key) return true;
+  const entry = referralVisits[code] || { count: 0, visitors: {} };
+  // Legacy entries included the user-agent in their key. Keep their historical
+  // total, but count new reward-eligible visits by IP so changing browsers or
+  // creating more accounts on the same computer cannot inflate the count.
+  if (!entry.uniqueIps || typeof entry.uniqueIps !== "object") entry.uniqueIps = {};
+  if (entry.uniqueIps[key]) return true;
+  if (Object.keys(entry.uniqueIps).length >= 10000) return true;
+  entry.uniqueIps[key] = Date.now();
+  const legacyKey = crypto.createHmac("sha256", REFERRAL_VISIT_SECRET)
     .update(`${code}\0${String(ip).slice(0, 64)}\0${String(userAgent).slice(0, 256)}`)
     .digest("hex");
-  const entry = referralVisits[code] || { count: 0, visitors: {} };
-  if (entry.visitors[key]) return true;
-  // Bound persistent telemetry. Counts are unique browser/network estimates,
-  // not a security decision; registrations and payments use server records.
-  if (Object.keys(entry.visitors).length >= 10000) return true;
-  entry.visitors[key] = Date.now();
-  entry.count++;
+  if (!entry.visitors?.[legacyKey]) entry.count = (Number(entry.count) || 0) + 1;
   referralVisits[code] = entry;
   saveJSONDebounced(REFERRAL_VISITS_FILE, referralVisits);
   return true;
@@ -200,7 +233,9 @@ function getReferralStats(userId, successfulPayments = []) {
     const planId = String(payment.planId || "unknown");
     byPlan[planId] = (byPlan[planId] || 0) + 1;
   }
-  return { code, visits: referralVisits[code]?.count || 0, registrations: referred.length,
+  return { code, visits: referralVisits[code]?.count || 0,
+    eligibleVisits: Object.keys(referralVisits[code]?.uniqueIps || {}).length,
+    registrations: referred.length,
     buyers: buyers.size, purchases: paid.length, byPlan };
 }
 
@@ -442,7 +477,7 @@ function createSession(userId) {
 
 function sanitizeUser(user) {
   if (!user) return null;
-  const { passwordHash, salt, passwordAlgorithm, appliedPaymentIds, ...safe } = user;
+  const { passwordHash, salt, passwordAlgorithm, appliedPaymentIds, referralSourceKey, registrationIp, ...safe } = user;
   if (!safe.plan) safe.plan = "free";
   // Auto-downgrade expired PRO subscriptions
   if (safe.plan === "pro" && user.proExpiresAt && Number.isFinite(user.proExpiresAt) && user.proExpiresAt <= Date.now()) {
@@ -617,11 +652,15 @@ async function registerUser({ username, email, password, ip = "", referralCode =
     lastActive: nowIso,
     lastLogin: nowIso,
     lastIp: ip,
+    registrationIp: ip,
     avatar: ""
   };
 
   const referrer = referralOwner(referralCode);
-  if (referrer && referrer.id !== userId) newUser.referredBy = referrer.id;
+  if (referrer && referrer.id !== userId && canAttributeReferral(referrer, referralCode, ip)) {
+    newUser.referredBy = referrer.id;
+    newUser.referralSourceKey = referralSourceKey(referralCode, ip);
+  }
 
   users[userId] = newUser;
   // Registration is rare and must be durable before the token is handed out.
@@ -748,11 +787,15 @@ function telegramAuth(tgData, chatId = null, ip = "", referralCode = "") {
       lastActive: nowIso,
       lastLogin: nowIso,
       lastIp: ip,
+      registrationIp: ip,
       avatar: tgData.photo_url || ""
     };
 
     const referrer = referralOwner(referralCode);
-    if (referrer && referrer.id !== userId) foundUser.referredBy = referrer.id;
+    if (referrer && referrer.id !== userId && canAttributeReferral(referrer, referralCode, ip, tgId)) {
+      foundUser.referredBy = referrer.id;
+      foundUser.referralSourceKey = referralSourceKey(referralCode, ip, tgId);
+    }
 
     users[userId] = foundUser;
     modified = true;

@@ -16158,6 +16158,7 @@ async function loadReferralProfile() {
   if (!token) return;
   const statsEl = $("profile-referral-stats");
   const statusEl = $("profile-referral-status");
+  const summaryEl = $("profile-referral-summary-counts");
   try {
     const response = await fetch("/api/referrals/me", { cache: "no-store", headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) throw new Error("Referral statistics unavailable");
@@ -16174,10 +16175,20 @@ async function loadReferralProfile() {
       const value = Number(values[cell.dataset.refStat]);
       cell.textContent = Number.isFinite(value) && value >= 0 ? value.toLocaleString("ru-RU") : "0";
     });
+    if (summaryEl) summaryEl.textContent = `Переходы ${Number(data.visits || 0).toLocaleString("ru-RU")} · PRO ${Number(data.buyers || 0).toLocaleString("ru-RU")}`;
+    const eligibleEl = $("profile-referral-eligible");
+    if (eligibleEl) eligibleEl.textContent = `Проверяемые переходы: ${Number(data.eligibleVisits || 0).toLocaleString("ru-RU")} / 50`;
     if (statusEl) statusEl.textContent = "";
   } catch (_) {
+    if (summaryEl) summaryEl.textContent = "Статистика недоступна";
     if (statusEl) statusEl.textContent = "Статистика временно недоступна";
   }
+}
+
+const referralDetails = document.getElementById("profile-referral-section");
+if (referralDetails && window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) {
+  referralDetails.addEventListener("mouseenter", () => { referralDetails.open = true; });
+  referralDetails.addEventListener("mouseleave", () => { referralDetails.open = false; });
 }
 
 document.getElementById("profile-referral-copy")?.addEventListener("click", async () => {

@@ -3110,8 +3110,13 @@
                     <span class="profile-stat-val" id="profile-stat-days">∞ (Бессрочно)</span>
                 </div>
             </div>
-            <div class="profile-promo-section" id="profile-referral-section">
-                <strong>Пригласить трейдеров</strong>
+            <details class="profile-referral-compact" id="profile-referral-section">
+                <summary class="profile-referral-summary">
+                    <span class="profile-referral-summary-title">↗ Реферальная программа</span>
+                    <span class="profile-referral-summary-counts" id="profile-referral-summary-counts">Переходы — · PRO —</span>
+                    <span class="profile-referral-chevron" aria-hidden="true">⌄</span>
+                </summary>
+                <div class="profile-referral-body">
                 <p class="profile-referral-caption">Ваша личная ссылка</p>
                 <div class="profile-promo-row">
                     <input id="profile-referral-link" type="text" readonly aria-label="Реферальная ссылка" />
@@ -3133,7 +3138,18 @@
                     </div>
                     <p id="profile-referral-status" class="profile-referral-status" role="status">Загружаем статистику…</p>
                 </div>
-            </div>
+                <div class="profile-referral-rewards" aria-label="Условия реферальной программы">
+                    <strong>Награды за приглашения</strong>
+                    <div class="profile-referral-progress" id="profile-referral-eligible">Проверяемые переходы: — / 50</div>
+                    <div><span>50 уникальных переходов</span><b>15 дней PRO</b></div>
+                    <div><span>Покупатель · 1 месяц</span><b>5 дней PRO</b></div>
+                    <div><span>Покупатель · 3 месяца</span><b>15 дней PRO</b></div>
+                    <div><span>Покупатель · 12 месяцев</span><b>1,5 месяца PRO</b></div>
+                    <div><span>Покупатель · навсегда</span><b>3 месяца PRO</b></div>
+                    <p>За покупателя учитывается первая успешная оплата. Проверяемые переходы считаются с момента обновления защиты. Награды не начисляются автоматически: после проверки обратитесь к <a href="https://t.me/ObsidianSup" target="_blank" rel="noopener noreferrer">менеджеру @ObsidianSup ↗</a>. Свои и повторные переходы не засчитываются.</p>
+                </div>
+                </div>
+            </details>
             <div class="profile-plan-upgrade-banner" id="profile-plan-upgrade-banner" style="display: flex; align-items: center; justify-content: space-between; gap: 14px; background: linear-gradient(135deg, rgba(124, 58, 237, 0.25) 0%, rgba(168, 85, 247, 0.12) 100%); border: 1px solid rgba(168, 85, 247, 0.5); border-radius: 12px; padding: 14px 18px; margin: 16px 0; box-shadow: 0 8px 25px rgba(124, 58, 237, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.15); position: relative; overflow: hidden;">
                 <div style="position: absolute; top: 0; left: 0; width: 4px; height: 100%; background: linear-gradient(180deg, #a855f7 0%, #7c3aed 100%); border-radius: 12px 0 0 12px;"></div>
                 <div style="display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;">

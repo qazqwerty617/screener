@@ -4876,12 +4876,23 @@ body {
     background: var(--bg2);
     border: 1px solid var(--bd2);
     border-radius: 14px;
-    padding: 20px;
+    padding: 14px;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 10px;
+    box-sizing: border-box;
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
 }
+
+#profile-modal { box-sizing: border-box; padding: 12px; }
+#profile-modal .profile-modal-content { margin: 0 auto !important; }
+#profile-modal .modal-header { position: sticky; top: 0; z-index: 1; flex: none; padding: 5px 0; background: var(--bg2); }
 
 .modal-header {
     display: flex;
@@ -4920,7 +4931,7 @@ body {
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 14px;
+    padding: 10px 12px;
     background: var(--bg3);
     border: 1px solid var(--bd);
     border-radius: 10px;
@@ -5003,7 +5014,7 @@ body {
     background: rgba(255, 255, 255, 0.025);
     border: 1px solid var(--bd);
     border-radius: 8px;
-    padding: 9px 12px;
+    padding: 7px 10px;
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -5422,6 +5433,37 @@ body {
 .profile-referral-plans .profile-referral-cell strong { font-size: 13px; color: #c4b5fd; }
 .profile-referral-status { margin: 0; color: var(--t3); font-size: 10px; text-align: center; }
 .profile-referral-status:not(:empty) { padding: 7px; border-top: 1px solid var(--bd2); }
+.profile-referral-compact { position: relative; min-width: 0; border: 1px solid var(--bd2); border-radius: 9px; background: rgba(124,58,237,.055); }
+.profile-referral-compact[open] { border-color: rgba(168,85,247,.35); }
+.profile-referral-summary { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 10px; cursor: pointer; list-style: none; }
+.profile-referral-summary::-webkit-details-marker { display: none; }
+.profile-referral-summary:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 8px; }
+.profile-referral-summary-title { min-width: 0; overflow: hidden; color: var(--t1); font-size: 11px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+.profile-referral-summary-counts { margin-left: auto; color: var(--t2); font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.profile-referral-chevron { color: var(--t3); transition: transform .15s ease; }
+.profile-referral-compact[open] .profile-referral-chevron { transform: rotate(180deg); }
+.profile-referral-body { padding: 0 10px 10px; border-top: 1px solid var(--bd2); }
+.profile-referral-rewards { margin-top: 10px; padding: 9px 10px; border: 1px solid rgba(168,85,247,.22); border-radius: 8px; background: rgba(124,58,237,.06); }
+.profile-referral-rewards > strong { display: block; margin-bottom: 6px; color: var(--t1); font-size: 11px; }
+.profile-referral-rewards > div { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; color: var(--t2); font-size: 10px; }
+.profile-referral-rewards > div b { color: #c4b5fd; font-weight: 700; white-space: nowrap; }
+.profile-referral-rewards .profile-referral-progress { margin-bottom: 5px; padding: 5px 7px; border-radius: 5px; background: rgba(124,58,237,.14); color: #c4b5fd; font-weight: 700; }
+.profile-referral-rewards p { margin: 7px 0 0; color: var(--t3); font-size: 10px; line-height: 1.45; }
+.profile-referral-rewards a { color: #7dd3fc; text-decoration: none; }
+.profile-referral-rewards a:hover { text-decoration: underline; }
+@media (max-width: 440px) {
+    .profile-referral-summary-counts { font-size: 9px; }
+    .profile-referral-summary-title { font-size: 10px; }
+}
+
+@media (max-height: 900px) {
+    #profile-modal .profile-modal-content { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+    #profile-modal .profile-card { padding-top: 8px; padding-bottom: 8px; }
+    #profile-modal .profile-stat-card { padding-top: 6px; padding-bottom: 6px; }
+    #profile-modal .profile-referral-cell { padding-top: 6px; padding-bottom: 6px; }
+    #profile-modal .profile-referral-plans-title { padding-top: 4px; padding-bottom: 4px; }
+    #profile-modal .profile-bug-card { margin-top: 4px; margin-bottom: 4px; padding-top: 7px; padding-bottom: 7px; }
+}
 
 .profile-manager-link { display: flex; align-items: center; gap: 7px; min-height: 34px; padding: 5px 10px; border: 1px solid rgba(34,158,217,.22); border-radius: 8px; background: rgba(34,158,217,.045); color: var(--t1); text-decoration: none; font-size: 11px; transition: background .15s, border-color .15s; }
 .profile-manager-link:hover { border-color: rgba(34,158,217,.5); background: rgba(34,158,217,.1); }

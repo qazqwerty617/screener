@@ -3373,7 +3373,8 @@ function referralCodeFromCookie(req) {
 
 app.get("/r/:code", referralVisitLimit, (req, res) => {
   const code = String(req.params.code || "");
-  if (!userStore.recordReferralVisit(code, req.ip, req.headers["user-agent"] || "")) {
+  const visitor = userStore.getUserByToken(getBearerToken(req));
+  if (!userStore.recordReferralVisit(code, req.ip, req.headers["user-agent"] || "", visitor?.id || "")) {
     return res.status(404).send("Referral link not found");
   }
   res.setHeader("Set-Cookie", `obsidian_ref=${code}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
