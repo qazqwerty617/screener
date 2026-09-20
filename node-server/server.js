@@ -4325,7 +4325,7 @@ app.get("/api/formations/snapshot", (req, res) => {
     maps[type] = Object.fromEntries(validKeys.filter(key => source[key]?.length).map(key => [key, source[key]]));
   }
   res.json({ tf, maps, updatedAt: validKeys.reduce((latest, key) => Math.max(latest, stamps[key]), 0),
-    scanned: validKeys.length, coverage: ["5m", "15m", "1h"].includes(tf) ? "all-assets" : "top-300" });
+    scanned: validKeys.length, coverage: ["5m", "15m", "1h"].includes(tf) ? "all-assets" : "top-500" });
 });
 
 app.get("/api/formations/map", (req, res) => {
@@ -5108,7 +5108,7 @@ server.listen(PORT, BIND_HOST, () => {
         venues.push(t);
       }
       const fullList = assignScanVenues(perCoin);
-      const list4h = fullList.slice(0, 300);
+      const list4h = fullList.slice(0, 500);
       for (const tf of ["4h", "1m", "1d", "3d", "1w"]) {
         const refreshMs = tf === "1m" ? 60000 : tf === "4h" ? 600000 : 1800000;
         if (Date.now() - (extraFormationScanAt.get(tf) || 0) < refreshMs) continue;
