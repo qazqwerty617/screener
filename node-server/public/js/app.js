@@ -12700,7 +12700,7 @@ function loadBacktestModule() {
 }
 
 window.switchView = function switchView(view) {
-  if (view !== "screener") {
+  if (view !== "screener" && view !== "events") {
     const user = window.currentUser;
     const isPro = user && user.plan === "pro";
     if (!isPro) {
@@ -12727,6 +12727,8 @@ window.switchView = function switchView(view) {
   const backtestEl = document.getElementById("backtest-view");
   const journalEl = document.getElementById("journal-view");
   const arbitrageEl = document.getElementById("arbitrage-view");
+  const eventsEl = document.getElementById("events-view");
+  if (eventsEl) eventsEl.style.display = view === "events" ? "block" : "none";
 
   // Highlight active navbar tab
   document.querySelectorAll("#nav .ntab").forEach(t => {
@@ -12737,7 +12739,8 @@ window.switchView = function switchView(view) {
       (view === "arbitrage" && (text.includes("арбитраж") || t.id === "tab-arbitrage")) ||
       (view === "formations" && text.includes("формации")) ||
       (view === "backtest" && text.includes("бэктест")) ||
-      (view === "journal" && (text.includes("дневник") || t.id === "tab-journal"));
+      (view === "journal" && (text.includes("дневник") || t.id === "tab-journal")) ||
+      (view === "events" && t.id === "tab-events");
     t.classList.toggle("on", isMatch);
     t.setAttribute("aria-selected", isMatch ? "true" : "false");
   });
@@ -12813,6 +12816,14 @@ window.switchView = function switchView(view) {
     if (journalEl) journalEl.style.display = "none";
     if (arbitrageEl) arbitrageEl.style.display = "block";
     if (window.CryptoArbitrage) window.CryptoArbitrage.activate();
+  } else if (view === "events") {
+    if (mainEl) mainEl.style.display = "none";
+    if (densityEl) densityEl.style.display = "none";
+    if (formationsEl) formationsEl.style.display = "none";
+    if (backtestEl) backtestEl.style.display = "none";
+    if (journalEl) journalEl.style.display = "none";
+    if (arbitrageEl) arbitrageEl.style.display = "none";
+    window.ObsidianEvents?.activate();
   }
 };
 
@@ -12831,6 +12842,8 @@ document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
       window.switchView("backtest");
     } else if (text.includes("дневник") || tab.id === "tab-journal" || idx === 5) {
       window.switchView("journal");
+    } else if (tab.id === "tab-events") {
+      window.switchView("events");
     }
   });
 });

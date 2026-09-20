@@ -48,6 +48,7 @@ node-server/referral_visits.json
 node-server/referral_fingerprint.key
 node-server/partners.json
 node-server/partner_visits.json
+node-server/events_hub.json*
 node-server/users_database.csv
 node-server/data/
 

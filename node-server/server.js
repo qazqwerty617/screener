@@ -741,6 +741,8 @@ const { registerPaymentRoutes, createSlidingWindowLimiter, getBearerToken } = re
 const { renderServerChartSnapshot } = require("./serverChartRenderer");
 const telegramQueue = require("./telegramQueue");
 const priceHistoryStore = require("./priceHistoryStore");
+const { createEventsHub } = require("./eventsHub");
+const eventsHub = createEventsHub();
 const securityShield = require("./securityShield");
 const { PAGES, renderSeoPage, renderNotFoundPage, renderSitemap } = require("./seoPages");
 
@@ -4301,6 +4303,11 @@ app.post("/api/notifications/telegram-photo", telegramNotificationLimit, express
 // Payment routes must be registered before the static catch-all route.
 registerPaymentRoutes(app, { userStore, paymentGateway });
 
+app.get("/api/events", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=30");
+  res.json(eventsHub.snapshot());
+});
+
 // Formation data is consumed by the screener, so this API route must be
 // registered before the SPA catch-all below.
 //
@@ -4651,6 +4658,7 @@ const exchanges = {
 
 // тФАтФАтФА Start тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
 server.listen(PORT, BIND_HOST, () => {
+  eventsHub.start();
   console.log(`\nтХФтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХЧ`);
   console.log(`тХС  CryptoScreen Pro  тЖТ  port ${PORT}                      тХС`);
   console.log(`тХС  Exchanges: ${Object.keys(exchanges).length} modules (parallel init)            тХС`);

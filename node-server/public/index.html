@@ -41,6 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=1" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -108,6 +109,7 @@
                 <div class="ntab" role="tab" data-pro-feature="Детектор формаций и уровней" onclick="switchView('formations')">Формации</div>
                 <div class="ntab" role="tab" data-pro-feature="Бэктестинг стратегий" onclick="switchView('backtest')">Бэктесты</div>
                 <div class="ntab" role="tab" id="tab-journal" data-pro-feature="Дневник трейдера" onclick="switchView('journal')">Дневник</div>
+                <div class="ntab" role="tab" id="tab-events" onclick="switchView('events')">События</div>
             </div>
             <div class="nright">
                 <div style="display: flex; align-items: center; gap: 4px">
@@ -1112,6 +1114,33 @@
         </div>
 
         <!-- Cross-exchange futures and funding arbitrage -->
+        <section id="events-view" class="events-view" style="display:none" aria-label="Новости и листинги">
+            <div class="events-heading">
+                <div><span class="events-eyebrow">OBSIDIAN RADAR</span><h1>События рынка</h1><p>Важные новости и новые торговые пары на подключённых биржах</p></div>
+                <span id="events-updated" class="events-updated">Загрузка данных…</span>
+            </div>
+            <div class="events-tabs" role="tablist" aria-label="Разделы событий">
+                <button id="events-tab-news" class="on" type="button" aria-selected="true">Новости</button>
+                <button id="events-tab-listings" type="button" aria-selected="false">Листинги</button>
+            </div>
+            <div id="events-news-panel" class="events-panel">
+                <div class="events-section-title"><div><h2>Важное сейчас</h2><p>Публикации источников с указанием времени и первоисточника</p></div></div>
+                <div id="events-urgent-list" class="events-urgent-grid"></div>
+                <div class="events-section-title"><div><h2>Лента новостей</h2><p>Свежие события крипторынка</p></div></div>
+                <div id="events-news-list" class="events-feed"></div>
+            </div>
+            <div id="events-listings-panel" class="events-panel" hidden>
+                <div class="events-filters">
+                    <label>Биржа <select id="events-exchange"><option value="all">Все 11 бирж</option></select></label>
+                    <label>Рынок <select id="events-market"><option value="all">Спот и фьючерсы</option><option value="spot">Спот</option><option value="futures">Фьючерсы</option></select></label>
+                    <span id="events-coverage" class="events-coverage"></span>
+                </div>
+                <div class="events-section-title"><div><h2>Предстоящие</h2><p>Только с датой запуска, опубликованной биржей</p></div></div>
+                <div id="events-upcoming" class="events-feed"></div>
+                <div class="events-section-title"><div><h2>Недавние</h2><p>Время обнаружения новой пары указано отдельно от времени запуска</p></div></div>
+                <div id="events-past" class="events-feed"></div>
+            </div>
+        </section>
         <div id="arbitrage-view" class="arb-view" style="display:none">
             <header class="arb-page-head">
                 <div><h1>Арбитраж <em>Obsidian</em></h1><p>Исполнимые межбиржевые спреды, фандинг, переводы и DEX-пулы с точной проверкой контрактов.</p></div>
@@ -3657,6 +3686,7 @@
     <script defer src="/js/arbitrage.js?v=2016"></script>
     <script defer src="/js/arbitrage-pro.js?v=2017"></script>
     <script defer src="/js/journal.js?v=2018"></script>
+    <script defer src="/js/events.js?v=1"></script>
 </body>
 
 </html>
