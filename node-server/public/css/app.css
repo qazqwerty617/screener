@@ -1627,44 +1627,21 @@ body.user-is-pro .exc-free-tag {
     gap: 8px;
 }
 
-.fmt-touch-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-    margin-top: 2px;
+.formation-touch-menu {
+    position: fixed;
+    z-index: 10050;
+    width: 176px;
+    padding: 8px;
+    border: 1px solid rgba(139, 92, 246, .4);
+    border-radius: 10px;
+    background: #121521;
+    box-shadow: 0 16px 38px rgba(0, 0, 0, .48);
 }
 
-.fmt-touch-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 4px;
-    min-width: 0;
-    padding: 5px 6px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.025);
-    color: var(--t2);
-    font-size: 10px;
-    font-weight: 600;
-}
-
-.fmt-touch-card select {
-    width: 48px;
-    flex: none;
-    padding: 3px 2px;
-    border: 1px solid rgba(139, 92, 246, 0.45);
-    border-radius: 6px;
-    background: #33215a;
-    color: #fff;
-    font: inherit;
-    cursor: pointer;
-}
-
-.fmt-touch-card select:focus-visible {
-    outline: 2px solid #a78bfa;
-    outline-offset: 2px;
-}
+.formation-touch-menu-title { padding: 3px 5px 8px; color: var(--t2); font-size: 10px; font-weight: 700; }
+.formation-touch-menu-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.formation-touch-menu button { height: 29px; border: 1px solid rgba(255,255,255,.1); border-radius: 6px; background: #1b1f2d; color: var(--t2); font: 700 11px var(--font); cursor: pointer; }
+.formation-touch-menu button:hover, .formation-touch-menu button.on { border-color: rgba(167,139,250,.85); background: #5b28bf; color: #fff; box-shadow: 0 3px 10px rgba(91,40,191,.32); }
 
 .chart-density-section-label {
     font-size: 10px;
@@ -4189,6 +4166,10 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
 .bt-field input, .bt-field textarea, .bt-field select { width: 100%; padding: 0 10px; color: var(--t1); font: 10px var(--font); background: #0d0f16; border: 1px solid var(--bd2); border-radius: 5px; outline: none; resize: none; }
 .bt-field input { height: 32px; }
 .bt-field select { height: 32px; cursor: pointer; }
+.bt-leverage-field > span { display: flex; align-items: center; justify-content: space-between; }
+.bt-leverage-field output { color: var(--ac); font-size: 11px; letter-spacing: 0; }
+.bt-field input[type="range"] { height: 32px; padding: 0; accent-color: var(--ac); cursor: pointer; }
+.bt-field input[type="range"]:disabled { cursor: not-allowed; opacity: .55; }
 .bt-field input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
 .bt-field input[type="number"]::-webkit-inner-spin-button, .bt-field input[type="number"]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .bt-field textarea { min-height: 54px; padding-top: 8px; line-height: 1.4; }

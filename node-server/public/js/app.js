@@ -8690,7 +8690,11 @@ function connectKlWs(ex, sym, tf) {
             }
           } else if (d.dataType?.includes("@kline") && d.data) {
             const k = Array.isArray(d.data) ? d.data[d.data.length - 1] : d.data;
-            if (k) appendCandle({ t: +(k.time || k.T || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.c || k.close || 0), v: +(k.v || k.volume || 0) });
+            // BingX v/volume is base-asset quantity. REST history and the server
+            // relay use quote-value volume, so direct updates must do the same.
+            // Mixing units makes cheap coins overwrite real USD bars with huge
+            // base quantities; appendCandle's monotonic volume then retains them.
+            if (k) appendCandle({ t: +(k.time || k.T || k.t || 0), o: +(k.open || k.o || 0), h: +(k.high || k.h || 0), l: +(k.low || k.l || 0), c: +(k.c || k.close || 0), v: +(k.v ?? k.volume ?? 0) * +(k.c || k.close || 0) });
           }
         } catch (_) {}
       };
@@ -9247,13 +9251,57 @@ function syncIndicatorButtonsUI() {
     if (smcName && chartActiveSmc.has(smcName)) isActive = true;
     btn.classList.toggle("on", isActive);
   });
-  const touchMinimums = { cascades: chartFovCascadesMin, levels: chartFovBreakoutMin,
-    trendlines: chartFovTrendlineMin, retests: chartFovRetestMin };
-  document.querySelectorAll("#chart-density-panel [data-fmt-touch-type]").forEach(select => {
-    select.value = String(touchMinimums[select.dataset.fmtTouchType] || 2);
-  });
 }
 window.syncIndicatorButtonsUI = syncIndicatorButtonsUI;
+
+const formationTouchLabels = { cascades: "Каскады", levels: "Горизонталки", trendlines: "Наклонки", retests: "Ретест" };
+function getFormationTouchMinimum(type) {
+  switch (type) {
+    case "cascades": return chartFovCascadesMin;
+    case "levels": return chartFovBreakoutMin;
+    case "trendlines": return chartFovTrendlineMin;
+    case "retests": return chartFovRetestMin;
+    default: return 2;
+  }
+}
+function setFormationTouchMinimum(type, value) {
+  if (!Number.isInteger(value) || value < 1 || value > 4 || (type === "retests" && value < 2)) return;
+  switch (type) {
+    case "cascades": chartFovCascadesMin = value; break;
+    case "levels": chartFovBreakoutMin = value; break;
+    case "trendlines": chartFovTrendlineMin = value; break;
+    case "retests": chartFovRetestMin = value; break;
+    default: return;
+  }
+  try { saveFovSettings(); } catch (_) {}
+  requestAnimationFrame(drawChart);
+}
+let formationTouchMenu = null;
+function closeFormationTouchMenu() { formationTouchMenu?.remove(); formationTouchMenu = null; }
+function openFormationTouchMenu(type, event) {
+  closeFormationTouchMenu();
+  const menu = document.createElement("div");
+  menu.className = "formation-touch-menu";
+  menu.setAttribute("role", "menu");
+  menu.innerHTML = `<div class="formation-touch-menu-title">${formationTouchLabels[type]} · мин. касаний</div><div class="formation-touch-menu-options"></div>`;
+  const options = menu.querySelector(".formation-touch-menu-options");
+  const current = getFormationTouchMinimum(type);
+  for (let value = type === "retests" ? 2 : 1; value <= 4; value++) {
+    const option = document.createElement("button");
+    option.type = "button"; option.textContent = `${value}+`;
+    option.classList.toggle("on", value === current);
+    option.setAttribute("role", "menuitemradio"); option.setAttribute("aria-checked", String(value === current));
+    option.onclick = () => { setFormationTouchMinimum(type, value); closeFormationTouchMenu(); };
+    options.appendChild(option);
+  }
+  document.body.appendChild(menu);
+  const gap = 8;
+  menu.style.left = `${Math.max(gap, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - gap))}px`;
+  menu.style.top = `${Math.max(gap, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - gap))}px`;
+  formationTouchMenu = menu;
+}
+document.addEventListener("pointerdown", event => { if (formationTouchMenu && !formationTouchMenu.contains(event.target)) closeFormationTouchMenu(); });
+document.addEventListener("keydown", event => { if (event.key === "Escape") closeFormationTouchMenu(); });
 
 document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forEach(btn => {
   btn.onclick = () => {
@@ -9304,26 +9352,17 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
       indInfoBox.textContent = "Наведите на индикатор, чтобы прочитать его описание.";
     }
   };
+  const fmtName = formationIdToName[btn.id];
+  if (fmtName) {
+    btn.addEventListener("contextmenu", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      openFormationTouchMenu(fmtName, event);
+    });
+  }
 });
 
 syncIndicatorButtonsUI();
-
-// Each chart formation keeps its own compact touch threshold.
-document.querySelectorAll("#chart-density-panel [data-fmt-touch-type]").forEach(select => {
-  select.onchange = () => {
-    const val = Number(select.value);
-    if (!Number.isInteger(val) || val < 1 || val > 4 || (select.dataset.fmtTouchType === "retests" && val < 2)) return;
-    switch (select.dataset.fmtTouchType) {
-      case "cascades": chartFovCascadesMin = val; break;
-      case "levels": chartFovBreakoutMin = val; break;
-      case "trendlines": chartFovTrendlineMin = val; break;
-      case "retests": chartFovRetestMin = val; break;
-      default: return;
-    }
-    try { saveFovSettings(); } catch (_) {}
-    requestAnimationFrame(drawChart);
-  };
-});
 
 // Cascade filter buttons inside main settings panel
 document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(btn => {
@@ -12891,6 +12930,61 @@ function layoutDensityBadges() {
     const angle = getDensityStableAngle(d);
     d.rx = cx + Math.cos(angle) * r;
     d.ry = cy + Math.sin(angle) * r;
+    d._densityTargetX = d.rx;
+    d._densityTargetY = d.ry;
+  }
+
+  // Keep the price-distance rings readable, but resolve the worst collisions
+  // afterwards. The soft displacement cap means a crowded map can still have
+  // a small, intentional overlap instead of throwing bubbles far from price.
+  // Stable-key order makes the result independent of the selected sort mode.
+  const collisionOrder = densityVisibleData.slice().sort((a, b) =>
+    getDensityStableKey(a).localeCompare(getDensityStableKey(b)));
+  const maxShift = 40;
+  const keepInsideRadar = d => {
+    const shiftX = d.rx - d._densityTargetX;
+    const shiftY = d.ry - d._densityTargetY;
+    const shift = Math.hypot(shiftX, shiftY);
+    if (shift > maxShift) {
+      d.rx = d._densityTargetX + shiftX / shift * maxShift;
+      d.ry = d._densityTargetY + shiftY / shift * maxShift;
+    }
+    const dx = d.rx - cx;
+    const dy = d.ry - cy;
+    const dist = Math.hypot(dx, dy);
+    const outerLimit = Math.max(minRadius, maxRadius - getDensityBubbleRadius(d) - 4);
+    if (dist > outerLimit) {
+      d.rx = cx + dx / dist * outerLimit;
+      d.ry = cy + dy / dist * outerLimit;
+    }
+  };
+  for (let pass = 0; pass < 18; pass++) {
+    let moved = false;
+    for (let i = 0; i < collisionOrder.length; i++) {
+      const a = collisionOrder[i];
+      for (let j = i + 1; j < collisionOrder.length; j++) {
+        const b = collisionOrder[j];
+        let dx = b.rx - a.rx;
+        let dy = b.ry - a.ry;
+        let distance = Math.hypot(dx, dy);
+        if (distance < 0.01) {
+          const nudgeAngle = (i + 1) * 2.399963229728653;
+          dx = Math.cos(nudgeAngle);
+          dy = Math.sin(nudgeAngle);
+          distance = 1;
+        }
+        const desiredDistance = getDensityBubbleRadius(a) + getDensityBubbleRadius(b) + 3;
+        if (distance >= desiredDistance) continue;
+        const push = Math.min(4, (desiredDistance - distance) / 2);
+        const ux = dx / distance;
+        const uy = dy / distance;
+        a.rx -= ux * push; a.ry -= uy * push;
+        b.rx += ux * push; b.ry += uy * push;
+        keepInsideRadar(a); keepInsideRadar(b);
+        moved = true;
+      }
+    }
+    if (!moved) break;
   }
 }
 

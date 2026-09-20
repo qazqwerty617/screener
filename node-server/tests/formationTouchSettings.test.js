@@ -9,11 +9,13 @@ const vm = require("node:vm");
 const app = fs.readFileSync(path.join(__dirname, "../public/js/app.js"), "utf8");
 const html = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8");
 
-test("each chart formation has its own compact minimum-touch control", () => {
+test("each chart formation has its own minimum-touch context menu", () => {
   for (const type of ["cascades", "levels", "trendlines", "retests"]) {
-    assert.match(html, new RegExp(`data-fmt-touch-type="${type}"`));
+    assert.match(app, new RegExp(`case "${type}":`));
   }
-  assert.doesNotMatch(html, /data-fmt-touches=/);
+  assert.doesNotMatch(html, /data-fmt-touch-type=/);
+  assert.match(app, /addEventListener\("contextmenu"/);
+  assert.match(app, /openFormationTouchMenu/);
 });
 
 test("chart touch settings persist independently", () => {

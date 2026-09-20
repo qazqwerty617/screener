@@ -556,19 +556,13 @@
                             <span class="chart-density-section-label">Формации & Уровни</span>
                             <div class="chart-density-indicators-grid" style="grid-template-columns: repeat(4, 1fr);">
                                 <button class="chart-indicator-grid-btn" id="fmt-cascades" title="Каскады уровней"
-                                    data-desc="Каскады (ScalpX style) — последовательные уровни с подсчетом касаний.">Каскады</button>
+                                    data-desc="Каскады (ScalpX style) — последовательные уровни с подсчетом касаний. ПКМ — минимум касаний.">Каскады</button>
                                 <button class="chart-indicator-grid-btn" id="fmt-levels" title="Горизонтальные уровни"
-                                    data-desc="Горизонталки — горизонтальные уровни поддержки и сопротивления с числом касаний.">Горизонт...</button>
+                                    data-desc="Горизонталки — горизонтальные уровни поддержки и сопротивления с числом касаний. ПКМ — минимум касаний.">Горизонт...</button>
                                 <button class="chart-indicator-grid-btn" id="fmt-trendlines" title="Наклонные уровни тренда"
-                                    data-desc="Наклонки — наклонные динамические линии тренда по экстремумам.">Наклонки</button>
+                                    data-desc="Наклонки — наклонные динамические линии тренда по экстремумам. ПКМ — минимум касаний.">Наклонки</button>
                                 <button class="chart-indicator-grid-btn" id="fmt-retests" title="Подтвержденный ретест"
-                                    data-desc="Ретест — уровни истинного пробоя с подтвержденным ретестом.">Ретест</button>
-                            </div>
-                            <div class="fmt-touch-grid" aria-label="Минимум касаний для каждого типа формации">
-                                <label class="fmt-touch-card">Каскады <select data-fmt-touch-type="cascades" aria-label="Минимум касаний: каскады"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
-                                <label class="fmt-touch-card">Горизонталки <select data-fmt-touch-type="levels" aria-label="Минимум касаний: горизонталки"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
-                                <label class="fmt-touch-card">Наклонки <select data-fmt-touch-type="trendlines" aria-label="Минимум касаний: наклонки"><option value="1">1+</option><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
-                                <label class="fmt-touch-card">Ретест <select data-fmt-touch-type="retests" aria-label="Минимум касаний: ретест" title="Для подтверждённого ретеста нужны минимум два касания уровня"><option value="2" selected>2+</option><option value="3">3+</option><option value="4">4+</option></select></label>
+                                    data-desc="Ретест — уровни истинного пробоя с подтвержденным ретестом. ПКМ — минимум касаний.">Ретест</button>
                             </div>
                         </div>
 
@@ -1441,7 +1435,7 @@
                     <div class="bt-plan-grid">
                         <label class="bt-field"><span>ОБЪЁМ, USDT</span><input id="bt-size" type="number" min="10"
                                 step="10" value="1000"></label>
-                        <label class="bt-field"><span>ПЛЕЧО</span><select id="bt-leverage" aria-label="Плечо учебной сделки"></select></label>
+                        <label class="bt-field bt-leverage-field"><span>ПЛЕЧО <output id="bt-leverage-value" for="bt-leverage">1×</output></span><input id="bt-leverage" type="range" min="1" max="50" step="1" value="1" aria-label="Плечо учебной сделки"></label>
                         <div id="bt-size-hint" class="bt-size-hint" aria-live="polite"></div>
                         <label class="bt-field"><span>СТОП</span>
                             <div class="bt-level-input"><input id="bt-sl" type="number" min="0" step="0.1"

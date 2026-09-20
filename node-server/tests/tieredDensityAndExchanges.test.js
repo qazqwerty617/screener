@@ -74,6 +74,17 @@ test("buildWallSnapshot filters out sub-3M BTC walls and attaches tier", () => {
   assert.equal(solWall.tier, "small");
 });
 
+test("published display tier is recalculated from the current dollar amount", () => {
+  const [wall] = buildWallSnapshot([{
+    base: "DASH", ex: "BN", sym: "DASHUSDT", side: "bid", price: 100,
+    pct: 1, S: 400_000, score: 8, v: 20_000_000,
+    // Simulates a level that grew after the old label was assigned.
+    tier: "small", sizeType: "small",
+  }]);
+  assert.equal(wall.tier, "medium");
+  assert.equal(wall.sizeType, "medium");
+});
+
 test("all-token coverage: minVolumeFor admits tokens with >=50k volume", () => {
   assert.ok(minVolumeFor("BN") <= 50_000);
   assert.ok(minVolumeFor("BB") <= 50_000);

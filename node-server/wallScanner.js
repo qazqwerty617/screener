@@ -1252,7 +1252,11 @@ function analyzeBook(input) {
       if (significance < qualityProfile.minSignificance) continue;
 
       const percentile = percentileRank(clusterUsd, cluster.usd);
-      const wallTier = classifyWallTier(cluster.usd, base, coinVol, ex);
+      // Display tiers are intentionally coin-wide, not venue-relative: a $400k
+      // DASH level must never look smaller than a $100k DASH level just because
+      // they came from different exchanges. Venue-specific floors still decide
+      // whether the level is admitted at all.
+      const wallTier = classifyWallTier(cluster.usd, base, coinVol);
 
       candidates.push({
         base,
@@ -1565,7 +1569,9 @@ function scoreSymbolWalls(state, analysis, tracked, now) {
       ? (analysis.bidDepth - analysis.askDepth) / imbalanceRef
       : 0;
 
-    const wallTier = candidate.tier || classifyWallTier(candidate.S, candidate.base, coinVol, candidate.ex);
+    // Recompute from the live amount. A retained candidate label can become
+    // stale after a partial fill or refill between polls.
+    const wallTier = classifyWallTier(candidate.S, candidate.base, coinVol);
 
     walls.push({
       base: candidate.base,
@@ -1745,7 +1751,7 @@ function clusterWalls(walls) {
       cur.pct = +(totalS > 0 ? (cur.pct * cur.S + w.pct * w.S) / totalS : cur.pct).toFixed(4);
       cur.S = totalS;
       cur.wallK = Math.round(totalS / 1000);
-      cur.tier = classifyWallTier(totalS, cur.base, cur.v || 0, cur.ex);
+      cur.tier = classifyWallTier(totalS, cur.base, cur.v || 0);
       cur.sizeType = cur.tier;
       cur.count = (cur.count || 1) + (w.count || 1);
       cur.rtwi = Math.max(cur.rtwi || 0, w.rtwi || 0);
@@ -1912,7 +1918,10 @@ function buildWallSnapshot(allWalls, options = {}) {
 
     const tierInfo = getTierThresholds(w.base, w.v || 0, w.ex);
     if (S < tierInfo.minFloor) continue;
-    const wallTier = w.tier || classifyWallTier(S, w.base, w.v || 0, w.ex);
+    // `tier` in a retained lifecycle record is historical metadata. Never send
+    // it to the map as a size label: use the current amount and coin-wide
+    // thresholds so labels remain monotonic for the same coin across venues.
+    const wallTier = classifyWallTier(S, w.base, w.v || 0);
 
     validWalls.push({
       ...w,

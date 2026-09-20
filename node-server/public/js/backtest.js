@@ -84,10 +84,12 @@
   function updatePositionLimits() {
     const sizeInput = $("bt-size");
     const leverageInput = $("bt-leverage");
+    const leverageValue = $("bt-leverage-value");
     const hint = $("bt-size-hint");
     const maxSize = maxPositionSize();
     if (sizeInput) sizeInput.max = String(maxSize);
     if (leverageInput) leverageInput.value = String(state.leverage);
+    if (leverageValue) leverageValue.textContent = `${state.leverage}×`;
     if (hint) hint.textContent = `Макс. объём: ${money(maxSize)} · маржа: объём / ${state.leverage}×`;
   }
 
@@ -1675,22 +1677,18 @@
   addEvt("bt-short", "click", () => selectDirection("short"));
   addEvt("bt-commit-plan", "click", () => openPosition());
   addEvt("bt-close-position", "click", () => state.position && closePosition(state.candles[state.candles.length - 1].c));
-  const leverageSelect = $("bt-leverage");
-  if (leverageSelect) {
-    for (let leverage = 1; leverage <= 50; leverage++) {
-      const option = document.createElement("option");
-      option.value = String(leverage);
-      option.textContent = `${leverage}×`;
-      leverageSelect.appendChild(option);
-    }
-    leverageSelect.value = String(state.leverage);
-    leverageSelect.addEventListener("change", () => {
-      const leverage = Number(leverageSelect.value);
+  const leverageInput = $("bt-leverage");
+  if (leverageInput) {
+    leverageInput.value = String(state.leverage);
+    const setLeverage = () => {
+      const leverage = Number(leverageInput.value);
       if (!Number.isInteger(leverage) || leverage < 1 || leverage > 50) return;
       state.leverage = leverage;
       saveBacktestAccount();
       updatePositionLimits();
-    });
+    };
+    leverageInput.addEventListener("input", setLeverage);
+    leverageInput.addEventListener("change", setLeverage);
   }
   addEvt("bt-reset-balance", "click", () => {
     if (state.position || !window.confirm("Сбросить учебный баланс до $10,000?")) return;

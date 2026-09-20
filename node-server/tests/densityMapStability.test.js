@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const source = fs.readFileSync(path.join(__dirname, "..", "public", "js", "app.js"), "utf8");
+const source = fs.readFileSync(path.join(__dirname, "..", "public", "js", "app.js"), "utf8").replace(/\r\n/g, "\n");
 
 function sourceBetween(start, end) {
   const from = source.indexOf(start);
@@ -66,6 +66,31 @@ test("density coordinates stay attached to a wall when live scores reorder", () 
 
   assert.deepEqual(Array.from(context.result.after.A), Array.from(context.result.before.A));
   assert.deepEqual(Array.from(context.result.after.B), Array.from(context.result.before.B));
+});
+
+test("badges separate when two walls initially receive the same radar coordinate", () => {
+  const helpers = sourceBetween("function getDensityRelativeRank", "try {\n  const savedChartDensity");
+  const layout = sourceBetween("function layoutDensityBadges()", "function drawDensityMap()");
+  const context = { Math };
+  vm.runInNewContext(`
+    let densityW = 1000;
+    let densityH = 700;
+    let densitySort = "score";
+    let densityVisibleData = [];
+    function getFilteredDensity() { return [
+      { wallId: "a", pct: 1, score: 10, S: 100, sizeType: "small" },
+      { wallId: "b", pct: 1, score: 9, S: 100, sizeType: "small" },
+    ]; }
+    function getDensityLiveAgeSec() { return 60; }
+    function $(id) { return null; }
+    ${helpers}
+    ${layout}
+    getDensityStableAngle = () => 0;
+    layoutDensityBadges();
+    const [a, b] = densityVisibleData;
+    result = Math.hypot(a.rx - b.rx, a.ry - b.ry);
+  `, context);
+  assert.ok(context.result >= 44.9, `expected near-separated badges, got ${context.result}px`);
 });
 
 test("density hit testing chooses the nearest overlapping wall", () => {
