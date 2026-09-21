@@ -1,0 +1,22 @@
+[
+  {
+    "code": "GWGIFT",
+    "type": "gift_days",
+    "value": 14,
+    "active": true,
+    "usedCount": 1,
+    "limit": 5,
+    "usedUsers": [
+      "USR-966407"
+    ],
+    "redemptions": [
+      {
+        "userId": "USR-966407",
+        "redeemedAt": "2026-09-20T17:38:25.516Z"
+      }
+    ],
+    "createdAt": "2026-09-20T17:38:25.160Z",
+    "expiresAt": "2026-12-19T17:38:25.160Z",
+    "reservations": []
+  }
+]
