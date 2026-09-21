@@ -6,7 +6,35 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { VENUES, createEventsHub, createMarketFetcher, parseNews, parseStreamNews, normalizeMarkets } = require("../eventsHub");
+const { VENUES, createEventsHub, createMarketFetcher, parseNews, parseStreamNews, normalizeMarkets, alertKind } = require("../eventsHub");
+
+test("only consequential headlines qualify for site-wide urgent cards", () => {
+  assert.equal(alertKind("Major exchange suffers $80M hack"), "security");
+  assert.equal(alertKind("Trump announces new tariff on crypto imports"), "macro");
+  assert.equal(alertKind("Bitcoin liquidations rise after market volatility"), null);
+  assert.equal(alertKind("Trump meme coin rises 4%"), null);
+});
+
+test("new critical news emits one immediate alert, not another on translation or repeat", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  const now = Date.parse("2026-09-21T12:00:00Z");
+  let resolveTranslation;
+  const hub = createEventsHub({ filePath, now: () => now,
+    translate: () => new Promise(resolve => { resolveTranslation = resolve; }) });
+  const events = [];
+  hub.subscribe(event => { if (event) events.push(event); });
+  const item = { id: "hack", title: "Exchange suffers major hack", url: "https://example.com/hack",
+    source: "Test Wire", publishedAt: now - 1000, priority: "urgent" };
+  hub.ingestNews([item]);
+  assert.equal(events.filter(event => event.type === "urgent").length, 1);
+  await new Promise(resolve => setImmediate(resolve));
+  resolveTranslation("Биржу взломали");
+  await new Promise(resolve => setImmediate(resolve));
+  hub.ingestNews([item]);
+  assert.equal(events.filter(event => event.type === "urgent").length, 1);
+  assert.equal(events.find(event => event.type === "translation")?.item.titleRu, "Биржу взломали");
+});
 
 test("market clients are reused and force a fresh catalog after the first scan", async () => {
   const calls = [];
@@ -250,7 +278,7 @@ test("stream headlines publish immediately, translate later, and survive RSS ref
     translate: () => new Promise(resolve => { finishTranslation = resolve; }),
     fetchFeed: async () => "<rss></rss>" });
   const notifications = [];
-  hub.subscribe(() => notifications.push(hub.snapshot().news[0]?.titleRu));
+  hub.subscribe(event => { if (event?.type !== "urgent") notifications.push(hub.snapshot().news[0]?.titleRu); });
   const item = parseStreamNews(JSON.stringify({ _id: "one", body: "Trump announces new tariff on crypto imports",
     source: "Reuters", link: "https://example.com/post", time }), time);
   assert.equal(item.priority, "urgent");

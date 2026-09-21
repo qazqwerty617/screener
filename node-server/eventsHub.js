@@ -19,6 +19,13 @@ const FEEDS = Object.freeze([
 ]);
 const URGENT = /\b(hack(?:ed)?|exploit|breach|stolen|drain(?:ed)?|attack|liquidat(?:ed|ion)|insolvenc[ey]|bankrupt|emergency|security incident|outage|trump|tariffs?|fed(?:eral)? reserve|rate (?:cut|hike)|sanctions?)\b/i;
 const IMPORTANT = /\b(SEC|ETF|fed(?:eral)? reserve|interest rate|regulat(?:ion|or)|lawsuit|listing|delisting|approval|hack|exploit|breach|bitcoin|ethereum)\b/i;
+function alertKind(title) {
+  if (/\b(hack(?:ed)?|exploit(?:ed)?|security breach|funds? (?:stolen|drained)|wallets? drained|cyberattack)\b/i.test(title)) return "security";
+  if (/\b(insolvenc[ey]|bankrupt(?:cy)?|withdrawals? (?:halted|suspended|frozen)|major (?:exchange |network )?outage)\b/i.test(title)) return "risk";
+  if (/\b(trump|fed(?:eral)? reserve)\b/i.test(title) && /\b(announc(?:es?|ed)|signs?|imposes?|emergency|rate (?:cut|hike)|tariffs?|sanctions?)\b/i.test(title)
+    && /\b(crypto|bitcoin|btc|tariffs?|sanctions?|interest|rates?|fed(?:eral)? reserve)\b/i.test(title)) return "macro";
+  return null;
+}
 const MAX_EVENT_AGE_MS = 90 * 86400000;
 
 function decodeXml(value) {
@@ -48,7 +55,7 @@ function parseNews(xml, source, now = Date.now()) {
     try { url = new URL(link); } catch (_) { continue; }
     if (url.protocol !== "https:") continue;
     rows.push({ id: `${source}:${url.pathname}`, title, url: url.href, source,
-      publishedAt, priority: URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" });
+      publishedAt, priority: alertKind(title) || URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" });
   }
   return rows;
 }
@@ -68,7 +75,7 @@ function parseStreamNews(raw, now = Date.now()) {
   // Stream includes social posts. Keep an explicit link to the original and never infer verification.
   return { id: `tree:${String(message._id || url.href).slice(0, 300)}`, title, url: url.href,
     source, publishedAt, receivedAt: now,
-    priority: URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" };
+    priority: alertKind(title) || URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" };
 }
 
 async function translateTitle(title, key = process.env.DEEPL_API_KEY || "") {
@@ -175,7 +182,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   let translating = 0;
   let translationPauseUntil = 0;
 
-  function emit() { for (const listener of listeners) { try { listener(); } catch (_) {} } }
+  function emit(event) { for (const listener of listeners) { try { listener(event); } catch (_) {} } }
 
   function drainTranslations() {
     while (translating < 2 && translationQueue.length && now() >= translationPauseUntil) {
@@ -184,7 +191,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       Promise.resolve().then(() => translate(item.title)).then(translated => {
         if (translated && translated.trim() && translated !== item.title) {
           item.titleRu = translated.trim().slice(0, 500);
-          persist(); emit();
+          persist(); emit({ type: "translation", item });
         }
       }).catch(() => { translationPauseUntil = now() + 60000; }).finally(() => {
         translating--; queued.delete(item.url);
@@ -198,8 +205,12 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   function mergeNews(rows) {
     const byUrl = new Map(state.news.map(item => [item.url, item]));
     let changed = false;
+    const alerts = [];
     for (const row of rows) {
       if (byUrl.has(row.url)) continue;
+      row.alertKind = alertKind(row.title);
+      row.receivedAt ||= now();
+      if (row.alertKind && row.priority === "urgent" && row.publishedAt >= now() - 15 * 60000 && row.publishedAt <= now() + 60000) alerts.push(row);
       byUrl.set(row.url, row); changed = true;
       if (!queued.has(row.url) && /[a-z]{3}/i.test(row.title) && !/[а-яё]/i.test(row.title)) {
         queued.add(row.url);
@@ -210,7 +221,9 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     if (changed) {
       state.news = [...byUrl.values()].filter(item => item.publishedAt > now() - 7 * 86400000)
         .sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 120);
-      state.newsUpdatedAt = now(); persist(); emit(); drainTranslations();
+      state.newsUpdatedAt = now(); persist(); emit();
+      for (const item of alerts) emit({ type: "urgent", item });
+      drainTranslations();
     }
   }
 
@@ -383,4 +396,4 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 
-module.exports = { VENUES, FEEDS, parseNews, parseStreamNews, translateTitle, launchTime, normalizeMarkets, createMarketFetcher, createEventsHub };
+module.exports = { VENUES, FEEDS, parseNews, parseStreamNews, translateTitle, launchTime, normalizeMarkets, createMarketFetcher, createEventsHub, alertKind };

@@ -18,7 +18,7 @@ test("events tab renders sourced news and filters spot and futures listings", as
   let stream;
   w.EventSource = class {
     constructor(url) { assert.equal(url, "/api/events/stream"); stream = this; }
-    addEventListener(type, callback) { if (type === "update") this.notify = callback; }
+    addEventListener(type, callback) { (this.callbacks ||= {})[type] = callback; }
     close() { this.closed = true; }
   };
   w.fetch = async () => ({ ok: true, json: async () => ({
@@ -33,11 +33,13 @@ test("events tab renders sourced news and filters spot and futures listings", as
     ]
   }) });
   w.eval(script);
+  assert.ok(stream, "alerts connect on every tab");
+  assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 0, "old feed rows are not replayed");
   w.ObsidianEvents.activate();
   await new Promise(resolve => setImmediate(resolve));
   assert.match(w.document.getElementById("events-urgent-list").textContent, /Exchange hack/);
   assert.match(w.document.getElementById("events-urgent-list").textContent, /Биржу взломали/);
-  assert.equal(typeof stream.notify, "function");
+  assert.equal(typeof stream.callbacks.update, "function");
   w.document.getElementById("events-tab-listings").click();
   assert.match(w.document.getElementById("events-day-list").textContent, /NEW\/USDT/);
   assert.match(w.document.getElementById("events-day-list").textContent, /GONE\/USDT/);
@@ -60,5 +62,36 @@ test("events tab renders sourced news and filters spot and futures listings", as
   w.document.querySelector(`[data-date="${key}"]`).click();
   assert.match(w.document.getElementById("events-day-list").textContent, /NEXT\/USDT/);
   w.ObsidianEvents.deactivate();
+  assert.equal(stream.closed, undefined, "alerts stay connected outside Events");
+  w.ObsidianEvents.stopAlerts();
   assert.equal(stream.closed, true);
+});
+
+test("urgent toast appears site-wide once and translation updates its text", t => {
+  const html = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8");
+  const script = fs.readFileSync(path.join(__dirname, "../public/js/events.js"), "utf8");
+  const dom = new JSDOM(html, { url: "https://obsidianscreener.com", runScripts: "outside-only" });
+  const w = dom.window;
+  let stream;
+  w.EventSource = class {
+    constructor() { stream = this; }
+    addEventListener(type, callback) { (this.callbacks ||= {})[type] = callback; }
+    close() { this.closed = true; }
+  };
+  t.after(() => { w.ObsidianEvents.stopAlerts(); w.close(); });
+  w.eval(script);
+  const item = { title: "Exchange suffers a hack", url: "https://example.com/hack", source: "Test Wire",
+    publishedAt: Date.now(), alertKind: "security" };
+  stream.callbacks.urgent({ data: JSON.stringify(item) });
+  const card = w.document.querySelector(".toast-urgent-news");
+  assert.ok(card);
+  assert.match(card.textContent, /Возможный взлом/);
+  assert.match(card.textContent, /Test Wire/);
+  assert.equal(card.querySelector("a").href, item.url);
+  stream.callbacks.translation({ data: JSON.stringify({ ...item, titleRu: "Биржу взломали" }) });
+  assert.match(card.textContent, /Биржу взломали/);
+  stream.callbacks.urgent({ data: JSON.stringify(item) });
+  assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 1);
+  stream.callbacks.urgent({ data: JSON.stringify({ ...item, url: "javascript:alert(1)" }) });
+  assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 1);
 });

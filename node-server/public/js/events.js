@@ -24,6 +24,11 @@
   let wired = false;
   let refreshTimer = null;
   let stream = null;
+  const seenKey = "obsidian-urgent-news-seen-v1";
+  const visibleAlerts = new Map();
+  let seenAlerts = [];
+  try { seenAlerts = JSON.parse(window.sessionStorage.getItem(seenKey)) || []; } catch (_) {}
+  if (!Array.isArray(seenAlerts)) seenAlerts = [];
   const dateTime = value => Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString("ru-RU", {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
   }) : "Время неизвестно";
@@ -39,6 +44,73 @@
 
   function clearWithEmpty(target, message) {
     target.replaceChildren(node("div", "events-empty", message));
+  }
+
+  function urgentText(item) {
+    const russianTitle = item.titleRu || (/[а-яё]/i.test(item.title || "") ? item.title : "");
+    if (russianTitle) return russianTitle.length > 150 ? `${russianTitle.slice(0, 147)}…` : russianTitle;
+    return { security: "Сообщают о возможном взломе. Подробности в источнике.",
+      risk: "Сообщают о серьёзном сбое или риске. Подробности в источнике.",
+      macro: "Важное заявление, которое может повлиять на рынок. Подробности в источнике." }[item.alertKind];
+  }
+
+  function alertItem(raw) {
+    try {
+      const item = JSON.parse(raw);
+      const url = new URL(item.url);
+      if (url.protocol !== "https:" || !["security", "risk", "macro"].includes(item.alertKind)) return null;
+      const age = Date.now() - Number(item.publishedAt);
+      if (!Number.isFinite(age) || age < -60000 || age > 15 * 60000) return null;
+      return item;
+    } catch (_) { return null; }
+  }
+
+  function showUrgentAlert(event) {
+    const item = alertItem(event.data);
+    if (!item || seenAlerts.includes(item.url)) return;
+    const container = byId("toast-container");
+    if (!container) return;
+    seenAlerts.push(item.url);
+    seenAlerts = seenAlerts.slice(-100);
+    try { window.sessionStorage.setItem(seenKey, JSON.stringify(seenAlerts)); } catch (_) {}
+    const card = node("div", `toast-card toast-urgent-news toast-urgent-${item.alertKind}`);
+    card.setAttribute("role", "alert");
+    const header = node("div", "toast-header");
+    const label = { security: "Возможный взлом", risk: "Срочное событие", macro: "Важное заявление" }[item.alertKind];
+    const close = node("button", "toast-close", "×");
+    close.type = "button"; close.setAttribute("aria-label", "Закрыть уведомление");
+    header.append(node("span", "", `✦ ${label}`), close);
+    const body = node("div", "toast-body", urgentText(item));
+    const footer = node("div", "toast-urgent-footer");
+    const source = node("span", "", String(item.source || "Источник").slice(0, 50));
+    const link = node("a", "", "Открыть источник ↗");
+    link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+    footer.append(source, link); card.append(header, body, footer);
+    const remove = () => { visibleAlerts.delete(item.url); card.remove(); };
+    close.addEventListener("click", remove);
+    container.append(card);
+    visibleAlerts.set(item.url, body);
+    while (container.querySelectorAll(".toast-urgent-news").length > 2) {
+      const oldest = container.querySelector(".toast-urgent-news");
+      for (const [url, element] of visibleAlerts) if (element.parentElement === oldest) visibleAlerts.delete(url);
+      oldest.remove();
+    }
+    window.setTimeout(remove, 18000);
+  }
+
+  function updateUrgentAlert(event) {
+    const item = alertItem(event.data);
+    const body = item && visibleAlerts.get(item.url);
+    if (body && item.titleRu) body.textContent = urgentText(item);
+  }
+
+  function initAlerts() {
+    if (stream || typeof window.EventSource !== "function") return;
+    stream = new window.EventSource("/api/events/stream");
+    stream.addEventListener("urgent", showUrgentAlert);
+    stream.addEventListener("translation", updateUrgentAlert);
+    stream.addEventListener("update", () => { if (byId("events-view")?.style.display === "block") void refresh(); });
+    stream.addEventListener("open", () => { if (byId("events-view")?.style.display === "block") void refresh(); });
   }
 
   function closePickers() {
@@ -292,15 +364,13 @@
           Date.now() - lastRequest > (connected ? 120000 : 30000)) void refresh();
       }, 15000);
     }
-    if (!stream && typeof window.EventSource === "function") {
-      stream = new window.EventSource("/api/events/stream");
-      stream.addEventListener("update", () => { void refresh(); });
-      stream.addEventListener("open", () => { void refresh(); });
-    }
+    initAlerts();
     render();
     if (!data || Date.now() - lastRequest > 60000) void refresh();
   }
 
-  function deactivate() { stream?.close(); stream = null; }
-  window.ObsidianEvents = { activate, deactivate };
+  function deactivate() { closePickers(); }
+  function stopAlerts() { stream?.close(); stream = null; if (refreshTimer) window.clearInterval(refreshTimer); }
+  window.ObsidianEvents = { activate, deactivate, stopAlerts };
+  initAlerts();
 })();

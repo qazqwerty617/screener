@@ -76,3 +76,17 @@ a.events-card:hover{border-color:var(--ac,#8842ea);background:var(--bgh,#242734)
 .events-agenda-item time{margin-left:auto;color:var(--t2,#939aab);font-size:11px;font-variant-numeric:tabular-nums}
 .events-empty{grid-column:1/-1;border:1px dashed var(--bd,#30343d);border-radius:12px;color:var(--t2,#939aab);padding:25px;text-align:center;font-size:12px}
 @media(max-width:850px){.events-heading{align-items:flex-start;flex-direction:column}.events-urgent-grid{grid-template-columns:1fr}.events-feed,.events-day-list{grid-template-columns:1fr}.events-view{height:calc(100vh - 50px);padding:22px 15px 60px}.events-coverage{width:100%;text-align:left;padding-bottom:0}.events-calendar-legend{display:none}.events-calendar-day,.events-day-spacer{min-height:100px}}
+.toast-card.toast-urgent-news{width:min(360px,calc(100vw - 32px));padding:15px 16px 14px;border-color:#ba6bff99;background:linear-gradient(135deg,#262039 0%,#171921 58%,#19151f 100%);box-shadow:0 14px 42px #000b,0 0 24px #8b5cf633;gap:10px}
+.toast-urgent-news:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:#ad72ff}
+.toast-urgent-security:before,.toast-urgent-risk:before{background:#ff667f}
+.toast-card.toast-urgent-security,.toast-card.toast-urgent-risk{border-color:#f27c9580}
+.toast-urgent-news .toast-header{font-size:13px;letter-spacing:.01em}
+.toast-urgent-news .toast-header span{color:#dfcaff}
+.toast-urgent-security .toast-header span,.toast-urgent-risk .toast-header span{color:#ffadb9}
+.toast-urgent-news .toast-body{color:#f0edf7;font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+.toast-urgent-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#9fa1b2;font-size:11px}
+.toast-urgent-footer span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toast-urgent-footer a{color:#c3a3ff;text-decoration:none;white-space:nowrap;font-weight:600}
+.toast-urgent-footer a:hover{text-decoration:underline}
+@media(max-width:480px){.toast-container{left:16px;right:16px;max-width:none}.toast-card.toast-urgent-news{width:auto}}
+@media(prefers-reduced-motion:reduce){.toast-card.toast-urgent-news{animation:none}}

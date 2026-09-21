@@ -4310,16 +4310,23 @@ app.get("/api/events", (_req, res) => {
 
 let eventStreamClients = 0;
 app.get("/api/events/stream", (req, res) => {
-  if (eventStreamClients >= 200) return res.status(503).end();
+  if (eventStreamClients >= 2000) return res.status(503).end();
   eventStreamClients++;
   res.set({ "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive", "X-Accel-Buffering": "no" });
   res.flushHeaders();
   res.write("retry: 3000\n\n");
-  const notify = () => { if (!res.destroyed && res.writableLength < 65536) res.write("event: update\ndata: {}\n\n"); };
+  const notify = event => {
+    if (res.destroyed || res.writableLength >= 65536) return;
+    res.write("event: update\ndata: {}\n\n");
+    if (event?.type !== "urgent" && event?.type !== "translation") return;
+    const { id, url, title, titleRu, source, publishedAt, receivedAt, alertKind } = event.item;
+    res.write(`event: ${event.type}\ndata: ${JSON.stringify({ id, url, title, titleRu, source, publishedAt, receivedAt, alertKind })}\n\n`);
+  };
   const unsubscribe = eventsHub.subscribe(notify);
   const heartbeat = setInterval(() => { if (!res.destroyed) res.write(": heartbeat\n\n"); }, 25000);
-  const cleanup = () => { clearInterval(heartbeat); unsubscribe(); eventStreamClients--; };
+  let closed = false;
+  const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); unsubscribe(); eventStreamClients--; };
   req.on("close", cleanup);
 });
 
