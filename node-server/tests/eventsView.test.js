@@ -25,10 +25,11 @@ test("events tab renders sourced news and filters spot and futures listings", as
     marketUpdatedAt: Date.now(), newsUpdatedAt: Date.now(),
     venues: { BN: { status: "ok" } },
     news: [{ title: "Exchange hack", titleRu: "Биржу взломали", source: "CoinDesk", url: "https://example.com/report",
-      publishedAt: Date.now(), priority: "urgent" }],
+      publishedAt: Date.now(), priority: "urgent", verification: { status: "corroborated", sources: [] } }],
     listings: [
       { exchange: "BN", type: "spot", symbol: "NEW/USDT", detectedAt: Date.now() },
       { exchange: "BB", type: "futures", symbol: "NEXT/USDT:USDT", detectedAt: Date.now(), launchAt: Date.now() + 86400000 },
+      { exchange: "BB", type: "futures", symbol: "REMOVE/USDT:USDT", kind: "delisting", detectedAt: Date.now(), delistAt: Date.now() + 86400000 },
       { exchange: "BN", type: "spot", symbol: "GONE/USDT", kind: "delisting", detectedAt: Date.now(), launchAt: null }
     ]
   }) });
@@ -61,6 +62,8 @@ test("events tab renders sourced news and filters spot and futures listings", as
   if (!w.document.querySelector(`[data-date="${key}"]`)) w.document.getElementById("events-next-month").click();
   w.document.querySelector(`[data-date="${key}"]`).click();
   assert.match(w.document.getElementById("events-day-list").textContent, /NEXT\/USDT/);
+  assert.match(w.document.getElementById("events-day-list").textContent, /REMOVE\/USDT/);
+  assert.match(w.document.getElementById("events-day-list").textContent, /делистинг · дата биржи/);
   w.ObsidianEvents.deactivate();
   assert.equal(stream.closed, undefined, "alerts stay connected outside Events");
   w.ObsidianEvents.stopAlerts();
@@ -81,7 +84,7 @@ test("urgent toast appears site-wide once and translation updates its text", t =
   t.after(() => { w.ObsidianEvents.stopAlerts(); w.close(); });
   w.eval(script);
   const item = { title: "Exchange suffers a hack", url: "https://example.com/hack", source: "Test Wire",
-    publishedAt: Date.now(), alertKind: "security" };
+    publishedAt: Date.now(), alertKind: "security", verification: { status: "corroborated", sources: [] } };
   stream.callbacks.urgent({ data: JSON.stringify(item) });
   const card = w.document.querySelector(".toast-urgent-news");
   assert.ok(card);
@@ -94,4 +97,8 @@ test("urgent toast appears site-wide once and translation updates its text", t =
   assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 1);
   stream.callbacks.urgent({ data: JSON.stringify({ ...item, url: "javascript:alert(1)" }) });
   assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 1);
+  stream.callbacks.urgent({ data: JSON.stringify({ ...item, url: "https://example.com/pending", verification: { status: "pending" } }) });
+  assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 1);
+  stream.callbacks.retract({ data: JSON.stringify(item) });
+  assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 0);
 });

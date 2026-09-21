@@ -743,6 +743,7 @@ const telegramQueue = require("./telegramQueue");
 const priceHistoryStore = require("./priceHistoryStore");
 const { createEventsHub } = require("./eventsHub");
 const eventsHub = createEventsHub();
+telegramBot.setNewsChannelHandler(message => eventsHub.ingestTelegram(message));
 const securityShield = require("./securityShield");
 const { PAGES, renderSeoPage, renderNotFoundPage, renderSitemap } = require("./seoPages");
 
@@ -4319,9 +4320,9 @@ app.get("/api/events/stream", (req, res) => {
   const notify = event => {
     if (res.destroyed || res.writableLength >= 65536) return;
     res.write("event: update\ndata: {}\n\n");
-    if (event?.type !== "urgent" && event?.type !== "translation") return;
-    const { id, url, title, titleRu, source, publishedAt, receivedAt, alertKind } = event.item;
-    res.write(`event: ${event.type}\ndata: ${JSON.stringify({ id, url, title, titleRu, source, publishedAt, receivedAt, alertKind })}\n\n`);
+    if (!["urgent", "translation", "retract"].includes(event?.type)) return;
+    const { id, url, title, titleRu, source, publishedAt, receivedAt, alertKind, verification } = event.item;
+    res.write(`event: ${event.type}\ndata: ${JSON.stringify({ id, url, title, titleRu, source, publishedAt, receivedAt, alertKind, verification })}\n\n`);
   };
   const unsubscribe = eventsHub.subscribe(notify);
   const heartbeat = setInterval(() => { if (!res.destroyed) res.write(": heartbeat\n\n"); }, 25000);

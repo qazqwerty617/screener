@@ -57,6 +57,7 @@
   function alertItem(raw) {
     try {
       const item = JSON.parse(raw);
+      if (!["official", "corroborated"].includes(item.verification?.status)) return null;
       const url = new URL(item.url);
       if (url.protocol !== "https:" || !["security", "risk", "macro"].includes(item.alertKind)) return null;
       const age = Date.now() - Number(item.publishedAt);
@@ -82,7 +83,7 @@
     header.append(node("span", "", `✦ ${label}`), close);
     const body = node("div", "toast-body", urgentText(item));
     const footer = node("div", "toast-urgent-footer");
-    const source = node("span", "", String(item.source || "Источник").slice(0, 50));
+    const source = node("span", "", item.verification.status === "official" ? `${item.source} · официально` : `${item.source} · 2 источника`);
     const link = node("a", "", "Открыть источник ↗");
     link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
     footer.append(source, link); card.append(header, body, footer);
@@ -109,6 +110,13 @@
     stream = new window.EventSource("/api/events/stream");
     stream.addEventListener("urgent", showUrgentAlert);
     stream.addEventListener("translation", updateUrgentAlert);
+    stream.addEventListener("retract", event => {
+      try {
+        const item = JSON.parse(event.data);
+        visibleAlerts.get(item.url)?.closest(".toast-urgent-news")?.remove();
+        visibleAlerts.delete(item.url);
+      } catch (_) {}
+    });
     stream.addEventListener("update", () => { if (byId("events-view")?.style.display === "block") void refresh(); });
     stream.addEventListener("open", () => { if (byId("events-view")?.style.display === "block") void refresh(); });
   }
@@ -183,26 +191,36 @@
     const newsBox = byId("events-news-list");
     if (!urgentBox || !newsBox) return;
     urgentBox.replaceChildren(); newsBox.replaceChildren();
-    const rows = Array.isArray(data?.news) ? data.news : [];
+    const rows = (Array.isArray(data?.news) ? data.news : []).filter(item => ["official", "corroborated"].includes(item.verification?.status));
     const urgent = rows.filter(item => item.priority === "urgent").slice(0, 3);
     const rest = rows.filter(item => !urgent.includes(item)).slice(0, 40);
     function appendItem(container, item) {
       let url;
       try { url = new URL(item.url); } catch (_) { return; }
       if (url.protocol !== "https:") return;
-      const link = node("a", `events-card ${item.priority === "urgent" ? "urgent" : ""}`);
-      link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer";
+      const link = node("article", `events-card ${item.priority === "urgent" ? "urgent" : ""}`);
       cardTop(link, item.priority === "urgent" ? "⚡ Срочно" : item.priority === "important" ? "● Важно" : "Новость",
         item.publishedAt, item.priority === "urgent" ? "red" : "");
-      link.append(node("h3", "", item.titleRu || item.title));
+      const heading = node("h3", "");
+      const primary = node("a", "events-source-link", item.titleRu || item.title);
+      primary.href = url.href; primary.target = "_blank"; primary.rel = "noopener noreferrer";
+      heading.append(primary); link.append(heading);
       if (item.titleRu) link.append(node("p", "events-original", item.title));
-      link.append(node("small", "", item.source + (item.titleRu ? " · перевод · " : /[а-яё]/i.test(item.title) ? " · оригинал · " : " · оригинал EN · ") + "открыть источник ↗"));
+      const sources = node("div", "events-news-sources");
+      sources.append(node("small", "", item.verification.status === "official" ? "Официальный источник" : "Сверено по 2 источникам"));
+      for (const evidence of item.verification.sources || []) {
+        try { if (new URL(evidence.url).protocol !== "https:") continue; } catch (_) { continue; }
+        const source = node("a", "events-source-link", `${evidence.name} ↗`);
+        source.href = evidence.url; source.target = "_blank"; source.rel = "noopener noreferrer";
+        sources.append(source);
+      }
+      link.append(sources);
       container.append(link);
     }
     urgent.forEach(item => appendItem(urgentBox, item));
     rest.forEach(item => appendItem(newsBox, item));
     if (!urgentBox.children.length) clearWithEmpty(urgentBox, "Срочных публикаций в свежей ленте нет.");
-    if (!newsBox.children.length) clearWithEmpty(newsBox, "Новости загружаются. Обновление происходит автоматически.");
+    if (!newsBox.children.length) clearWithEmpty(newsBox, "Ждём публикации с подтверждением источников.");
   }
 
   function renderListings() {
@@ -213,9 +231,10 @@
     const market = selectedMarket;
     const now = Date.now();
     const query = byId("events-search")?.value.trim().toLowerCase() || "";
+    const eventTime = item => item.kind === "delisting" ? item.delistAt || item.detectedAt : item.launchAt || item.detectedAt;
     const rows = (Array.isArray(data?.listings) ? data.listings : [])
       .filter(item => {
-        const time = Number(item.kind === "delisting" ? item.detectedAt : item.launchAt || item.detectedAt);
+        const time = Number(eventTime(item));
         return Number.isFinite(time) && time > 0 &&
           (exchange === "all" || item.exchange === exchange) && (market === "all" || item.type === market) &&
           (selectedKind === "all" || (item.kind || "listing") === selectedKind) &&
@@ -224,7 +243,7 @@
       });
     const byDay = new Map();
     for (const item of rows) {
-      const time = item.kind === "delisting" ? item.detectedAt : item.launchAt || item.detectedAt;
+      const time = eventTime(item);
       const key = dayKey(new Date(Number(time)));
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key).push(item);
@@ -263,7 +282,7 @@
     const selectedDate = new Date(`${selectedDay}T12:00:00`);
     byId("events-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
     const selectedItems = (byDay.get(selectedDay) || []).sort((a, b) =>
-      Number(a.launchAt || a.detectedAt) - Number(b.launchAt || b.detectedAt));
+      Number(eventTime(a)) - Number(eventTime(b)));
     byId("events-day-count").textContent = selectedItems.length ? `${selectedItems.length} событий` : "";
     dayList.replaceChildren();
     for (const item of selectedItems.slice(0, 100)) {
@@ -272,8 +291,8 @@
       const icon = node("img", ""); icon.src = `/img/${VENUE_ICONS[item.exchange] || "ALL"}.svg`; icon.alt = "";
       const text = node("div", "events-agenda-text");
       const venue = VENUES.find(([code]) => code === item.exchange)?.[1] || item.exchange;
-      text.append(node("strong", "", item.symbol), node("small", "", `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"} · ${removed ? "исчезла из каталога" : item.launchAt ? "дата из каталога" : "обнаружено"}`));
-      const time = item.kind === "delisting" ? item.detectedAt : item.launchAt || item.detectedAt;
+      text.append(node("strong", "", item.symbol), node("small", "", `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"} · ${removed ? item.delistAt ? "делистинг · дата биржи" : "исчезла из каталога" : item.launchAt ? "дата из каталога" : "обнаружено"}`));
+      const time = eventTime(item);
       card.append(icon, text, node("time", "", new Date(Number(time)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
       dayList.append(card);
     }
@@ -286,6 +305,10 @@
       const spot = selected.reduce((sum, venue) => sum + (venue?.status === "ok" ? Number(venue.spot) || 0 : 0), 0);
       const futures = selected.reduce((sum, venue) => sum + (venue?.status === "ok" ? Number(venue.futures) || 0 : 0), 0);
       coverage.textContent = `Каталоги: ${ready}/11 · USDT спот: ${spot} · фьючерсы: ${futures}`;
+      coverage.title = VENUES.map(([code, name]) => {
+        const venue = data?.venues?.[code];
+        return `${name}: ${venue?.status === "ok" ? `${venue.spot} спот / ${venue.futures} фьючерсы` : "нет свежих данных"}`;
+      }).join("\n");
     }
   }
 
@@ -294,6 +317,8 @@
     if (updated) updated.textContent = data?.marketUpdatedAt || data?.newsUpdatedAt
       ? `Новости ${dateTime(data.newsUpdatedAt)} · рынки ${dateTime(data.marketUpdatedAt)}`
       : "Получаем данные бирж и новостей…";
+    if (updated) updated.title = Object.entries(data?.sources || {}).map(([name, source]) =>
+      `${name}: ${source.status === "ok" || source.status === "connected" ? "доступен" : "нет связи"}`).join("\n");
     renderNews(); renderListings();
   }
 

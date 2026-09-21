@@ -156,7 +156,7 @@ async function pollUpdates() {
   isPollingUser = true;
 
   try {
-    const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent('["message","edited_message","callback_query"]')}`;
+    const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=25&allowed_updates=${encodeURIComponent('["message","edited_message","callback_query","channel_post","edited_channel_post"]')}`;
     const res = await fetch(url, { dispatcher: telegramDispatcher || undefined, signal: AbortSignal.timeout(35000) });
     if (res.status === 200) {
       const data = await res.json();
@@ -262,7 +262,12 @@ async function getTelegramFileUrl(botToken, fileId) {
   return null;
 }
 
+let newsChannelHandler = null;
 async function handleUpdate(update) {
+  if (update.channel_post || update.edited_channel_post) {
+    newsChannelHandler?.(update.channel_post || update.edited_channel_post);
+    return;
+  }
   if (update.callback_query) {
     handleCallbackQuery(update.callback_query);
     return;
@@ -721,6 +726,7 @@ if (process.env.DISABLE_TELEGRAM_BOT !== "true" && getBotToken()) {
 }
 
 module.exports = {
+  setNewsChannelHandler(handler) { newsChannelHandler = handler; },
   get BOT_USERNAME() { return getBotUsername(); },
   verifyTelegramAuth,
   createLinkToken,

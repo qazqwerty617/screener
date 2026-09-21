@@ -3,6 +3,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const WebSocket = require("ws");
+const { publisher, canonicalUrl, assessNews, sameClaim, isPublished } = require("./newsVerification");
+const { createSourceReader, parseArticle, telegramLead } = require("./newsSources");
 
 const VENUES = Object.freeze([
   ["BN", "Binance", "binance"], ["BB", "Bybit", "bybit"],
@@ -13,13 +15,17 @@ const VENUES = Object.freeze([
   ["AD", "Aster", "aster"]
 ]);
 const FEEDS = Object.freeze([
-  ["CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"],
+  ["CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss"],
   ["Cointelegraph", "https://cointelegraph.com/rss"],
-  ["The Block", "https://www.theblock.co/rss.xml"]
+  ["The Block", "https://www.theblock.co/rss.xml"],
+  ["Decrypt", "https://decrypt.co/feed"],
+  ["Federal Reserve", "https://www.federalreserve.gov/feeds/press_monetary.xml"],
+  ["White House", "https://www.whitehouse.gov/presidential-actions/feed/"]
 ]);
 const URGENT = /\b(hack(?:ed)?|exploit|breach|stolen|drain(?:ed)?|attack|liquidat(?:ed|ion)|insolvenc[ey]|bankrupt|emergency|security incident|outage|trump|tariffs?|fed(?:eral)? reserve|rate (?:cut|hike)|sanctions?)\b/i;
 const IMPORTANT = /\b(SEC|ETF|fed(?:eral)? reserve|interest rate|regulat(?:ion|or)|lawsuit|listing|delisting|approval|hack|exploit|breach|bitcoin|ethereum)\b/i;
 function alertKind(title) {
+  if (/\b(FOMC statement|Federal Reserve (?:issues|lowers|raises))\b/i.test(title)) return "macro";
   if (/\b(hack(?:ed)?|exploit(?:ed)?|security breach|funds? (?:stolen|drained)|wallets? drained|cyberattack)\b/i.test(title)) return "security";
   if (/\b(insolvenc[ey]|bankrupt(?:cy)?|withdrawals? (?:halted|suspended|frozen)|major (?:exchange |network )?outage)\b/i.test(title)) return "risk";
   if (/\b(trump|fed(?:eral)? reserve)\b/i.test(title) && /\b(announc(?:es?|ed)|signs?|imposes?|emergency|rate (?:cut|hike)|tariffs?|sanctions?)\b/i.test(title)
@@ -54,7 +60,8 @@ function parseNews(xml, source, now = Date.now()) {
     let url;
     try { url = new URL(link); } catch (_) { continue; }
     if (url.protocol !== "https:") continue;
-    rows.push({ id: `${source}:${url.pathname}`, title, url: url.href, source,
+    rows.push({ id: `${source}:${url.pathname}`, title, url: canonicalUrl(url.href), source,
+      context: rssField(match[1], "description").slice(0, 1200), originVerified: publisher(url.href)?.[2] === source,
       publishedAt, priority: alertKind(title) || URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" });
   }
   return rows;
@@ -97,7 +104,7 @@ async function translateTitle(title, key = process.env.DEEPL_API_KEY || "") {
 }
 
 function launchTime(info, now = Date.now(), venue = "") {
-  const keys = { BN: ["onboardDate"], OX: ["listTime"], BX: ["launchTime"],
+  const keys = { BN: ["onboardDate"], BB: ["launchTime"], OX: ["contTdSwTime", "listTime"], BX: ["launchTime"],
     AD: ["onboardDate"] }[venue] || [];
   for (const key of keys) {
     const raw = info?.[key];
@@ -109,53 +116,93 @@ function launchTime(info, now = Date.now(), venue = "") {
   return null;
 }
 
+function delistField(market, venue) {
+  return venue === "OX" ? "expTime" : venue === "BB" && market.swap ? "deliveryTime"
+    : venue === "GT" && market.spot ? "delisting_time" : null;
+}
+function delistTime(market, venue, now) {
+  const key = delistField(market, venue);
+  const raw = key ? Number(market.info?.[key]) : 0;
+  const time = raw && raw < 1e11 ? raw * 1000 : raw;
+  return time > now - MAX_EVENT_AGE_MS && time < now + 60 * 86400000 ? time : null;
+}
+
 function normalizeMarkets(markets, venue, now = Date.now()) {
   const rows = new Map();
   for (const market of Object.values(markets || {})) {
     if (!market || !(market.spot || market.swap) || !market.symbol || !market.base ||
-      market.quote !== "USDT" || market.swap && market.settle && market.settle !== "USDT" ||
-      market.active === false) continue;
+      market.quote !== "USDT" || market.swap && market.settle && market.settle !== "USDT") continue;
+    const launchAt = launchTime(market.info, now, venue);
+    const delistAt = delistTime(market, venue, now);
+    if (market.active === false && !(launchAt > now) && !delistAt) continue;
     const type = market.spot ? "spot" : "futures";
     const symbol = String(market.symbol).slice(0, 80);
     const key = `${venue}:${type}:${symbol}`;
     rows.set(key, { key, exchange: venue, type, symbol,
-      base: String(market.base).slice(0, 40), launchAt: launchTime(market.info, now, venue) });
+      base: String(market.base).slice(0, 40), launchAt, delistAt,
+      delistScheduleKnown: !!delistField(market, venue) && Object.hasOwn(market.info || {}, delistField(market, venue)) });
   }
   return [...rows.values()];
 }
 
 function createMarketFetcher(createClient = exchangeId => {
   const ccxt = require("ccxt");
-  return new ccxt[exchangeId]({ enableRateLimit: true, timeout: 12000 });
-}) {
+  const client = new ccxt[exchangeId]({ enableRateLimit: true, timeout: 12000 });
+  if (exchangeId === "gate") {
+    client.options.fetchMarkets = { types: ["spot", "swap"] };
+    client.options.swap = { fetchMarkets: { settlementCurrencies: ["usdt"] } };
+    client.has.fetchCurrencies = false;
+  }
+  return client;
+}, deadlineMs = 30000) {
   const clients = new Map();
   const loaded = new Set();
-  const fetchMarkets = async exchangeId => {
+  const pending = new Map();
+  const timedOut = new Set();
+  const lateResults = new Map();
+  const load = async exchangeId => {
+    const late = lateResults.get(exchangeId);
+    lateResults.delete(exchangeId);
+    if (late && Date.now() - late.receivedAt < 90000) return late.markets;
     let client = clients.get(exchangeId);
     if (!client) { client = createClient(exchangeId); clients.set(exchangeId, client); }
-    const markets = await client.loadMarkets(loaded.has(exchangeId));
-    loaded.add(exchangeId);
-    return markets;
+    let operation = pending.get(exchangeId);
+    if (!operation) {
+      operation = Promise.resolve().then(() => client.loadMarkets(loaded.has(exchangeId))).then(markets => {
+        if (timedOut.has(exchangeId)) lateResults.set(exchangeId, { markets, receivedAt: Date.now() });
+        loaded.add(exchangeId); return markets;
+      }).finally(() => { pending.delete(exchangeId); timedOut.delete(exchangeId); });
+      pending.set(exchangeId, operation);
+    }
+    let timer;
+    try {
+      const markets = await Promise.race([operation, new Promise((_, reject) => {
+        timer = setTimeout(() => { timedOut.add(exchangeId); reject(new Error("Market catalog deadline exceeded")); }, deadlineMs);
+      })]);
+      lateResults.delete(exchangeId);
+      return markets;
+    } finally { clearTimeout(timer); }
+  };
+  const fetchMarkets = async exchangeId => {
+    // CCXT exposes KuCoin derivatives through a separate exchange client.
+    if (exchangeId === "kucoin") {
+      const [spot, futures] = await Promise.all([load("kucoin"), load("kucoinfutures")]);
+      return { ...spot, ...futures };
+    }
+    return load(exchangeId);
   };
   fetchMarkets.close = async () => {
     await Promise.allSettled([...clients.values()].map(client => client.close?.()));
-    clients.clear(); loaded.clear();
+    clients.clear(); loaded.clear(); lateResults.clear();
   };
   return fetchMarkets;
 }
 
 function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
-  fetchMarkets = null, fetchFeed = async url => {
-    const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { "User-Agent": "ObsidianScreener/1.0" } });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const length = Number(response.headers.get("content-length"));
-    if (length > 2_000_000) throw new Error("Feed too large");
-    const body = await response.text();
-    if (body.length > 2_000_000) throw new Error("Feed too large");
-    return body;
-  }, now = () => Date.now(), translate = translateTitle,
+  fetchMarkets = null, fetchFeed = createSourceReader(), now = () => Date.now(), translate = translateTitle,
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
-  streamKey = process.env.TREE_NEWS_API_KEY || "" } = {}) {
+  streamKey = process.env.TREE_NEWS_API_KEY || "",
+  telegramChannelIds = (process.env.NEWS_TELEGRAM_CHANNEL_IDS || "").split(",").map(value => value.trim()).filter(Boolean) } = {}) {
   const marketFetcher = fetchMarkets || createMarketFetcher();
   let state = { marketVersion: 2, known: {}, active: {}, missing: {}, historySeeded: {}, candidates: {}, listings: [], news: [], venues: {}, marketUpdatedAt: null, newsUpdatedAt: null };
   try {
@@ -181,20 +228,30 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   const queued = new Set();
   let translating = 0;
   let translationPauseUntil = 0;
+  let lastConfirmationFetch = 0;
+  let leadWorkers = 0;
+  const leadQueue = new Map();
+  const sourceHealth = {};
 
   function emit(event) { for (const listener of listeners) { try { listener(event); } catch (_) {} } }
 
   function drainTranslations() {
     while (translating < 2 && translationQueue.length && now() >= translationPauseUntil) {
       const item = translationQueue.shift();
+      if (!state.news.some(current => current.url === item.url && current.title === item.title && isPublished(current))) { queued.delete(item.url); continue; }
       translating++;
       Promise.resolve().then(() => translate(item.title)).then(translated => {
-        if (translated && translated.trim() && translated !== item.title) {
-          item.titleRu = translated.trim().slice(0, 500);
-          persist(); emit({ type: "translation", item });
+        const current = state.news.find(row => row.url === item.url && row.title === item.title);
+        if (current && isPublished(current) && translated && translated.trim() && translated !== item.title) {
+          current.titleRu = translated.trim().slice(0, 500);
+          persist(); emit({ type: "translation", item: current });
         }
       }).catch(() => { translationPauseUntil = now() + 60000; }).finally(() => {
         translating--; queued.delete(item.url);
+        const current = state.news.find(row => row.url === item.url);
+        if (current && isPublished(current) && !current.titleRu && current.title !== item.title) {
+          queued.add(current.url); translationQueue.unshift(current);
+        }
         if (translationQueue.length && now() < translationPauseUntil) {
           const timer = setTimeout(drainTranslations, Math.max(1000, translationPauseUntil - now())); timer.unref?.();
         } else drainTranslations();
@@ -205,25 +262,65 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   function mergeNews(rows) {
     const byUrl = new Map(state.news.map(item => [item.url, item]));
     let changed = false;
-    const alerts = [];
     for (const row of rows) {
-      if (byUrl.has(row.url)) continue;
+      row.url = canonicalUrl(row.url);
+      if (!row.url || !row.title || !Number.isFinite(row.publishedAt) || row.publishedAt < now() - 7 * 86400000 || row.publishedAt > now() + 60000) continue;
+      const previous = byUrl.get(row.url);
+      if (previous && (!row.originVerified || previous.originVerified && previous.title === row.title && previous.context === row.context)) continue;
+      if (previous) {
+        row.alertedAt = previous.alertedAt;
+        row.verification = previous.verification;
+        if (previous.title === row.title) row.titleRu = previous.titleRu;
+      }
       row.alertKind = alertKind(row.title);
       row.receivedAt ||= now();
-      if (row.alertKind && row.priority === "urgent" && row.publishedAt >= now() - 15 * 60000 && row.publishedAt <= now() + 60000) alerts.push(row);
+      row.priority ||= row.alertKind || URGENT.test(row.title) ? "urgent" : IMPORTANT.test(row.title) ? "important" : "regular";
       byUrl.set(row.url, row); changed = true;
-      if (!queued.has(row.url) && /[a-z]{3}/i.test(row.title) && !/[а-яё]/i.test(row.title)) {
-        queued.add(row.url);
-        if (row.priority === "urgent") translationQueue.unshift(row);
-        else translationQueue.push(row);
-      }
     }
     if (changed) {
       state.news = [...byUrl.values()].filter(item => item.publishedAt > now() - 7 * 86400000)
-        .sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 120);
+        .sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 240);
+      const notifications = [];
+      for (const item of state.news) {
+        const wasPublished = isPublished(item);
+        item.verification = assessNews(item, state.news);
+        if (wasPublished && !isPublished(item)) notifications.push({ type: "retract", item });
+        if (!isPublished(item)) continue;
+        if (!item.titleRu && !queued.has(item.url) && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)) {
+          queued.add(item.url);
+          if (item.alertKind) translationQueue.unshift(item); else translationQueue.push(item);
+        }
+        if (item.alertKind && !item.alertedAt && now() - item.publishedAt <= 15 * 60000) {
+          const alreadyAlerted = state.news.some(other => other.alertedAt && Math.abs(other.publishedAt - item.publishedAt) < 2 * 3600000 && sameClaim(item, other));
+          item.alertedAt = now();
+          if (!alreadyAlerted) notifications.push({ type: "urgent", item });
+        }
+      }
       state.newsUpdatedAt = now(); persist(); emit();
-      for (const item of alerts) emit({ type: "urgent", item });
+      for (const event of notifications) emit(event);
       drainTranslations();
+    }
+  }
+
+  function ingestLead(item) {
+    if (!item) return;
+    mergeNews([{ ...item, originVerified: false }]);
+    if (publisher(item.url) && !leadQueue.has(item.url) && leadQueue.size < 30) leadQueue.set(item.url, item);
+    void drainLeads();
+    if (alertKind(item.title) && now() - lastConfirmationFetch >= 10000) {
+      lastConfirmationFetch = now(); void refreshNews();
+    }
+  }
+
+  async function drainLeads() {
+    if (leadWorkers >= 3) return;
+    while (leadQueue.size) {
+      const [url] = leadQueue.keys(); leadQueue.delete(url); leadWorkers++;
+      try {
+        const article = parseArticle(await fetchFeed(url), url, decodeXml, now());
+        if (article) mergeNews([article]);
+      } catch (_) { /* Unreadable sources stay pending; never trust the supplied headline. */ }
+      finally { leadWorkers--; }
     }
   }
 
@@ -231,15 +328,16 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     if (stopped) return;
     try {
       const ws = stream = streamFactory("wss://news.treeofalpha.com/ws");
-      ws.on("open", () => { if (streamKey) ws.send(`login ${streamKey}`); });
+      ws.on("open", () => { sourceHealth["Tree News"] = { status: "connected", updatedAt: now() }; if (streamKey) ws.send(`login ${streamKey}`); });
       ws.on("message", raw => {
         const item = parseStreamNews(raw, now());
-        if (item && item.priority !== "regular") mergeNews([item]);
+        if (item && item.priority !== "regular") ingestLead(item);
       });
       ws.on("error", () => {});
       ws.on("close", () => {
         if (stream !== ws || stopped) return;
         stream = null;
+        sourceHealth["Tree News"] = { status: "reconnecting", updatedAt: now() };
         reconnectTimer = setTimeout(connectStream, 5000 + Math.random() * 5000);
         reconnectTimer.unref?.();
       });
@@ -290,7 +388,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
                 if (current.has(key)) continue;
                 const count = (missing[key] || 0) + 1;
                 nextMissing[key] = count;
-                if (count !== 3) continue;
+                if (count !== 3 || existingById.has(`scheduled-delist:${key}`)) continue;
                 const [, type, ...symbolParts] = key.split(":");
                 const event = { id: `delist:${key}`, kind: "delisting", exchange: code, type,
                   symbol: symbolParts.join(":"), launchAt: null, detectedAt: now(), timing: "detected" };
@@ -301,17 +399,32 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
             const nextCandidates = {};
             // A new market must survive a second scan; one incomplete catalog is not a listing.
             for (const row of rows) {
+              const scheduledId = `scheduled-delist:${row.key}`;
+              const scheduled = existingById.get(scheduledId);
+              if (row.delistAt && (!scheduled || scheduled.delistAt !== row.delistAt)) {
+                const event = { ...row, id: scheduledId, kind: "delisting", detectedAt: now(), timing: "exchange" };
+                if (scheduled) Object.assign(scheduled, event);
+                else { state.listings.push(event); existingById.set(scheduledId, event); }
+                changed = true;
+              } else if (!row.delistAt && row.delistScheduleKnown && scheduled?.delistAt > now()) {
+                state.listings = state.listings.filter(event => event.id !== scheduledId);
+                existingById.delete(scheduledId); changed = true;
+              }
               if (existingById.has(`delist:${row.key}`)) {
                 state.listings = state.listings.filter(event => event.id !== `delist:${row.key}`);
                 existingById.delete(`delist:${row.key}`);
                 changed = true;
               }
-              if (!state.historySeeded[code] && (code === "BN" || code === "OX") && row.launchAt &&
+              if ((state.historySeeded[code] !== 2 && ["BN", "BB", "OX"].includes(code) || row.launchAt > now()) && row.launchAt &&
                 row.launchAt >= now() - 30 * 86400000 && row.launchAt <= now() + 30 * 86400000 &&
                 !existingById.has(row.key)) {
                 const event = { ...row, id: row.key, kind: "listing", historical: true,
                   detectedAt: now(), timing: "exchange" };
                 state.listings.push(event); existingById.set(event.id, event); changed = true;
+              }
+              const recorded = existingById.get(row.key);
+              if (recorded && row.launchAt && recorded.launchAt !== row.launchAt) {
+                recorded.launchAt = row.launchAt; recorded.timing = "exchange"; changed = true;
               }
               const firstTypeScan = row.type === "spot" ? priorSpot === 0 : priorFutures === 0;
               if (!prior || firstTypeScan) { known.add(row.key); continue; }
@@ -331,7 +444,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
               }
             }
             state.candidates[code] = nextCandidates;
-            state.historySeeded[code] = true;
+            state.historySeeded[code] = 2;
             state.missing[code] = nextMissing;
             state.active[code] = [...current.keys()];
             state.known[code] = [...known];
@@ -339,15 +452,19 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
               futures: futuresCount, updatedAt: now() };
             if (changed) { state.marketUpdatedAt = now(); persist(); emit(); }
           } catch (error) {
+            // Keep the missing keys so the next healthy scan can restart confirmation.
+            state.missing[code] = Object.fromEntries(Object.keys(state.missing[code] || {}).map(key => [key, 0]));
+            state.candidates[code] = {};
             state.venues[code] = { ...state.venues[code], name, status: "error",
               error: String(error.message || error).slice(0, 120), updatedAt: state.venues[code]?.updatedAt || null };
           }
         }
       }));
-      state.listings = state.listings.filter(row => (row.launchAt || row.detectedAt) > now() - MAX_EVENT_AGE_MS)
-        .sort((a, b) => (b.launchAt || b.detectedAt) - (a.launchAt || a.detectedAt)).slice(0, 3000);
+      const eventTime = row => row.kind === "delisting" ? row.delistAt || row.detectedAt : row.launchAt || row.detectedAt;
+      state.listings = state.listings.filter(row => eventTime(row) > now() - MAX_EVENT_AGE_MS)
+        .sort((a, b) => eventTime(b) - eventTime(a)).slice(0, 3000);
       state.marketUpdatedAt = now();
-      persist();
+      persist(); emit();
     } finally { marketsRunning = false; }
   }
 
@@ -355,14 +472,24 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     if (newsRunning) return;
     newsRunning = true;
     try {
-      const responses = await Promise.allSettled(FEEDS.map(async ([source, url]) => parseNews(await fetchFeed(url), source, now())));
-      const rows = responses.filter(result => result.status === "fulfilled").flatMap(result => result.value);
-      if (rows.length) mergeNews(rows);
+      await Promise.allSettled(FEEDS.map(async ([source, url]) => {
+        try {
+          const rows = parseNews(await fetchFeed(url), source, now()).filter(item => source !== "White House" || item.priority !== "regular");
+          sourceHealth[source] = { status: "ok", checkedAt: now(), latestAt: Math.max(0, ...rows.map(row => row.publishedAt)) || null };
+          if (rows.length) mergeNews(rows);
+        } catch (_) { sourceHealth[source] = { ...sourceHealth[source], status: "error", checkedAt: now() }; }
+      }));
     } finally { newsRunning = false; }
   }
 
   function snapshot() {
-    return { listings: state.listings, news: state.news, venues: state.venues,
+    const news = [];
+    for (const item of state.news.filter(isPublished)) {
+      if (news.some(other => Math.abs(other.publishedAt - item.publishedAt) <= 2 * 3600000 && sameClaim(item, other))) continue;
+      const { context, originVerified, ...publicItem } = item;
+      news.push(publicItem);
+    }
+    return { listings: state.listings, news, venues: state.venues, sources: sourceHealth,
       marketUpdatedAt: state.marketUpdatedAt, newsUpdatedAt: state.newsUpdatedAt,
       sourceNames: ["Tree News", ...FEEDS.map(([name]) => name)] };
   }
@@ -371,7 +498,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     if (marketTimer) return;
     stopped = false;
     for (const item of state.news.slice(0, 30)) {
-      if (!item.titleRu && item.publishedAt > now() - 86400000 && !queued.has(item.url) &&
+      if (isPublished(item) && !item.titleRu && item.publishedAt > now() - 86400000 && !queued.has(item.url) &&
         /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)) {
         queued.add(item.url); translationQueue.push(item);
       }
@@ -380,7 +507,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     void Promise.allSettled([refreshMarkets(), refreshNews()]);
     connectStream();
     marketTimer = setInterval(() => { void refreshMarkets(); }, 90 * 1000);
-    newsTimer = setInterval(() => { void refreshNews(); }, 60000);
+    newsTimer = setInterval(() => { void refreshNews(); }, 20000);
     marketTimer.unref?.(); newsTimer.unref?.();
   }
   function stop() {
@@ -393,6 +520,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     marketTimer = null; newsTimer = null;
   }
   return { snapshot, refreshMarkets, refreshNews, start, stop, ingestNews: mergeNews,
+    ingestTelegram(message) { ingestLead(telegramLead(message, telegramChannelIds, now())); },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 

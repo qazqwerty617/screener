@@ -15,7 +15,7 @@ test("only consequential headlines qualify for site-wide urgent cards", () => {
   assert.equal(alertKind("Trump meme coin rises 4%"), null);
 });
 
-test("new critical news emits one immediate alert, not another on translation or repeat", async t => {
+test("authenticated official critical news emits one alert, not another on translation or repeat", async t => {
   const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
   t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
   const now = Date.parse("2026-09-21T12:00:00Z");
@@ -24,8 +24,8 @@ test("new critical news emits one immediate alert, not another on translation or
     translate: () => new Promise(resolve => { resolveTranslation = resolve; }) });
   const events = [];
   hub.subscribe(event => { if (event) events.push(event); });
-  const item = { id: "hack", title: "Exchange suffers major hack", url: "https://example.com/hack",
-    source: "Test Wire", publishedAt: now - 1000, priority: "urgent" };
+  const item = { id: "hack", title: "Bybit reports a major hack", url: "https://announcements.bybit.com/en/article/hack",
+    source: "Bybit", publishedAt: now - 1000, priority: "urgent", originVerified: true };
   hub.ingestNews([item]);
   assert.equal(events.filter(event => event.type === "urgent").length, 1);
   await new Promise(resolve => setImmediate(resolve));
@@ -150,7 +150,7 @@ test("legacy non-USDT listing history is discarded while news is retained", t =>
     news: [{ title: "Kept news", url: "https://example.com" }] }));
   const hub = createEventsHub({ filePath });
   assert.equal(hub.snapshot().listings.length, 0);
-  assert.equal(hub.snapshot().news[0].title, "Kept news");
+  assert.equal(hub.snapshot().news.length, 0, "legacy unverified headlines are withheld");
 });
 
 test("persistent market removal is an observed delisting, and a recovered pair retracts it", async t => {
@@ -269,7 +269,7 @@ test("urgent feed headlines retain their source and reject unsafe links", () => 
   assert.match(rows[0].title, /hack & security/);
 });
 
-test("stream headlines publish immediately, translate later, and survive RSS refresh", async t => {
+test("stream headlines wait for authenticated evidence before publishing or translating", async t => {
   const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
   t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
   const time = Date.parse("2025-12-09T13:00:00Z");
@@ -280,18 +280,20 @@ test("stream headlines publish immediately, translate later, and survive RSS ref
   const notifications = [];
   hub.subscribe(event => { if (event?.type !== "urgent") notifications.push(hub.snapshot().news[0]?.titleRu); });
   const item = parseStreamNews(JSON.stringify({ _id: "one", body: "Trump announces new tariff on crypto imports",
-    source: "Reuters", link: "https://example.com/post", time }), time);
+    source: "Reuters", link: "https://www.whitehouse.gov/presidential-actions/2025/12/tariffs/", time }), time);
   assert.equal(item.priority, "urgent");
   hub.ingestNews([item]);
-  assert.equal(hub.snapshot().news[0].title, item.title);
-  assert.equal(hub.snapshot().news[0].titleRu, undefined);
+  assert.equal(hub.snapshot().news.length, 0);
   await hub.refreshNews();
+  assert.equal(hub.snapshot().news.length, 0);
+  assert.equal(finishTranslation, undefined);
+  hub.ingestNews([{ ...item, source: "White House", originVerified: true }]);
   assert.equal(hub.snapshot().news.length, 1);
   await new Promise(resolve => setImmediate(resolve));
   finishTranslation("Трамп объявил новые пошлины");
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(hub.snapshot().news[0].titleRu, "Трамп объявил новые пошлины");
-  assert.equal(notifications.length, 2);
+  assert.equal(notifications.length, 3);
   hub.ingestNews([item]);
   assert.equal(hub.snapshot().news.length, 1);
 });
