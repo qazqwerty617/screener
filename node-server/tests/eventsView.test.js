@@ -41,9 +41,10 @@ test("events tab renders sourced news and filters spot and futures listings", as
   assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 0, "old feed rows are not replayed");
   w.ObsidianEvents.activate();
   await new Promise(resolve => setImmediate(resolve));
-  assert.match(w.document.getElementById("events-urgent-list").textContent, /Exchange hack/);
+  assert.doesNotMatch(w.document.getElementById("events-urgent-list").textContent, /Exchange hack/);
   assert.match(w.document.getElementById("events-urgent-list").textContent, /Биржу взломали/);
   assert.match(w.document.getElementById("events-news-list").textContent, /Приток средств в биткоин ETF вырос/);
+  assert.doesNotMatch(w.document.getElementById("events-news-list").textContent, /Bitcoin ETF inflows increased/);
   assert.match(w.document.getElementById("events-news-list").textContent, /Сообщает источник/);
   assert.equal(typeof stream.callbacks.update, "function");
   w.document.getElementById("events-tab-listings").click();

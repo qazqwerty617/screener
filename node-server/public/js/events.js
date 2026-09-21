@@ -205,7 +205,6 @@
       const primary = node("a", "events-source-link", item.titleRu || item.title);
       primary.href = url.href; primary.target = "_blank"; primary.rel = "noopener noreferrer";
       heading.append(primary); link.append(heading);
-      if (item.titleRu) link.append(node("p", "events-original", item.title));
       const sources = node("div", "events-news-sources");
       sources.append(node("small", "", item.verification.status === "official" ? "Официальный источник"
         : item.verification.status === "corroborated" ? "Сверено по 2 источникам" : "Сообщает источник"));

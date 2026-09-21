@@ -70,8 +70,12 @@ function parseNews(xml, source, now = Date.now()) {
 }
 
 function parseGateAnnouncements(payload, now = Date.now()) {
-  if (payload?.code !== 0 || !Array.isArray(payload.data?.list)) throw new Error("Gate announcements unavailable");
-  return payload.data.list.flatMap(article => {
+  const english = payload?.english || payload;
+  if (english?.code !== 0 || !Array.isArray(english.data?.list)) throw new Error("Gate announcements unavailable");
+  const russianById = new Map((payload?.russian?.code === 0 ? payload.russian.data?.list || [] : [])
+    .filter(article => /[а-яё]/i.test(String(article.title || "")))
+    .map(article => [String(article.id), String(article.title).trim().slice(0, 500)]));
+  return english.data.list.flatMap(article => {
     const title = String(article.title || "").trim().slice(0, 250);
     const publishedAt = Number(article.release_timestamp) * 1000;
     let url;
@@ -79,17 +83,21 @@ function parseGateAnnouncements(payload, now = Date.now()) {
     if (!title || !publisher(url) || !Number.isFinite(publishedAt) ||
       publishedAt > now + 60000 || now - publishedAt > 7 * 86400000 ||
       !(alertKind(title) || IMPORTANT.test(title) || /\b(list|launch|delist|suspend|outage|maintenance)\b/i.test(title))) return [];
-    return [{ id: `gate:${article.id}`, title, url, source: "Gate.io", publishedAt,
+    return [{ id: `gate:${article.id}`, title, titleRu: russianById.get(String(article.id)), url, source: "Gate.io", publishedAt,
       originVerified: true, priority: alertKind(title) ? "urgent" : "important" }];
   }).sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 30);
 }
 
 async function readGateAnnouncements() {
-  const response = await fetch(GATE_ANNOUNCEMENTS_URL, { method: "POST", signal: AbortSignal.timeout(7000),
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ page: "1", size: "50", lang: "en" }) });
-  if (!response.ok) throw new Error(`Gate announcements HTTP ${response.status}`);
-  return response.json();
+  const read = async lang => {
+    const response = await fetch(GATE_ANNOUNCEMENTS_URL, { method: "POST", signal: AbortSignal.timeout(7000),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ page: "1", size: "50", lang }) });
+    if (!response.ok) throw new Error(`Gate announcements HTTP ${response.status}`);
+    return response.json();
+  };
+  const [english, russian] = await Promise.all([read("en"), read("ru").catch(() => null)]);
+  return { english, russian };
 }
 
 function parseStreamNews(raw, now = Date.now()) {
@@ -110,20 +118,31 @@ function parseStreamNews(raw, now = Date.now()) {
     priority: alertKind(title) || URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" };
 }
 
-async function translateTitle(title, key = process.env.DEEPL_API_KEY || "") {
+async function translateTitle(title, key = process.env.DEEPL_API_KEY || "", request = fetch) {
   const deepl = key.trim();
   const endpoint = deepl.endsWith(":fx") ? "https://api-free.deepl.com/v2/translate" : "https://api.deepl.com/v2/translate";
   if (deepl) {
-    const response = await fetch(endpoint, { method: "POST", signal: AbortSignal.timeout(5000),
+    const response = await request(endpoint, { method: "POST", signal: AbortSignal.timeout(5000),
       headers: { Authorization: `DeepL-Auth-Key ${deepl}`, "Content-Type": "application/json" },
       body: JSON.stringify({ text: [title], target_lang: "RU" }) });
     if (!response.ok) throw new Error(`DeepL HTTP ${response.status}`);
     return (await response.json()).translations?.[0]?.text || null;
   }
-  const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(title.slice(0, 350))}&langpair=en%7Cru`,
+  const params = new URLSearchParams({ q: title.slice(0, 350), langpair: "en|ru" });
+  if (process.env.MYMEMORY_CONTACT_EMAIL) params.set("de", process.env.MYMEMORY_CONTACT_EMAIL);
+  const response = await request(`https://api.mymemory.translated.net/get?${params}`,
     { signal: AbortSignal.timeout(5000) });
-  if (!response.ok) throw new Error(`MyMemory HTTP ${response.status}`);
+  if (!response.ok) {
+    const error = new Error(`MyMemory HTTP ${response.status}`);
+    if (response.status === 429) error.retryAfterMs = 3600000;
+    throw error;
+  }
   const result = await response.json();
+  if (result.quotaFinished || /quota|free translations for today/i.test(String(result.responseData?.translatedText || result.responseDetails || ""))) {
+    const error = new Error("MyMemory daily quota exhausted");
+    error.retryAfterMs = 24 * 3600000;
+    throw error;
+  }
   if (result.responseStatus !== 200) throw new Error("Translation unavailable");
   return result.responseData?.translatedText || null;
 }
@@ -255,17 +274,23 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   const translationRetryAt = new Map();
   let translating = 0;
   let translationPauseUntil = 0;
+  let translationLastError = null;
   let lastConfirmationFetch = 0;
   let leadWorkers = 0;
   const leadQueue = new Map();
   const sourceHealth = {};
 
   function emit(event) { for (const listener of listeners) { try { listener(event); } catch (_) {} } }
+  function prioritizeTranslations() {
+    const rank = item => item.alertKind ? 2 : item.priority === "urgent" ? 1 : 0;
+    translationQueue.sort((a, b) => rank(b) - rank(a) || b.publishedAt - a.publishedAt);
+  }
   function queueTranslation(item) {
     if (item.titleRu || queued.has(item.url) || (translationRetryAt.get(item.url) || 0) > now() ||
       !/[a-z]{3}/i.test(item.title) || /[а-яё]/i.test(item.title)) return;
     queued.add(item.url);
-    if (item.alertKind) translationQueue.unshift(item); else translationQueue.push(item);
+    translationQueue.push(item);
+    prioritizeTranslations();
     drainTranslations();
   }
 
@@ -279,18 +304,20 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
         if (current && isPublished(current) && translated && /[а-яё]/i.test(translated) && translated !== item.title) {
           current.titleRu = translated.trim().slice(0, 500);
           translationRetryAt.delete(item.url);
+          translationLastError = null;
           persist(); emit({ type: "translation", item: current });
         } else if (current && isPublished(current)) {
           translationRetryAt.set(item.url, now() + 60000);
         }
-      }).catch(() => {
+      }).catch(error => {
         translationRetryAt.set(item.url, now() + 60000);
-        translationPauseUntil = now() + 60000;
+        translationPauseUntil = Math.max(translationPauseUntil, now() + (error.retryAfterMs || 60000));
+        translationLastError = { message: error.message, at: now() };
       }).finally(() => {
         translating--; queued.delete(item.url);
         const current = state.news.find(row => row.url === item.url);
         if (current && isPublished(current) && !current.titleRu && current.title !== item.title) {
-          queued.add(current.url); translationQueue.unshift(current);
+          queued.add(current.url); translationQueue.push(current); prioritizeTranslations();
         }
         if (translationQueue.length && now() < translationPauseUntil) {
           const timer = setTimeout(drainTranslations, Math.max(1000, translationPauseUntil - now())); timer.unref?.();
@@ -307,6 +334,10 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       if (!row.url || !row.title || !Number.isFinite(row.publishedAt) || row.publishedAt < now() - 7 * 86400000 || row.publishedAt > now() + 60000) continue;
       const previous = byUrl.get(row.url);
       if (previous && (!row.originVerified || previous.originVerified && previous.title === row.title && previous.context === row.context)) {
+        if (row.titleRu && /[а-яё]/i.test(row.titleRu) && row.titleRu !== previous.titleRu && row.title === previous.title) {
+          previous.titleRu = row.titleRu;
+          persist(); emit({ type: "translation", item: previous });
+        }
         if (isPublished(previous)) queueTranslation(previous);
         continue;
       }
@@ -541,6 +572,9 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       news.push(publicItem);
     }
     return { listings: state.listings, news, venues: state.venues, sources: sourceHealth,
+      translation: { provider: process.env.DEEPL_API_KEY ? "DeepL" : "MyMemory", pending: translationQueue.length + translating,
+        untranslated: news.filter(item => !item.titleRu && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)).length,
+        pausedUntil: translationPauseUntil || null, lastError: translationLastError },
       marketUpdatedAt: state.marketUpdatedAt, newsUpdatedAt: state.newsUpdatedAt,
       sourceNames: ["Tree News", "Gate.io", ...FEEDS.map(([name]) => name)] };
   }

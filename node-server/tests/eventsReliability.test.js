@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), crypto = require("node:crypto");
-const { createEventsHub, createMarketFetcher, normalizeMarkets, parseGateAnnouncements } = require("../eventsHub");
+const { createEventsHub, createMarketFetcher, normalizeMarkets, parseGateAnnouncements, translateTitle } = require("../eventsHub");
 const now = Date.now();
 function hubFor(t, options) {
   const filePath = path.join(os.tmpdir(), `events-reliability-${crypto.randomUUID()}.json`);
@@ -47,6 +47,49 @@ test("a failed headline translation is retried when a feed repeats the article",
   hub.ingestNews([article]);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(hub.snapshot().news[0].titleRu, "Приток средств в биткоин ETF вырос");
+});
+
+test("a fresh headline moves ahead of the old translation backlog", async t => {
+  const started = [], pending = [];
+  const hub = hubFor(t, { translate: title => {
+    started.push(title);
+    return new Promise(resolve => pending.push(resolve));
+  } });
+  const article = (id, age) => ({ title: `Market report number ${id} describes token activity`,
+    url: `https://www.coindesk.com/markets/report-${id}`, source: "CoinDesk",
+    publishedAt: now - age * 60000, originVerified: true });
+  hub.ingestNews([article(1, 50), article(2, 40), article(3, 30), article(4, 20)]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started.length, 2);
+  hub.ingestNews([article(5, 0)]);
+  pending[0]("Рыночный отчёт об активности токенов");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started[2], article(5, 0).title);
+});
+
+test("translation quota exhaustion is reported and does not hammer the provider", async t => {
+  let calls = 0;
+  const hub = hubFor(t, { translate: async () => {
+    calls++;
+    const error = new Error("daily quota exhausted");
+    error.retryAfterMs = 24 * 3600000;
+    throw error;
+  } });
+  hub.ingestNews(Array.from({ length: 5 }, (_, i) => ({
+    title: `Market report number ${i} describes token activity`,
+    url: `https://www.coindesk.com/markets/report-${i}`, source: "CoinDesk",
+    publishedAt: now - i * 60000, originVerified: true })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(calls <= 2);
+  assert.ok(hub.snapshot().translation.pausedUntil >= now + 24 * 3600000);
+  assert.equal(hub.snapshot().translation.untranslated, 5);
+});
+
+test("MyMemory quota response is treated as failure rather than a translated headline", async () => {
+  await assert.rejects(translateTitle("Bitcoin reached a new high", "", async () => ({ ok: true,
+    json: async () => ({ responseStatus: 200, quotaFinished: true,
+      responseData: { translatedText: "Биткоин достиг нового максимума" } }) })),
+  error => error.retryAfterMs === 24 * 3600000);
 });
 
 test("a flood of unverified stream leads cannot evict a sourced article", t => {
@@ -100,6 +143,19 @@ test("Gate official announcements are parsed from authenticated article paths an
   await hub.refreshNews();
   assert.equal(hub.snapshot().news[0].source, "Gate.io");
   assert.equal(hub.snapshot().news[0].verification.status, "official");
+});
+
+test("Gate Russian announcement text is attached to the matching official article", async t => {
+  const english = { code: 0, data: { list: [{ id: 42, title: "Gate will list BREW for spot trading",
+    url: "/announcements/article/42", release_timestamp: String(now / 1000) }] } };
+  const russian = { code: 0, data: { list: [{ id: 42, title: "Gate добавит BREW для спотовой торговли" }] } };
+  const hub = hubFor(t, { fetchFeed: async () => "<rss/>", fetchGateAnnouncements: async () => ({ english, russian }) });
+  await hub.refreshNews();
+  assert.equal(hub.snapshot().news[0].titleRu, "Gate добавит BREW для спотовой торговли");
+  const oldHub = hubFor(t);
+  oldHub.ingestNews(parseGateAnnouncements(english, now));
+  oldHub.ingestNews(parseGateAnnouncements({ english, russian }, now));
+  assert.equal(oldHub.snapshot().news[0].titleRu, "Gate добавит BREW для спотовой торговли");
 });
 test("a catalogue timeout does not start overlapping requests for the same exchange", async () => {
   let finish, calls = 0;
