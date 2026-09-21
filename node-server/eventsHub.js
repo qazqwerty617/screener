@@ -7,13 +7,14 @@ const { publisher, canonicalUrl, assessNews, sameClaim, isPublished } = require(
 const { createSourceReader, parseArticle, telegramLead } = require("./newsSources");
 
 const VENUES = Object.freeze([
+  ["GT", "Gate.io", "gate"], ["MX", "MEXC", "mexc"],
+  ["AD", "Aster", "aster"], ["HL", "Hyperliquid", "hyperliquid"],
   ["BN", "Binance", "binance"], ["BB", "Bybit", "bybit"],
   ["OX", "OKX", "okx"], ["BG", "Bitget", "bitget"],
-  ["GT", "Gate.io", "gate"], ["MX", "MEXC", "mexc"],
   ["KC", "KuCoin", "kucoin"], ["BX", "BingX", "bingx"],
-  ["HT", "HTX", "htx"], ["HL", "Hyperliquid", "hyperliquid"],
-  ["AD", "Aster", "aster"]
+  ["HT", "HTX", "htx"]
 ]);
+const PRIORITY_VENUES = Object.freeze(["GT", "MX", "AD", "HL"]);
 const FEEDS = Object.freeze([
   ["CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss"],
   ["Cointelegraph", "https://cointelegraph.com/rss"],
@@ -22,6 +23,7 @@ const FEEDS = Object.freeze([
   ["Federal Reserve", "https://www.federalreserve.gov/feeds/press_monetary.xml"],
   ["White House", "https://www.whitehouse.gov/presidential-actions/feed/"]
 ]);
+const GATE_ANNOUNCEMENTS_URL = "https://api.gateio.ws/api/v4/ann/list_article";
 const URGENT = /\b(hack(?:ed)?|exploit|breach|stolen|drain(?:ed)?|attack|liquidat(?:ed|ion)|insolvenc[ey]|bankrupt|emergency|security incident|outage|trump|tariffs?|fed(?:eral)? reserve|rate (?:cut|hike)|sanctions?)\b/i;
 const IMPORTANT = /\b(SEC|ETF|fed(?:eral)? reserve|interest rate|regulat(?:ion|or)|lawsuit|listing|delisting|approval|hack|exploit|breach|bitcoin|ethereum)\b/i;
 function alertKind(title) {
@@ -65,6 +67,29 @@ function parseNews(xml, source, now = Date.now()) {
       publishedAt, priority: alertKind(title) || URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" });
   }
   return rows;
+}
+
+function parseGateAnnouncements(payload, now = Date.now()) {
+  if (payload?.code !== 0 || !Array.isArray(payload.data?.list)) throw new Error("Gate announcements unavailable");
+  return payload.data.list.flatMap(article => {
+    const title = String(article.title || "").trim().slice(0, 250);
+    const publishedAt = Number(article.release_timestamp) * 1000;
+    let url;
+    try { url = new URL(article.url, "https://www.gate.com").href; } catch (_) { return []; }
+    if (!title || !publisher(url) || !Number.isFinite(publishedAt) ||
+      publishedAt > now + 60000 || now - publishedAt > 7 * 86400000 ||
+      !(alertKind(title) || IMPORTANT.test(title) || /\b(list|launch|delist|suspend|outage|maintenance)\b/i.test(title))) return [];
+    return [{ id: `gate:${article.id}`, title, url, source: "Gate.io", publishedAt,
+      originVerified: true, priority: alertKind(title) ? "urgent" : "important" }];
+  }).sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 30);
+}
+
+async function readGateAnnouncements() {
+  const response = await fetch(GATE_ANNOUNCEMENTS_URL, { method: "POST", signal: AbortSignal.timeout(7000),
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ page: "1", size: "50", lang: "en" }) });
+  if (!response.ok) throw new Error(`Gate announcements HTTP ${response.status}`);
+  return response.json();
 }
 
 function parseStreamNews(raw, now = Date.now()) {
@@ -199,7 +224,8 @@ function createMarketFetcher(createClient = exchangeId => {
 }
 
 function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
-  fetchMarkets = null, fetchFeed = createSourceReader(), now = () => Date.now(), translate = translateTitle,
+  fetchMarkets = null, fetchFeed = createSourceReader(), fetchGateAnnouncements = readGateAnnouncements,
+  now = () => Date.now(), translate = translateTitle,
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
   streamKey = process.env.TREE_NEWS_API_KEY || "",
   telegramChannelIds = (process.env.NEWS_TELEGRAM_CHANNEL_IDS || "").split(",").map(value => value.trim()).filter(Boolean) } = {}) {
@@ -226,6 +252,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   const listeners = new Set();
   const translationQueue = [];
   const queued = new Set();
+  const translationRetryAt = new Map();
   let translating = 0;
   let translationPauseUntil = 0;
   let lastConfirmationFetch = 0;
@@ -234,6 +261,13 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   const sourceHealth = {};
 
   function emit(event) { for (const listener of listeners) { try { listener(event); } catch (_) {} } }
+  function queueTranslation(item) {
+    if (item.titleRu || queued.has(item.url) || (translationRetryAt.get(item.url) || 0) > now() ||
+      !/[a-z]{3}/i.test(item.title) || /[а-яё]/i.test(item.title)) return;
+    queued.add(item.url);
+    if (item.alertKind) translationQueue.unshift(item); else translationQueue.push(item);
+    drainTranslations();
+  }
 
   function drainTranslations() {
     while (translating < 2 && translationQueue.length && now() >= translationPauseUntil) {
@@ -242,11 +276,17 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       translating++;
       Promise.resolve().then(() => translate(item.title)).then(translated => {
         const current = state.news.find(row => row.url === item.url && row.title === item.title);
-        if (current && isPublished(current) && translated && translated.trim() && translated !== item.title) {
+        if (current && isPublished(current) && translated && /[а-яё]/i.test(translated) && translated !== item.title) {
           current.titleRu = translated.trim().slice(0, 500);
+          translationRetryAt.delete(item.url);
           persist(); emit({ type: "translation", item: current });
+        } else if (current && isPublished(current)) {
+          translationRetryAt.set(item.url, now() + 60000);
         }
-      }).catch(() => { translationPauseUntil = now() + 60000; }).finally(() => {
+      }).catch(() => {
+        translationRetryAt.set(item.url, now() + 60000);
+        translationPauseUntil = now() + 60000;
+      }).finally(() => {
         translating--; queued.delete(item.url);
         const current = state.news.find(row => row.url === item.url);
         if (current && isPublished(current) && !current.titleRu && current.title !== item.title) {
@@ -266,11 +306,15 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       row.url = canonicalUrl(row.url);
       if (!row.url || !row.title || !Number.isFinite(row.publishedAt) || row.publishedAt < now() - 7 * 86400000 || row.publishedAt > now() + 60000) continue;
       const previous = byUrl.get(row.url);
-      if (previous && (!row.originVerified || previous.originVerified && previous.title === row.title && previous.context === row.context)) continue;
+      if (previous && (!row.originVerified || previous.originVerified && previous.title === row.title && previous.context === row.context)) {
+        if (isPublished(previous)) queueTranslation(previous);
+        continue;
+      }
       if (previous) {
         row.alertedAt = previous.alertedAt;
         row.verification = previous.verification;
         if (previous.title === row.title) row.titleRu = previous.titleRu;
+        else translationRetryAt.delete(row.url);
       }
       row.alertKind = alertKind(row.title);
       row.receivedAt ||= now();
@@ -278,18 +322,18 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       byUrl.set(row.url, row); changed = true;
     }
     if (changed) {
-      state.news = [...byUrl.values()].filter(item => item.publishedAt > now() - 7 * 86400000)
-        .sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 240);
+      const ordered = [...byUrl.values()].filter(item => item.publishedAt > now() - 7 * 86400000)
+        .sort((a, b) => b.publishedAt - a.publishedAt);
+      const sourced = ordered.filter(item => item.originVerified && publisher(item.url)).slice(0, 240);
+      const leads = ordered.filter(item => !item.originVerified || !publisher(item.url)).slice(0, 80);
+      state.news = [...sourced, ...leads].sort((a, b) => b.publishedAt - a.publishedAt);
       const notifications = [];
       for (const item of state.news) {
         const wasPublished = isPublished(item);
         item.verification = assessNews(item, state.news);
         if (wasPublished && !isPublished(item)) notifications.push({ type: "retract", item });
         if (!isPublished(item)) continue;
-        if (!item.titleRu && !queued.has(item.url) && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)) {
-          queued.add(item.url);
-          if (item.alertKind) translationQueue.unshift(item); else translationQueue.push(item);
-        }
+        queueTranslation(item);
         if (item.alertKind && !item.alertedAt && now() - item.publishedAt <= 15 * 60000) {
           const alreadyAlerted = state.news.some(other => other.alertedAt && Math.abs(other.publishedAt - item.publishedAt) < 2 * 3600000 && sameClaim(item, other));
           item.alertedAt = now();
@@ -354,15 +398,16 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     fs.renameSync(temporary, filePath);
   }
 
-  async function refreshMarkets() {
+  async function refreshMarkets(selectedCodes = null) {
     if (marketsRunning) return;
     marketsRunning = true;
     try {
+      const venues = selectedCodes ? VENUES.filter(([code]) => selectedCodes.includes(code)) : VENUES;
       const existingById = new Map(state.listings.map(item => [item.id, item]));
       let cursor = 0;
-      await Promise.all(Array.from({ length: Math.min(6, VENUES.length) }, async () => {
-        while (cursor < VENUES.length) {
-          const [code, name, exchangeId] = VENUES[cursor++];
+      await Promise.all(Array.from({ length: Math.min(6, venues.length) }, async () => {
+        while (cursor < venues.length) {
+          const [code, name, exchangeId] = venues[cursor++];
           try {
             let changed = false;
             const rows = normalizeMarkets(await marketFetcher(exchangeId), code, now());
@@ -472,13 +517,19 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     if (newsRunning) return;
     newsRunning = true;
     try {
-      await Promise.allSettled(FEEDS.map(async ([source, url]) => {
+      await Promise.allSettled([...FEEDS.map(async ([source, url]) => {
         try {
           const rows = parseNews(await fetchFeed(url), source, now()).filter(item => source !== "White House" || item.priority !== "regular");
           sourceHealth[source] = { status: "ok", checkedAt: now(), latestAt: Math.max(0, ...rows.map(row => row.publishedAt)) || null };
           if (rows.length) mergeNews(rows);
         } catch (_) { sourceHealth[source] = { ...sourceHealth[source], status: "error", checkedAt: now() }; }
-      }));
+      }), (async () => {
+        try {
+          const rows = parseGateAnnouncements(await fetchGateAnnouncements(), now());
+          sourceHealth["Gate.io"] = { status: "ok", checkedAt: now(), latestAt: rows[0]?.publishedAt || null };
+          if (rows.length) mergeNews(rows);
+        } catch (_) { sourceHealth["Gate.io"] = { ...sourceHealth["Gate.io"], status: "error", checkedAt: now() }; }
+      })()]);
     } finally { newsRunning = false; }
   }
 
@@ -491,22 +542,21 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     }
     return { listings: state.listings, news, venues: state.venues, sources: sourceHealth,
       marketUpdatedAt: state.marketUpdatedAt, newsUpdatedAt: state.newsUpdatedAt,
-      sourceNames: ["Tree News", ...FEEDS.map(([name]) => name)] };
+      sourceNames: ["Tree News", "Gate.io", ...FEEDS.map(([name]) => name)] };
   }
 
   function start() {
     if (marketTimer) return;
     stopped = false;
-    for (const item of state.news.slice(0, 30)) {
-      if (isPublished(item) && !item.titleRu && item.publishedAt > now() - 86400000 && !queued.has(item.url) &&
-        /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)) {
-        queued.add(item.url); translationQueue.push(item);
-      }
-    }
+    for (const item of state.news) if (isPublished(item)) queueTranslation(item);
     drainTranslations();
     void Promise.allSettled([refreshMarkets(), refreshNews()]);
     connectStream();
-    marketTimer = setInterval(() => { void refreshMarkets(); }, 90 * 1000);
+    let marketCycle = 0;
+    marketTimer = setInterval(() => {
+      marketCycle++;
+      void refreshMarkets(marketCycle % 3 === 0 ? null : PRIORITY_VENUES);
+    }, 30 * 1000);
     newsTimer = setInterval(() => { void refreshNews(); }, 20000);
     marketTimer.unref?.(); newsTimer.unref?.();
   }
@@ -524,4 +574,4 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 
-module.exports = { VENUES, FEEDS, parseNews, parseStreamNews, translateTitle, launchTime, normalizeMarkets, createMarketFetcher, createEventsHub, alertKind };
+module.exports = { VENUES, FEEDS, parseNews, parseGateAnnouncements, parseStreamNews, translateTitle, launchTime, normalizeMarkets, createMarketFetcher, createEventsHub, alertKind };

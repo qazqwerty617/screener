@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path"), crypto = require("node:crypto");
-const { createEventsHub, createMarketFetcher, normalizeMarkets } = require("../eventsHub");
+const { createEventsHub, createMarketFetcher, normalizeMarkets, parseGateAnnouncements } = require("../eventsHub");
 const now = Date.now();
 function hubFor(t, options) {
   const filePath = path.join(os.tmpdir(), `events-reliability-${crypto.randomUUID()}.json`);
@@ -22,6 +22,44 @@ test("a corroborated hack emits one toast; a later denial retracts it", t => {
   assert.equal(hub.snapshot().news.length, 0);
   assert.ok(events.some(event => event.type === "retract"));
 });
+
+test("a publisher's ordinary report reaches the news feed while an unconfirmed hack stays off it", t => {
+  const hub = hubFor(t);
+  hub.ingestNews([{ title: "Bitcoin ETF inflows rose on Monday", url: "https://www.coindesk.com/markets/etf-inflows",
+    source: "CoinDesk", publishedAt: now, originVerified: true }]);
+  assert.equal(hub.snapshot().news.length, 1);
+  assert.equal(hub.snapshot().news[0].verification.status, "reported");
+  hub.ingestNews([{ title: "Bybit loses $80 million in Ethereum wallet exploit", url: "https://www.coindesk.com/markets/hack",
+    source: "CoinDesk", publishedAt: now, originVerified: true }]);
+  assert.equal(hub.snapshot().news.length, 1);
+});
+
+test("a failed headline translation is retried when a feed repeats the article", async t => {
+  let calls = 0;
+  let clock = now;
+  const hub = hubFor(t, { now: () => clock,
+    translate: async () => ++calls === 1 ? null : "Приток средств в биткоин ETF вырос" });
+  const article = { title: "Bitcoin ETF inflows rose on Monday", url: "https://www.coindesk.com/markets/etf-inflows",
+    source: "CoinDesk", publishedAt: now, originVerified: true };
+  hub.ingestNews([article]);
+  await new Promise(resolve => setImmediate(resolve));
+  clock += 60000;
+  hub.ingestNews([article]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(hub.snapshot().news[0].titleRu, "Приток средств в биткоин ETF вырос");
+});
+
+test("a flood of unverified stream leads cannot evict a sourced article", t => {
+  const hub = hubFor(t);
+  hub.ingestNews([{ title: "Bitcoin ETF inflows rose on Monday", url: "https://www.coindesk.com/markets/etf-inflows",
+    source: "CoinDesk", publishedAt: now - 30 * 60000, originVerified: true }]);
+  hub.ingestNews(Array.from({ length: 260 }, (_, i) => ({
+    title: `Unconfirmed report number ${i} about market activity`,
+    url: `https://t.me/somechannel/${i}`, publishedAt: now - i * 1000, originVerified: false,
+  })));
+  assert.equal(hub.snapshot().news.length, 1);
+  assert.equal(hub.snapshot().news[0].source, "CoinDesk");
+});
 test("revisions invalidate an old translated headline and canonical URLs deduplicate tracking links", t => {
   const hub = hubFor(t);
   const item = { title: "Bybit reports a security breach", titleRu: "Предыдущий перевод", url: "https://announcements.bybit.com/en/article/hack", publishedAt: now, originVerified: true };
@@ -36,6 +74,32 @@ test("KuCoin spot and futures clients are both loaded", async () => {
   assert.deepEqual(calls.sort(), ["kucoin", "kucoinfutures"]);
   assert.equal(Object.keys(rows).length, 2);
   await fetchMarkets.close();
+});
+
+test("priority market refresh checks Gate, MEXC, Aster and Hyperliquid first without dropping full coverage", async t => {
+  const calls = [];
+  const hub = hubFor(t, { fetchMarkets: async id => {
+    calls.push(id);
+    return { btc: { symbol: "BTC/USDT", base: "BTC", quote: "USDT", spot: true } };
+  } });
+  await hub.refreshMarkets(["GT", "MX", "AD", "HL"]);
+  assert.deepEqual(calls, ["gate", "mexc", "aster", "hyperliquid"]);
+  await hub.refreshMarkets();
+  assert.equal(Object.keys(hub.snapshot().venues).length, 11);
+});
+
+test("Gate official announcements are parsed from authenticated article paths and enter the news feed", async t => {
+  const payload = { code: 0, data: { list: [
+    { id: 1, title: "Gate will list BREW for spot trading", url: "/announcements/article/101862", release_timestamp: String(now / 1000) },
+    { id: 2, title: "Gate will list FAKE", url: "https://gate.com.evil.example/article/2", release_timestamp: String(now / 1000) },
+    { id: 3, title: "Gate VIP bonus campaign", url: "/announcements/article/101863", release_timestamp: String(now / 1000) },
+  ] } };
+  const rows = parseGateAnnouncements(payload, now);
+  assert.deepEqual(rows.map(row => row.id), ["gate:1"]);
+  const hub = hubFor(t, { fetchFeed: async () => "<rss/>", fetchGateAnnouncements: async () => payload });
+  await hub.refreshNews();
+  assert.equal(hub.snapshot().news[0].source, "Gate.io");
+  assert.equal(hub.snapshot().news[0].verification.status, "official");
 });
 test("a catalogue timeout does not start overlapping requests for the same exchange", async () => {
   let finish, calls = 0;

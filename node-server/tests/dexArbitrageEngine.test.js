@@ -28,6 +28,32 @@ test("DEX discovery is contract-first and never falls back to a matching symbol"
   assert.deepEqual(pairs, [], "same symbol with a different contract must be rejected");
 });
 
+test("verified Gate contracts survive the DEX scan limit while other exchanges retain capacity", () => {
+  const catalogs = new Map([
+    ["BN", new Map([["AAA", [{ network: "BSC", contractAddress: "0x1111111111111111111111111111111111111111" }]],
+      ["BBB", [{ network: "BSC", contractAddress: "0x2222222222222222222222222222222222222222" }]]])],
+    ["GT", new Map([["ZZZ", [{ network: "BSC", contractAddress: "0x3333333333333333333333333333333333333333" }]]])],
+  ]);
+  const rows = collectVerifiedContracts(catalogs, ["AAA", "BBB", "ZZZ"], {
+    limit: 2, prioritySources: ["GT"], priorityLimit: 1,
+  });
+  assert.deepEqual(rows.map(row => row.base), ["ZZZ", "AAA"]);
+});
+
+test("DEX service batches contracts on the same chain into one request", async () => {
+  const catalogs = new Map([["GT", new Map([
+    ["AAA", [{ network: "BSC", contractAddress: "0x1111111111111111111111111111111111111111" }]],
+    ["BBB", [{ network: "BSC", contractAddress: "0x2222222222222222222222222222222222222222" }]],
+  ])]]);
+  const urls = [];
+  const service = createDexArbitrageService(async url => { urls.push(url); return []; },
+    { catalogs, refresh: async () => {} },
+    () => [{ base: "AAA", buyEx: "GT", buyAsk: 1 }, { base: "BBB", buyEx: "GT", buyAsk: 1 }]);
+  await service.getSnapshot();
+  assert.equal(urls.length, 1);
+  assert.match(urls[0], /tokens\/v1\/bsc\/0x1111.*?,0x2222/);
+});
+
 test("normalizes verified DEX pools and computes only plausible liquid CEX/DEX edges", () => {
   const contract = {
     id: "bsc:0x1111111111111111111111111111111111111111",

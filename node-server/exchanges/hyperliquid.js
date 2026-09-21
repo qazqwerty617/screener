@@ -82,17 +82,31 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         }
       } catch (_) {}
     };
-    setInterval(poll, 15000);
+    const timer = setInterval(poll, 15000);
+    timer.unref?.();
   }
 
   function connectWs() {
-    // allMids subscription — real-time mid prices for all assets at once
-    const chunkSize = 50;
-    for (let i = 0; i < hlSyms.length; i += chunkSize) {
-      const chunk = hlSyms.slice(i, i + chunkSize);
-      mkExWs("HL" + (i===0?"":"_" + i), "wss://api.hyperliquid.xyz/ws", (raw) => {
+    // allMids covers the universe; a bounded set of BBO streams supplies
+    // executable prices for the more liquid contracts in arbitrage.
+    const bookSymbols = hlSyms.slice().sort((a, b) =>
+      (tickers.get("HL:" + b)?.v || 0) - (tickers.get("HL:" + a)?.v || 0)).slice(0, 80);
+      mkExWs("HL", "wss://api.hyperliquid.xyz/ws", (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
+          if (msg.channel === "bbo") {
+            const d = msg.data;
+            const t = tickers.get("HL:" + d?.coin);
+            const bid = Number(d?.bbo?.[0]?.px), ask = Number(d?.bbo?.[1]?.px);
+            if (t && bid > 0 && ask > bid) {
+              t.bid = bid; t.ask = ask;
+              t.bboTs = Date.now(); t.quoteTs = t.bboTs;
+              t.p = (bid + ask) / 2;
+              if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+              dirtyKeys.add(t.key);
+            }
+            return;
+          }
           if (msg.channel === "allMids" && msg.data?.mids) {
             for (const [sym, mid] of Object.entries(msg.data.mids)) {
               const t = tickers.get("HL:" + sym);
@@ -109,9 +123,8 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
         } catch (_) {}
       }, (ws) => {
         ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "allMids" } }));
+        for (const coin of bookSymbols) ws.send(JSON.stringify({ method: "subscribe", subscription: { type: "bbo", coin } }));
       });
-      break; // allMids covers all symbols in one connection
-    }
   }
 
   return { init };

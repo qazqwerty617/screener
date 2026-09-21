@@ -18,6 +18,11 @@ test("labels, lookalike domains and user generated official-site pages cannot au
   assert.equal(publisher("https://coindesk.com.evil.example/news"), null);
   assert.equal(publisher("https://www.binance.com/en/square/post/123"), null);
   assert.equal(publisher("https://attacker@www.coindesk.com/news"), null);
+  assert.equal(publisher("https://www.gate.com/announcements/article/101862")?.[1], "gate");
+  assert.equal(publisher("https://www.mexc.com/support/article/security-notice-123")?.[1], "mexc");
+  assert.equal(publisher("https://www.asterdex.com/en/announcement/428")?.[1], "aster");
+  assert.equal(publisher("https://www.gate.com/en/square/post/123"), null);
+  assert.equal(publisher("https://www.asterdex.com/en/user/post/123"), null);
 });
 test("copies, common wire attribution, rumours and changed amounts do not confirm a hack", () => {
   for (const change of [{ title: first.title }, { context: "According to Reuters" }, { context: "Sponsored content" },
@@ -45,6 +50,11 @@ test("article verification uses publisher metadata and rejects undated or stale 
   assert.equal(parseArticle(html, first.url, value => value, now).title, "Actual publisher headline");
   assert.equal(parseArticle('<meta property="og:title" content="Fake">', first.url, value => value, now), null);
   assert.equal(parseArticle(html, "https://unknown.example/report", value => value, now), null);
+  const mexcUrl = "https://www.mexc.com/announcements/article/security-notice-123";
+  const mexcHtml = `<meta property="og:title" content="MEXC Exchange"><script type="application/ld+json">${JSON.stringify({
+    "@graph": [{ "@type": "NewsArticle", headline: "MEXC announces a security update", url: mexcUrl,
+      datePublished: new Date(now).toISOString() }] })}</script>`;
+  assert.equal(parseArticle(mexcHtml, mexcUrl, value => value, now).title, "MEXC announces a security update");
 });
 test("Telegram accepts only selected channel IDs, and remains an unverified lead", () => {
   const post = { chat: { id: -100123, type: "channel", username: "selected" }, message_id: 12, date: now / 1000, text: "Bybit Ethereum wallet hack report" };

@@ -2,7 +2,7 @@
 
 const { EXCHANGES, extractBaseAndMultiplier } = require("./arbitrageEngine");
 
-const DEX_SCREENER_BASE = "https://api.dexscreener.com/token-pairs/v1";
+const DEX_SCREENER_BASE = "https://api.dexscreener.com/tokens/v1";
 
 const CHAIN_IDS = Object.freeze({
   ETH: "ethereum", BSC: "bsc", SOL: "solana", BASE: "base", ARB: "arbitrum",
@@ -76,12 +76,35 @@ function collectVerifiedContracts(catalogs, bases, options = {}) {
       }
     }
   }
-  return [...byIdentity.values()]
+  const ordered = [...byIdentity.values()]
     .sort((a, b) => {
       const ai = CHAIN_PRIORITY.indexOf(a.network), bi = CHAIN_PRIORITY.indexOf(b.network);
       return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi) || a.base.localeCompare(b.base);
-    })
-    .slice(0, limit);
+    });
+  const prioritySources = new Set(options.prioritySources || []);
+  if (!prioritySources.size) return ordered.slice(0, limit);
+  const priorityLimit = Math.min(limit, Math.max(0, Number(options.priorityLimit) || 24));
+  const priority = ordered.filter(contract => contract.sources.some(source => prioritySources.has(source)));
+  const selected = priority.slice(0, priorityLimit);
+  const selectedIds = new Set(selected.map(contract => contract.id));
+  for (const contract of ordered) {
+    if (selected.length >= limit) break;
+    if (!selectedIds.has(contract.id)) { selected.push(contract); selectedIds.add(contract.id); }
+  }
+  return selected;
+}
+
+function contractBatches(contracts) {
+  const byChain = new Map();
+  for (const contract of contracts) {
+    if (!byChain.has(contract.chainId)) byChain.set(contract.chainId, []);
+    byChain.get(contract.chainId).push(contract);
+  }
+  const batches = [];
+  for (const group of byChain.values()) {
+    for (let offset = 0; offset < group.length; offset += 20) batches.push(group.slice(offset, offset + 20));
+  }
+  return batches;
 }
 
 function normalizeDexPairs(contract, payload) {
@@ -236,7 +259,7 @@ function buildDexOpportunities(cexRows, dexPairs, options = {}) {
 }
 
 function createDexArbitrageService(apiFetch, transferService, getCexRows, options = {}) {
-  const ttlMs = Math.max(30_000, Number(options.ttlMs) || 60_000);
+  const ttlMs = Math.max(30_000, Number(options.ttlMs) || 30_000);
   const forceMinAgeMs = Math.max(0, Number(options.forceMinAgeMs ?? 10_000));
   const historyLimit = Math.max(2, Math.min(2_160, Number(options.historyLimit) || 720));
   const clock = typeof options.clock === "function" ? options.clock : Date.now;
@@ -268,16 +291,18 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
       const cexRows = currentCexRows instanceof Map || Array.isArray(currentCexRows) ? currentCexRows : [];
       const quotes = cexQuotes(cexRows, { ...options, now: clock() });
       const bases = [...quotes.keys()];
-      const contracts = collectVerifiedContracts(transferService.catalogs, bases, { limit: options.contractLimit || 80 });
-      const requests = contracts.map(contract => {
-        const url = `${DEX_SCREENER_BASE}/${encodeURIComponent(contract.chainId)}/${encodeURIComponent(contract.contractAddress)}`;
-        return apiFetch(url, 12_000, 0).then(payload => ({ contract, payload }));
+      const contracts = collectVerifiedContracts(transferService.catalogs, bases, {
+        limit: options.contractLimit || 80, prioritySources: ["GT", "MX", "AD", "HL"], priorityLimit: 24,
+      });
+      const requests = contractBatches(contracts).map(batch => {
+        const url = `${DEX_SCREENER_BASE}/${encodeURIComponent(batch[0].chainId)}/${batch.map(contract => encodeURIComponent(contract.contractAddress)).join(",")}`;
+        return apiFetch(url, 12_000, 0).then(payload => ({ batch, payload }));
       });
       const settled = await Promise.allSettled(requests);
       const pools = [];
       for (const result of settled) {
         if (result.status !== "fulfilled") continue;
-        pools.push(...normalizeDexPairs(result.value.contract, result.value.payload));
+        for (const contract of result.value.batch) pools.push(...normalizeDexPairs(contract, result.value.payload));
       }
       const generatedAt = clock();
       cachedPools = pools;

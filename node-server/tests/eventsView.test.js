@@ -25,7 +25,10 @@ test("events tab renders sourced news and filters spot and futures listings", as
     marketUpdatedAt: Date.now(), newsUpdatedAt: Date.now(),
     venues: { BN: { status: "ok" } },
     news: [{ title: "Exchange hack", titleRu: "Биржу взломали", source: "CoinDesk", url: "https://example.com/report",
-      publishedAt: Date.now(), priority: "urgent", verification: { status: "corroborated", sources: [] } }],
+      publishedAt: Date.now(), priority: "urgent", verification: { status: "corroborated", sources: [] } },
+    { title: "Bitcoin ETF inflows increased", titleRu: "Приток средств в биткоин ETF вырос", source: "CoinDesk",
+      url: "https://example.com/etf", publishedAt: Date.now() - 1000, priority: "regular",
+      verification: { status: "reported", sources: [] } }],
     listings: [
       { exchange: "BN", type: "spot", symbol: "NEW/USDT", detectedAt: Date.now() },
       { exchange: "BB", type: "futures", symbol: "NEXT/USDT:USDT", detectedAt: Date.now(), launchAt: Date.now() + 86400000 },
@@ -40,6 +43,8 @@ test("events tab renders sourced news and filters spot and futures listings", as
   await new Promise(resolve => setImmediate(resolve));
   assert.match(w.document.getElementById("events-urgent-list").textContent, /Exchange hack/);
   assert.match(w.document.getElementById("events-urgent-list").textContent, /Биржу взломали/);
+  assert.match(w.document.getElementById("events-news-list").textContent, /Приток средств в биткоин ETF вырос/);
+  assert.match(w.document.getElementById("events-news-list").textContent, /Сообщает источник/);
   assert.equal(typeof stream.callbacks.update, "function");
   w.document.getElementById("events-tab-listings").click();
   assert.match(w.document.getElementById("events-day-list").textContent, /NEW\/USDT/);

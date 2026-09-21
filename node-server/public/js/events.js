@@ -191,7 +191,7 @@
     const newsBox = byId("events-news-list");
     if (!urgentBox || !newsBox) return;
     urgentBox.replaceChildren(); newsBox.replaceChildren();
-    const rows = (Array.isArray(data?.news) ? data.news : []).filter(item => ["official", "corroborated"].includes(item.verification?.status));
+    const rows = (Array.isArray(data?.news) ? data.news : []).filter(item => ["official", "corroborated", "reported"].includes(item.verification?.status));
     const urgent = rows.filter(item => item.priority === "urgent").slice(0, 3);
     const rest = rows.filter(item => !urgent.includes(item)).slice(0, 40);
     function appendItem(container, item) {
@@ -207,7 +207,8 @@
       heading.append(primary); link.append(heading);
       if (item.titleRu) link.append(node("p", "events-original", item.title));
       const sources = node("div", "events-news-sources");
-      sources.append(node("small", "", item.verification.status === "official" ? "Официальный источник" : "Сверено по 2 источникам"));
+      sources.append(node("small", "", item.verification.status === "official" ? "Официальный источник"
+        : item.verification.status === "corroborated" ? "Сверено по 2 источникам" : "Сообщает источник"));
       for (const evidence of item.verification.sources || []) {
         try { if (new URL(evidence.url).protocol !== "https:") continue; } catch (_) { continue; }
         const source = node("a", "events-source-link", `${evidence.name} ↗`);

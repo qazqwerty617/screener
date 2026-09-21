@@ -44,8 +44,19 @@ function parseArticle(html, url, decode, now = Date.now()) {
     const key = attrs.property || attrs.name;
     if (key && attrs.content) meta.set(key.toLowerCase(), decode(attrs.content));
   }
-  const title = meta.get("og:title") || meta.get("twitter:title");
-  const publishedAt = Date.parse(meta.get("article:published_time") || meta.get("date") || "");
+  let structured = null;
+  if (origin[1] === "mexc") {
+    for (const script of String(html).matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]{1,200000}?)<\/script>/gi)) {
+      try {
+        const parsed = JSON.parse(script[1]);
+        const candidates = Array.isArray(parsed) ? parsed : [parsed, ...(Array.isArray(parsed?.["@graph"]) ? parsed["@graph"] : [])];
+        structured = candidates.find(item => canonicalUrl(item?.url) === canonicalUrl(url) && item?.headline && item?.datePublished) || null;
+        if (structured) break;
+      } catch (_) {}
+    }
+  }
+  const title = structured?.headline || meta.get("og:title") || meta.get("twitter:title");
+  const publishedAt = Date.parse(structured?.datePublished || meta.get("article:published_time") || meta.get("date") || "");
   // Never reuse the lead's headline or timestamp when the publisher cannot attest them.
   if (!title || !Number.isFinite(publishedAt) || now - publishedAt > 7 * 86400000 || publishedAt > now + 60000) return null;
   return { id: canonicalUrl(url), url: canonicalUrl(url), title: title.slice(0, 300),

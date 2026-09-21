@@ -6,14 +6,14 @@ Reviewed on 2026-09-21. This is automatic source corroboration, not a guarantee 
 
 Tree News remains the streaming input. The publisher name supplied in a stream message is not evidence of identity. For a supported publisher URL, the server fetches the article and reads its own headline and publication date; it does not reuse the stream headline as a verified claim. Social posts and unknown URLs remain leads.
 
-The polling pool is CoinDesk, Cointelegraph, The Block, Decrypt, Federal Reserve monetary policy and White House presidential actions. Polling is every 20 seconds; an urgent lead can trigger an earlier check, limited to once per 10 seconds. Each publisher publishes independently, so a slow source cannot hold up another. Conditional HTTP requests reuse unchanged feeds, failures back off, and responses have time and size limits. The feed's refresh interval does not promise an end-to-end news delay.
+The polling pool is CoinDesk, Cointelegraph, The Block, Decrypt, Federal Reserve monetary policy, White House presidential actions and Gate's official announcement API. Polling is every 20 seconds; an urgent lead can trigger an earlier check, limited to once per 10 seconds. Each publisher publishes independently, so a slow source cannot hold up another. Conditional HTTP requests reuse unchanged RSS feeds, failures back off, and responses have time and size limits. The feed's refresh interval does not promise an end-to-end news delay. Gate announcements are limited to relevant market changes and events; promotions are excluded.
 
-Before appearing in either the public feed or a toast, an item needs:
+Before appearing as a sourced report in the public feed, an ordinary article needs an authenticated publisher URL and a fresh date from that publisher. This is labelled as a single-source report. Security, solvency and market-moving alerts need:
 
 - An authenticated official statement on an allowed official page, about the publisher's own action or incident; or
 - Two supported publishers reporting a matching claim within two hours. Matching requires shared subject, headline overlap, compatible amounts/numbers and action direction. Headlines that look like rumours, verbatim copies, explicit wire attribution or different amounts do not qualify.
 
-This deliberately sacrifices coverage when headlines cannot be matched confidently. Reworded syndicated reports without attribution can still evade automatic checks; the UI therefore shows “Сверено по 2 источникам” and links to the evidence rather than a guarantee of truth. A detected denial removes matching publications and retracts their open toast. Corrections supersede old headlines; late translations cannot restore withdrawn text. There is no semantic model or manual fact checker behind this implementation.
+Reworded syndicated reports without attribution can still evade automatic checks; the UI distinguishes single-source reporting, official statements and “Сверено по 2 источникам” and links to the evidence rather than a guarantee of truth. A detected denial removes matching publications and retracts their open toast. Corrections supersede old headlines; late translations cannot restore withdrawn text. There is no semantic model or manual fact checker behind this implementation. Failed headline translations retry after a minute when a feed repeats the article. DeepL can be configured with `DEEPL_API_KEY`; the default public MyMemory service has no delivery guarantee.
 
 Evidence identity is derived from the publisher URL and an actual fetched feed/article. Binance Square and other user-generated pages on official domains are excluded. Previously stored unverified headlines are not published automatically. Only fresh corroborated events qualify for toasts; translation does not delay initial publication after verification.
 
@@ -21,7 +21,7 @@ Telegram ingestion uses the existing bot's `channel_post` and `edited_channel_po
 
 ## Listings and delistings
 
-All eleven configured exchanges are scanned for USDT spot and perpetual markets. KuCoin now loads both `kucoin` and `kucoinfutures`; its futures catalogue was previously absent. Gate's catalogue loading excludes options, delivery futures and currency-network metadata. Each client has a 30-second catalogue deadline, and overlapping callers share an unfinished request.
+All eleven configured exchanges are scanned for USDT spot and perpetual markets every 90 seconds. Gate, MEXC, Aster and Hyperliquid receive additional scans at the intervening 30-second ticks. KuCoin now loads both `kucoin` and `kucoinfutures`; its futures catalogue was previously absent. Gate's catalogue loading excludes options, delivery futures and currency-network metadata. Each client has a 30-second catalogue deadline, and overlapping callers share an unfinished request.
 
 New undated markets require two successful scans; disappearing markets require three. An error breaks confirmation but retains missing keys for a later healthy scan. Bulk catalogue loss remains an error, not a mass delisting. Disappearance is explicitly labelled as an observation, not an official delisting date.
 
@@ -43,4 +43,5 @@ All six RSS endpoints returned parseable current items. CoinDesk redirected its 
 - [Bybit instrument launch and perpetual delisting timestamps](https://bybit-exchange.github.io/docs/v5/market/instrument)
 - [OKX instrument listing and delisting updates](https://www.okx.com/docs-v5/log_en/)
 - [Gate spot delisting and public market API](https://www.gate.com/docs/developers/apiv4/en/)
+- [Gate public announcement API](https://github.com/gate/gateapi-python/blob/master/docs/AnnouncementApi.md)
 - [CertiK security alert channels](https://www.certik.com/blog/top-tips-for-keeping-up-with-the-latest-crypto-security-events) — candidate for a separately configured source; not presented as connected.

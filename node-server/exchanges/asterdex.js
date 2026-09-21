@@ -90,6 +90,7 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
               }
           } catch (_) {}
       }, 30000);
+      fundingTimer.unref?.();
   }
 
   function connectWs() {
@@ -111,6 +112,21 @@ module.exports = function(tickers, dirtyKeys, mkExWs, apiFetch, updateExStatus) 
             }
           }
         }
+      } catch (_) {}
+    });
+    mkExWs("AD-BookTicker", "wss://fstream.asterdex.com/ws/!bookTicker", (raw) => {
+      try {
+        const d = JSON.parse(raw.toString());
+        const t = tickers.get("AD:" + d.s);
+        const bid = Number(d.b), ask = Number(d.a);
+        if (!t || !(bid > 0) || !(ask > bid)) return;
+        t.bid = bid;
+        t.ask = ask;
+        t.bboTs = Date.now();
+        t.quoteTs = t.bboTs;
+        t.p = (bid + ask) / 2;
+        if (t.o > 0) t.chg = ((t.p - t.o) / t.o) * 100;
+        dirtyKeys.add(t.key);
       } catch (_) {}
     });
   }

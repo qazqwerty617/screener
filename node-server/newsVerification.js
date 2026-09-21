@@ -7,7 +7,9 @@ const PUBLISHERS = [
   ["federalreserve.gov", "fed", "Federal Reserve", "macro"],
   ["sec.gov", "sec", "SEC", "official"], ["whitehouse.gov", "whitehouse", "White House", "macro"],
   ["bybit.com", "bybit", "Bybit", "exchange"], ["binance.com", "binance", "Binance", "exchange"],
-  ["okx.com", "okx", "OKX", "exchange"], ["kucoin.com", "kucoin", "KuCoin", "exchange"]
+  ["okx.com", "okx", "OKX", "exchange"], ["kucoin.com", "kucoin", "KuCoin", "exchange"],
+  ["gate.com", "gate", "Gate.io", "exchange"], ["mexc.com", "mexc", "MEXC", "exchange"],
+  ["asterdex.com", "aster", "Aster", "exchange"]
 ];
 function publisher(url) {
   try {
@@ -17,7 +19,9 @@ function publisher(url) {
     if (!origin) return null;
     const officialPaths = { binance: /\/support\/announcement\//, bybit: /\//,
       okx: /\/help\//, kucoin: /\/announcement\//, fed: /\/newsevents\/pressreleases\//,
-      sec: /\/(?:newsroom\/press-releases|news\/press-release)\//, whitehouse: /\/(?:presidential-actions|briefings-statements)\// };
+      sec: /\/(?:newsroom\/press-releases|news\/press-release)\//, whitehouse: /\/(?:presidential-actions|briefings-statements)\//,
+      gate: /^\/announcements\/article\/\d+$/, mexc: /^\/(?:support|announcements)\/article\//,
+      aster: /^\/[a-z]{2}\/announcement\/\d+$/ };
     if (origin[3] && (!officialPaths[origin[1]].test(parsed.pathname) || origin[1] === "bybit" && parsed.hostname !== "announcements.bybit.com")) return null;
     return origin;
   } catch (_) { return null; }
@@ -102,7 +106,9 @@ function assessNews(item, rows) {
     if (a || b || item.title.toLowerCase().replace(/\W/g, "") === other.title.toLowerCase().replace(/\W/g, "")) continue;
     return { status: "corroborated", sources: [own, second] };
   }
-  return { status: "pending", sources: [own] };
+  // A named publisher's ordinary reporting can appear as a sourced report.
+  // Security, solvency and market-moving alerts still require independent evidence.
+  return item.alertKind ? { status: "pending", sources: [own] } : { status: "reported", sources: [own] };
 }
-const isPublished = item => ["official", "corroborated"].includes(item.verification?.status);
+const isPublished = item => ["official", "corroborated", "reported"].includes(item.verification?.status);
 module.exports = { publisher, canonicalUrl, assessNews, sameClaim, isPublished };
