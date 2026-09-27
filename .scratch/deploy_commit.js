@@ -3,10 +3,10 @@ const path = require('path');
 const cp = require('child_process');
 const os = require('os');
 
-const COMMIT = process.argv[2] || '822e2b135a4eddf25e6a73ea5362d736f5e3b669';
-const BASE_COMMIT = process.argv[3] || 'b25d626';
-const BUNDLE_PATH = path.join(__dirname, `bundle-${COMMIT}.bundle`);
-const REMOTE_TMP_BUNDLE = `/tmp/bundle-${COMMIT}.bundle`;
+const COMMIT = process.argv[2] || cp.execSync('git rev-parse HEAD', { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim();
+const BASE_COMMIT = process.argv[3] || '822e2b1';
+const BUNDLE_PATH = path.join(__dirname, `bundle-${COMMIT.slice(0, 7)}.bundle`);
+const REMOTE_TMP_BUNDLE = `/tmp/bundle-${COMMIT.slice(0, 7)}.bundle`;
 
 // Load .env for credentials
 function loadDotEnv(envPath) {
