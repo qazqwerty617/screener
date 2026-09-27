@@ -42,7 +42,10 @@ test("developing reports remain searchable but cannot raise confirmed toasts", a
   const item = { title: "Bitget wallet exploit", source: "CoinDesk", alertKind: "security", url: "https://www.coindesk.com/markets/test",
     publishedAt: Date.now(), verification: { status: "pending", sources: [] } };
   const { w, streams } = await setup(t, { news: [], developing: [item] });
+  assert.equal(w.document.getElementById("events-announcements-list"), null, "listings do not have announcements block");
   assert.match(w.document.getElementById("events-developing-list").textContent, /Bitget/);
+  assert.ok(w.document.querySelector("#events-developing-list h3 .events-source-link"), "developing card uses h3 heading");
+  assert.ok(w.document.querySelector("#events-developing-list .events-news-sources"), "developing card has news sources footer");
   streams[0].callbacks.urgent({ data: JSON.stringify(item) });
   assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 0);
   const search = w.document.getElementById("events-news-search");

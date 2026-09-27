@@ -305,3 +305,27 @@ test("stream rejects unsafe, stale and malformed posts", () => {
   assert.equal(parseStreamNews(JSON.stringify({ ...data, link: "https://example.com", time: time - 8 * 86400000 }), time), null);
   assert.equal(parseStreamNews("garbage", time), null);
 });
+
+test("developing unconfirmed reports are translated to Russian and surfaced in snapshot developing without urgent alerts", async t => {
+  const filePath = path.join(os.tmpdir(), `obsidian-events-${crypto.randomUUID()}.json`);
+  t.after(() => { try { fs.unlinkSync(filePath); } catch (_) {} });
+  const time = Date.parse("2026-09-21T12:00:00Z");
+  let finishTranslation;
+  const hub = createEventsHub({ filePath, now: () => time,
+    translate: () => new Promise(resolve => { finishTranslation = resolve; }) });
+  const urgentAlerts = [];
+  hub.subscribe(event => { if (event?.type === "urgent") urgentAlerts.push(event); });
+  const item = { id: "dev-1", title: "Bitget wallet drained in large security incident", url: "https://www.coindesk.com/markets/2026/09/21/bitget-exploit/",
+    source: "CoinDesk", publishedAt: time - 1000, originVerified: true };
+  hub.ingestNews([item]);
+  assert.equal(urgentAlerts.length, 0, "no urgent alert for unconfirmed report");
+  assert.equal(hub.snapshot().developing.length, 1);
+  assert.equal(hub.snapshot().news.length, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(typeof finishTranslation, "function", "translation was queued for developing news");
+  finishTranslation("Кошелек Bitget опустошен в результате инцидента безопасности");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(hub.snapshot().developing[0].titleRu, "Кошелек Bitget опустошен в результате инцидента безопасности");
+  assert.equal(urgentAlerts.length, 0, "translation does not trigger urgent toast");
+});
+

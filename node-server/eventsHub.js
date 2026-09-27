@@ -306,6 +306,9 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   let translationTimer = null;
 
   function emit(event) { publicCache = null; for (const listener of listeners) { try { listener(event); } catch (_) {} } }
+  const isDeveloping = item => Boolean(item && item.alertKind && item.originVerified &&
+    item.verification?.status === "pending" && item.verification?.sources?.length);
+  const isTranslatable = item => Boolean(item && (isPublished(item) || isDeveloping(item)));
   function prioritizeTranslations() {
     const rank = item => item.alertKind ? 2 : item.priority === "urgent" ? 1 : 0;
     translationQueue.sort((a, b) => rank(b) - rank(a) || b.publishedAt - a.publishedAt);
@@ -322,16 +325,16 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   function drainTranslations() {
     while (!stopped && translating < 2 && translationQueue.length && now() >= translationPauseUntil) {
       const item = translationQueue.shift();
-      if (!state.news.some(current => current.url === item.url && current.title === item.title && isPublished(current))) { queued.delete(item.url); continue; }
+      if (!state.news.some(current => current.url === item.url && current.title === item.title && isTranslatable(current))) { queued.delete(item.url); continue; }
       translating++;
       Promise.resolve().then(() => translate(item.title)).then(translated => {
         const current = state.news.find(row => row.url === item.url && row.title === item.title);
-        if (!stopped && current && isPublished(current) && translated && /[а-яё]/i.test(translated) && translated !== item.title) {
+        if (!stopped && current && isTranslatable(current) && translated && /[а-яё]/i.test(translated) && translated !== item.title) {
           current.titleRu = translated.trim().slice(0, 500);
           translationRetryAt.delete(item.url);
           translationLastError = null;
           persist(); emit({ type: "translation", item: current });
-        } else if (current && isPublished(current)) {
+        } else if (current && isTranslatable(current)) {
           translationRetryAt.set(item.url, now() + 60000);
         }
       }).catch(error => {
@@ -341,7 +344,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       }).finally(() => {
         translating--; queued.delete(item.url);
         const current = state.news.find(row => row.url === item.url);
-        if (current && isPublished(current) && !current.titleRu && current.title !== item.title) {
+        if (current && isTranslatable(current) && !current.titleRu && current.title !== item.title) {
           queued.add(current.url); translationQueue.push(current); prioritizeTranslations();
         }
         if (!stopped && translationQueue.length && now() < translationPauseUntil) {
@@ -366,7 +369,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
           previous.titleRu = row.titleRu;
           persist(); emit({ type: "translation", item: previous });
         }
-        if (isPublished(previous)) queueTranslation(previous);
+        if (isTranslatable(previous)) queueTranslation(previous);
         continue;
       }
       if (previous) {
@@ -393,9 +396,9 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
         const wasPublished = isPublished(item);
         item.verification = assessNews(item, state.news);
         if (wasPublished && !isPublished(item)) notifications.push({ type: "retract", item });
+        if (isTranslatable(item)) queueTranslation(item);
         if (!isPublished(item)) continue;
-        queueTranslation(item);
-      if (item.alertKind && !item.alertedAt && now() - item.publishedAt <= 15 * 60000) {
+        if (item.alertKind && !item.alertedAt && now() - item.publishedAt <= 15 * 60000) {
           const alreadyAlerted = state.news.some(other => other.alertedAt && Math.abs(other.publishedAt - item.publishedAt) < 2 * 3600000 && sameClaim(item, other));
           item.alertedAt = now();
           if (!alreadyAlerted) notifications.push({ type: "urgent", item });
@@ -638,7 +641,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     publicCacheAt = now();
     return publicCache = { listings: state.listings, announcements: listingAnnouncements(state.news), unlocks: unlockService.snapshot(), news, developing, venues: state.venues, sources: sourceHealth,
       translation: { provider: process.env.DEEPL_API_KEY ? "DeepL" : "MyMemory", pending: translationQueue.length + translating,
-        untranslated: news.filter(item => !item.titleRu && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)).length,
+        untranslated: [...news, ...developing].filter(item => !item.titleRu && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)).length,
         pausedUntil: translationPauseUntil || null, lastError: translationLastError },
       marketUpdatedAt: state.marketUpdatedAt, newsUpdatedAt: state.newsUpdatedAt,
       sourceNames: ["Tree News", "Gate.io", "Binance", "Bybit", "Bitget", ...FEEDS.map(([name]) => name)] };
@@ -647,7 +650,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   function start() {
     if (marketTimer) return;
     stopped = false;
-    for (const item of state.news) if (isPublished(item)) queueTranslation(item);
+    for (const item of state.news) if (isTranslatable(item)) queueTranslation(item);
     drainTranslations();
     void Promise.allSettled([refreshMarkets(), refreshNews()]);
     connectStream();

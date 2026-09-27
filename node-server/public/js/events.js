@@ -239,12 +239,25 @@
       developingBox.replaceChildren();
       for (const item of data?.developing || []) {
         if (item.verification?.status !== "pending" || !matches(item)) continue;
-        try { if (new URL(item.url).protocol !== "https:") continue; } catch (_) { continue; }
+        let url;
+        try { url = new URL(item.url); } catch (_) { continue; }
+        if (url.protocol !== "https:") continue;
         const card = node("article", "events-card");
         cardTop(card, "Один источник · требует подтверждения", item.publishedAt);
+        const heading = node("h3", "");
         const link = node("a", "events-source-link", item.titleRu || item.title);
-        link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
-        card.append(link, node("small", "", item.source)); developingBox.append(card);
+        link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer";
+        heading.append(link);
+        card.append(heading);
+        const sources = node("div", "events-news-sources");
+        sources.append(node("small", "", "Сообщает источник"));
+        if (item.source) {
+          const source = node("a", "events-source-link", `${item.source} ↗`);
+          source.href = url.href; source.target = "_blank"; source.rel = "noopener noreferrer";
+          sources.append(source);
+        }
+        card.append(sources);
+        developingBox.append(card);
       }
       if (!developingBox.children.length) clearWithEmpty(developingBox, "Неподтверждённых сообщений от подключённых изданий нет.");
     }
@@ -258,21 +271,6 @@
     const market = selectedMarket;
     const now = Date.now();
     const query = byId("events-search")?.value.trim().toLowerCase() || "";
-    const announcements = byId("events-announcements-list");
-    if (announcements) {
-      announcements.replaceChildren();
-      for (const item of (data?.announcements || []).filter(item =>
-        (exchange === "all" || item.exchange === exchange) && (selectedKind === "all" || item.kind === selectedKind) &&
-        (!query || `${item.title} ${item.titleRu || ""}`.toLowerCase().includes(query))).slice(0, 40)) {
-        try { if (new URL(item.url).protocol !== "https:") continue; } catch (_) { continue; }
-        const card = node("article", "events-card");
-        cardTop(card, `${item.source} · анонс`, item.publishedAt);
-        const link = node("a", "events-source-link", item.titleRu || item.title);
-        link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
-        card.append(link); announcements.append(card);
-      }
-      if (!announcements.children.length) clearWithEmpty(announcements, "Нет свежих анонсов по выбранным фильтрам.");
-    }
     const eventTime = item => item.kind === "delisting" ? item.delistAt || item.detectedAt : item.launchAt || item.detectedAt;
     const rows = (Array.isArray(data?.listings) ? data.listings : [])
       .filter(item => {

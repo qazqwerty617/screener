@@ -3,8 +3,8 @@ const path = require('path');
 const cp = require('child_process');
 const os = require('os');
 
-const COMMIT = process.argv[2] || '41d64c7';
-const BASE_COMMIT = process.argv[3] || '107fe87';
+const COMMIT = process.argv[2] || '822e2b135a4eddf25e6a73ea5362d736f5e3b669';
+const BASE_COMMIT = process.argv[3] || 'b25d626';
 const BUNDLE_PATH = path.join(__dirname, `bundle-${COMMIT}.bundle`);
 const REMOTE_TMP_BUNDLE = `/tmp/bundle-${COMMIT}.bundle`;
 
@@ -68,11 +68,15 @@ async function run() {
   console.log('[3] Applying commit on /root/nother and /root/cryptoscreen...');
   const remoteScript = `
     set -e
+    echo "--- Preserving live admin_settings.json ---"
+    [ -f /root/nother/node-server/admin_settings.json ] && cp /root/nother/node-server/admin_settings.json /tmp/admin_settings.json.bak || true
+
     echo "--- Updating /root/nother ---"
     cd /root/nother
     git bundle verify ${REMOTE_TMP_BUNDLE}
     git fetch ${REMOTE_TMP_BUNDLE} main
     git reset --hard ${COMMIT}
+    [ -f /tmp/admin_settings.json.bak ] && cp /tmp/admin_settings.json.bak /root/nother/node-server/admin_settings.json || true
     echo "nother HEAD is now: $(git log -1 --oneline)"
 
     echo "--- Updating /root/cryptoscreen ---"
@@ -81,17 +85,33 @@ async function run() {
     git reset --hard ${COMMIT}
     echo "cryptoscreen HEAD is now: $(git log -1 --oneline)"
 
+    echo "--- Building go-scanner in cryptoscreen and nother ---"
+    cd /root/cryptoscreen/go-scanner
+    go test ./...
+    go build -o scanner .
+    chmod +x scanner
+
+    cd /root/nother/go-scanner
+    go test ./...
+    go build -o scanner .
+    chmod +x scanner
+
     echo "--- Running test suite on updated code ---"
     cd /root/nother/node-server
-    node --test tests/serverHotPaths.test.js tests/giftPromo.test.js tests/paymentUi.test.js
+    node --test tests/serverHotPaths.test.js tests/giftPromo.test.js tests/paymentUi.test.js tests/eventsHub.test.js tests/newsVerification.test.js tests/asterArbitrageQuotes.test.js tests/hyperliquidArbitrageQuotes.test.js tests/arbitrageLifecycle.test.js tests/exchangeAnnouncements.test.js tests/unlocks.test.js tests/broadcastBuffer.test.js tests/closedCandleTicks.test.js tests/correlationIntegrity.test.js tests/densityLayoutLoad.test.js tests/eventsAuditUi.test.js tests/eventsStreamLoad.test.js tests/goScannerProxy.test.js tests/marketIntegrityAudit.test.js tests/vwapSession.test.js tests/auditRegressions.test.js tests/arbitrageProRequests.test.js
 
-    echo "--- Restarting PM2 server ---"
+    echo "--- Restarting PM2 services ---"
+    pm2 restart cryptoscreen-go || true
     pm2 restart server --update-env
     sleep 3
     pm2 status
 
+    echo "--- Verifying server API response ---"
+    curl -s http://127.0.0.1:3000/api/tickers | head -c 80
+    echo ""
+
     echo "--- Cleaning up bundle ---"
-    rm -f ${REMOTE_TMP_BUNDLE}
+    rm -f ${REMOTE_TMP_BUNDLE} /tmp/admin_settings.json.bak
     echo "DEPLOY SUCCESSFUL"
   `;
 
