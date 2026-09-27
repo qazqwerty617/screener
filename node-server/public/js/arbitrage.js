@@ -221,11 +221,6 @@
     if ($("arb-spreads-table")) $("arb-spreads-table").hidden = mode !== "spreads";
     if ($("arb-funding-table")) $("arb-funding-table").hidden = mode !== "funding";
     if ($("arb-dex-table")) $("arb-dex-table").hidden = mode !== "dex";
-    if ($("arb-result-title")) $("arb-result-title").textContent = mode === "spreads" ? "Исполнимые фьючерсные спреды" : mode === "funding" ? "Ближайшие funding-события" : "CEX ↔ DEX · только точные контракты";
-    if ($("arb-result-sub")) $("arb-result-sub").textContent = mode === "spreads"
-      ? "Свежий BBO обеих ног · комиссии полного round-trip"
-      : mode === "funding" ? "Текущие ставки и ближайшие расчёты без 30-дневных прогнозов"
-      : "Пулы всех найденных DEX · chain + contract exact · цена пула индикативная";
     if ($("arb-min-label")) $("arb-min-label").textContent = mode === "funding" ? "Мин. выплата" : "Мин. net";
     const netOption = $("arb-sort")?.querySelector('option[value="net"]');
     const grossOption = $("arb-sort")?.querySelector('option[value="gross"]');
