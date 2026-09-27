@@ -488,6 +488,21 @@ let tickerIndexCounter = 0;
 const newKeysBuffer = new Map(); // key -> idx, pending announcement
 let tickerMapBroadcastTimer = null;
 
+function flushTickerMap() {
+  if (tickerMapBroadcastTimer) clearTimeout(tickerMapBroadcastTimer);
+  tickerMapBroadcastTimer = null;
+  if (clients.size === 0 || newKeysBuffer.size === 0) { newKeysBuffer.clear(); return; }
+  const msg = JSON.stringify({ type: "ticker_map", data: Object.fromEntries(newKeysBuffer) });
+  newKeysBuffer.clear();
+  for (const ws of clients) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    try {
+      if (ws.bufferedAmount > 2_000_000) { ws.terminate(); clients.delete(ws); continue; }
+      ws.send(msg);
+    } catch (_) { clients.delete(ws); try { ws.terminate(); } catch (__) {} }
+  }
+}
+
 function getTickerIndex(key) {
   let idx = tickerIndex.get(key);
   if (idx === undefined) {
@@ -496,15 +511,7 @@ function getTickerIndex(key) {
     // Schedule a ticker_map broadcast so clients learn about new keys
     newKeysBuffer.set(key, idx);
     if (!tickerMapBroadcastTimer) {
-      tickerMapBroadcastTimer = setTimeout(() => {
-        tickerMapBroadcastTimer = null;
-        if (clients.size === 0 || newKeysBuffer.size === 0) { newKeysBuffer.clear(); return; }
-        const msg = JSON.stringify({ type: "ticker_map", data: Object.fromEntries(newKeysBuffer) });
-        newKeysBuffer.clear();
-        for (const ws of clients) {
-          if (ws.readyState === WebSocket.OPEN) { try { ws.send(msg); } catch (_) {} }
-        }
-      }, 500);
+      tickerMapBroadcastTimer = setTimeout(flushTickerMap, 500);
       tickerMapBroadcastTimer.unref?.();
     }
   }
@@ -536,9 +543,12 @@ function broadcastSnapshot() {
 
 setInterval(() => {
   if (clients.size === 0 || dirtyKeys.size === 0) {
+    if (dirtyKeys.size) cachedSnapshotMsg = null;
     dirtyKeys.clear();
     return;
   }
+  // New clients cannot replay deltas published before they connected.
+  cachedSnapshotMsg = null;
   // Build binary buffer: [ID, p, chg, v, h, l, o, funding, nextFunding, oi, trades] x N
   const count = dirtyKeys.size;
   const requiredBytes = count * 11 * 8;
@@ -569,12 +579,17 @@ setInterval(() => {
   dirtyKeys.clear();
 
   // Slice to actual used bytes
-  const sendBuf = reusableBroadcastBuffer.subarray(0, offset);
+  // ws retains this memory until the socket flushes. Share one immutable copy
+  // across clients; the scratch buffer can then be reused by the next batch.
+  const sendBuf = Buffer.from(reusableBroadcastBuffer.subarray(0, offset));
 
+  // WebSocket preserves frame order: publish all newly allocated IDs before
+  // any client receives prices that reference them.
+  flushTickerMap();
   for (const ws of clients) {
     if (ws.readyState === WebSocket.OPEN) {
       try {
-        if (ws.bufferedAmount > 2_000_000) continue;
+        if (ws.bufferedAmount > 2_000_000) { ws.terminate(); continue; }
         ws.send(sendBuf, { binary: true });
       } catch (_) {
         clients.delete(ws);
@@ -643,7 +658,8 @@ function broadcastKline(ex, sym, tf, candle) {
     data: [normT, clean.o, clean.h, clean.l, clean.c, clean.v, seq, Date.now()],
   });
   for (const ws of sub.clients) {
-    if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 1_000_000) continue;
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > 1_000_000) { ws.terminate(); continue; }
     try { ws.send(msg); } catch (_) {}
   }
 }
@@ -671,7 +687,13 @@ function publishMarketTrade(ex, sym, tf, eventTime, price, volume = 0) {
   stat.lastSourceAt = t;
   marketFeedStats.set(ex, stat);
 
-  const existing = pendingMarketTicks.get(targetKey);
+  let existing = pendingMarketTicks.get(targetKey);
+  const interval = getTfMs(tf);
+  if (existing && Math.floor(existing.batch.eventTime / interval) !== Math.floor(t / interval)) {
+    // Never attach the old candle's high/low/open to a newer timestamp.
+    flushMarketTick(targetKey);
+    existing = null;
+  }
   const merged = marketDataCore.mergeMarketTick(existing?.batch || null, { t, p, volume });
   if (!merged) return;
   if (existing) {
@@ -681,7 +703,9 @@ function publishMarketTrade(ex, sym, tf, eventTime, price, volume = 0) {
   const pending = { batch: merged, timer: null };
   pendingMarketTicks.set(targetKey, pending);
   // Zero-delay immediate dispatch (Vataga model)
-  setImmediate(() => flushMarketTick(targetKey));
+  setImmediate(() => {
+    if (pendingMarketTicks.get(targetKey) === pending) flushMarketTick(targetKey);
+  });
 }
 
 function flushMarketTick(targetKey) {
@@ -697,7 +721,8 @@ function flushMarketTick(targetKey) {
     data: [b.eventTime, b.last, b.high, b.low, b.first, b.firstTime, b.trades, seq, serverTime],
   });
   for (const ws of sub.clients) {
-    if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 1_000_000) continue;
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > 1_000_000) { ws.terminate(); continue; }
     try { ws.send(msg); } catch (_) {}
   }
 }
@@ -2459,8 +2484,10 @@ app.get("/api/go-status", async (req, res) => {
     const r = await fetch(`${GO_SCANNER_URL}/api/klines?ex=BN&sym=BTCUSDT&tf=1m&limit=1`, {
       signal: AbortSignal.timeout(GO_SCANNER_TIMEOUT_MS)
     });
-    if (r.ok) {
+    if (r.status === 200) {
       res.json({ status: "online" });
+    } else if (r.status === 202) {
+      res.json({ status: "warming_up" });
     } else {
       res.json({ status: "error", code: r.status });
     }
@@ -2475,11 +2502,12 @@ app.get("/api/go-klines", async (req, res) => {
   try {
     const goUrl = `${GO_SCANNER_URL}/api/klines?ex=${encodeURIComponent(ex)}&sym=${encodeURIComponent(sym)}&tf=${encodeURIComponent(tf)}&limit=${encodeURIComponent(limit)}`;
     const r = await fetch(goUrl, { signal: AbortSignal.timeout(GO_SCANNER_TIMEOUT_MS * 2) });
-    if (!r.ok) {
+    if (r.status !== 200) {
       const text = await r.text();
       return res.status(r.status).json({ error: text });
     }
     const data = await r.json();
+    if (!Array.isArray(data)) return res.status(502).json({ error: "Invalid Go scanner response" });
     if (Array.isArray(data) && data.length > 0) {
       const lastC = data[data.length - 1];
       const maxStaleMs = 30 * 60 * 1000;
@@ -4317,18 +4345,28 @@ app.get("/api/events/stream", (req, res) => {
     Connection: "keep-alive", "X-Accel-Buffering": "no" });
   res.flushHeaders();
   res.write("retry: 3000\n\n");
+  let updateTimer = null;
+  const writeEvent = payload => {
+    if (res.destroyed) return;
+    if (res.writableLength >= 65536) { res.destroy(); return; }
+    res.write(payload);
+    res.flush?.();
+  };
   const notify = event => {
-    if (res.destroyed || res.writableLength >= 65536) return;
-    res.write("event: update\ndata: {}\n\n");
+    if (res.destroyed) return;
+    // Burst translations/news batches share one refresh request per client.
+    if (!updateTimer) updateTimer = setTimeout(() => {
+      updateTimer = null; writeEvent("event: update\ndata: {}\n\n");
+    }, 500);
     if (!["urgent", "translation", "retract"].includes(event?.type)) return;
     const { id, url, title, titleRu, source, publishedAt, receivedAt, alertKind, verification } = event.item;
-    res.write(`event: ${event.type}\ndata: ${JSON.stringify({ id, url, title, titleRu, source, publishedAt, receivedAt, alertKind, verification })}\n\n`);
+    writeEvent(`event: ${event.type}\ndata: ${JSON.stringify({ id, url, title, titleRu, source, publishedAt, receivedAt, alertKind, verification })}\n\n`);
   };
   const unsubscribe = eventsHub.subscribe(notify);
-  const heartbeat = setInterval(() => { if (!res.destroyed) res.write(": heartbeat\n\n"); }, 25000);
+  const heartbeat = setInterval(() => writeEvent(": heartbeat\n\n"), 25000);
   let closed = false;
-  const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); unsubscribe(); eventStreamClients--; };
-  req.on("close", cleanup);
+  const cleanup = () => { if (closed) return; closed = true; clearInterval(heartbeat); clearTimeout(updateTimer); unsubscribe(); eventStreamClients--; };
+  res.on("close", cleanup);
 });
 
 // Formation data is consumed by the screener, so this API route must be
@@ -4723,6 +4761,7 @@ server.listen(PORT, BIND_HOST, () => {
     const msg = JSON.stringify({ type: "walls", data: walls, meta });
     for (const ws of clients) {
       if (ws.readyState === WebSocket.OPEN) {
+        if (ws.bufferedAmount > 2_000_000) { ws.terminate(); continue; }
         try { ws.send(msg); } catch (e) {}
       }
     }
@@ -4856,6 +4895,7 @@ server.listen(PORT, BIND_HOST, () => {
     const msg = JSON.stringify({ type, data });
     for (const ws of clients) {
       if (ws.readyState === WebSocket.OPEN) {
+        if (ws.bufferedAmount > 2_000_000) { ws.terminate(); continue; }
         try { ws.send(msg); } catch (_) {}
       }
     }
@@ -4866,6 +4906,7 @@ server.listen(PORT, BIND_HOST, () => {
     const msg = JSON.stringify({ type, data });
     for (const ws of clients) {
       if (ws.readyState === WebSocket.OPEN && ws._userId === userId) {
+        if (ws.bufferedAmount > 2_000_000) { ws.terminate(); continue; }
         try { ws.send(msg); } catch (_) {}
       }
     }
@@ -5284,6 +5325,7 @@ server.listen(PORT, BIND_HOST, () => {
     try { saveFormationMaps(true); } catch (_) {}
     try { correlationEngine.saveCacheSync?.(); } catch (_) {}
     try { correlationEngine.stop?.(); } catch (_) {}
+    try { eventsHub.stop(); void eventsHub.flush(); } catch (_) {}
 
     // Stop accepting new work, then close live sockets.
     try { server.close(); } catch (_) {}

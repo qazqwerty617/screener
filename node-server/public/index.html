@@ -33,7 +33,7 @@
          otherwise show while fonts.css is still being parsed. -->
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/js/app.js?v=2104" as="script" />
+    <link rel="preload" href="/js/app.js?v=2105" as="script" />
     <link rel="stylesheet" href="/css/fonts.css?v=3" />
     <link rel="stylesheet" href="/css/app.css?v=1020" />
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
@@ -41,7 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/events.css?v=4" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -526,7 +526,7 @@
                                     data-desc="EMA 200 — глобальный тренд. Сильнейший уровень поддержки/сопротивления.">EMA
                                     200</button>
                                 <button class="chart-indicator-grid-btn" id="ind-vwap"
-                                    data-desc="VWAP — средняя цена с учетом объема. Показывает баланс дня: выше — лонг, ниже — шорт.">VWAP</button>
+                                    data-desc="VWAP UTC — средняя цена текущего дня, сброс в 00:00 UTC. Расчёт по HLC3; базовый объём оценён из оборота. Загруженная часть дня может быть неполной.">VWAP</button>
                                 <button class="chart-indicator-grid-btn" id="ind-rsi"
                                     data-desc="RSI 14 — сила рынка (0-100) с автоматическим поиском дивергенций (разворотных точек).">RSI</button>
                                 <button class="chart-indicator-grid-btn" id="ind-atr"
@@ -1114,7 +1114,7 @@
         </div>
 
         <!-- Cross-exchange futures and funding arbitrage -->
-        <section id="events-view" class="events-view" style="display:none" aria-label="Новости и листинги">
+        <section id="events-view" class="events-view" style="display:none" aria-label="Новости, листинги и разлоки">
             <div class="events-heading">
                 <div><h1>События</h1></div>
                 <span id="events-updated" class="events-updated">Загрузка данных…</span>
@@ -1122,14 +1122,21 @@
             <div class="events-tabs" role="tablist" aria-label="Разделы событий">
                 <button id="events-tab-news" class="on" type="button" aria-selected="true">Новости</button>
                 <button id="events-tab-listings" type="button" aria-selected="false">Листинги</button>
+                <button id="events-tab-unlocks" type="button" aria-selected="false">Разлоки</button>
             </div>
             <div id="events-news-panel" class="events-panel">
+                <div class="events-filters"><input id="events-news-search" class="events-search" type="search" placeholder="Поиск новости или источника" aria-label="Поиск новостей"><div class="events-segment" role="group" aria-label="Категория новостей"><button type="button" data-news-kind="all" class="on">Все</button><button type="button" data-news-kind="security">Безопасность</button><button type="button" data-news-kind="macro">Макро</button><button type="button" data-news-kind="official">Официально</button></div></div>
                 <div class="events-section-title"><div><h2>Срочно</h2></div></div>
                 <div id="events-urgent-list" class="events-urgent-grid"></div>
+                <div class="events-section-title"><div><h2>Требует подтверждения</h2><p>Сообщения проверенных изданий, которые пока не подтверждены независимо.</p></div></div>
+                <div id="events-developing-list" class="events-feed"></div>
                 <div class="events-section-title"><div><h2>Лента</h2></div></div>
                 <div id="events-news-list" class="events-feed"></div>
+                <button id="events-news-more" type="button" hidden>Показать ещё</button>
             </div>
             <div id="events-listings-panel" class="events-panel" hidden>
+                <div class="events-section-title"><div><h2>Официальные анонсы</h2><p>Дата публикации не является датой начала торгов. Условия и время — в объявлении биржи.</p></div></div>
+                <div id="events-announcements-list" class="events-feed"></div>
                 <div class="events-filters">
                     <input id="events-search" class="events-search" type="search" placeholder="Поиск монеты" aria-label="Поиск монеты" autocomplete="off">
                     <div class="events-segment" role="group" aria-label="Тип события"><button type="button" class="on" data-kind="all">Все</button><button type="button" data-kind="listing">Листинги</button><button type="button" data-kind="delisting">Делистинги</button></div>
@@ -1142,6 +1149,16 @@
                 <div class="events-calendar-scroll"><div id="events-calendar" class="events-calendar" role="grid" aria-label="Календарь событий"></div></div>
                 <div class="events-day-heading"><h2 id="events-day-label"></h2><span id="events-day-count"></span></div>
                 <div id="events-day-list" class="events-day-list"></div>
+            </div>
+            <div id="events-unlocks-panel" class="events-panel" hidden>
+                <div class="events-section-title"><div><h2>Календарь разлоков</h2><p>Расписание вестинга не означает продажу токенов. Сверяйте дату и условия с первоисточником.</p></div></div>
+                <div class="events-filters">
+                    <input id="events-unlocks-search" class="events-search" type="search" placeholder="Токен или проект" aria-label="Поиск разлоков">
+                    <div class="events-segment" role="group" aria-label="Период разлоков"><button type="button" data-unlock-period="30" class="on">30 дней</button><button type="button" data-unlock-period="90">90 дней</button><button type="button" data-unlock-period="365">Год</button><button type="button" data-unlock-period="past">Прошедшие</button></div>
+                </div>
+                <p id="events-unlocks-status" class="events-coverage" role="status"></p>
+                <div id="events-unlocks-list" class="events-feed"></div>
+                <button id="events-unlocks-more" type="button" hidden>Показать ещё</button>
             </div>
         </section>
         <div id="arbitrage-view" class="arb-view" style="display:none">
@@ -3685,11 +3702,11 @@
     <script defer src="/js/formationEngine.js?v=2013"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
-    <script defer src="/js/app.js?v=2104"></script>
-    <script defer src="/js/arbitrage.js?v=2016"></script>
-    <script defer src="/js/arbitrage-pro.js?v=2017"></script>
+    <script defer src="/js/app.js?v=2105"></script>
+    <script defer src="/js/arbitrage.js?v=2017"></script>
+    <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2018"></script>
-    <script defer src="/js/events.js?v=7"></script>
+    <script defer src="/js/events.js?v=8"></script>
 </body>
 
 </html>

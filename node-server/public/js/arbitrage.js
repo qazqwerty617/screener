@@ -8,12 +8,19 @@
     HL: ["Hyperliquid", "HL.svg"], AD: ["Asterdex", "AS.svg"],
   };
   const $ = id => document.getElementById(id);
+  function readFavorites() {
+    try {
+      const saved = JSON.parse(localStorage.getItem("arbFavorites") || "[]");
+      return new Set(Array.isArray(saved) ? saved.filter(value => typeof value === "string").slice(0, 1000) : []);
+    } catch (_) { return new Set(); }
+  }
   const state = {
     active: false, initialized: false, loading: false, mode: "spreads", data: null, dexData: null,
-    selectedExchanges: new Set(Object.keys(EX)), favorites: new Set(JSON.parse(localStorage.getItem("arbFavorites") || "[]")),
+    selectedExchanges: new Set(Object.keys(EX)), favorites: readFavorites(),
     trail: new Map(), timer: null, detailKey: null, detailRow: null,
     transferByKey: new Map(), transferRequested: new Set(), transferUpdatedAt: new Map(), transferLoading: false,
     minByMode: { spreads: "0", funding: "0", dex: "0" },
+    requestErrors: { cex: false, dex: false },
   };
 
   function esc(value) {
@@ -32,10 +39,11 @@
     n = Number(n) || 0;
     if (n >= 1000) return n.toLocaleString("en-US", { maximumFractionDigits: 2 });
     if (n >= 1) return n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
-    if (n < 0.0001 && n > 0) return n.toFixed(8).replace(/0+$/, "").replace(/\.$/, "");
+    if (n < 0.0001 && n > 0) return Number(n.toPrecision(6)).toString();
     return n ? n.toPrecision(6).replace(/0+$/, "").replace(/\.$/, "") : "0.00";
   }
   function pct(n, digits = 3) {
+    if (n == null || !Number.isFinite(Number(n))) return "—";
     const val = Number(n || 0);
     return `${val >= 0 ? "+" : ""}${val.toFixed(digits)}%`;
   }
@@ -236,8 +244,10 @@
   }
 
   async function fetchData(force) {
-    if (!state.active || state.loading) return;
+    if (!state.active || document.hidden) return;
+    if (state.loading) { state.refreshPending = true; return; }
     state.loading = true;
+    const requestedMode = state.mode;
     try {
       const q = new URLSearchParams({
         search: $("arb-search")?.value || "",
@@ -249,25 +259,38 @@
       if (force) q.set("_", Date.now());
       if (state.mode === "dex") {
         if (force) q.set("force", "1");
-        const dexResponse = await fetch(`/api/arbitrage/dex?${q}`, { cache: "no-store" });
+        const dexResponse = await fetch(`/api/arbitrage/dex?${q}`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
         if (!dexResponse.ok) throw new Error(`HTTP ${dexResponse.status}`);
-        state.dexData = await dexResponse.json();
+        const payload = await dexResponse.json();
+        if (!state.active || state.mode !== requestedMode) return;
+        state.requestErrors.dex = false;
+        state.dexData = payload;
         if ($("arb-dex-badge")) $("arb-dex-badge").textContent = state.dexData.total ?? state.dexData.rows?.length ?? 0;
         updateFreshness(state.dexData.generatedAt, state.dexData.poolGeneratedAt);
         render();
         return;
       }
-      const res = await fetch(`/api/arbitrage/snapshot?${q}`, { cache: "no-store" });
+      const res = await fetch(`/api/arbitrage/snapshot?${q}`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      state.data = await res.json();
+      const payload = await res.json();
+      if (!state.active || state.mode !== requestedMode) return;
+      state.requestErrors.cex = false;
+      state.data = payload;
       updateTrails(state.data.spreads, "net", state.data.generatedAt);
       updateTrails(state.data.funding, "hourly", state.data.generatedAt);
       render();
       fetchTransferStatuses();
     } catch (err) {
+      if (!state.active || state.mode !== requestedMode) return;
+      state.requestErrors[requestedMode === "dex" ? "dex" : "cex"] = true;
       console.warn("[Arbitrage]", err.message);
+      if ($("arb-update-age")) $("arb-update-age").textContent = "Нет связи · данные могут устареть";
     } finally {
       state.loading = false;
+      if (state.refreshPending || state.mode !== requestedMode) {
+        state.refreshPending = false;
+        if (state.active) void fetchData(false);
+      }
     }
   }
 
@@ -288,6 +311,7 @@
       if (points.length > 50) points.shift();
       state.trail.set(row.key, points);
     });
+    while (state.trail.size > 2000) state.trail.delete(state.trail.keys().next().value);
   }
 
   function render() {
@@ -296,7 +320,7 @@
       const rows = filteredRows();
       renderDex(rows);
       if ($("arb-empty")) $("arb-empty").hidden = rows.length > 0;
-      if ($("arb-shown")) $("arb-shown").textContent = `Показано ${rows.length} из ${state.dexData.total ?? rows.length}`;
+      if ($("arb-shown")) $("arb-shown").textContent = `Показано ${rows.length} из ${state.dexData.total ?? rows.length} · Контракты: ${state.dexData.coveredContracts ?? state.dexData.contracts ?? 0}/${state.dexData.eligibleContracts ?? state.dexData.contracts ?? 0} · Пулы: ${state.dexData.pools ?? 0}${state.dexData.status === "partial" ? " · часть источников недоступна" : ""}`;
       return;
     }
     if (!state.data) return;
@@ -492,13 +516,18 @@
   function updateFreshness(generatedAt, poolGeneratedAt = 0) {
     const target = $("arb-update-age");
     if (!target) return;
+    if (state.requestErrors[state.mode === "dex" ? "dex" : "cex"]) {
+      target.textContent = "Нет связи · данные могут устареть";
+      return;
+    }
     const age = Math.max(0, Date.now() - Number(generatedAt || 0));
     target.textContent = poolGeneratedAt
-      ? `CEX сейчас · пул ${Math.round(Math.max(0, Date.now() - Number(poolGeneratedAt)) / 1000)}с назад`
+      ? `CEX ${age < 2500 ? "сейчас" : `${Math.round(age / 1000)}с назад`} · пул ${Math.round(Math.max(0, Date.now() - Number(poolGeneratedAt)) / 1000)}с назад`
       : age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;
   }
 
   function fundingHourly(r) {
+    if (r.sellFunding == null || r.buyFunding == null) return null;
     return (Number(r.sellFunding) || 0) / (Number(r.sellInterval) || 8) - (Number(r.buyFunding) || 0) / (Number(r.buyInterval) || 8);
   }
 
@@ -700,5 +729,10 @@
     }, 2000);
   }
 
-  window.CryptoArbitrage = { activate, refresh: () => fetchData(true) };
+  function deactivate() {
+    state.active = false; state.refreshPending = false;
+    clearInterval(state.timer); state.timer = null;
+    closeDetail();
+  }
+  window.CryptoArbitrage = { activate, deactivate, refresh: () => fetchData(true) };
 })();

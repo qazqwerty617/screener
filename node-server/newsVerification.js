@@ -9,7 +9,8 @@ const PUBLISHERS = [
   ["bybit.com", "bybit", "Bybit", "exchange"], ["binance.com", "binance", "Binance", "exchange"],
   ["okx.com", "okx", "OKX", "exchange"], ["kucoin.com", "kucoin", "KuCoin", "exchange"],
   ["gate.com", "gate", "Gate.io", "exchange"], ["mexc.com", "mexc", "MEXC", "exchange"],
-  ["asterdex.com", "aster", "Aster", "exchange"]
+  ["asterdex.com", "aster", "Aster", "exchange"], ["bitget.com", "bitget", "Bitget", "exchange"],
+  ["dlnews.com", "dlnews", "DL News"], ["blockworks.co", "blockworks", "Blockworks"], ["blockworks.com", "blockworks", "Blockworks"]
 ];
 function publisher(url) {
   try {
@@ -21,7 +22,7 @@ function publisher(url) {
       okx: /\/help\//, kucoin: /\/announcement\//, fed: /\/newsevents\/pressreleases\//,
       sec: /\/(?:newsroom\/press-releases|news\/press-release)\//, whitehouse: /\/(?:presidential-actions|briefings-statements)\//,
       gate: /^\/announcements\/article\/\d+$/, mexc: /^\/(?:support|announcements)\/article\//,
-      aster: /^\/[a-z]{2}\/announcement\/\d+$/ };
+      aster: /^\/[a-z]{2}\/announcement\/\d+$/, bitget: /^\/(?:[a-z]{2}(?:[-_][A-Z]{2})?\/)?support\/articles\/\d+\/?$/ };
     if (origin[3] && (!officialPaths[origin[1]].test(parsed.pathname) || origin[1] === "bybit" && parsed.hostname !== "announcements.bybit.com")) return null;
     return origin;
   } catch (_) { return null; }

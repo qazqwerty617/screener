@@ -592,13 +592,14 @@
     return { middle, upper, lower };
   }
 
-  function drawSeries(m, values, color, yForValue = m.yForPrice, lineWidth = 1.2) {
+  function drawSeries(m, values, color, yForValue = m.yForPrice, lineWidth = 1.2, dailySession = false) {
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = lineWidth;
     ctx.beginPath();
     let started = false;
     m.data.forEach((_, i) => {
+      if (dailySession && i > 0 && Math.floor(m.data[i].t / 86400000) !== Math.floor(m.data[i - 1].t / 86400000)) started = false;
       const value = values[m.start + i];
       if (!Number.isFinite(value)) { started = false; return; }
       const x = m.xForIndex(i), y = yForValue(value);
@@ -911,9 +912,7 @@
     if (state.indicators.has("ema50")) drawSeries(m, ema(allClose, 50), "#3b82f6");
     if (state.indicators.has("ema200")) drawSeries(m, ema(allClose, 200), "#ec4899", m.yForPrice, 1.35);
     if (state.indicators.has("vwap")) {
-      let pv = 0, volume = 0;
-      const values = state.candles.map(c => { pv += ((c.h + c.l + c.c) / 3) * Math.max(0, c.v); volume += Math.max(0, c.v); return volume ? pv / volume : c.c; });
-      drawSeries(m, values, "#a78bfa", m.yForPrice, 1.35);
+      drawSeries(m, calcVWAP(state.candles), "#a78bfa", m.yForPrice, 1.35, true);
     }
     if (state.indicators.has("bb")) {
       const bands = bollingerValues(allClose);

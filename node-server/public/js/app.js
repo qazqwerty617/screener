@@ -20,7 +20,7 @@ function markTickerDirty(key) {
   chartTickerDirty.add(key);
 }
 const rowEls = new Map();
-const priceHistories = new Map();
+// Correlations are sampled once on the server for all clients.
 let isHoveringScreener = false;
 
 // ════ TOAST NOTIFICATIONS ═════════════════════════════
@@ -144,82 +144,25 @@ function showToast(options, typeArg, titleArg, durationArg) {
 }
 window.showToast = showToast;
 
-function pearsonCorrelationAbs(x, y) {
-  let n = Math.min(x.length, y.length);
-  if (n < 2) return 0;
-
-  // Use absolute prices directly for true correlation (professional standard)
-  let rx = x.slice(-n);
-  let ry = y.slice(-n);
-
-  let meanX = 0, meanY = 0;
-  for (let i = 0; i < n; i++) {
-    meanX += rx[i];
-    meanY += ry[i];
-  }
-  meanX /= n;
-  meanY /= n;
-
-  let num = 0, denX = 0, denY = 0;
-  for (let i = 0; i < n; i++) {
-    const dx = rx[i] - meanX;
-    const dy = ry[i] - meanY;
-    num += dx * dy;
-    denX += dx * dx;
-    denY += dy * dy;
-  }
-
-  if (denX === 0 || denY === 0) return 0;
-  return num / Math.sqrt(denX * denY);
-}
-
-function updatePriceHistory() {
-  // тФАтФАтФА Verified BTC key per exchange (from server tickers.set() calls) тФАтФАтФА
-  const BTC_KEY = {
-    BN: "BN:BTCUSDT",
-    BB: "BB:BTCUSDT",
-    OX: "OX:BTC-USDT-SWAP",
-    BG: "BG:BTCUSDT",
-    GT: "GT:BTC_USDT",
-    MX: "MX:BTC_USDT",
-    KC: "KC:XBTUSDTM",
-    BX: "BX:BTC-USDT",
-    HT: "HT:BTC-USDT",
-    HL: "HL:BTC",
-    AD: "AD:BTCUSDT",
-  };
-
-  for (const [key, c] of coins.entries()) {
-    // тФАтФАтФА 1. Price history for correlation тФАтФАтФА
-    let hist = priceHistories.get(key);
-    if (!hist) { hist = []; priceHistories.set(key, hist); }
-    hist.push(c.p);
-    if (hist.length > 120) hist.shift();
-
-    // тФАтФАтФА 2. Correlation vs BTC (percentage-return Pearson) тФАтФАтФА
-    // Try exchange-native BTC first, fall back to Binance BTC
-    const btcKey = BTC_KEY[c.ex];
-    let btcHist = (btcKey && btcKey !== key) ? priceHistories.get(btcKey) : null;
-    if ((!btcHist || btcHist.length < 10) && c.ex !== "BN") {
-      btcHist = priceHistories.get("BN:BTCUSDT"); // universal fallback
-    }
-    if (btcHist && btcHist.length >= 10 && hist.length >= 10 && btcKey !== key) {
-      c.corr = Math.round(pearsonCorrelationAbs(hist, btcHist) * 100);
-    }
-  }
-  needRebuild = true;
-}
-setInterval(updatePriceHistory, 5000);
-
-function applyServerCorrelations(corrs) {
+function applyServerCorrelations(corrs, replace = false) {
   if (!corrs || typeof corrs !== "object") return;
   let changed = false;
   const activeKey = `${activeEx}:${activeSym}`;
+  if (replace) {
+    for (const [key, c] of coins) {
+      if (c.corr !== undefined && !Object.prototype.hasOwnProperty.call(corrs, key)) {
+        delete c.corr;
+        changed = true;
+        if (key === activeKey) updateSymInfoInterp(c);
+      }
+    }
+  }
   for (const [key, val] of Object.entries(corrs)) {
     const c = coins.get(key);
-    if (c && typeof val === "number") {
-      if (c.corr !== val) {
-        c.corr = val;
+    if (c && (val === null || (Number.isFinite(val) && val >= 0 && val <= 100))) {
+      const next = val === null ? undefined : val;
+      if (c.corr !== next) {
+        c.corr = next;
         changed = true;
         if (key === activeKey) {
           updateSymInfoInterp(c);
@@ -1767,23 +1710,27 @@ function calcBB(data, period = 20, stdDevMult = 2) {
 function calcVWAP(data) {
   if (!data || data.length === 0) return [];
   if (!data._cache) data._cache = {};
-  const lastC = data[data.length - 1].c;
-  const lastT = data[data.length - 1].t;
-  const key = "vwap";
-  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
-
-  let vwap = new Array(data.length);
-  let sumPV = 0, sumV = 0;
+  const last = data[data.length - 1];
+  const signature = [data.length, data[0].t, last.t, last.h, last.l, last.c, last.v, last.baseVolume].join(":");
+  if (data._cache.vwap?._signature === signature) return data._cache.vwap;
+  const vwap = new Array(data.length);
+  let sumPV = 0, sumV = 0, session = null;
   for (let i = 0; i < data.length; i++) {
-    const tp = (data[i].h + data[i].l + data[i].c) / 3;
-    sumPV += tp * data[i].v;
-    sumV += data[i].v;
-    vwap[i] = sumV > 0 ? sumPV / sumV : tp;
+    const bar = data[i];
+    const day = Math.floor(Number(bar.t) / 86400000);
+    if (day !== session) { sumPV = 0; sumV = 0; session = day; }
+    const tp = (Number(bar.h) + Number(bar.l) + Number(bar.c)) / 3;
+    // Screener candles carry quote turnover. Approximate base volume from HLC3
+    // when an exact base-volume field is unavailable; never weight by USD twice.
+    const volume = bar.baseVolume == null ? Number(bar.v) / tp : Number(bar.baseVolume);
+    if (Number.isFinite(tp) && tp > 0 && Number.isFinite(volume) && volume > 0) {
+      sumPV += tp * volume;
+      sumV += volume;
+    }
+    vwap[i] = sumV > 0 ? sumPV / sumV : null;
   }
-  vwap._len = data.length;
-  vwap._lastC = lastC;
-  vwap._lastT = lastT;
-  data._cache[key] = vwap;
+  vwap._signature = signature;
+  data._cache.vwap = vwap;
   return vwap;
 }
 
@@ -3827,7 +3774,7 @@ function drawChart() {
       if (val) {
         const x = (s + i - viewStart) * candleW + candleW / 2;
         const y = toY(val);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        if (i === 0 || !vwap[s + i - 1] || Math.floor(candles[s + i].t / 86400000) !== Math.floor(candles[s + i - 1].t / 86400000)) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
     }
     ctx.stroke();
@@ -7235,7 +7182,7 @@ function fetchInitialTickersSnapshot() {
     .then(r => r.json())
     .then(corrs => {
       if (corrs && typeof corrs === "object") {
-        applyServerCorrelations(corrs);
+        applyServerCorrelations(corrs, true);
       }
     })
     .catch(() => {});
@@ -7259,6 +7206,8 @@ function connectWS() {
   }
   if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
 
+  // IDs belong to one server connection and can change after a restart.
+  idToKey = {};
   $("cd-label").textContent = "Connecting...";
   // The server sends the same market snapshot immediately after opening the
   // socket. Keep HTTP as a fallback instead of downloading and parsing both.
@@ -7301,15 +7250,20 @@ function connectWS() {
     lastWsMsg = Date.now();
     // тФАтФА Binary Protocol Handler (Ultra-Sync 3.0) тФАтФА
     if (e.data instanceof ArrayBuffer) {
+      if (e.data.byteLength % 88 !== 0) return;
       const floatData = new Float64Array(e.data);
       for (let i = 0; i < floatData.length; i += 11) {
-        const id = Math.round(floatData[i]);
+        const id = floatData[i];
+        if (!Number.isSafeInteger(id) || id < 0) continue;
         const key = idToKey[id];
         if (!key) continue;
 
         const p = floatData[i + 1], chg = floatData[i + 2], v = floatData[i + 3], h = floatData[i + 4],
           l = floatData[i + 5], o = floatData[i + 6], funding = floatData[i + 7],
           nextFunding = floatData[i + 8], oi = floatData[i + 9], trades = floatData[i + 10];
+        let valid = p > 0;
+        for (let j = 1; valid && j < 11; j++) valid = Number.isFinite(floatData[i + j]);
+        if (!valid) continue;
 
         let c = coins.get(key);
         if (!c) {
@@ -7386,10 +7340,8 @@ function connectWS() {
       }
       const newSize = Object.keys(idToKey).length;
       console.log(`[BINARY] Ticker map updated: ${newSize} entries (+${newSize - prevSize})`);
-      // If new keys arrived - request fresh snapshot so we get their current prices
-      if (newSize > prevSize && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "get_snapshot" }));
-      }
+      // The server sends the initial snapshot and orders new dictionaries
+      // before their deltas. A second full snapshot here duplicates the feed.
       return;
     }
     if (msg.type === "ex_status") {
@@ -7445,7 +7397,7 @@ function connectWS() {
       }
       console.log(`[SNAPSHOT] coins.size=${coins.size}`);
       if (msg.correlations && typeof msg.correlations === "object") {
-        applyServerCorrelations(msg.correlations);
+        applyServerCorrelations(msg.correlations, true);
       }
       needRebuild = true;
       hideLoading();
@@ -12193,7 +12145,7 @@ class ChartInstance {
         if (val) {
           const x = (i + futureGap) * candleWidth + candleWidth / 2;
           const y = toY(val);
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          if (i === 0 || !vwap[s + i - 1] || Math.floor(this.candles[s + i].t / 86400000) !== Math.floor(this.candles[s + i - 1].t / 86400000)) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
       }
       ctx.stroke();
@@ -12687,7 +12639,7 @@ function loadBacktestModule() {
   if (!backtestModulePromise) {
     backtestModulePromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "/js/backtest.js?v=2015";
+      script.src = "/js/backtest.js?v=2016";
       script.onload = () => {
         if (window.CryptoBacktest) resolve(window.CryptoBacktest);
         else { script.remove(); reject(new Error("Модуль бэктеста не запустился")); }
@@ -12729,6 +12681,7 @@ window.switchView = function switchView(view) {
   const arbitrageEl = document.getElementById("arbitrage-view");
   const eventsEl = document.getElementById("events-view");
   if (view !== "events") window.ObsidianEvents?.deactivate();
+  if (view !== "arbitrage") window.CryptoArbitrage?.deactivate();
   if (eventsEl) eventsEl.style.display = view === "events" ? "block" : "none";
 
   // Highlight active navbar tab
@@ -13069,11 +13022,40 @@ function layoutDensityBadges() {
       d.ry = cy + dy / dist * outerLimit;
     }
   };
-  for (let pass = 0; pass < 18; pass++) {
+  const crowded = collisionOrder.length > 150;
+  const cellSize = 80;
+  const passes = crowded ? 6 : 18;
+  for (let pass = 0; pass < passes; pass++) {
     let moved = false;
+    const grid = new Map();
+    if (crowded) {
+      for (let j = 0; j < collisionOrder.length; j++) {
+        const d = collisionOrder[j];
+        const key = `${Math.floor(d.rx / cellSize)}:${Math.floor(d.ry / cellSize)}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(j);
+      }
+    }
     for (let i = 0; i < collisionOrder.length; i++) {
       const a = collisionOrder[i];
-      for (let j = i + 1; j < collisionOrder.length; j++) {
+      let neighbors;
+      if (crowded) {
+        neighbors = [];
+        const gx = Math.floor(a.rx / cellSize), gy = Math.floor(a.ry / cellSize);
+        // Include neighboring cells; cap visual relaxation in dense clusters.
+        // All walls remain rendered and selectable even when space is exhausted.
+        for (let x = gx - 1; x <= gx + 1; x++) for (let y = gy - 1; y <= gy + 1; y++) {
+          const bucket = grid.get(`${x}:${y}`) || [];
+          const offset = bucket.length ? (i + pass * 17) % bucket.length : 0;
+          for (let n = 0; n < Math.min(bucket.length, 12); n++) {
+            const j = bucket[(offset + n) % bucket.length];
+            if (j > i) neighbors.push(j);
+          }
+        }
+      }
+      const count = crowded ? neighbors.length : collisionOrder.length - i - 1;
+      for (let n = 0; n < count; n++) {
+        const j = crowded ? neighbors[n] : i + n + 1;
         const b = collisionOrder[j];
         let dx = b.rx - a.rx;
         let dy = b.ry - a.ry;

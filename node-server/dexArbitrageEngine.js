@@ -124,7 +124,7 @@ function normalizeDexPairs(contract, payload) {
     const native = Number(pair.priceNative);
     const tokenPriceUsd = tokenIsBase ? baseUsd : (baseUsd > 0 && native > 0 ? baseUsd / native : 0);
     const liquidityUsd = Number(pair?.liquidity?.usd) || 0;
-    if (!(tokenPriceUsd > 0) || !(liquidityUsd > 0)) continue;
+    if (!Number.isFinite(tokenPriceUsd) || !(tokenPriceUsd > 0) || !Number.isFinite(liquidityUsd) || !(liquidityUsd > 0)) continue;
     output.push({
       base: contract.base,
       network: contract.network,
@@ -163,7 +163,9 @@ function cexQuotes(rows, options = {}) {
       const ageMs = quoteTs ? Math.max(0, now - quoteTs) : Infinity;
       const ask = Number(row.ask) / factor;
       const bid = Number(row.bid) / factor;
-      if (!base || !row.ex || ageMs > maxAgeMs || (!(ask > 0) && !(bid > 0)) || Number(row.v) < 1_000) continue;
+      if (!base || !row.ex || quoteTs > now + 1000 || ageMs > maxAgeMs ||
+        !Number.isFinite(ask) || !Number.isFinite(bid) || ask > 0 && bid > ask ||
+        (!(ask > 0) && !(bid > 0)) || !Number.isFinite(Number(row.v)) || Number(row.v) < 1_000) continue;
       if (!byBase.has(base)) byBase.set(base, new Map());
       const quote = {
         ex: row.ex, name: EXCHANGES[row.ex]?.name || row.ex, ask, bid, ageMs,
@@ -181,7 +183,8 @@ function cexQuotes(rows, options = {}) {
     ];
     if (!byBase.has(base)) byBase.set(base, new Map());
     for (const quote of candidates) {
-      if (!quote.ex || (!(quote.ask > 0) && !(quote.bid > 0))) continue;
+      if (!quote.ex || quote.ageMs < 0 || quote.ageMs > maxAgeMs ||
+        (!(Number.isFinite(quote.ask) && quote.ask > 0) && !(Number.isFinite(quote.bid) && quote.bid > 0))) continue;
       const current = byBase.get(base).get(quote.ex);
       if (!current || quote.ageMs < current.ageMs) byBase.get(base).set(quote.ex, quote);
     }
@@ -199,6 +202,7 @@ function buildDexOpportunities(cexRows, dexPairs, options = {}) {
   const quotes = cexQuotes(cexRows, options);
   const rows = [];
   for (const pair of Array.isArray(dexPairs) ? dexPairs : []) {
+    if (pair.fetchedAt != null && (Number(options.now || Date.now()) - pair.fetchedAt > (options.maxPoolAgeMs || 90000))) continue;
     if (!pair.contractVerified || pair.liquidityUsd < minLiquidityUsd || pair.volume24hUsd < minVolume24hUsd) continue;
     if ((Number(pair.transactions5m) || 0) < 1) continue;
     const verifiedSources = new Set(pair.contractSources || []);
@@ -236,6 +240,7 @@ function buildDexOpportunities(cexRows, dexPairs, options = {}) {
       cexEx: cex.ex,
       cexName: cex.name,
       cexAgeMs: cex.ageMs,
+      poolAgeMs: pair.fetchedAt == null ? null : Math.max(0, Number(options.now || Date.now()) - pair.fetchedAt),
       cexUrl: cex.url,
       cexPrice: direction === "cex_to_dex" ? cex.ask : cex.bid,
       dexId: pair.dexId,
@@ -267,11 +272,15 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
   let cache = { generatedAt: 0, contracts: 0, pools: 0, venues: [], sources: ["DEX Screener"] };
   let cachedPools = [];
   let pending = null;
+  let discoveryCursor = 0;
+  const poolsByContract = new Map();
+  const contractLimit = Math.max(1, Math.min(600, Number(options.contractLimit) || 240));
+  const maxPoolAgeMs = Math.max(30000, Math.min(120000, Number(options.maxPoolAgeMs) || 90000));
 
   function recordHistory(rows, generatedAt) {
     for (const row of rows) {
       const points = history.get(row.key) || [];
-      if (!points.length || points.at(-1)[0] !== generatedAt) {
+      if (!points.length || generatedAt - points.at(-1)[0] >= 1000) {
         points.push([generatedAt, row.netPct, row.cexPrice, row.dexPrice, row.grossPct, row.estimatedCostsPct, row.liquidityUsd]);
       }
       history.set(row.key, points.slice(-historyLimit));
@@ -291,24 +300,40 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
       const cexRows = currentCexRows instanceof Map || Array.isArray(currentCexRows) ? currentCexRows : [];
       const quotes = cexQuotes(cexRows, { ...options, now: clock() });
       const bases = [...quotes.keys()];
-      const contracts = collectVerifiedContracts(transferService.catalogs, bases, {
-        limit: options.contractLimit || 80, prioritySources: ["GT", "MX", "AD", "HL"], priorityLimit: 24,
-      });
-      const requests = contractBatches(contracts).map(batch => {
-        const url = `${DEX_SCREENER_BASE}/${encodeURIComponent(batch[0].chainId)}/${batch.map(contract => encodeURIComponent(contract.contractAddress)).join(",")}`;
-        return apiFetch(url, 12_000, 0).then(payload => ({ batch, payload }));
-      });
-      const settled = await Promise.allSettled(requests);
+      const eligible = collectVerifiedContracts(transferService.catalogs, bases, { limit: 20000 });
+      const contracts = [];
+      for (let i = 0; i < Math.min(contractLimit, eligible.length); i++) contracts.push(eligible[(discoveryCursor + i) % eligible.length]);
+      discoveryCursor = eligible.length ? (discoveryCursor + contracts.length) % eligible.length : 0;
+      const batches = contractBatches(contracts);
+      let cursor = 0, failedBatches = 0;
+      await Promise.all(Array.from({ length: Math.min(3, batches.length) }, async () => {
+        while (cursor < batches.length) {
+          const batch = batches[cursor++];
+          const url = `${DEX_SCREENER_BASE}/${encodeURIComponent(batch[0].chainId)}/${batch.map(contract => encodeURIComponent(contract.contractAddress)).join(",")}`;
+          try {
+            const payload = await apiFetch(url, 12_000, 0);
+            if (!Array.isArray(payload) && !Array.isArray(payload?.pairs)) throw new Error("Invalid pool response");
+            const fetchedAt = clock();
+            for (const contract of batch) poolsByContract.set(contract.id, {
+              fetchedAt, pools: normalizeDexPairs(contract, payload).map(pool => ({ ...pool, fetchedAt })) });
+          } catch (_) { failedBatches++; }
+        }
+      }));
+      const eligibleIds = new Set(eligible.map(contract => contract.id));
       const pools = [];
-      for (const result of settled) {
-        if (result.status !== "fulfilled") continue;
-        for (const contract of result.value.batch) pools.push(...normalizeDexPairs(contract, result.value.payload));
+      for (const [id, entry] of poolsByContract) {
+        if (!eligibleIds.has(id) || clock() - entry.fetchedAt > maxPoolAgeMs) poolsByContract.delete(id);
+        else pools.push(...entry.pools);
       }
       const generatedAt = clock();
       cachedPools = pools;
       cache = {
         generatedAt,
         contracts: contracts.length,
+        eligibleContracts: eligible.length,
+        coveredContracts: poolsByContract.size,
+        failedBatches,
+        status: failedBatches ? "partial" : "ok",
         pools: pools.length,
         venues: [...new Set(pools.map(pool => pool.dexName))].sort(),
         sources: ["DEX Screener"],
@@ -322,7 +347,7 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
     const current = await refresh(Boolean(filters.force));
     const generatedAt = clock();
     const cexRows = getCexRows();
-    const allRows = buildDexOpportunities(cexRows instanceof Map || Array.isArray(cexRows) ? cexRows : [], cachedPools, { ...options, now: generatedAt });
+    const allRows = buildDexOpportunities(cexRows instanceof Map || Array.isArray(cexRows) ? cexRows : [], cachedPools, { ...options, maxPoolAgeMs, now: generatedAt });
     recordHistory(allRows, generatedAt);
     const search = String(filters.search || "").toUpperCase();
     const minNet = Number(filters.minNet) || 0;
@@ -333,7 +358,8 @@ function createDexArbitrageService(apiFetch, transferService, getCexRows, option
     const rows = allRows.filter(row => (!search || row.base.includes(search) || row.dexName.toUpperCase().includes(search))
       && (!exchanges.size || exchanges.has(row.cexEx))
       && row.netPct >= minNet && row.liquidityUsd >= minLiquidityUsd && row.volume24hUsd >= minVolume24hUsd).slice(0, limit);
-    return { ...current, generatedAt, poolGeneratedAt: current.generatedAt, rows, total: allRows.length, methodology: "chain and contract exact match; indicative pool price and constant-product impact; gas, withdrawal and hedge exit excluded" };
+    const poolGeneratedAt = cachedPools.length ? Math.min(...cachedPools.map(pool => pool.fetchedAt)) : current.generatedAt;
+    return { ...current, generatedAt, poolGeneratedAt, rows, total: allRows.length, methodology: "chain and contract exact match; indicative pool price and constant-product impact; gas, withdrawal and hedge exit excluded" };
   }
 
   function getHistory(key) {

@@ -36,7 +36,7 @@ const BTC_KEY = {
  * 5s tick, i.e. ~1M element moves per tick at production ticker counts.
  */
 function makeSeries() {
-  return { buf: new Float64Array(MAX_SAMPLES), len: 0, head: 0, missed: 0 };
+  return { buf: new Float64Array(MAX_SAMPLES), len: 0, head: 0, missed: 0, bucket: -1 };
 }
 
 function seriesPush(s, v) {
@@ -153,13 +153,19 @@ class CorrelationEngine {
       if (!fs.existsSync(CACHE_FILE)) return;
       const parsed = JSON.parse(fs.readFileSync(CACHE_FILE, "utf8"));
       const age = Date.now() - (parsed.savedAt || 0);
-      // Only restore if cache is less than 20 minutes old
-      if (age >= 1200000 || !parsed.histories || typeof parsed.histories !== "object") return;
+      // A saved price array without its sampling time cannot be aligned with
+      // live prices. Older cache formats deliberately warm up again.
+      if (age < 0 || age >= SAMPLE_INTERVAL_MS * 2 || !parsed.buckets || !parsed.histories || typeof parsed.histories !== "object") return;
 
       let count = 0;
       for (const [k, arr] of Object.entries(parsed.histories)) {
         if (!Array.isArray(arr) || arr.length === 0) continue;
+        const bucket = parsed.buckets[k];
+        const currentBucket = Math.floor(Date.now() / SAMPLE_INTERVAL_MS);
+        if (!Number.isSafeInteger(bucket) || bucket < currentBucket - 1 || bucket > currentBucket) continue;
+        if (!arr.every(v => Number.isFinite(v) && v > 0)) continue;
         const s = makeSeries();
+        s.bucket = bucket;
         const from = Math.max(0, arr.length - MAX_SAMPLES);
         for (let i = from; i < arr.length; i++) {
           const v = arr[i];
@@ -169,7 +175,7 @@ class CorrelationEngine {
       }
       if (parsed.correlations && typeof parsed.correlations === "object") {
         for (const [k, v] of Object.entries(parsed.correlations)) {
-          if (typeof v === "number") this.correlationMap.set(k, v);
+          if (this.priceHistories.has(k) && Number.isFinite(v) && v >= 0 && v <= 100) this.correlationMap.set(k, v);
         }
       }
       console.log(`[CORRELATION ENGINE] Restored ${count} price histories & ${this.correlationMap.size} correlations from cache (age: ${(age / 1000).toFixed(0)}s).`);
@@ -180,13 +186,18 @@ class CorrelationEngine {
 
   _buildCachePayload() {
     const historiesObj = {};
+    const buckets = {};
     for (const [k, s] of this.priceHistories.entries()) {
-      if (s.len >= 5) historiesObj[k] = seriesToArray(s, PERSIST_SAMPLES);
+      if (s.len >= 5 && s.missed === 0) {
+        historiesObj[k] = seriesToArray(s, PERSIST_SAMPLES);
+        buckets[k] = s.bucket;
+      }
     }
     return JSON.stringify({
       savedAt: Date.now(),
       correlations: Object.fromEntries(this.correlationMap),
       histories: historiesObj,
+      buckets,
     });
   }
 
@@ -218,46 +229,55 @@ class CorrelationEngine {
   }
 
   tick() {
-    if (!this.tickers || this.tickers.size === 0) return;
+    if (!this.tickers) return;
 
     const histories = this.priceHistories;
+    const now = Date.now();
+    const bucket = Math.floor(now / SAMPLE_INTERVAL_MS);
 
     // 1. Record current price sample for each live ticker
     for (const t of this.tickers.values()) {
       if (!t || !t.key || !(t.p > 0) || !Number.isFinite(t.p)) continue;
+      if (!Number.isFinite(t.quoteTs) || t.quoteTs <= 0 || t.quoteTs > now + 1000 || now - t.quoteTs > 15000) continue;
       let s = histories.get(t.key);
       if (!s) { s = makeSeries(); histories.set(t.key, s); }
-      seriesPush(s, t.p);
+      if (s.bucket !== bucket) {
+        if (s.bucket !== bucket - 1) { s.len = 0; s.head = 0; }
+        seriesPush(s, t.p);
+        s.bucket = bucket;
+      }
+      s.missed = 0;
     }
 
     // 2. Identify available BTC reference series
     const btcHistories = Object.create(null);
     for (const ex in BTC_KEY) {
       const h = histories.get(BTC_KEY[ex]);
-      if (h && h.len >= 5) btcHistories[ex] = h;
+      if (h && h.bucket === bucket && h.len >= 5) btcHistories[ex] = h;
     }
     const defaultBtcHist =
-      btcHistories.BN || histories.get("BN:BTCUSDT") || Object.values(btcHistories)[0] || null;
-
-    if (!defaultBtcHist || defaultBtcHist.len < 5) return;
+      btcHistories.BN || Object.values(btcHistories)[0] || null;
 
     // 3. Compute Pearson correlation vs BTC + evict silent keys in one pass.
     //    Only changed values go on the wire; the old code broadcast all ~8.5k
     //    keys every 5 seconds regardless of whether anything moved.
     const changed = {};
     let changedCount = 0;
-    let computedCount = 0;
     let evicted = 0;
+    const invalidate = key => {
+      if (this.correlationMap.delete(key)) { changed[key] = null; changedCount++; }
+    };
 
     for (const [key, s] of histories) {
-      // The sampling pass above resets `missed` to 0 for every live ticker.
-      if (++s.missed > STALE_TICKS_BEFORE_EVICT) {
+      s.missed = Math.max(0, bucket - s.bucket);
+      if (s.missed > STALE_TICKS_BEFORE_EVICT) {
+        invalidate(key);
         histories.delete(key);
         this.correlationMap.delete(key);
         evicted++;
         continue;
       }
-      if (s.len < 5) continue;
+      if (s.bucket !== bucket || s.len < 5) { invalidate(key); continue; }
 
       const colonIdx = key.indexOf(":");
       const ex = colonIdx > 0 ? key.substring(0, colonIdx) : "BN";
@@ -268,9 +288,8 @@ class CorrelationEngine {
         corrVal = 100;
       } else {
         const refBtc = btcHistories[ex] || defaultBtcHist;
-        if (!refBtc || refBtc.len < 5) continue;
+        if (!refBtc || refBtc.len < 5) { invalidate(key); continue; }
         corrVal = Math.round(pearsonAbsRings(s, refBtc) * 100);
-        computedCount++;
       }
 
       if (this.correlationMap.get(key) !== corrVal) {
@@ -289,7 +308,7 @@ class CorrelationEngine {
     }
 
     // 4. Push only the delta to WebSocket clients
-    if (typeof this.broadcastFn === "function" && changedCount > 0 && computedCount > 0) {
+    if (typeof this.broadcastFn === "function" && changedCount > 0) {
       try {
         this.broadcastFn("correlations", changed);
       } catch (_) {}

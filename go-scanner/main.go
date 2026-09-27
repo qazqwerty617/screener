@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,20 +56,38 @@ type BackfillTask struct {
 var (
 	candlesMu     sync.RWMutex
 	candlesDB     = make(map[string][]Candle)
-	dataDir       = "./data/candles"
+	dataDir       = "./data/candles-quote-v2" // old files stored base volume, incompatible with Node candles
 	backfillQueue = make(chan BackfillTask, 1000)
 	queuedCoins   = make(map[string]bool)
 	queuedMu      sync.Mutex
+	diskDirty     = make(map[string]bool) // protected by candlesMu
 )
 
+var validSymbol = regexp.MustCompile(`^[A-Z0-9]{1,40}USDT$`)
+
+func freshHistory(list []Candle) bool {
+	if len(list) < 2 || time.Since(time.UnixMilli(list[len(list)-1].T)) > 2*time.Minute {
+		return false
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i].T-list[i-1].T != 60000 {
+			return false
+		}
+	}
+	return true
+}
+
 func enqueueBackfill(ex, sym string) {
+	if ex != "BN" || !validSymbol.MatchString(sym) {
+		return
+	}
 	key := ex + ":" + sym
 
 	// Quick check if already loaded to memory
 	candlesMu.RLock()
-	_, exists := candlesDB[key]
+	ready := freshHistory(candlesDB[key])
 	candlesMu.RUnlock()
-	if exists {
+	if ready {
 		return
 	}
 
@@ -91,15 +112,10 @@ func startBackfillWorker() {
 		for task := range backfillQueue {
 			key := task.Ex + ":" + task.Sym
 
-			candlesMu.RLock()
-			_, exists := candlesDB[key]
-			candlesMu.RUnlock()
-
-			if !exists {
-				backfillCoinHistory(task.Ex, task.Sym)
-				// Delay between processing different coins to protect IP from Binance rate limit
-				time.Sleep(1500 * time.Millisecond)
-			}
+			// A new live tail does not satisfy a queued history recovery.
+			backfillCoinHistory(task.Ex, task.Sym)
+			// Delay between coins to respect the exchange rate limit.
+			time.Sleep(1500 * time.Millisecond)
 
 			queuedMu.Lock()
 			delete(queuedCoins, key)
@@ -132,14 +148,117 @@ func saveCandlesToDisk(key string, list []Candle) error {
 			return err
 		}
 	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
+	if err := os.WriteFile(path+".tmp", buf.Bytes(), 0644); err != nil {
+		return err
+	}
+	return os.Rename(path+".tmp", path)
+}
+
+// One writer coalesces updates. No goroutine retains a mutable candle slice,
+// and two saves of the same symbol can never overwrite each other out of order.
+func flushDirtyCandles() {
+	candlesMu.Lock()
+	keys := make([]string, 0, len(diskDirty))
+	for key := range diskDirty {
+		keys = append(keys, key)
+	}
+	diskDirty = make(map[string]bool)
+	candlesMu.Unlock()
+	for _, key := range keys {
+		candlesMu.RLock()
+		list := append([]Candle(nil), candlesDB[key]...)
+		candlesMu.RUnlock()
+		if err := saveCandlesToDisk(key, list); err != nil {
+			log.Printf("[DISK ERROR] Failed saving %s: %v", key, err)
+			candlesMu.Lock()
+			diskDirty[key] = true
+			candlesMu.Unlock()
+		}
+	}
+}
+
+func ingestClosedCandle(key string, candle Candle) bool {
+	if !validCandle(candle) {
+		return false
+	}
+	candlesMu.Lock()
+	list := candlesDB[key]
+	gap := len(list) > 0 && candle.T-list[len(list)-1].T > 60000
+	if len(list) > 0 && candle.T < list[len(list)-1].T {
+		candlesMu.Unlock()
+		return false
+	}
+	if len(list) > 0 && list[len(list)-1].T == candle.T {
+		list[len(list)-1] = candle
+	} else {
+		list = append(list, candle)
+	}
+	if len(list) > MaxCandles {
+		list = append([]Candle(nil), list[len(list)-MaxCandles:]...)
+	}
+	candlesDB[key] = list
+	diskDirty[key] = true
+	candlesMu.Unlock()
+	// enqueueBackfill acquires candlesMu itself: never call it under that lock.
+	if gap {
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			enqueueBackfill(parts[0], parts[1])
+		}
+	}
+	return true
+}
+
+func validCandle(c Candle) bool {
+	if c.T <= 0 || c.T > time.Now().Add(time.Minute).UnixMilli() {
+		return false
+	}
+	for _, value := range []float64{c.O, c.H, c.L, c.C, c.V} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return false
+		}
+	}
+	return c.O > 0 && c.C > 0 && c.L > 0 && c.V >= 0 && c.H >= math.Max(c.O, c.C) && c.L <= math.Min(c.O, c.C)
+}
+
+func mergeHistory(key string, history []Candle) {
+	candlesMu.Lock()
+	defer candlesMu.Unlock()
+	byTime := make(map[int64]Candle, len(history)+len(candlesDB[key]))
+	for _, c := range history {
+		if validCandle(c) {
+			byTime[c.T] = c
+		}
+	}
+	// A candle received while REST was pending wins over the REST snapshot.
+	for _, c := range candlesDB[key] {
+		byTime[c.T] = c
+	}
+	merged := make([]Candle, 0, len(byTime))
+	for _, c := range byTime {
+		merged = append(merged, c)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].T < merged[j].T })
+	if len(merged) > MaxCandles {
+		merged = merged[len(merged)-MaxCandles:]
+	}
+	candlesDB[key] = merged
+	diskDirty[key] = true
 }
 
 func loadCandlesFromDisk(key string) ([]Candle, error) {
 	path := getFilePath(key)
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, int64(MaxCandles*48+1)))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > MaxCandles*48 {
+		return nil, fmt.Errorf("oversized candle cache")
 	}
 
 	r := bytes.NewReader(data)
@@ -152,10 +271,14 @@ func loadCandlesFromDisk(key string) ([]Candle, error) {
 			}
 			return nil, err
 		}
-		list = append(list, Candle{
+		candle := Candle{
 			T: bc.T,
 			O: bc.O, H: bc.H, L: bc.L, C: bc.C, V: bc.V,
-		})
+		}
+		if !validCandle(candle) {
+			return nil, fmt.Errorf("invalid candle cache")
+		}
+		list = append(list, candle)
 	}
 	return list, nil
 }
@@ -236,10 +359,15 @@ func klinesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Missing ex or sym parameters"}`, 400)
 		return
 	}
+	if ex != "BN" || !validSymbol.MatchString(sym) {
+		http.Error(w, `{"error":"Unsupported market"}`, 400)
+		return
+	}
 
 	key := ex + ":" + sym
 	candlesMu.RLock()
 	list, exists := candlesDB[key]
+	list = append([]Candle(nil), list...)
 	candlesMu.RUnlock()
 
 	if !exists {
@@ -250,19 +378,16 @@ func klinesHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"History not loaded yet, loading initiated"}`, 202)
 			return
 		}
-		// If disk data is stale (> 2 hours old), do not serve it as fresh!
-		if time.Since(time.UnixMilli(list[len(list)-1].T)) > 2*time.Hour {
+		if !freshHistory(list) {
 			enqueueBackfill(ex, sym)
 			http.Error(w, `{"error":"History is stale, backfill queued"}`, 202)
 			return
 		}
-		candlesMu.Lock()
-		candlesDB[key] = list
-		candlesMu.Unlock()
+		mergeHistory(key, list)
 	}
 
 	// Double check memory data freshness
-	if len(list) > 0 && time.Since(time.UnixMilli(list[len(list)-1].T)) > 2*time.Hour {
+	if !freshHistory(list) {
 		enqueueBackfill(ex, sym)
 		http.Error(w, `{"error":"History is stale, backfill queued"}`, 202)
 		return
@@ -295,11 +420,10 @@ func backfillCoinHistory(ex, sym string) {
 	var candles []Candle
 	var err error
 
-	if ex == "BN" {
-		candles, err = downloadBinanceHistory(sym, MaxCandles)
-	} else {
-		candles, err = downloadBinanceHistory(sym, MaxCandles)
+	if ex != "BN" || !validSymbol.MatchString(sym) {
+		return
 	}
+	candles, err = downloadBinanceHistory(sym, MaxCandles)
 
 	if err != nil {
 		log.Printf("[SYNC ERROR] Failed to download history for %s: %v", key, err)
@@ -307,15 +431,8 @@ func backfillCoinHistory(ex, sym string) {
 	}
 
 	if len(candles) > 0 {
-		candlesMu.Lock()
-		candlesDB[key] = candles
-		candlesMu.Unlock()
-
-		if err := saveCandlesToDisk(key, candles); err != nil {
-			log.Printf("[SYNC ERROR] Failed saving %s to disk: %v", key, err)
-		} else {
-			log.Printf("[SYNC] Successfully synced %d candles for %s", len(candles), key)
-		}
+		mergeHistory(key, candles)
+		log.Printf("[SYNC] Successfully synced %d candles for %s", len(candles), key)
 	}
 }
 
@@ -323,6 +440,7 @@ func downloadBinanceHistory(sym string, total int) ([]Candle, error) {
 	var all []Candle
 	limit := 1000
 	endTime := time.Now().UnixMilli()
+	rateLimitRetries := 0
 
 	client := &http.Client{Timeout: 15 * time.Second}
 
@@ -335,18 +453,22 @@ func downloadBinanceHistory(sym string, total int) ([]Candle, error) {
 
 		if resp.StatusCode == 429 || resp.StatusCode == 418 {
 			resp.Body.Close()
+			rateLimitRetries++
+			if rateLimitRetries > 2 {
+				return nil, fmt.Errorf("binance backfill rate limited")
+			}
 			log.Printf("[RATE LIMIT] Hit rate limit/ban (HTTP %d) on Binance. Pausing backfill worker for 60 seconds...", resp.StatusCode)
 			time.Sleep(60 * time.Second)
 			continue
 		}
 
 		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 			resp.Body.Close()
 			return all, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 		resp.Body.Close()
 		if err != nil {
 			return all, err
@@ -373,13 +495,27 @@ func downloadBinanceHistory(sym string, total int) ([]Candle, error) {
 
 		var batch []Candle
 		for _, k := range raw {
-			if len(k) < 6 {
+			if len(k) < 8 {
 				continue
 			}
-			batch = append(batch, Candle{
-				T: int64(k[0].(float64)),
-				O: parseF(k[1]), H: parseF(k[2]), L: parseF(k[3]), C: parseF(k[4]), V: parseF(k[5]),
-			})
+			timestamp, ok := k[0].(float64)
+			if !ok || timestamp <= 0 {
+				continue
+			}
+			// Persist closed candles only; the stream owns the latest closed bar.
+			if int64(timestamp)+60000 > time.Now().UnixMilli() {
+				continue
+			}
+			candle := Candle{
+				T: int64(timestamp),
+				O: parseF(k[1]), H: parseF(k[2]), L: parseF(k[3]), C: parseF(k[4]), V: parseF(k[7]),
+			}
+			if validCandle(candle) {
+				batch = append(batch, candle)
+			}
+		}
+		if len(batch) == 0 {
+			return nil, fmt.Errorf("no valid closed candles in response")
 		}
 
 		all = append(batch, all...)
@@ -431,8 +567,10 @@ func startBinanceWS(symbols []string) {
 				continue
 			}
 			log.Println("[WS] Connected to Binance Kline WebSocket")
+			conn.SetReadLimit(2 * 1024 * 1024)
 
 			for {
+				conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 				_, msg, err := conn.ReadMessage()
 				if err != nil {
 					log.Printf("[WS CLOSE] Connection closed: %v, reconnecting...", err)
@@ -450,6 +588,7 @@ func startBinanceWS(symbols []string) {
 							L string `json:"l"`
 							C string `json:"c"`
 							V string `json:"v"`
+							Q string `json:"q"`
 							X bool   `json:"x"`
 						} `json:"k"`
 					} `json:"data"`
@@ -467,37 +606,10 @@ func startBinanceWS(symbols []string) {
 				key := "BN:" + payload.Data.S
 				newCandle := Candle{
 					T: k.T,
-					O: parseF(k.O), H: parseF(k.H), L: parseF(k.L), C: parseF(k.C), V: parseF(k.V),
+					O: parseF(k.O), H: parseF(k.H), L: parseF(k.L), C: parseF(k.C), V: parseF(k.Q),
 				}
 
-				candlesMu.Lock()
-				list := candlesDB[key]
-				if len(list) > 0 && list[len(list)-1].T == newCandle.T {
-					list[len(list)-1] = newCandle
-				} else if len(list) > 0 && newCandle.T-list[len(list)-1].T > 2*60*60*1000 {
-					// Time gap > 2 hours between disk cache and live stream!
-					// Discard disconnected historical remnants and start fresh series.
-					log.Printf("[GAP DETECTED] %s: gap of %v between old history and live candle. Discarding stale history.", key, time.Duration(newCandle.T-list[len(list)-1].T)*time.Millisecond)
-					list = []Candle{newCandle}
-					parts := strings.Split(key, ":")
-					if len(parts) == 2 {
-						enqueueBackfill(parts[0], parts[1])
-					}
-				} else {
-					list = append(list, newCandle)
-				}
-
-				if len(list) > MaxCandles {
-					list = list[1:]
-				}
-				candlesDB[key] = list
-				candlesMu.Unlock()
-
-				go func(cKey string, cList []Candle) {
-					if err := saveCandlesToDisk(cKey, cList); err != nil {
-						log.Printf("[DISK ERROR] Failed saving %s: %v", cKey, err)
-					}
-				}(key, list)
+				ingestClosedCandle(key, newCandle)
 			}
 			conn.Close()
 			time.Sleep(2 * time.Second)
@@ -506,13 +618,14 @@ func startBinanceWS(symbols []string) {
 }
 
 func getTopSymbolsFromNode() ([]string, error) {
-	resp, err := http.Get("http://127.0.0.1:3000/api/tickers")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:3000/api/tickers")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +646,7 @@ func getTopSymbolsFromNode() ([]string, error) {
 			continue
 		}
 		parts := strings.Split(key, ":")
-		if len(parts) == 2 && parts[0] == "BN" {
+		if len(parts) == 2 && parts[0] == "BN" && validSymbol.MatchString(parts[1]) {
 			symbols = append(symbols, parts[1])
 		}
 	}
@@ -545,6 +658,13 @@ func main() {
 
 	// Start sequential backfill task queue worker
 	startBackfillWorker()
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			flushDirtyCandles()
+		}
+	}()
 
 	var symbols []string
 	var err error
@@ -572,7 +692,7 @@ func main() {
 		list, err := loadCandlesFromDisk(key)
 		if err == nil && len(list) > 0 {
 			lastC := list[len(list)-1]
-			if time.Since(time.UnixMilli(lastC.T)) > 2*time.Hour {
+			if !freshHistory(list) {
 				log.Printf("[INIT] Disk cache for %s is stale (%v old), queuing fresh backfill", key, time.Since(time.UnixMilli(lastC.T)))
 				enqueueBackfill("BN", s)
 			} else {
@@ -598,5 +718,6 @@ func main() {
 		scannerAddr = "127.0.0.1:8082"
 	}
 	log.Println("Go Server listening on " + scannerAddr)
-	log.Fatal(http.ListenAndServe(scannerAddr, mux))
+	server := &http.Server{Addr: scannerAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	log.Fatal(server.ListenAndServe())
 }

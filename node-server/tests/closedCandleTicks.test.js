@@ -25,3 +25,19 @@ test('single chart ignores a trade from before the current candle',()=>{
   ctx.applyMainMarketTick([start-1000,105,105,105]);
   assert.deepEqual(current,bar());
 });
+test('one trade batch cannot move a previous minute wick into the next candle',()=>{
+  const sent=[], immediates=[];
+  const socket={readyState:1,bufferedAmount:0,send:m=>sent.push(JSON.parse(m))};
+  const ctx=vm.createContext({normalizeTimestamp:t=>t,getTfMs:()=>60000,
+    marketDataCore:require('../marketDataCore'),tickers:new Map(),marketFeedStats:new Map(),pendingMarketTicks:new Map(),
+    klineSubs:new Map([['BN|BTCUSDT|1m',{ex:'BN',sym:'BTCUSDT',tf:'1m',clients:new Set([socket])}]]),
+    marketSequence:0,WebSocket:{OPEN:1},setImmediate:fn=>immediates.push(fn)});
+  vm.runInContext(block(server,'publishMarketTrade')+'\n'+block(server,'flushMarketTick'),ctx);
+  ctx.publishMarketTrade('BN','BTCUSDT','1m',start+59000,120);
+  ctx.publishMarketTrade('BN','BTCUSDT','1m',start+61000,100);
+  immediates.forEach(fn=>fn());
+  assert.equal(sent.length,2);
+  assert.equal(sent[0].data[2],120);
+  assert.equal(sent[1].data[2],100);
+  assert.equal(sent[1].data[4],100);
+});

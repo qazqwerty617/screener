@@ -11,7 +11,7 @@ function normalizeLevels(levels, multiplier = 1, descending = false) {
     const price = positive(Array.isArray(level) ? level[0] : level?.p ?? level?.price ?? level?.px);
     const rawSize = positive(Array.isArray(level) ? level[1] : level?.s ?? level?.size ?? level?.sz ?? level?.vol ?? level?.quantity);
     const size = rawSize * positive(multiplier || 1);
-    if (price && size) result.push([price, size]);
+    if (price && size && Number.isFinite(size) && Number.isFinite(price * size)) result.push([price, size]);
   }
   result.sort((a, b) => descending ? b[0] - a[0] : a[0] - b[0]);
   return result;
@@ -64,7 +64,17 @@ function analyzeBooks({ asks, bids, notional, feesPct = 0, fundingHourlyPct = 0 
   if (!asks.length || !bids.length) throw new Error("Order book is empty");
   const buyTop = asks[0][0];
   const sellTop = bids[0][0];
-  const requestedQty = Math.max(1, Number(notional) || 500) / buyTop;
+  const requestedNotional = Math.max(1, positive(notional) || 500);
+  // Spend the requested quote-currency budget across asks. Dividing only by
+  // the best ask overspends that budget as soon as the next level is needed.
+  let remainingBudget = requestedNotional;
+  let requestedQty = 0;
+  for (const [price, available] of asks) {
+    const take = Math.min(available, remainingBudget / price);
+    requestedQty += take;
+    remainingBudget = Math.max(0, remainingBudget - take * price);
+    if (remainingBudget <= requestedNotional * 1e-9) break;
+  }
   const buyProbe = fillQuantity(asks, requestedQty);
   const sellProbe = fillQuantity(bids, requestedQty);
   const executableQty = Math.min(buyProbe.qty, sellProbe.qty);
@@ -80,19 +90,19 @@ function analyzeBooks({ asks, bids, notional, feesPct = 0, fundingHourlyPct = 0 
     return { impact, notional: Math.min(buyCapacity.notional, sellCapacity.notional) };
   });
   return {
-    requestedNotional: Number(notional) || 500,
+    requestedNotional,
     executableNotional: executableQty * buy.avg,
     executableQty,
-    complete: buyProbe.complete && sellProbe.complete,
+    complete: remainingBudget <= requestedNotional * 1e-9 && buyProbe.complete && sellProbe.complete,
     buy: { top: buyTop, average: buy.avg, impactPct: impactBuyPct, levelsUsed: buy.levelsUsed },
     sell: { top: sellTop, average: sell.avg, impactPct: impactSellPct, levelsUsed: sell.levelsUsed },
     grossPct,
     feesPct,
     netPct,
     fundingHourlyPct,
-    netAfterFundingHourPct: netPct + fundingHourlyPct,
+    netAfterFundingHourPct: Number.isFinite(fundingHourlyPct) ? netPct + fundingHourlyPct : null,
     estimatedPnl: executableQty * buy.avg * netPct / 100,
-    estimatedPnlAfterFundingHour: executableQty * buy.avg * (netPct + fundingHourlyPct) / 100,
+    estimatedPnlAfterFundingHour: Number.isFinite(fundingHourlyPct) ? executableQty * buy.avg * (netPct + fundingHourlyPct) / 100 : null,
     bands,
   };
 }
@@ -105,8 +115,10 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
    * process lifetime — with a caller-influenced key space.
    */
   const BOOK_TTL_MS = 2500;
+  const MAX_BOOK_AGE_MS = 5000;
   const CACHE_MAX_ENTRIES = 400;
   const cache = new Map();
+  const pending = new Map();
 
   function pruneCache(now) {
     for (const [k, v] of cache) {
@@ -134,10 +146,11 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
     return tickers.get(`${ex}:${sym}`);
   }
 
-  async function fetchBook(ex, sym) {
+  async function loadBook(ex, sym) {
     const key = `${ex}:${sym}`;
     const cached = cache.get(key);
     if (cached && Date.now() - cached.ts < BOOK_TTL_MS) return cached.book;
+    const requestedAt = Date.now();
     const ticker = findTicker(ex, sym);
     const cs = positive(ticker?.cs) || 1;
     const s = encodeURIComponent(sym);
@@ -150,6 +163,8 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
       bids = raw.bids; asks = raw.asks;
     } else if (ex === "BB") {
       raw = await apiFetch(`https://api.bybit.com/v5/market/orderbook?category=linear&symbol=${s}&limit=500`, 7000, 1);
+      if (raw.retCode != null && Number(raw.retCode) !== 0) throw new Error("BB order book request failed");
+      if (raw.result?.s && raw.result.s !== sym) throw new Error("BB returned another symbol's book");
       bids = raw.result?.b; asks = raw.result?.a;
     } else if (ex === "OX") {
       raw = await apiFetch(`https://www.okx.com/api/v5/market/books?instId=${s}&sz=400`, 7000, 1);
@@ -178,16 +193,31 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
     } else {
       throw new Error("Unsupported exchange order book");
     }
+    // Where the adapter has no verified source clock, use request start,
+    // conservatively including network/retry latency in book age.
+    const receivedAt = Date.now();
+    const sourceAt = ex === "BB" ? positive(raw.result?.ts) : 0;
+    if (sourceAt && (sourceAt > receivedAt + 1000 || receivedAt - sourceAt > MAX_BOOK_AGE_MS)) throw new Error(`${ex} returned a stale order book`);
+    if (receivedAt - requestedAt > MAX_BOOK_AGE_MS) throw new Error(`${ex} order book request was too slow`);
     const book = {
-      ex, sym, ts: Date.now(),
+      ex, sym, ts: Math.min(requestedAt, sourceAt || requestedAt), sourceAt: sourceAt || null, receivedAt,
       bids: normalizeLevels(bids, cs, true),
       asks: normalizeLevels(asks, cs, false),
     };
     if (!book.bids.length || !book.asks.length) throw new Error(`${ex} returned an empty order book`);
+    if (book.bids[0][0] > book.asks[0][0]) throw new Error(`${ex} returned a crossed order book`);
     const now = Date.now();
-    cache.set(key, { ts: now, book });
+    cache.set(key, { ts: book.ts, book });
     pruneCache(now);
     return book;
+  }
+
+  function fetchBook(ex, sym) {
+    const key = `${ex}:${sym}`;
+    if (pending.has(key)) return pending.get(key);
+    const operation = loadBook(ex, sym).finally(() => pending.delete(key));
+    pending.set(key, operation);
+    return operation;
   }
 
   async function analyze(key, notional) {
@@ -197,13 +227,21 @@ function createDepthAnalyzer(apiFetch, tickers, arbitrageEngine) {
       fetchBook(row.buyEx, row.buySymbol),
       fetchBook(row.sellEx, row.sellSymbol),
     ]);
-    const fundingHourlyPct = row.sellFunding / (row.sellInterval || 8) - row.buyFunding / (row.buyInterval || 8);
+    if (Date.now() - Math.min(buyBook.ts, sellBook.ts) > MAX_BOOK_AGE_MS) throw new Error("Order book pair is stale; refresh the calculation");
+    const fundingHourlyPct = Number.isFinite(row.sellFunding) && Number.isFinite(row.buyFunding)
+      ? row.sellFunding / (row.sellInterval || 8) - row.buyFunding / (row.buyInterval || 8) : null;
+    // The exchange book quotes one bundled unit; the route compares individual
+    // tokens. Normalize price AND quantity, preserving each level's USD value.
+    const inBaseUnits = (levels, multiplier) => {
+      const factor = positive(multiplier) || 1;
+      return factor === 1 ? levels : levels.map(([price, qty]) => [price / factor, qty * factor]);
+    };
     return {
       key,
       generatedAt: Date.now(),
       buyEx: row.buyEx,
       sellEx: row.sellEx,
-      ...analyzeBooks({ asks: buyBook.asks, bids: sellBook.bids, notional, feesPct: row.fees, fundingHourlyPct }),
+      ...analyzeBooks({ asks: inBaseUnits(buyBook.asks, row.buyMultiplier), bids: inBaseUnits(sellBook.bids, row.sellMultiplier), notional, feesPct: row.fees, fundingHourlyPct }),
     };
   }
 

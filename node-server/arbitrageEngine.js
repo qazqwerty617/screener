@@ -67,7 +67,7 @@ function canonicalBase(ticker) {
     .replace(/[^A-Z0-9]/g, "");
 
   if (raw.endsWith("STOCK")) raw = raw.replace(/STOCK$/, "");
-  if ((raw.startsWith("R") || raw.startsWith("X")) && raw.length >= 4) raw = raw.slice(1);
+  if ((raw.startsWith("R") || raw.startsWith("X")) && STOCK_ROOTS_ARBITRAGE.includes(raw.slice(1))) raw = raw.slice(1);
 
   for (const root of STOCK_ROOTS_ARBITRAGE) {
     if (raw.startsWith(root) && raw.length <= root.length + 3) {
@@ -99,7 +99,8 @@ function extractBaseAndMultiplier(ticker) {
   for (const m of MULTIPLIER_PREFIXES) {
     if (raw.startsWith(m.prefix) && raw.length > m.prefix.length) {
       const rem = raw.slice(m.prefix.length);
-      if (KNOWN_MEME_BASES.has(rem) || (rem.length >= 2 && !/^\d/.test(rem))) {
+      // Digits can be part of a token name (e.g. 10SET), not a contract unit.
+      if (KNOWN_MEME_BASES.has(rem)) {
         mult = m.mult;
         raw = rem;
         break;
@@ -153,10 +154,12 @@ function quoteFor(ticker, now, excludedBases = null) {
   const rawMid = finitePositive(ticker.p);
   const rawBid = finitePositive(ticker.bid);
   const rawAsk = finitePositive(ticker.ask);
-  if (!rawMid || (rawBid && rawAsk && rawAsk < rawBid * 0.90)) return null;
+  if (!rawMid || (rawBid && rawAsk && rawAsk < rawBid)) return null;
 
   const quoteTs = finitePositive(ticker.quoteTs);
   const ageMs = quoteTs ? Math.max(0, now - quoteTs) : Infinity;
+  const bboTs = finitePositive(ticker.bboTs ?? ticker.quoteTs);
+  const bboAgeMs = bboTs ? Math.max(0, now - bboTs) : Infinity;
   const fundingTs = finitePositive(ticker.fundingTs);
   const fundingAgeMs = fundingTs ? Math.max(0, now - fundingTs) : Infinity;
 
@@ -189,10 +192,11 @@ function quoteFor(ticker, now, excludedBases = null) {
     takerFee: finitePositive(ticker.takerFeePct) || EXCHANGES[ticker.ex]?.fee || 0.055,
     quoteTs,
     ageMs,
+    bboAgeMs,
     fundingAgeMs,
-    fundingFresh: fundingTs > 0 && fundingAgeMs <= MAX_FUNDING_RATE_AGE_MS,
-    marketFresh: quoteTs > 0 && ageMs <= MAX_FUNDING_MARKET_AGE_MS,
-    executable: rawBid > 0 && rawAsk > 0 && quoteTs > 0 && ageMs <= MAX_EXECUTABLE_AGE_MS,
+    fundingFresh: fundingTs > 0 && fundingTs <= now + 1000 && fundingAgeMs <= MAX_FUNDING_RATE_AGE_MS,
+    marketFresh: quoteTs > 0 && quoteTs <= now + 1000 && ageMs <= MAX_FUNDING_MARKET_AGE_MS,
+    executable: rawBid > 0 && rawAsk > 0 && bboTs > 0 && bboTs <= now + 1000 && bboAgeMs <= MAX_EXECUTABLE_AGE_MS,
   };
 }
 
@@ -248,18 +252,6 @@ function nextFundingEvent(long, short, now) {
   return { at: shortAt, edge: short.funding, legs: "short" };
 }
 
-// Check if ratio between two prices represents an unhandled power-of-10 contract multiplier
-function detectDynamicMultiplier(pA, pB) {
-  if (pA <= 0 || pB <= 0) return 1;
-  const rawRatio = pA / pB;
-  const candidatePowers = [10, 100, 1000, 10000, 100000, 1000000, 1000000000];
-  for (const pow of candidatePowers) {
-    if (Math.abs(rawRatio - pow) / pow < 0.015) return pow;
-    if (Math.abs(rawRatio - (1 / pow)) / (1 / pow) < 0.015) return 1 / pow;
-  }
-  return 1;
-}
-
 function buildRows(tickers, now = Date.now(), history = null, onRouteSample = null, assetAllowed = null) {
   const groups = new Map();
   const seenObjects = new Set();
@@ -294,19 +286,8 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
     if (quotes.length < 2) continue;
     for (let i = 0; i < quotes.length; i++) {
       for (let j = i + 1; j < quotes.length; j++) {
-        let a = quotes[i];
-        let b = quotes[j];
-
-        // Auto-detect dynamic multiplier mismatch (e.g. 1000x on one venue)
-        const dynMult = detectDynamicMultiplier(a.mid, b.mid);
-        if (dynMult !== 1) {
-          if (dynMult > 1) {
-            a = { ...a, mid: a.mid / dynMult, bid: a.bid / dynMult, ask: a.ask / dynMult, multiplier: a.multiplier * dynMult };
-          } else {
-            const inv = 1 / dynMult;
-            b = { ...b, mid: b.mid / inv, bid: b.bid / inv, ask: b.ask / inv, multiplier: b.multiplier * inv };
-          }
-        }
+        const a = quotes[i];
+        const b = quotes[j];
 
         const ratio = a.mid / b.mid;
         // In crypto arbitrage, genuine price ratio between venues for the same asset is tightly bounded
@@ -325,7 +306,7 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
 
           // Keep only plausible, liquid routes; the public endpoint applies the user's minimum edge.
           if (gross >= -0.5 && gross <= 30 && liquidity >= 5000 && !(gross > 10 && liquidity < 25000)) {
-            const freshness = Math.max(buy.ageMs, sell.ageMs);
+            const freshness = Math.max(buy.bboAgeMs, sell.bboAgeMs);
             const roundTripFees = fee * 2;
             const roundTripNet = gross - roundTripFees;
             const closeNowNet = gross + exitGross - roundTripFees;
@@ -341,14 +322,15 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
             spreads.push({
               key: rKey, base, symbol: `${base}/USDT`,
               buyEx: buy.ex, buyName: EXCHANGES[buy.ex].name, buySymbol: buy.sym,
-              buyAsk: round(buy.rawAsk, 8), buyBid: round(buy.rawBid, 8), buyMultiplier: buy.multiplier,
+              buyAsk: buy.rawAsk, buyBid: buy.rawBid, buyMultiplier: buy.multiplier,
               sellEx: sell.ex, sellName: EXCHANGES[sell.ex].name, sellSymbol: sell.sym,
-              sellBid: round(sell.rawBid, 8), sellAsk: round(sell.rawAsk, 8), sellMultiplier: sell.multiplier,
+              sellBid: sell.rawBid, sellAsk: sell.rawAsk, sellMultiplier: sell.multiplier,
               gross: round(gross, 4), fees: round(fee, 4), net: round(net, 4),
               roundTripFees: round(roundTripFees, 4), roundTripNet: round(roundTripNet, 4),
               exitGross: round(exitGross, 4), exitNet: round(exitNet, 4), closeNowNet: round(closeNowNet, 4),
               liquidity: round(liquidity, 2), openInterest: round(Math.min(buy.oi || 0, sell.oi || 0), 2),
-              buyFunding: round(buy.funding, 6), sellFunding: round(sell.funding, 6),
+              buyFunding: buy.fundingFresh && buy.funding !== null ? round(buy.funding, 6) : null,
+              sellFunding: sell.fundingFresh && sell.funding !== null ? round(sell.funding, 6) : null,
               buyInterval: buy.interval, sellInterval: sell.interval,
               ageMs: freshness, quality: "bbo", score: round(score, 1),
               history: [],
@@ -387,10 +369,10 @@ function buildRows(tickers, now = Date.now(), history = null, onRouteSample = nu
               key: fKey, base, symbol: `${base}/USDT`,
               longEx: long.ex, longName: EXCHANGES[long.ex].name, longSymbol: long.sym,
               longFunding: round(long.funding, 6), longInterval: long.interval,
-              longPrice: round(long.rawMid, 8), longMultiplier: long.multiplier,
+              longPrice: long.rawMid, longMultiplier: long.multiplier,
               shortEx: short.ex, shortName: EXCHANGES[short.ex].name, shortSymbol: short.sym,
               shortFunding: round(short.funding, 6), shortInterval: short.interval,
-              shortPrice: round(short.rawMid, 8), shortMultiplier: short.multiplier,
+              shortPrice: short.rawMid, shortMultiplier: short.multiplier,
               hourly: round(hourlyEdge, 6),
               longNextFunding: long.nextFunding || 0, shortNextFunding: short.nextFunding || 0,
               nextEventAt: event.at, nextEventEdge: event.edge == null ? null : round(event.edge, 6), nextEventLegs: event.legs,
@@ -459,12 +441,12 @@ function createArbitrageEngine(tickers, exStatus, options = {}) {
         sample.key,
         generatedAt,
         round(sample.net, 4),
-        round(sample.buy.rawAsk, 8),
-        round(sample.sell.rawBid, 8),
+        sample.buy.rawAsk,
+        sample.sell.rawBid,
         round(sample.gross, 4),
         round(sample.exitNet, 4),
-        round(sample.buy.rawBid, 8),
-        round(sample.sell.rawAsk, 8),
+        sample.buy.rawBid,
+        sample.sell.rawAsk,
       );
     }
     for (const row of snapshot.funding.slice(0, rankedHistoryLimit)) {

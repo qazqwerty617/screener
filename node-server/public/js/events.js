@@ -21,15 +21,19 @@
   let lastRequest = 0;
   let inFlight = null;
   let refreshPending = false;
+  let connectionError = false;
   let wired = false;
   let refreshTimer = null;
   let stream = null;
+  let updateTimer = null;
+  let unlockPeriod = "30", unlockLimit = 100;
+  let newsKind = "all", newsLimit = 40;
   const seenKey = "obsidian-urgent-news-seen-v1";
   const visibleAlerts = new Map();
   let seenAlerts = [];
   try { seenAlerts = JSON.parse(window.sessionStorage.getItem(seenKey)) || []; } catch (_) {}
   if (!Array.isArray(seenAlerts)) seenAlerts = [];
-  const dateTime = value => Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString("ru-RU", {
+  const dateTime = value => value != null && Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString("ru-RU", {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
   }) : "Время неизвестно";
   const dayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -117,7 +121,10 @@
         visibleAlerts.delete(item.url);
       } catch (_) {}
     });
-    stream.addEventListener("update", () => { if (byId("events-view")?.style.display === "block") void refresh(); });
+    stream.addEventListener("update", () => {
+      if (updateTimer || document.hidden || byId("events-view")?.style.display !== "block") return;
+      updateTimer = window.setTimeout(() => { updateTimer = null; void refresh(); }, 500);
+    });
     stream.addEventListener("open", () => { if (byId("events-view")?.style.display === "block") void refresh(); });
   }
 
@@ -191,16 +198,22 @@
     const newsBox = byId("events-news-list");
     if (!urgentBox || !newsBox) return;
     urgentBox.replaceChildren(); newsBox.replaceChildren();
-    const rows = (Array.isArray(data?.news) ? data.news : []).filter(item => ["official", "corroborated", "reported"].includes(item.verification?.status));
-    const urgent = rows.filter(item => item.priority === "urgent").slice(0, 3);
-    const rest = rows.filter(item => !urgent.includes(item)).slice(0, 40);
+    const query = byId("events-news-search")?.value.trim().toLowerCase() || "";
+    const matches = item => (!query || `${item.title} ${item.titleRu || ""} ${item.source}`.toLowerCase().includes(query)) &&
+      (newsKind === "all" || (newsKind === "official" ? item.verification?.status === "official" : item.alertKind === newsKind));
+    const rows = (Array.isArray(data?.news) ? data.news : []).filter(item => matches(item) && ["official", "corroborated", "reported"].includes(item.verification?.status));
+    const urgent = rows.filter(item => item.priority === "urgent" && ["official", "corroborated"].includes(item.verification.status)).slice(0, 3);
+    const otherRows = rows.filter(item => !urgent.includes(item));
+    const rest = otherRows.slice(0, newsLimit);
+    if (byId("events-news-more")) byId("events-news-more").hidden = otherRows.length <= newsLimit;
     function appendItem(container, item) {
       let url;
       try { url = new URL(item.url); } catch (_) { return; }
       if (url.protocol !== "https:") return;
-      const link = node("article", `events-card ${item.priority === "urgent" ? "urgent" : ""}`);
-      cardTop(link, item.priority === "urgent" ? "⚡ Срочно" : item.priority === "important" ? "● Важно" : "Новость",
-        item.publishedAt, item.priority === "urgent" ? "red" : "");
+      const confirmedUrgent = item.priority === "urgent" && ["official", "corroborated"].includes(item.verification.status);
+      const link = node("article", `events-card ${confirmedUrgent ? "urgent" : ""}`);
+      cardTop(link, confirmedUrgent ? "⚡ Срочно" : item.priority !== "regular" ? "● Важно" : "Новость",
+        item.publishedAt, confirmedUrgent ? "red" : "");
       const heading = node("h3", "");
       const primary = node("a", "events-source-link", item.titleRu || item.title);
       primary.href = url.href; primary.target = "_blank"; primary.rel = "noopener noreferrer";
@@ -221,6 +234,20 @@
     rest.forEach(item => appendItem(newsBox, item));
     if (!urgentBox.children.length) clearWithEmpty(urgentBox, "Срочных публикаций в свежей ленте нет.");
     if (!newsBox.children.length) clearWithEmpty(newsBox, "Ждём публикации с подтверждением источников.");
+    const developingBox = byId("events-developing-list");
+    if (developingBox) {
+      developingBox.replaceChildren();
+      for (const item of data?.developing || []) {
+        if (item.verification?.status !== "pending" || !matches(item)) continue;
+        try { if (new URL(item.url).protocol !== "https:") continue; } catch (_) { continue; }
+        const card = node("article", "events-card");
+        cardTop(card, "Один источник · требует подтверждения", item.publishedAt);
+        const link = node("a", "events-source-link", item.titleRu || item.title);
+        link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        card.append(link, node("small", "", item.source)); developingBox.append(card);
+      }
+      if (!developingBox.children.length) clearWithEmpty(developingBox, "Неподтверждённых сообщений от подключённых изданий нет.");
+    }
   }
 
   function renderListings() {
@@ -231,6 +258,21 @@
     const market = selectedMarket;
     const now = Date.now();
     const query = byId("events-search")?.value.trim().toLowerCase() || "";
+    const announcements = byId("events-announcements-list");
+    if (announcements) {
+      announcements.replaceChildren();
+      for (const item of (data?.announcements || []).filter(item =>
+        (exchange === "all" || item.exchange === exchange) && (selectedKind === "all" || item.kind === selectedKind) &&
+        (!query || `${item.title} ${item.titleRu || ""}`.toLowerCase().includes(query))).slice(0, 40)) {
+        try { if (new URL(item.url).protocol !== "https:") continue; } catch (_) { continue; }
+        const card = node("article", "events-card");
+        cardTop(card, `${item.source} · анонс`, item.publishedAt);
+        const link = node("a", "events-source-link", item.titleRu || item.title);
+        link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+        card.append(link); announcements.append(card);
+      }
+      if (!announcements.children.length) clearWithEmpty(announcements, "Нет свежих анонсов по выбранным фильтрам.");
+    }
     const eventTime = item => item.kind === "delisting" ? item.delistAt || item.detectedAt : item.launchAt || item.detectedAt;
     const rows = (Array.isArray(data?.listings) ? data.listings : [])
       .filter(item => {
@@ -312,25 +354,69 @@
     }
   }
 
+  function renderUnlocks() {
+    const list = byId("events-unlocks-list"), status = byId("events-unlocks-status");
+    if (!list || !status) return;
+    const payload = data?.unlocks;
+    const primary = payload?.sources?.primary;
+    const aggregator = payload?.sources?.defillama;
+    status.textContent = `Публичные расписания: ${primary?.tokens || 0} проекта · проверены ${dateTime(primary?.reviewedAt)}. ` +
+      (payload?.coverage === "primary_only" ? "Охват ограничен: дополнительный календарь не подключён."
+        : aggregator?.status === "ok" && !aggregator.stale ? `DefiLlama: обновлено ${dateTime(aggregator.updatedAt)}` : "DefiLlama: нет свежих данных.");
+    const query = byId("events-unlocks-search").value.trim().toLowerCase();
+    const now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
+    const rows = (payload?.rows || []).filter(item => {
+      const at = Number(item.at);
+      return Number.isFinite(at) && item.amount > 0 &&
+        (unlockPeriod === "past" ? at < today && at >= today - 90 * 86400000 : at >= today && at <= now + Number(unlockPeriod) * 86400000) &&
+        (!query || `${item.symbol || ""} ${item.name}`.toLowerCase().includes(query));
+    }).sort((a, b) => unlockPeriod === "past" ? b.at - a.at : a.at - b.at);
+    const fragment = document.createDocumentFragment();
+    for (const item of rows.slice(0, unlockLimit)) {
+      const card = node("article", "events-card");
+      const at = new Date(item.at);
+      card.append(node("h3", "", `${item.symbol || item.name} · ${at.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })}`));
+      const amount = Number(item.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
+      card.append(node("p", "", `${amount} токенов${share}`));
+      card.append(node("small", "", `${item.provider} · ${item.precision === "day" ? "дата по расписанию, точное время неизвестно" : dateTime(item.at)}`));
+      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`));
+      const sources = node("div", "events-news-sources");
+      for (const url of item.sources || []) {
+        let parsed; try { parsed = new URL(url); if (parsed.protocol !== "https:") continue; } catch (_) { continue; }
+        const link = node("a", "events-source-link", `${parsed.hostname} ↗`);
+        link.href = parsed.href; link.target = "_blank"; link.rel = "noopener noreferrer"; sources.append(link);
+      }
+      card.append(sources); fragment.append(card);
+    }
+    list.replaceChildren(fragment);
+    if (!rows.length) clearWithEmpty(list, "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
+    byId("events-unlocks-more").hidden = rows.length <= unlockLimit;
+  }
+
   function render() {
     const updated = byId("events-updated");
-    if (updated) updated.textContent = data?.marketUpdatedAt || data?.newsUpdatedAt
+    if (updated) updated.textContent = connectionError ? "Нет связи · показываем последние данные" : data?.marketUpdatedAt || data?.newsUpdatedAt
       ? `Новости ${dateTime(data.newsUpdatedAt)} · рынки ${dateTime(data.marketUpdatedAt)}`
       : "Получаем данные бирж и новостей…";
     if (updated) updated.title = Object.entries(data?.sources || {}).map(([name, source]) =>
-      `${name}: ${source.status === "ok" || source.status === "connected" ? "доступен" : "нет связи"}`).join("\n");
-    renderNews(); renderListings();
+      `${name}: ${source.status === "ok" || source.status === "connected" ? "доступен" : source.status === "no_recent_items" ? "нет публикаций за 7 дней" : "нет связи"}`).join("\n");
+    if (selectedTab === "news") renderNews();
+    else if (selectedTab === "listings") renderListings();
+    else renderUnlocks();
   }
 
   function setTab(tab) {
     selectedTab = tab;
     byId("events-news-panel").hidden = tab !== "news";
     byId("events-listings-panel").hidden = tab !== "listings";
-    for (const key of ["news", "listings"]) {
+    byId("events-unlocks-panel").hidden = tab !== "unlocks";
+    for (const key of ["news", "listings", "unlocks"]) {
       const button = byId(`events-tab-${key}`);
       button.classList.toggle("on", key === tab);
       button.setAttribute("aria-selected", String(key === tab));
     }
+    render();
   }
 
   async function refresh() {
@@ -339,10 +425,15 @@
       try {
         const response = await fetch("/api/events", { signal: AbortSignal.timeout(10000) });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        data = await response.json();
+        const payload = await response.json();
+        if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+          ["news", "listings", "developing", "announcements"].some(key => payload[key] != null && !Array.isArray(payload[key]))) throw new Error("Invalid events response");
+        data = payload;
+        connectionError = false;
         lastRequest = Date.now();
         render();
       } catch (_) {
+        connectionError = true;
         const updated = byId("events-updated");
         if (updated) updated.textContent = "Нет связи · показываем последние данные";
       } finally {
@@ -360,7 +451,22 @@
       wirePicker("market", MARKET_OPTIONS);
       document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
+      byId("events-news-search").addEventListener("input", () => { newsLimit = 40; renderNews(); });
+      byId("events-news-more").addEventListener("click", () => { newsLimit += 40; renderNews(); });
+      document.querySelectorAll("[data-news-kind]").forEach(button => button.addEventListener("click", () => {
+        newsKind = button.dataset.newsKind; newsLimit = 40;
+        button.parentElement.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
+        renderNews();
+      }));
       byId("events-tab-listings").addEventListener("click", () => setTab("listings"));
+      byId("events-tab-unlocks").addEventListener("click", () => setTab("unlocks"));
+      byId("events-unlocks-search").addEventListener("input", () => { unlockLimit = 100; renderUnlocks(); });
+      byId("events-unlocks-more").addEventListener("click", () => { unlockLimit += 100; renderUnlocks(); });
+      document.querySelectorAll("[data-unlock-period]").forEach(button => button.addEventListener("click", () => {
+        unlockPeriod = button.dataset.unlockPeriod; unlockLimit = 100;
+        button.parentElement.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
+        renderUnlocks();
+      }));
       byId("events-search").addEventListener("input", renderListings);
       for (const [attribute, update] of [["kind", value => { selectedKind = value; }],
         ["phase", value => { selectedPhase = value; }]]) {
@@ -383,9 +489,11 @@
         selectedDay = dayKey(today); renderListings();
       });
       setTab(selectedTab);
+    }
+    if (!refreshTimer) {
       refreshTimer = window.setInterval(() => {
         const connected = stream?.readyState === 1;
-        if (byId("events-view")?.style.display === "block" &&
+        if (!document.hidden && byId("events-view")?.style.display === "block" &&
           Date.now() - lastRequest > (connected ? 120000 : 30000)) void refresh();
       }, 15000);
     }
@@ -395,7 +503,12 @@
   }
 
   function deactivate() { closePickers(); }
-  function stopAlerts() { stream?.close(); stream = null; if (refreshTimer) window.clearInterval(refreshTimer); }
+  function stopAlerts() {
+    stream?.close(); stream = null;
+    if (refreshTimer) window.clearInterval(refreshTimer);
+    if (updateTimer) window.clearTimeout(updateTimer);
+    refreshTimer = null; updateTimer = null;
+  }
   window.ObsidianEvents = { activate, deactivate, stopAlerts };
   initAlerts();
 })();

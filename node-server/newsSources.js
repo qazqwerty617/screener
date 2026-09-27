@@ -4,7 +4,8 @@ const { publisher, canonicalUrl } = require("./newsVerification");
 
 function createSourceReader({ request = fetch, now = Date.now } = {}) {
   const cache = new Map();
-  return async function read(url) {
+  const pending = new Map();
+  async function read(url) {
     const previous = cache.get(url) || {};
     if (previous.retryAt > now()) throw new Error("Source backoff");
     const headers = { "User-Agent": "ObsidianScreener/1.0", Accept: "application/rss+xml,application/xml,text/html,application/json" };
@@ -12,7 +13,10 @@ function createSourceReader({ request = fetch, now = Date.now } = {}) {
     if (previous.modified) headers["If-Modified-Since"] = previous.modified;
     try {
       const response = await request(url, { headers, redirect: "error", signal: AbortSignal.timeout(7000) });
-      if (response.status === 304 && previous.body != null) return previous.body;
+      if (response.status === 304 && previous.body != null) {
+        cache.set(url, { ...previous, failures: 0, retryAt: 0 });
+        return previous.body;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       if (Number(response.headers.get("content-length")) > 2_000_000) throw new Error("Source too large");
       const chunks = []; let bytes = 0;
@@ -32,6 +36,12 @@ function createSourceReader({ request = fetch, now = Date.now } = {}) {
       while (cache.size > 80) cache.delete(cache.keys().next().value);
       throw error;
     }
+  }
+  return function sharedRead(url) {
+    if (pending.has(url)) return pending.get(url);
+    const operation = read(url).finally(() => pending.delete(url));
+    pending.set(url, operation);
+    return operation;
   };
 }
 

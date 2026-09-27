@@ -4,11 +4,12 @@
   const $ = id => document.getElementById(id);
   const pro = {
     row: null, isFunding: false, isDex: false, tf: 'live', mode: 'best', view: 'spread', depth: null,
-    depthLoading: false, requestId: 0, historySeq: 0, initialized: false,
+    depthLoading: false, depthController: null, historyController: null, depthSeq: 0, requestId: 0, historySeq: 0, initialized: false,
     drawQueued: false, history: [], historyTimer: null, hoverX: -1,
   };
 
   function pct(n, digits = 3) {
+    if (n == null) return '—';
     const value = Number(n);
     return Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(digits)}%` : '—';
   }
@@ -16,7 +17,7 @@
     n = Number(n) || 0;
     if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
     if (n >= 1) return n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
-    if (n < 0.0001 && n > 0) return n.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+    if (n < 0.0001 && n > 0) return Number(n.toPrecision(6)).toString();
     return n ? n.toPrecision(6).replace(/0+$/, '').replace(/\.$/, '') : '—';
   }
   function money(n) {
@@ -34,6 +35,7 @@
   function fundingHourly(row) {
     if (pro.isDex) return 0;
     if (pro.isFunding) return Number(row.hourly) || 0;
+    if (row.sellFunding == null || row.buyFunding == null) return null;
     return ((Number(row.sellFunding) || 0) / (Number(row.sellInterval) || 8)
       - (Number(row.buyFunding) || 0) / (Number(row.buyInterval) || 8));
   }
@@ -102,6 +104,7 @@
 
   function openRoute(row, isFunding, isDex) {
     init();
+    cancelRequests();
     pro.row = row;
     pro.isFunding = Boolean(isFunding);
     pro.isDex = Boolean(isDex);
@@ -147,6 +150,7 @@
   }
 
   function close() {
+    cancelRequests();
     if (pro.historyTimer) { clearInterval(pro.historyTimer); pro.historyTimer = null; }
     pro.row = null;
     pro.isDex = false;
@@ -154,6 +158,31 @@
     pro.history = [];
     pro.requestId++;
     pro.historySeq++;
+  }
+
+  function cancelRequests() {
+    pro.depthController?.abort(); pro.historyController?.abort();
+    pro.depthController = null; pro.historyController = null;
+    pro.depthLoading = false;
+    pro.depthSeq++;
+  }
+
+  async function requestJson(kind, url) {
+    const slot = `${kind}Controller`;
+    pro[slot]?.abort();
+    const controller = new AbortController();
+    pro[slot] = controller;
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+      const data = await response.json();
+      if (controller.signal.aborted) throw new Error('Request cancelled');
+      if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+      return data;
+    } finally {
+      clearTimeout(timer);
+      if (pro[slot] === controller) pro[slot] = null;
+    }
   }
 
   function updateChartLabels() {
@@ -177,12 +206,12 @@
   }
 
   async function loadServerHistory(key) {
+    if (pro.historyController) return;
     const requestId = pro.requestId;
     const sequence = ++pro.historySeq;
     try {
-      const response = await fetch(`/api/arbitrage/history?key=${encodeURIComponent(key)}`, { cache: 'no-store' });
-      if (!response.ok || requestId !== pro.requestId || sequence !== pro.historySeq) return;
-      const data = await response.json();
+      const data = await requestJson('history', `/api/arbitrage/history?key=${encodeURIComponent(key)}`);
+      if (requestId !== pro.requestId || sequence !== pro.historySeq) return;
       const byTime = new Map();
       for (const raw of data.points || []) {
         const point = {
@@ -199,6 +228,7 @@
       if ($('arb-chart-empty')) $('arb-chart-empty').hidden = true;
       renderCharts();
     } catch (_) {
+      if (requestId !== pro.requestId || sequence !== pro.historySeq) return;
       if (!pro.history.length && $('arb-chart-empty')) {
         $('arb-chart-empty').hidden = false;
         $('arb-chart-empty').textContent = 'История временно недоступна';
@@ -207,12 +237,12 @@
   }
 
   async function loadDexHistory(key) {
+    if (pro.historyController) return;
     const requestId = pro.requestId;
     const sequence = ++pro.historySeq;
     try {
-      const response = await fetch(`/api/arbitrage/dex/history?key=${encodeURIComponent(key)}`, { cache: 'no-store' });
-      if (!response.ok || requestId !== pro.requestId || sequence !== pro.historySeq) return;
-      const data = await response.json();
+      const data = await requestJson('history', `/api/arbitrage/dex/history?key=${encodeURIComponent(key)}`);
+      if (requestId !== pro.requestId || sequence !== pro.historySeq) return;
       const byTime = new Map();
       for (const raw of data.points || []) {
         const cexPrice = Number(raw[2]) || 0;
@@ -231,6 +261,7 @@
       if ($('arb-chart-empty')) $('arb-chart-empty').hidden = true;
       renderCharts();
     } catch (_) {
+      if (requestId !== pro.requestId || sequence !== pro.historySeq) return;
       if (!pro.history.length && $('arb-chart-empty')) {
         $('arb-chart-empty').hidden = false;
         $('arb-chart-empty').textContent = 'История DEX-маршрута временно недоступна';
@@ -240,16 +271,17 @@
 
   async function loadDepth() {
     const row = pro.row;
-    if (!row || pro.isFunding || pro.depthLoading) return;
+    if (!row || pro.isFunding || pro.isDex) return;
     const requestId = pro.requestId;
+    const sequence = ++pro.depthSeq;
     const notional = Math.max(10, Math.min(1000000, Number($('arb-notional')?.value) || 500));
     pro.depthLoading = true;
+    pro.depth = null;
+    renderDepth();
     if ($('arb-depth-state')) { $('arb-depth-state').textContent = 'СТАКАНЫ…'; $('arb-depth-state').className = ''; }
     try {
-      const response = await fetch(`/api/arbitrage/depth?key=${encodeURIComponent(row.key)}&notional=${encodeURIComponent(notional)}`, { cache: 'no-store' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
-      if (pro.requestId !== requestId) return;
+      const data = await requestJson('depth', `/api/arbitrage/depth?key=${encodeURIComponent(row.key)}&notional=${encodeURIComponent(notional)}`);
+      if (pro.requestId !== requestId || sequence !== pro.depthSeq) return;
       pro.depth = data;
       renderDepth();
       if ($('arb-depth-state')) {
@@ -257,11 +289,11 @@
         $('arb-depth-state').className = data.complete ? 'ready' : 'error';
       }
     } catch (_) {
-      if (pro.requestId !== requestId) return;
+      if (pro.requestId !== requestId || sequence !== pro.depthSeq) return;
       pro.depth = null;
       renderDepth();
       if ($('arb-depth-state')) { $('arb-depth-state').textContent = 'СТАКАН НЕДОСТУПЕН'; $('arb-depth-state').className = 'error'; }
-    } finally { pro.depthLoading = false; }
+    } finally { if (sequence === pro.depthSeq) pro.depthLoading = false; }
   }
 
   function renderDepth() {
@@ -285,7 +317,9 @@
     if ($('arb-depth-sell-impact')) $('arb-depth-sell-impact').textContent = `проскальзывание ${pct(data.sell.impactPct, 4)}`;
     if ($('arb-depth-net')) $('arb-depth-net').textContent = pct(data.netPct);
     if ($('arb-depth-funded')) $('arb-depth-funded').textContent = pct(data.netAfterFundingHourPct);
-    if ($('arb-depth-pnl')) $('arb-depth-pnl').textContent = `${data.complete ? '≈' : 'до'} ${money(data.estimatedPnlAfterFundingHour)} PnL · текущая ставка`;
+    if ($('arb-depth-pnl')) $('arb-depth-pnl').textContent = data.estimatedPnlAfterFundingHour == null
+      ? `≈ ${money(data.estimatedPnl)} PnL · без funding (нет ставки)`
+      : `${data.complete ? '≈' : 'до'} ${money(data.estimatedPnlAfterFundingHour)} PnL · текущая ставка`;
     const ratio = safe > 0 ? Math.min(1, requested / safe) : 1;
     if ($('arb-depth-fill')) $('arb-depth-fill').style.width = `${ratio * 100}%`;
     if ($('arb-depth-marker')) $('arb-depth-marker').style.left = `${Math.min(99, ratio * 100)}%`;

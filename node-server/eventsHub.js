@@ -5,6 +5,8 @@ const path = require("node:path");
 const WebSocket = require("ws");
 const { publisher, canonicalUrl, assessNews, sameClaim, isPublished } = require("./newsVerification");
 const { createSourceReader, parseArticle, telegramLead } = require("./newsSources");
+const { ANNOUNCEMENT_FEEDS, parseAnnouncements, listingAnnouncements } = require("./exchangeAnnouncements");
+const { createUnlockService } = require("./unlockService");
 
 const VENUES = Object.freeze([
   ["GT", "Gate.io", "gate"], ["MX", "MEXC", "mexc"],
@@ -20,6 +22,8 @@ const FEEDS = Object.freeze([
   ["Cointelegraph", "https://cointelegraph.com/rss"],
   ["The Block", "https://www.theblock.co/rss.xml"],
   ["Decrypt", "https://decrypt.co/feed"],
+  ["DL News", "https://www.dlnews.com/arc/outboundfeeds/rss/"],
+  ["Blockworks", "https://blockworks.com/feed"],
   ["Federal Reserve", "https://www.federalreserve.gov/feeds/press_monetary.xml"],
   ["White House", "https://www.whitehouse.gov/presidential-actions/feed/"]
 ]);
@@ -27,8 +31,9 @@ const GATE_ANNOUNCEMENTS_URL = "https://api.gateio.ws/api/v4/ann/list_article";
 const URGENT = /\b(hack(?:ed)?|exploit|breach|stolen|drain(?:ed)?|attack|liquidat(?:ed|ion)|insolvenc[ey]|bankrupt|emergency|security incident|outage|trump|tariffs?|fed(?:eral)? reserve|rate (?:cut|hike)|sanctions?)\b/i;
 const IMPORTANT = /\b(SEC|ETF|fed(?:eral)? reserve|interest rate|regulat(?:ion|or)|lawsuit|listing|delisting|approval|hack|exploit|breach|bitcoin|ethereum)\b/i;
 function alertKind(title) {
+  if (/\bHack VC\b/i.test(title) && !/\b(exploit|breach|stolen|hacked)\b/i.test(title)) return null;
   if (/\b(FOMC statement|Federal Reserve (?:issues|lowers|raises))\b/i.test(title)) return "macro";
-  if (/\b(hack(?:ed)?|exploit(?:ed)?|security breach|funds? (?:stolen|drained)|wallets? drained|cyberattack)\b/i.test(title)) return "security";
+  if (/\b(hack(?:ed|ers?)?|exploit(?:ed)?|security (?:breach|incident)|(?:crypto |exchange )?heist|funds? (?:stolen|drained)|wallets? drained|cyberattack)\b/i.test(title)) return "security";
   if (/\b(insolvenc[ey]|bankrupt(?:cy)?|withdrawals? (?:halted|suspended|frozen)|major (?:exchange |network )?outage)\b/i.test(title)) return "risk";
   if (/\b(trump|fed(?:eral)? reserve)\b/i.test(title) && /\b(announc(?:es?|ed)|signs?|imposes?|emergency|rate (?:cut|hike)|tariffs?|sanctions?)\b/i.test(title)
     && /\b(crypto|bitcoin|btc|tariffs?|sanctions?|interest|rates?|fed(?:eral)? reserve)\b/i.test(title)) return "macro";
@@ -52,18 +57,29 @@ function rssField(item, name) {
   return decodeXml(match?.[1]);
 }
 
+function relevantNews(title, context = "") {
+  return !/\b(AI|ChatGPT|OpenAI|Google|iPhone|Hollywood|movie|Hack VC)\b/i.test(title) ||
+    /\b(crypto|bitcoin|ethereum|blockchain|tokens?|stablecoins?|wallets?|DeFi|NFTs?|BTC|ETH|XRP|Solana|exchange)\b/i.test(`${title} ${context}`);
+}
+
 function parseNews(xml, source, now = Date.now()) {
+  if (!/<(?:rss|feed|rdf:RDF)\b/i.test(String(xml))) throw new Error("Invalid news feed");
   const rows = [];
-  for (const match of String(xml).matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi)) {
+  for (const match of String(xml).matchAll(/<(?:item|entry)(?:\s[^>]*)?>([\s\S]*?)<\/(?:item|entry)>/gi)) {
     const title = rssField(match[1], "title").slice(0, 250);
-    const link = rssField(match[1], "link");
-    const publishedAt = Date.parse(rssField(match[1], "pubDate"));
+    const atomLink = [...match[1].matchAll(/<link\b[^>]*>/gi)].find(([tag]) => !/rel=["'](?:self|enclosure)["']/i.test(tag));
+    const link = rssField(match[1], "link") || decodeXml(/href=["']([^"']+)["']/i.exec(atomLink?.[0] || "")?.[1]);
+    const publishedAt = Date.parse(rssField(match[1], "pubDate") || rssField(match[1], "published") || rssField(match[1], "updated"));
     if (!title || !Number.isFinite(publishedAt) || publishedAt > now + 3600000 || now - publishedAt > 7 * 86400000) continue;
     let url;
     try { url = new URL(link); } catch (_) { continue; }
     if (url.protocol !== "https:") continue;
+    const context = (rssField(match[1], "description") || rssField(match[1], "summary")).slice(0, 1200);
+    // Broad publishers also cover unrelated AI/entertainment; keep their crypto
+    // coverage without turning the screener into a general technology feed.
+    if (!relevantNews(title, context)) continue;
     rows.push({ id: `${source}:${url.pathname}`, title, url: canonicalUrl(url.href), source,
-      context: rssField(match[1], "description").slice(0, 1200), originVerified: publisher(url.href)?.[2] === source,
+      context, originVerified: publisher(url.href)?.[2] === source,
       publishedAt, priority: alertKind(title) || URGENT.test(title) ? "urgent" : IMPORTANT.test(title) ? "important" : "regular" });
   }
   return rows;
@@ -244,7 +260,7 @@ function createMarketFetcher(createClient = exchangeId => {
 
 function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   fetchMarkets = null, fetchFeed = createSourceReader(), fetchGateAnnouncements = readGateAnnouncements,
-  now = () => Date.now(), translate = translateTitle,
+  now = () => Date.now(), translate = translateTitle, unlockService = createUnlockService(),
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
   streamKey = process.env.TREE_NEWS_API_KEY || "",
   telegramChannelIds = (process.env.NEWS_TELEGRAM_CHANNEL_IDS || "").split(",").map(value => value.trim()).filter(Boolean) } = {}) {
@@ -261,6 +277,12 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   state.missing ||= {};
   state.historySeeded ||= {};
   state.candidates ||= {};
+  // Reassess persisted records with the current classifier; an old "reported"
+  // label must not let a newly recognized security incident bypass verification.
+  state.news = (Array.isArray(state.news) ? state.news : []).filter(item => item?.title && item.url &&
+    Number.isFinite(item.publishedAt) && item.publishedAt > now() - 7 * 86400000 && item.publishedAt <= now() + 60000 && relevantNews(item.title, item.context))
+    .slice(0, 320).map(item => ({ ...item, alertKind: alertKind(item.title) }));
+  for (const item of state.news) item.verification = assessNews(item, state.news);
   let marketsRunning = false;
   let newsRunning = false;
   let marketTimer = null;
@@ -279,8 +301,11 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   let leadWorkers = 0;
   const leadQueue = new Map();
   const sourceHealth = {};
+  let publicCache = null, publicCacheAt = 0;
+  let persistTimer = null, persistRunning = null, persistDirty = false;
+  let translationTimer = null;
 
-  function emit(event) { for (const listener of listeners) { try { listener(event); } catch (_) {} } }
+  function emit(event) { publicCache = null; for (const listener of listeners) { try { listener(event); } catch (_) {} } }
   function prioritizeTranslations() {
     const rank = item => item.alertKind ? 2 : item.priority === "urgent" ? 1 : 0;
     translationQueue.sort((a, b) => rank(b) - rank(a) || b.publishedAt - a.publishedAt);
@@ -295,13 +320,13 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }
 
   function drainTranslations() {
-    while (translating < 2 && translationQueue.length && now() >= translationPauseUntil) {
+    while (!stopped && translating < 2 && translationQueue.length && now() >= translationPauseUntil) {
       const item = translationQueue.shift();
       if (!state.news.some(current => current.url === item.url && current.title === item.title && isPublished(current))) { queued.delete(item.url); continue; }
       translating++;
       Promise.resolve().then(() => translate(item.title)).then(translated => {
         const current = state.news.find(row => row.url === item.url && row.title === item.title);
-        if (current && isPublished(current) && translated && /[а-яё]/i.test(translated) && translated !== item.title) {
+        if (!stopped && current && isPublished(current) && translated && /[а-яё]/i.test(translated) && translated !== item.title) {
           current.titleRu = translated.trim().slice(0, 500);
           translationRetryAt.delete(item.url);
           translationLastError = null;
@@ -319,8 +344,11 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
         if (current && isPublished(current) && !current.titleRu && current.title !== item.title) {
           queued.add(current.url); translationQueue.push(current); prioritizeTranslations();
         }
-        if (translationQueue.length && now() < translationPauseUntil) {
-          const timer = setTimeout(drainTranslations, Math.max(1000, translationPauseUntil - now())); timer.unref?.();
+        if (!stopped && translationQueue.length && now() < translationPauseUntil) {
+          if (!translationTimer) {
+            translationTimer = setTimeout(() => { translationTimer = null; drainTranslations(); }, Math.max(1000, translationPauseUntil - now()));
+            translationTimer.unref?.();
+          }
         } else drainTranslations();
       });
     }
@@ -331,7 +359,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     let changed = false;
     for (const row of rows) {
       row.url = canonicalUrl(row.url);
-      if (!row.url || !row.title || !Number.isFinite(row.publishedAt) || row.publishedAt < now() - 7 * 86400000 || row.publishedAt > now() + 60000) continue;
+      if (!row.url || !row.title || !relevantNews(row.title, row.context) || !Number.isFinite(row.publishedAt) || row.publishedAt < now() - 7 * 86400000 || row.publishedAt > now() + 60000) continue;
       const previous = byUrl.get(row.url);
       if (previous && (!row.originVerified || previous.originVerified && previous.title === row.title && previous.context === row.context)) {
         if (row.titleRu && /[а-яё]/i.test(row.titleRu) && row.titleRu !== previous.titleRu && row.title === previous.title) {
@@ -358,6 +386,8 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       const sourced = ordered.filter(item => item.originVerified && publisher(item.url)).slice(0, 240);
       const leads = ordered.filter(item => !item.originVerified || !publisher(item.url)).slice(0, 80);
       state.news = [...sourced, ...leads].sort((a, b) => b.publishedAt - a.publishedAt);
+      const retainedUrls = new Set(state.news.map(item => item.url));
+      for (const url of translationRetryAt.keys()) if (!retainedUrls.has(url)) translationRetryAt.delete(url);
       const notifications = [];
       for (const item of state.news) {
         const wasPublished = isPublished(item);
@@ -365,7 +395,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
         if (wasPublished && !isPublished(item)) notifications.push({ type: "retract", item });
         if (!isPublished(item)) continue;
         queueTranslation(item);
-        if (item.alertKind && !item.alertedAt && now() - item.publishedAt <= 15 * 60000) {
+      if (item.alertKind && !item.alertedAt && now() - item.publishedAt <= 15 * 60000) {
           const alreadyAlerted = state.news.some(other => other.alertedAt && Math.abs(other.publishedAt - item.publishedAt) < 2 * 3600000 && sameClaim(item, other));
           item.alertedAt = now();
           if (!alreadyAlerted) notifications.push({ type: "urgent", item });
@@ -389,11 +419,11 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
 
   async function drainLeads() {
     if (leadWorkers >= 3) return;
-    while (leadQueue.size) {
+    while (!stopped && leadQueue.size) {
       const [url] = leadQueue.keys(); leadQueue.delete(url); leadWorkers++;
       try {
         const article = parseArticle(await fetchFeed(url), url, decodeXml, now());
-        if (article) mergeNews([article]);
+        if (!stopped && article) mergeNews([article]);
       } catch (_) { /* Unreadable sources stay pending; never trust the supplied headline. */ }
       finally { leadWorkers--; }
     }
@@ -422,26 +452,46 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }
 
   function persist() {
-    const dir = path.dirname(filePath);
-    fs.mkdirSync(dir, { recursive: true });
-    const temporary = `${filePath}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(state));
-    fs.renameSync(temporary, filePath);
+    if (stopped) return;
+    persistDirty = true;
+    if (persistTimer || persistRunning) return;
+    persistTimer = setTimeout(() => { persistTimer = null; void flush(); }, 250);
+    persistTimer.unref?.();
+  }
+
+  async function flush() {
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+    if (persistRunning) { await persistRunning; if (persistDirty) return flush(); return; }
+    if (!persistDirty) return;
+    persistDirty = false;
+    const content = JSON.stringify(state);
+    persistRunning = (async () => {
+      try {
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.promises.writeFile(`${filePath}.tmp`, content);
+        await fs.promises.rename(`${filePath}.tmp`, filePath);
+      } catch (_) {
+        sourceHealth.storage = { status: "error", checkedAt: now() };
+      }
+    })().finally(() => { persistRunning = null; });
+    await persistRunning;
+    if (persistDirty) return flush();
   }
 
   async function refreshMarkets(selectedCodes = null) {
-    if (marketsRunning) return;
+    if (marketsRunning || stopped) return;
     marketsRunning = true;
     try {
       const venues = selectedCodes ? VENUES.filter(([code]) => selectedCodes.includes(code)) : VENUES;
       const existingById = new Map(state.listings.map(item => [item.id, item]));
       let cursor = 0;
       await Promise.all(Array.from({ length: Math.min(6, venues.length) }, async () => {
-        while (cursor < venues.length) {
+        while (!stopped && cursor < venues.length) {
           const [code, name, exchangeId] = venues[cursor++];
           try {
             let changed = false;
             const rows = normalizeMarkets(await marketFetcher(exchangeId), code, now());
+            if (stopped) return;
             if (!rows.length) throw new Error("Empty market catalog");
             const prior = Array.isArray(state.known[code]) ? new Set(state.known[code]) : null;
             const spotCount = rows.filter(row => row.type === "spot").length;
@@ -536,6 +586,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
           }
         }
       }));
+      if (stopped) return;
       const eventTime = row => row.kind === "delisting" ? row.delistAt || row.detectedAt : row.launchAt || row.detectedAt;
       state.listings = state.listings.filter(row => eventTime(row) > now() - MAX_EVENT_AGE_MS)
         .sort((a, b) => eventTime(b) - eventTime(a)).slice(0, 3000);
@@ -545,38 +596,52 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }
 
   async function refreshNews() {
-    if (newsRunning) return;
+    if (newsRunning || stopped) return;
     newsRunning = true;
     try {
-      await Promise.allSettled([...FEEDS.map(async ([source, url]) => {
+      await Promise.allSettled([unlockService.refresh(), ...FEEDS.map(async ([source, url]) => {
         try {
           const rows = parseNews(await fetchFeed(url), source, now()).filter(item => source !== "White House" || item.priority !== "regular");
-          sourceHealth[source] = { status: "ok", checkedAt: now(), latestAt: Math.max(0, ...rows.map(row => row.publishedAt)) || null };
-          if (rows.length) mergeNews(rows);
+          sourceHealth[source] = { status: rows.length ? "ok" : "no_recent_items", checkedAt: now(), latestAt: Math.max(0, ...rows.map(row => row.publishedAt)) || null };
+          if (!stopped && rows.length) mergeNews(rows);
         } catch (_) { sourceHealth[source] = { ...sourceHealth[source], status: "error", checkedAt: now() }; }
+      }), ...ANNOUNCEMENT_FEEDS.map(async ([source, url]) => {
+        const healthKey = `${source} · ${new URL(url).searchParams.get("catalogId") || new URL(url).searchParams.get("annType") || new URL(url).searchParams.get("type")}`;
+        try {
+          const rows = parseAnnouncements(JSON.parse(await fetchFeed(url)), source, now());
+          sourceHealth[healthKey] = { status: "ok", checkedAt: now(), latestAt: Math.max(0, ...rows.map(row => row.publishedAt)) || null };
+          if (!stopped && rows.length) mergeNews(rows);
+        } catch (_) { sourceHealth[healthKey] = { ...sourceHealth[healthKey], status: "error", checkedAt: now() }; }
       }), (async () => {
         try {
           const rows = parseGateAnnouncements(await fetchGateAnnouncements(), now());
           sourceHealth["Gate.io"] = { status: "ok", checkedAt: now(), latestAt: rows[0]?.publishedAt || null };
-          if (rows.length) mergeNews(rows);
+          if (!stopped && rows.length) mergeNews(rows);
         } catch (_) { sourceHealth["Gate.io"] = { ...sourceHealth["Gate.io"], status: "error", checkedAt: now() }; }
       })()]);
-    } finally { newsRunning = false; }
+    } finally { newsRunning = false; publicCache = null; }
   }
 
   function snapshot() {
+    if (publicCache && now() - publicCacheAt < 1000) return publicCache;
     const news = [];
-    for (const item of state.news.filter(isPublished)) {
+    for (const item of state.news.filter(item => isPublished(item) && item.publishedAt > now() - 7 * 86400000)) {
       if (news.some(other => Math.abs(other.publishedAt - item.publishedAt) <= 2 * 3600000 && sameClaim(item, other))) continue;
       const { context, originVerified, ...publicItem } = item;
       news.push(publicItem);
     }
-    return { listings: state.listings, news, venues: state.venues, sources: sourceHealth,
+    // Sourced security leads remain visible for investigation without being
+    // promoted to confirmed facts or generating urgent push notifications.
+    const developing = state.news.filter(item => item.alertKind && item.originVerified &&
+      item.verification?.status === "pending" && item.verification.sources.length && item.publishedAt > now() - 7 * 86400000)
+      .slice(0, 30).map(({ context, originVerified, ...item }) => item);
+    publicCacheAt = now();
+    return publicCache = { listings: state.listings, announcements: listingAnnouncements(state.news), unlocks: unlockService.snapshot(), news, developing, venues: state.venues, sources: sourceHealth,
       translation: { provider: process.env.DEEPL_API_KEY ? "DeepL" : "MyMemory", pending: translationQueue.length + translating,
         untranslated: news.filter(item => !item.titleRu && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)).length,
         pausedUntil: translationPauseUntil || null, lastError: translationLastError },
       marketUpdatedAt: state.marketUpdatedAt, newsUpdatedAt: state.newsUpdatedAt,
-      sourceNames: ["Tree News", "Gate.io", ...FEEDS.map(([name]) => name)] };
+      sourceNames: ["Tree News", "Gate.io", "Binance", "Bybit", "Bitget", ...FEEDS.map(([name]) => name)] };
   }
 
   function start() {
@@ -597,13 +662,17 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   function stop() {
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (translationTimer) clearTimeout(translationTimer);
+    if (persistTimer) clearTimeout(persistTimer);
+    translationTimer = null; persistTimer = null;
+    translationQueue.length = 0; leadQueue.clear(); queued.clear();
     stream?.close(); stream = null;
     void marketFetcher.close?.();
     if (marketTimer) clearInterval(marketTimer);
     if (newsTimer) clearInterval(newsTimer);
     marketTimer = null; newsTimer = null;
   }
-  return { snapshot, refreshMarkets, refreshNews, start, stop, ingestNews: mergeNews,
+  return { snapshot, refreshMarkets, refreshNews, start, stop, flush, ingestNews: mergeNews,
     ingestTelegram(message) { ingestLead(telegramLead(message, telegramChannelIds, now())); },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
