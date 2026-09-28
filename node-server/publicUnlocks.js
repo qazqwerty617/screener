@@ -3,6 +3,7 @@
 const DAY = 86400000;
 const DROPS_URL = "https://dropstab.com/_gateway/api/portfolio/api/markets";
 const TOKENOMIST_URL = "https://tokenomist.ai/";
+const { loadCoinMarketCap } = require("./coinMarketCapUnlocks");
 const positive = n => (typeof n === "number" || typeof n === "string") && n !== "" && Number.isFinite(Number(n)) && Number(n) > 0 ? Number(n) : null;
 const label = n => String(n || "").slice(0, 120);
 const slug = n => typeof n === "string" && /^[a-z0-9][a-z0-9-]{0,120}$/i.test(n) ? n : null;
@@ -114,7 +115,7 @@ async function readResponse(response, maxBytes = 6000000) {
 }
 
 function createPublicUnlocks({ request = fetch, now = Date.now } = {}) {
-  const states = Object.fromEntries(["dropstab", "tokenomist"].map(key => [key, {
+  const states = Object.fromEntries(["dropstab", "tokenomist", "coinmarketcap"].map(key => [key, {
     status: "pending", rows: [], checkedAt: null, updatedAt: null, retryAt: 0, pending: null,
     tokens: 0, scannedTokens: 0, availableTokens: null, pages: 0, partial: true,
   }]));
@@ -176,7 +177,8 @@ function createPublicUnlocks({ request = fetch, now = Date.now } = {}) {
     }
     return { rows, sources };
   }
-  return { refresh: () => Promise.allSettled([refreshOne("dropstab", drops), refreshOne("tokenomist", tokenomist)]), snapshot };
+  return { refresh: () => Promise.allSettled([refreshOne("dropstab", drops), refreshOne("tokenomist", tokenomist),
+    refreshOne("coinmarketcap", () => loadCoinMarketCap(get, now))]), snapshot };
 }
 
 module.exports = { createPublicUnlocks, normalizeDrops, normalizeTokenomist, publicVestingList, readResponse };

@@ -26,8 +26,9 @@
   let refreshTimer = null;
   let stream = null;
   let updateTimer = null;
-  let unlockMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  let unlockMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
   let unlockSelectedDay;
+  let unlockPage = 0, unlockWindowPage = 0;
   let unlockType = "all", unlockSource = "all";
   let newsKind = "all", newsLimit = 40;
   const seenKey = "obsidian-urgent-news-seen-v1";
@@ -40,7 +41,8 @@
   }) : "Время неизвестно";
   const dayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   selectedDay = dayKey(new Date());
-  unlockSelectedDay = selectedDay;
+  const utcDayKey = date => date.toISOString().slice(0, 10);
+  unlockSelectedDay = utcDayKey(new Date());
 
   function node(tag, className, value) {
     const element = document.createElement(tag);
@@ -157,7 +159,7 @@
         item.setAttribute("aria-selected", String(active));
       });
       closePickers();
-      if (kind.startsWith("unlock-")) renderUnlocks(); else renderListings();
+      if (kind.startsWith("unlock-")) { unlockPage = unlockWindowPage = 0; renderUnlocks(); } else renderListings();
     };
     for (const [value, label, glyph] of options) {
       const item = node("button", "events-picker-option");
@@ -367,17 +369,19 @@
     const health = source => source?.expired ? "кэш истёк, события скрыты" : source?.status === "error"
       ? (source.updatedAt ? "источник недоступен, показан кэш" : "источник недоступен")
       : source?.stale ? "данные устарели" : source?.status === "empty" ? "нет датированных событий в доступном календаре" : source?.status === "ok" ? `обновлено ${dateTime(source.updatedAt)}` : "загрузка";
-    const drops = payload?.sources?.dropstab, tokenomist = payload?.sources?.tokenomist;
     status.textContent = `Официальные расписания: ${primary?.tokens || 0} проекта. ` +
-      (drops ? `DropsTab: ${drops.tokens || 0} проектов с событиями · проверено ${drops.scannedTokens || 0}/${drops.availableTokens ?? "?"} · ${health(drops)}${drops.partial ? " · неполный обход" : ""}. ` : "") +
-      (tokenomist ? `Tokenomist: ${tokenomist.tokens || 0} проектов · только публичная страница · ${health(tokenomist)}. ` : "") +
+      [["dropstab", "DropsTab"], ["coinmarketcap", "CoinMarketCap"], ["tokenomist", "Tokenomist"]].map(([key, name]) => {
+        const source = payload?.sources?.[key];
+        return source ? `${name}: ${source.tokens || 0} проектов с событиями${source.inactiveTokens ? ` (из них ${source.inactiveTokens} помечены неактивными)` : ""} · получено ${source.scannedTokens || 0}/${source.availableTokens ?? "?"} записей каталога · ${health(source)}${source.partial ? " · часть каталога недоступна" : ""}. ` : "";
+      }).join("") +
       (aggregator?.status === "not_configured" ? "" : `DefiLlama: ${health(aggregator)}. `) +
-      "Охват ограничен доступными источниками. Данные разных поставщиков не суммируются; расхождения сверяйте по ссылкам.";
+      "Охват ограничен доступными источниками. Проекты и события у поставщиков пересекаются; количества не суммируются. Публичные календари показывают ближайшие порции, а не полное расписание на год.";
     const query = byId("events-unlocks-search").value.trim().toLowerCase();
     const kind = unlockType, provider = unlockSource;
     const rows = (payload?.rows || []).filter(item => {
       const at = Number(item.at);
       return Number.isFinite(at) && item.amount > 0 &&
+        (!byId("events-unlocks-hide-inactive").checked || item.marketStatus !== "inactive") &&
         (kind === "all" || item.unlockType === kind) &&
         (provider === "all" || (provider === "primary" ? item.confidence === "schedule" : item.provider === provider)) &&
         (!query || `${item.symbol || ""} ${item.name}`.toLowerCase().includes(query));
@@ -385,29 +389,31 @@
 
     const byDay = new Map();
     for (const item of rows) {
-      const key = dayKey(new Date(Number(item.at)));
+      if (["month", "week"].includes(item.precision)) continue;
+      const key = utcDayKey(new Date(Number(item.at)));
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key).push(item);
     }
-    const impact = item => Number(item.percentCirculating) || Number(item.percentSupply) || 0;
-    for (const items of byDay.values()) items.sort((a, b) => impact(b) - impact(a) || Number(b.amount) - Number(a.amount));
+    // Compare the same denominator; token counts of different assets are not comparable.
+    const impact = item => Number.isFinite(item.percentSupply) ? item.percentSupply : -1;
+    for (const items of byDay.values()) items.sort((a, b) => impact(b) - impact(a) || a.at - b.at || String(a.id).localeCompare(String(b.id)));
 
     calendar.replaceChildren();
     for (const weekday of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", weekday));
-    const year = unlockMonth.getFullYear(), monthIndex = unlockMonth.getMonth();
-    byId("events-unlocks-month-label").textContent = unlockMonth.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
-    const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
+    const year = unlockMonth.getUTCFullYear(), monthIndex = unlockMonth.getUTCMonth();
+    byId("events-unlocks-month-label").textContent = unlockMonth.toLocaleDateString("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" });
+    const offset = (unlockMonth.getUTCDay() + 6) % 7;
     for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
-    const days = new Date(year, monthIndex + 1, 0).getDate();
+    const days = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
     let monthEvents = 0;
     for (let day = 1; day <= days; day++) {
-      const date = new Date(year, monthIndex, day), key = dayKey(date), items = byDay.get(key) || [];
+      const date = new Date(Date.UTC(year, monthIndex, day)), key = utcDayKey(date), items = byDay.get(key) || [];
       monthEvents += items.length;
       const cell = node("button", "events-calendar-day unlock-calendar-day");
       cell.type = "button"; cell.dataset.unlockDate = key;
-      cell.setAttribute("aria-label", `${date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}, разлоков: ${items.length}`);
+      cell.setAttribute("aria-label", `${date.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long" })} UTC, записей: ${items.length}`);
       if (key === unlockSelectedDay) cell.classList.add("selected");
-      if (key === dayKey(new Date())) cell.classList.add("today");
+      if (key === utcDayKey(new Date())) cell.classList.add("today");
       const head = node("span", "events-calendar-day-head");
       head.append(node("strong", "", day));
       if (items.length) head.append(node("b", "", items.length));
@@ -423,44 +429,25 @@
         cell.append(entry);
       }
       if (items.length > 3) cell.append(node("span", "events-more", `+${items.length - 3}`));
-      cell.addEventListener("click", () => { unlockSelectedDay = key; renderUnlocks(); });
+      cell.addEventListener("click", () => { unlockSelectedDay = key; unlockPage = 0; renderUnlocks(); });
       calendar.append(cell);
     }
 
     const count = byId("events-unlocks-count");
-    if (count) count.textContent = `В этом месяце: ${monthEvents} · всего по фильтрам: ${rows.length}`;
-    const selectedDate = new Date(`${unlockSelectedDay}T12:00:00`);
-    byId("events-unlocks-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+    const monthStart = unlockMonth.getTime(), monthEnd = Date.UTC(year, monthIndex + 1, 1);
+    const windows = rows.filter(item => ["month", "week"].includes(item.precision) &&
+      Number(item.windowStart) < monthEnd && Number(item.windowEnd) >= monthStart);
+    if (count) count.textContent = `Календарь UTC · в месяце: ${monthEvents} записей с датой + ${windows.length} приблизительных окон · всего по фильтрам: ${rows.length}. % = доля общего предложения.`;
+    const selectedDate = new Date(`${unlockSelectedDay}T12:00:00Z`);
+    byId("events-unlocks-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }) + " · UTC";
     const selectedItems = byDay.get(unlockSelectedDay) || [];
-    byId("events-unlocks-day-count").textContent = selectedItems.length ? `${selectedItems.length} событий` : "";
+    byId("events-unlocks-day-count").textContent = selectedItems.length ? `${selectedItems.length} записей` : "";
 
-    const fragment = document.createDocumentFragment();
-    for (const item of selectedItems.slice(0, 100)) {
-      const card = node("article", "events-card");
-      const at = new Date(item.at);
-      const formatDay = date => new Date(date).toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
-      const dateLabel = item.precision === "month" ? at.toLocaleDateString("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" })
-        : item.precision === "week" ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
-      card.append(node("h3", "", `${item.symbol || item.name} · ${dateLabel}`));
-      const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию", unknown: "Тип выпуска не уточнён" };
-      card.append(node("p", "", `${item.name} · ${types[item.unlockType] || types.unknown}`));
-      const amount = Number(item.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
-      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
-      card.append(node("p", "", `${amount} токенов${share}`));
-      const precisionLabel = { month: "любой день месяца, дата приблизительная", week: "приблизительное окно ±3 дня", day: "точное время неизвестно", hour: `${dateTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${dateTime(item.at)} · оценка времени блока` }[item.precision];
-      card.append(node("small", "", `${item.provider} · ${precisionLabel || dateTime(item.at)}${item.stale ? " · УСТАРЕВШИЕ ДАННЫЕ" : ""}`));
-      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`));
-      const sources = node("div", "events-news-sources");
-      for (const url of item.sources || []) {
-        let parsed; try { parsed = new URL(url); if (parsed.protocol !== "https:") continue; } catch (_) { continue; }
-        const link = node("a", "events-source-link", `${parsed.hostname} ↗`);
-        link.href = parsed.href; link.target = "_blank"; link.rel = "noopener noreferrer"; sources.append(link);
-      }
-      card.append(sources); fragment.append(card);
-    }
-    list.replaceChildren(fragment);
-    if (!selectedItems.length) clearWithEmpty(list, rows.length ? "На эту дату разлоков нет" : "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
-    if (selectedItems.length > 100) list.append(node("div", "events-more", `Ещё ${selectedItems.length - 100} событий`));
+    renderUnlockCards(list, selectedItems, unlockPage, page => { unlockPage = page; renderUnlocks(); });
+    if (!selectedItems.length) clearWithEmpty(list, rows.length ? "На эту дату разлоков нет. Приблизительные окна указаны отдельно ниже." : "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
+    const windowList = byId("events-unlocks-windows");
+    byId("events-unlocks-windows-section").hidden = !windows.length;
+    renderUnlockCards(windowList, windows, unlockWindowPage, page => { unlockWindowPage = page; renderUnlocks(); });
     const signals = byId("events-unlocks-signals");
     if (signals) {
       const cards = (payload?.signals || []).filter(item => !query || `${item.title} ${item.titleRu || ""}`.toLowerCase().includes(query)).map(item => {
@@ -471,6 +458,46 @@
       }).filter(Boolean);
       signals.replaceChildren(...cards);
       if (!cards.length) clearWithEmpty(signals, "Свежих публикаций по этому запросу нет.");
+    }
+  }
+
+  function renderUnlockCards(list, items, requestedPage, onPage) {
+    const page = Math.min(requestedPage, Math.max(0, Math.ceil(items.length / 100) - 1));
+    const fragment = document.createDocumentFragment();
+    for (const item of items.slice(page * 100, (page + 1) * 100)) {
+      const card = node("article", "events-card");
+      const at = new Date(item.at);
+      const formatDay = date => new Date(date).toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
+      const dateLabel = item.precision === "month" ? at.toLocaleDateString("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" })
+        : item.precision === "week" ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
+      card.append(node("h3", "", `${item.symbol || item.name} · ${dateLabel}`));
+      const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию", tge: "Первичный выпуск (TGE)", inflationary: "Возрастающая эмиссия", deflationary: "Убывающая эмиссия", "non-linear": "Нелинейный выпуск", unknown: "Тип выпуска не уточнён" };
+      card.append(node("p", "", `${item.name} · ${types[item.unlockType] || types.unknown}`));
+      const amount = Number(item.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
+      card.append(node("p", "", `${amount} токенов${share}`));
+      const utcTime = value => new Date(Number(value)).toLocaleString("ru-RU", { timeZone: "UTC" }) + " UTC";
+      const precisionLabel = { month: "любой день месяца, дата приблизительная", week: "приблизительное окно ±3 дня", day: "точное время неизвестно · дата UTC", hour: `${utcTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${utcTime(item.at)} · оценка времени блока` }[item.precision];
+      card.append(node("small", "", `${item.provider} · ${precisionLabel || utcTime(item.at)}${item.stale ? " · УСТАРЕВШИЕ ДАННЫЕ" : ""}`));
+      if (item.marketStatus === "inactive") card.append(node("small", "", "Источник пометил проект неактивным; доступность торгов не подтверждена."));
+      if (item.allocationMismatch) card.append(node("small", "", "Сумма распределений источника расходится с итогом. Показан итог без разбивки."));
+      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`));
+      const sources = node("div", "events-news-sources");
+      for (const url of item.sources || []) {
+        let parsed; try { parsed = new URL(url); if (parsed.protocol !== "https:") continue; } catch (_) { continue; }
+        const link = node("a", "events-source-link", `${parsed.hostname} ↗`);
+        link.href = parsed.href; link.target = "_blank"; link.rel = "noopener noreferrer"; sources.append(link);
+      }
+      card.append(sources); fragment.append(card);
+    }
+    list.replaceChildren(fragment);
+    if (items.length > 100) {
+      const nav = node("div", "events-calendar-bar unlock-pagination");
+      const prev = node("button", "", "Предыдущие"), next = node("button", "", "Следующие");
+      prev.type = next.type = "button"; prev.disabled = page === 0; next.disabled = (page + 1) * 100 >= items.length;
+      prev.addEventListener("click", () => onPage(page - 1)); next.addEventListener("click", () => onPage(page + 1));
+      nav.append(prev, node("span", "", `${page * 100 + 1}–${Math.min((page + 1) * 100, items.length)} из ${items.length}`), next);
+      list.append(nav);
     }
   }
 
@@ -529,8 +556,8 @@
       wired = true;
       wirePicker("exchange", [["all", "Все 11 бирж", "ALL"], ...VENUES.map(([code, name]) => [code, name, VENUE_ICONS[code]])]);
       wirePicker("market", MARKET_OPTIONS);
-      wirePicker("unlock-type", [["all", "Все типы", "◈"], ["cliff", "Разовые (cliff)", "◆"], ["linear", "Линейный вестинг", "↗"], ["scheduled", "Официальное расписание", "✓"], ["unknown", "Тип не уточнён", "?"]]);
-      wirePicker("unlock-source", [["all", "Все источники", "◈"], ["primary", "Официальные расписания", "✓"], ["DropsTab", "DropsTab", "D"], ["Tokenomist", "Tokenomist", "T"], ["DefiLlama", "DefiLlama", "L"]]);
+      wirePicker("unlock-type", [["all", "Все типы", "◈"], ["cliff", "Разовые (cliff)", "◆"], ["linear", "Линейный вестинг", "↗"], ["scheduled", "Официальное расписание", "✓"], ["tge", "Первичный выпуск (TGE)", "●"], ["inflationary", "Возрастающая эмиссия", "↗"], ["deflationary", "Убывающая эмиссия", "↘"], ["non-linear", "Нелинейный выпуск", "≈"], ["unknown", "Тип не уточнён", "?"]]);
+      wirePicker("unlock-source", [["all", "Все источники", "◈"], ["primary", "Официальные расписания", "✓"], ["DropsTab", "DropsTab", "D"], ["CoinMarketCap", "CoinMarketCap", "C"], ["Tokenomist", "Tokenomist", "T"], ["DefiLlama", "DefiLlama", "L"]]);
       document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
       byId("events-news-search").addEventListener("input", () => { newsLimit = 40; renderNews(); });
@@ -542,18 +569,20 @@
       }));
       byId("events-tab-listings").addEventListener("click", () => setTab("listings"));
       byId("events-tab-unlocks").addEventListener("click", () => setTab("unlocks"));
-      byId("events-unlocks-search").addEventListener("input", renderUnlocks);
+      byId("events-unlocks-search").addEventListener("input", () => { unlockPage = unlockWindowPage = 0; renderUnlocks(); });
+      byId("events-unlocks-hide-inactive").addEventListener("change", () => { unlockPage = unlockWindowPage = 0; renderUnlocks(); });
       for (const [id, offset] of [["events-unlocks-prev-month", -1], ["events-unlocks-next-month", 1]]) {
         byId(id).addEventListener("click", () => {
-          unlockMonth = new Date(unlockMonth.getFullYear(), unlockMonth.getMonth() + offset, 1);
-          unlockSelectedDay = dayKey(unlockMonth);
+          unlockMonth = new Date(Date.UTC(unlockMonth.getUTCFullYear(), unlockMonth.getUTCMonth() + offset, 1));
+          unlockSelectedDay = utcDayKey(unlockMonth);
+          unlockPage = unlockWindowPage = 0;
           renderUnlocks();
         });
       }
       byId("events-unlocks-today").addEventListener("click", () => {
         const today = new Date();
-        unlockMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-        unlockSelectedDay = dayKey(today); renderUnlocks();
+        unlockMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+        unlockSelectedDay = utcDayKey(today); unlockPage = unlockWindowPage = 0; renderUnlocks();
       });
       byId("events-search").addEventListener("input", renderListings);
       for (const [attribute, update] of [["kind", value => { selectedKind = value; }],

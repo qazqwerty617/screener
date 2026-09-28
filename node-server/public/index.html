@@ -41,7 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/events.css?v=7" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=8" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1154,6 +1154,7 @@
                     <input id="events-unlocks-search" class="events-search" type="search" placeholder="Токен или проект" aria-label="Поиск разлоков">
                     <div class="events-picker" data-picker="unlock-type"><button id="events-unlocks-type" type="button" class="events-picker-btn" aria-haspopup="listbox" aria-expanded="false"><span>Все типы</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Тип разлока"></div></div>
                     <div class="events-picker" data-picker="unlock-source"><button id="events-unlocks-source" type="button" class="events-picker-btn" aria-haspopup="listbox" aria-expanded="false"><span>Все источники</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Источник разлока"></div></div>
+                    <label class="unlock-inactive-filter"><input id="events-unlocks-hide-inactive" type="checkbox"> Скрыть неактивные по источнику</label>
                 </div>
                 <p id="events-unlocks-status" class="events-coverage" role="status"></p>
                 <details class="events-card"><summary>Публикации о разлоках · требуют проверки расписания</summary><p>Обнаружены в подключённых новостях и официальных лентах. Дата публикации не является датой разлока.</p><div id="events-unlocks-signals" class="events-feed"></div></details>
@@ -1162,6 +1163,7 @@
                 <div class="events-calendar-scroll"><div id="events-unlocks-calendar" class="events-calendar events-unlock-calendar" role="grid" aria-label="Календарь разлоков"></div></div>
                 <div class="events-day-heading"><h2 id="events-unlocks-day-label"></h2><span id="events-unlocks-day-count"></span></div>
                 <div id="events-unlocks-list" class="events-feed events-unlock-day-list"></div>
+                <section id="events-unlocks-windows-section" hidden><div class="events-day-heading"><h2>Приблизительные окна этого месяца</h2></div><p class="events-coverage">Точный день неизвестен. Окна, пересекающие границу месяца, видны в обоих месяцах.</p><div id="events-unlocks-windows" class="events-feed"></div></section>
             </div>
         </section>
         <div id="arbitrage-view" class="arb-view" style="display:none">
@@ -3706,7 +3708,7 @@
     <script defer src="/js/arbitrage.js?v=2017"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2018"></script>
-    <script defer src="/js/events.js?v=11"></script>
+    <script defer src="/js/events.js?v=12"></script>
 </body>
 
 </html>

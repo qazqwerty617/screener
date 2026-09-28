@@ -57,12 +57,13 @@ test("free sources paginate all public projects, share concurrent polls and neve
   let calls = 0;
   const service = createUnlockService({ apiKey: "", now: () => now, request: async (url, opts) => {
     calls++; assert.doesNotMatch(url, /pro-api/);
+    if (url.includes("coinmarketcap")) return new Response("offline", { status: 503 });
     if (url.includes("tokenomist")) return new Response(page());
     const p = JSON.parse(opts.body); assert.deepEqual(p.filters, { vestingPeriod: true });
     return market([{ ...coin, currencyId: 123 + p.page }], p.page, 3);
   } });
   await Promise.all(Array.from({ length: 20 }, () => service.refresh()));
-  assert.equal(calls, 4); await service.refresh(); assert.equal(calls, 4);
+  assert.equal(calls, 5); await service.refresh(); assert.equal(calls, 5);
   const result = service.snapshot();
   assert.equal(result.sources.dropstab.scannedTokens, 3); assert.equal(result.sources.dropstab.tokens, 3);
   assert.equal(result.sources.dropstab.partial, false); assert.equal(result.sources.tokenomist.partial, true);
