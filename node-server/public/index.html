@@ -41,7 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/events.css?v=6" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=7" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1154,13 +1154,14 @@
                     <input id="events-unlocks-search" class="events-search" type="search" placeholder="Токен или проект" aria-label="Поиск разлоков">
                     <div class="events-picker" data-picker="unlock-type"><button id="events-unlocks-type" type="button" class="events-picker-btn" aria-haspopup="listbox" aria-expanded="false"><span>Все типы</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Тип разлока"></div></div>
                     <div class="events-picker" data-picker="unlock-source"><button id="events-unlocks-source" type="button" class="events-picker-btn" aria-haspopup="listbox" aria-expanded="false"><span>Все источники</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Источник разлока"></div></div>
-                    <div class="events-segment" role="group" aria-label="Период разлоков"><button type="button" data-unlock-period="30" class="on">30 дней</button><button type="button" data-unlock-period="90">90 дней</button><button type="button" data-unlock-period="365">Год</button><button type="button" data-unlock-period="past">Прошедшие</button></div>
                 </div>
                 <p id="events-unlocks-status" class="events-coverage" role="status"></p>
                 <details class="events-card"><summary>Публикации о разлоках · требуют проверки расписания</summary><p>Обнаружены в подключённых новостях и официальных лентах. Дата публикации не является датой разлока.</p><div id="events-unlocks-signals" class="events-feed"></div></details>
-                <p id="events-unlocks-count" class="events-coverage" aria-live="polite"></p>
-                <div id="events-unlocks-list" class="events-feed"></div>
-                <button id="events-unlocks-more" type="button" hidden>Показать ещё</button>
+                <div class="events-calendar-bar events-unlock-calendar-bar"><button id="events-unlocks-prev-month" type="button" aria-label="Предыдущий месяц">‹</button><strong id="events-unlocks-month-label"></strong><button id="events-unlocks-next-month" type="button" aria-label="Следующий месяц">›</button><button id="events-unlocks-today" type="button">Сегодня</button><span class="events-calendar-legend events-unlock-legend"><i class="cliff"></i> Cliff <i class="linear"></i> Linear <i class="scheduled"></i> Официально <i class="uncertain"></i> Приблизительно</span></div>
+                <p id="events-unlocks-count" class="events-coverage events-unlock-count" aria-live="polite"></p>
+                <div class="events-calendar-scroll"><div id="events-unlocks-calendar" class="events-calendar events-unlock-calendar" role="grid" aria-label="Календарь разлоков"></div></div>
+                <div class="events-day-heading"><h2 id="events-unlocks-day-label"></h2><span id="events-unlocks-day-count"></span></div>
+                <div id="events-unlocks-list" class="events-feed events-unlock-day-list"></div>
             </div>
         </section>
         <div id="arbitrage-view" class="arb-view" style="display:none">
@@ -3705,7 +3706,7 @@
     <script defer src="/js/arbitrage.js?v=2017"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2018"></script>
-    <script defer src="/js/events.js?v=10"></script>
+    <script defer src="/js/events.js?v=11"></script>
 </body>
 
 </html>

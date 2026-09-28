@@ -31,7 +31,7 @@ a.events-card:hover{border-color:var(--ac,#8842ea);background:var(--bgh,#242734)
 #events-unlocks-list .events-card{font-size:12px;line-height:1.6}
 #events-unlocks-list .events-card p{font-size:13px;margin:8px 0}
 #events-unlocks-list .events-news-sources{margin-top:10px}
-#events-news-more,#events-unlocks-more{margin-top:14px;padding:9px 16px;border:1px solid var(--bd,#30343d);border-radius:8px;background:var(--bg2,#1c2028);color:var(--t1,#edf0fa);font:inherit;cursor:pointer}
+#events-news-more{margin-top:14px;padding:9px 16px;border:1px solid var(--bd,#30343d);border-radius:8px;background:var(--bg2,#1c2028);color:var(--t1,#edf0fa);font:inherit;cursor:pointer}
 .events-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;padding:14px;background:var(--bg2,#1c2028);border:1px solid var(--bd,#30343d);border-radius:12px}
 .events-search{min-height:36px;width:160px;padding:7px 10px;border:1px solid var(--bd,#30343d);border-radius:8px;background:var(--bg,#111317);color:var(--t1,#edf0fa);font:inherit;font-size:12px;outline:none}
 .events-search:focus{border-color:var(--ac,#8842ea)}
@@ -75,6 +75,17 @@ a.events-card:hover{border-color:var(--ac,#8842ea);background:var(--bgh,#242734)
 .events-calendar-entry.removed{background:#ef5b6d19;color:#ff9aa5}
 .events-calendar-entry i{width:5px;height:5px;border-radius:50%;flex:none;background:#ad80ff}.events-calendar-entry.removed i{background:#ef6577}
 .events-calendar-entry span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.events-calendar-entry small{margin-left:auto;color:var(--t2,#939aab);font-size:9px}
+.events-unlock-calendar-bar{margin-top:14px}
+.events-unlock-calendar-bar #events-unlocks-today{margin-left:5px;color:#bda2ff}
+.events-unlock-legend i.cliff{background:#ff637d}.events-unlock-legend i.linear{background:#9665ef}.events-unlock-legend i.scheduled{background:#45c69a}.events-unlock-legend i.uncertain{background:#e4a957}
+.events-unlock-count{margin:0 0 8px;padding:0;text-align:right}
+.events-unlock-calendar .events-calendar-day,.events-unlock-calendar .events-day-spacer{min-height:126px}
+.events-calendar-entry.unlock-entry{background:#8758d926;color:#d9c7ff}
+.events-calendar-entry.unlock-entry i{background:#a978ff}
+.events-calendar-entry.unlock-entry.cliff{background:#ed50671f;color:#ffabb7}.events-calendar-entry.unlock-entry.cliff i{background:#ff637d}
+.events-calendar-entry.unlock-entry.scheduled{background:#37bd8f20;color:#86e1c1}.events-calendar-entry.unlock-entry.scheduled i{background:#45c69a}
+.events-calendar-entry.unlock-entry.uncertain{background:#d99a3920;color:#f2c77e}.events-calendar-entry.unlock-entry.uncertain i{background:#e4a957}
+.events-unlock-day-list .events-card{border-left:2px solid #9665ef;background:linear-gradient(110deg,#8758d90b,transparent 48%),var(--bg2,#1c2028)}
 .events-more{font-size:10px;color:var(--t2,#939aab)}
 .events-day-heading{display:flex;align-items:baseline;gap:10px;margin:18px 0 9px}.events-day-heading h2{font-size:15px;margin:0}.events-day-heading span{color:var(--t2,#939aab);font-size:11px}
 .events-day-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}

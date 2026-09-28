@@ -21,15 +21,20 @@ async function setup(t, payload) {
   w.ObsidianEvents.activate(); await tick();
   return { w, streams, click: id => w.document.getElementById(id).click() };
 }
-test("unlock filters retain provenance, omit unsafe links, and paginate a large calendar", async t => {
+test("unlock calendar groups a large day, retains provenance, and omits unsafe links", async t => {
   const at = Math.floor(Date.now() / 86400000) * 86400000 + 86400000;
   const rows = Array.from({ length: 125 }, (_, i) => ({ id: String(i), symbol: i ? `TOKEN${i}` : "XPL", name: "Token", at,
     amount: 1000, precision: "day", provider: "Primary", sources: ["https://www.plasma.org/", "javascript:alert(1)"] }));
   const { w, click } = await setup(t, { news: [], unlocks: { rows, coverage: "primary_only", sources: { primary: { tokens: 3, reviewedAt: at } } } });
   click("events-tab-unlocks");
   const list = w.document.getElementById("events-unlocks-list");
+  const date = new Date(at), key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  if (!w.document.querySelector(`[data-unlock-date="${key}"]`)) click("events-unlocks-next-month");
+  const cell = w.document.querySelector(`[data-unlock-date="${key}"]`);
+  assert.ok(cell); assert.match(cell.textContent, /125/); assert.match(cell.textContent, /\+122/);
+  cell.click();
   assert.equal(list.querySelectorAll("article").length, 100);
-  click("events-unlocks-more"); assert.equal(list.querySelectorAll("article").length, 125);
+  assert.match(list.textContent, /Ещё 25 событий/);
   assert.match(list.textContent, /точное время неизвестно/);
   assert.equal(list.querySelectorAll('a[href^="javascript:"]').length, 0);
   const search = w.document.getElementById("events-unlocks-search");
@@ -71,11 +76,17 @@ test("unlock source and type menus preserve uncertain date windows and separate 
     {...base,symbol:"MONTH",at:start,windowStart:start,windowEnd:end,precision:"month",unlockType:"unknown",provider:"Tokenomist"}];
   const {w,click}=await setup(t,{news:[],unlocks:{rows,signals:[{title:"Vesting schedule announcement",url:"https://blog.sui.io/vesting",source:"Sui",publishedAt:Date.now()}]}});
   click("events-tab-unlocks"); const list=w.document.getElementById("events-unlocks-list");
-  assert.equal(list.querySelectorAll("article").length,4); assert.match(list.textContent,/любой день месяца/);
+  assert.equal(w.document.querySelectorAll("#events-unlocks-calendar .events-calendar-day").length,new Date(date.getFullYear(),date.getMonth()+1,0).getDate());
+  assert.ok(w.document.querySelector("#events-unlocks-calendar .unlock-entry.uncertain"));
+  const tomorrow=new Date(at), tomorrowKey=`${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,"0")}-${String(tomorrow.getDate()).padStart(2,"0")}`;
+  w.document.querySelector(`[data-unlock-date="${tomorrowKey}"]`).click();
+  assert.equal(list.querySelectorAll("article").length,3);
   const pick=(kind,value)=>w.document.querySelector(`.events-picker[data-picker="unlock-${kind}"] [data-value="${value}"]`).click();
   pick("type","linear"); assert.equal(list.querySelectorAll("article").length,1); assert.match(list.textContent,/LINEAR/);
   pick("type","all"); pick("source","primary"); assert.match(list.textContent,/PRIMARY/); assert.doesNotMatch(list.textContent,/CLIFF/);
-  pick("source","Tokenomist"); assert.match(list.textContent,/MONTH/);
+  pick("source","Tokenomist");
+  w.document.querySelector(`[data-unlock-date="${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-01"]`).click();
+  assert.match(list.textContent,/MONTH/); assert.match(list.textContent,/любой день месяца/);
   assert.match(w.document.getElementById("events-unlocks-signals").textContent,/расписание требует проверки/);
   assert.doesNotMatch(list.textContent,/Vesting schedule announcement/);
 });
@@ -85,5 +96,8 @@ test("an hour-precision unlock displays the actual hour rather than an unspecifi
   const { w, click } = await setup(t, { news: [], unlocks: { rows: [{ at, amount: 50, name: "Hourly", symbol: "HOUR",
     precision: "hour", provider: "Tokenomist", sources: [] }] } });
   click("events-tab-unlocks");
+  const date = new Date(at), key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  if (!w.document.querySelector(`[data-unlock-date="${key}"]`)) click("events-unlocks-next-month");
+  w.document.querySelector(`[data-unlock-date="${key}"]`).click();
   assert.match(w.document.getElementById("events-unlocks-list").textContent, /\d{1,2}:00/);
 });

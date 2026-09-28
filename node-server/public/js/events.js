@@ -26,7 +26,8 @@
   let refreshTimer = null;
   let stream = null;
   let updateTimer = null;
-  let unlockPeriod = "30", unlockLimit = 100;
+  let unlockMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  let unlockSelectedDay;
   let unlockType = "all", unlockSource = "all";
   let newsKind = "all", newsLimit = 40;
   const seenKey = "obsidian-urgent-news-seen-v1";
@@ -39,6 +40,7 @@
   }) : "Время неизвестно";
   const dayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   selectedDay = dayKey(new Date());
+  unlockSelectedDay = selectedDay;
 
   function node(tag, className, value) {
     const element = document.createElement(tag);
@@ -155,7 +157,7 @@
         item.setAttribute("aria-selected", String(active));
       });
       closePickers();
-      if (kind.startsWith("unlock-")) { unlockLimit = 100; renderUnlocks(); } else renderListings();
+      if (kind.startsWith("unlock-")) renderUnlocks(); else renderListings();
     };
     for (const [value, label, glyph] of options) {
       const item = node("button", "events-picker-option");
@@ -357,8 +359,8 @@
   }
 
   function renderUnlocks() {
-    const list = byId("events-unlocks-list"), status = byId("events-unlocks-status");
-    if (!list || !status) return;
+    const list = byId("events-unlocks-list"), status = byId("events-unlocks-status"), calendar = byId("events-unlocks-calendar");
+    if (!list || !status || !calendar) return;
     const payload = data?.unlocks;
     const primary = payload?.sources?.primary;
     const aggregator = payload?.sources?.defillama;
@@ -373,18 +375,67 @@
       "Охват ограничен доступными источниками. Данные разных поставщиков не суммируются; расхождения сверяйте по ссылкам.";
     const query = byId("events-unlocks-search").value.trim().toLowerCase();
     const kind = unlockType, provider = unlockSource;
-    const now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
     const rows = (payload?.rows || []).filter(item => {
       const at = Number(item.at);
       return Number.isFinite(at) && item.amount > 0 &&
-        (unlockPeriod === "past" ? (item.windowEnd ?? at) < today && (item.windowEnd ?? at) >= today - 90 * 86400000
-          : (item.windowEnd ?? at) >= today && (item.windowStart ?? at) <= now + Number(unlockPeriod) * 86400000) &&
         (kind === "all" || item.unlockType === kind) &&
         (provider === "all" || (provider === "primary" ? item.confidence === "schedule" : item.provider === provider)) &&
         (!query || `${item.symbol || ""} ${item.name}`.toLowerCase().includes(query));
-    }).sort((a, b) => unlockPeriod === "past" ? b.at - a.at : a.at - b.at);
+    }).sort((a, b) => a.at - b.at);
+
+    const byDay = new Map();
+    for (const item of rows) {
+      const key = dayKey(new Date(Number(item.at)));
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(item);
+    }
+    const impact = item => Number(item.percentCirculating) || Number(item.percentSupply) || 0;
+    for (const items of byDay.values()) items.sort((a, b) => impact(b) - impact(a) || Number(b.amount) - Number(a.amount));
+
+    calendar.replaceChildren();
+    for (const weekday of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", weekday));
+    const year = unlockMonth.getFullYear(), monthIndex = unlockMonth.getMonth();
+    byId("events-unlocks-month-label").textContent = unlockMonth.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+    const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
+    for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
+    const days = new Date(year, monthIndex + 1, 0).getDate();
+    let monthEvents = 0;
+    for (let day = 1; day <= days; day++) {
+      const date = new Date(year, monthIndex, day), key = dayKey(date), items = byDay.get(key) || [];
+      monthEvents += items.length;
+      const cell = node("button", "events-calendar-day unlock-calendar-day");
+      cell.type = "button"; cell.dataset.unlockDate = key;
+      cell.setAttribute("aria-label", `${date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}, разлоков: ${items.length}`);
+      if (key === unlockSelectedDay) cell.classList.add("selected");
+      if (key === dayKey(new Date())) cell.classList.add("today");
+      const head = node("span", "events-calendar-day-head");
+      head.append(node("strong", "", day));
+      if (items.length) head.append(node("b", "", items.length));
+      cell.append(head);
+      for (const item of items.slice(0, 3)) {
+        const uncertain = ["month", "week"].includes(item.precision);
+        const style = uncertain ? "uncertain" : ["cliff", "linear", "scheduled"].includes(item.unlockType) ? item.unlockType : "unknown";
+        const entry = node("span", `events-calendar-entry unlock-entry ${style}`);
+        const ticker = `${uncertain ? "≈ " : ""}${item.symbol || item.name || "?"}`;
+        const pct = Number.isFinite(item.percentSupply) ? `${item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}%` : "";
+        entry.append(node("i", ""), node("span", "", ticker));
+        if (pct) entry.append(node("small", "", pct));
+        cell.append(entry);
+      }
+      if (items.length > 3) cell.append(node("span", "events-more", `+${items.length - 3}`));
+      cell.addEventListener("click", () => { unlockSelectedDay = key; renderUnlocks(); });
+      calendar.append(cell);
+    }
+
+    const count = byId("events-unlocks-count");
+    if (count) count.textContent = `В этом месяце: ${monthEvents} · всего по фильтрам: ${rows.length}`;
+    const selectedDate = new Date(`${unlockSelectedDay}T12:00:00`);
+    byId("events-unlocks-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+    const selectedItems = byDay.get(unlockSelectedDay) || [];
+    byId("events-unlocks-day-count").textContent = selectedItems.length ? `${selectedItems.length} событий` : "";
+
     const fragment = document.createDocumentFragment();
-    for (const item of rows.slice(0, unlockLimit)) {
+    for (const item of selectedItems.slice(0, 100)) {
       const card = node("article", "events-card");
       const at = new Date(item.at);
       const formatDay = date => new Date(date).toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
@@ -408,10 +459,8 @@
       card.append(sources); fragment.append(card);
     }
     list.replaceChildren(fragment);
-    if (!rows.length) clearWithEmpty(list, "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
-    byId("events-unlocks-more").hidden = rows.length <= unlockLimit;
-    const count = byId("events-unlocks-count");
-    if (count) count.textContent = `Событий по фильтрам: ${rows.length} · показано ${Math.min(rows.length, unlockLimit)}`;
+    if (!selectedItems.length) clearWithEmpty(list, rows.length ? "На эту дату разлоков нет" : "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
+    if (selectedItems.length > 100) list.append(node("div", "events-more", `Ещё ${selectedItems.length - 100} событий`));
     const signals = byId("events-unlocks-signals");
     if (signals) {
       const cards = (payload?.signals || []).filter(item => !query || `${item.title} ${item.titleRu || ""}`.toLowerCase().includes(query)).map(item => {
@@ -493,13 +542,19 @@
       }));
       byId("events-tab-listings").addEventListener("click", () => setTab("listings"));
       byId("events-tab-unlocks").addEventListener("click", () => setTab("unlocks"));
-      byId("events-unlocks-search").addEventListener("input", () => { unlockLimit = 100; renderUnlocks(); });
-      byId("events-unlocks-more").addEventListener("click", () => { unlockLimit += 100; renderUnlocks(); });
-      document.querySelectorAll("[data-unlock-period]").forEach(button => button.addEventListener("click", () => {
-        unlockPeriod = button.dataset.unlockPeriod; unlockLimit = 100;
-        button.parentElement.querySelectorAll("button").forEach(item => item.classList.toggle("on", item === button));
-        renderUnlocks();
-      }));
+      byId("events-unlocks-search").addEventListener("input", renderUnlocks);
+      for (const [id, offset] of [["events-unlocks-prev-month", -1], ["events-unlocks-next-month", 1]]) {
+        byId(id).addEventListener("click", () => {
+          unlockMonth = new Date(unlockMonth.getFullYear(), unlockMonth.getMonth() + offset, 1);
+          unlockSelectedDay = dayKey(unlockMonth);
+          renderUnlocks();
+        });
+      }
+      byId("events-unlocks-today").addEventListener("click", () => {
+        const today = new Date();
+        unlockMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        unlockSelectedDay = dayKey(today); renderUnlocks();
+      });
       byId("events-search").addEventListener("input", renderListings);
       for (const [attribute, update] of [["kind", value => { selectedKind = value; }],
         ["phase", value => { selectedPhase = value; }]]) {
