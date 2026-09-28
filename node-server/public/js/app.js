@@ -7368,9 +7368,8 @@ function connectWS() {
       }
 
       if (incomingWalls) {
-        if (incomingWalls.length > 0 || !densityData.length || (meta && !meta.partial)) {
-          densityData = incomingWalls;
-        }
+        if (meta?.updatedAt && meta.updatedAt < densityLastUpdate) return;
+        densityData = incomingWalls;
         if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
         densityLastUpdate = (meta && meta.updatedAt) || Date.now();
         if (typeof updateDensityStatusUI === "function") updateDensityStatusUI(meta);
@@ -10953,6 +10952,11 @@ let densityHover = -1;
 let densityMouseX = -1, densityMouseY = -1;
 let densityAnimFrame = null;
 let densityLastUpdate = 0;
+let densityReceivedAt = 0;
+let densityMeta = null;
+let densityFetchPending = false;
+let densityConnectionError = false;
+let densitySnapshotVersion = 0;
 const densityBubbleSpriteCache = new Map();
 const DENSITY_SPRITE_W = 84;
 const DENSITY_SPRITE_H = 92;
@@ -12829,6 +12833,10 @@ function resizeDensityCanvas() {
 }
 
 function updateDensityStatusUI(meta) {
+  densitySnapshotVersion++;
+  densityMeta = meta;
+  densityReceivedAt = Date.now();
+  densityConnectionError = false;
   const statusEl = $("density-status");
   if (!statusEl) return;
   if (meta && typeof meta.exchangesReady === "number" && typeof meta.exchangesTotal === "number") {
@@ -12841,6 +12849,8 @@ function updateDensityStatusUI(meta) {
     const coverageText = symbolTotal > 0 ? ` · охват ${weightedCoverage}%` : "";
     statusEl.textContent = `Биржи: ${meta.exchangesReady}/${meta.exchangesTotal}${coverageText}`;
     statusEl.style.color = (meta.partial || (symbolTotal > 0 && weightedCoverage < 100)) ? "#f59e0b" : "#10b981";
+    statusEl.title = Object.entries(meta.exchangeStatuses || {}).map(([ex, item]) =>
+      `${EX_NAMES[ex] || ex}: ${item.symbolsScanned || 0}/${item.symbolsTotal || 0} стаканов · ${item.status || "pending"}${item.error ? ` · ${item.error}` : ""}`).join("\n");
   } else {
     statusEl.textContent = "Обновлено";
     statusEl.style.color = "#10b981";
@@ -12865,8 +12875,12 @@ function updateDensityExchangeCounts() {
 }
 
 async function fetchWalls() {
+  if (densityFetchPending) return;
+  densityFetchPending = true;
+  const startedVersion = densitySnapshotVersion;
   try {
-    const res = await fetch("/api/walls?format=full");
+    const res = await fetch("/api/walls?format=full", { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     if (res.ok) {
       const data = await res.json();
       let incomingWalls = null;
@@ -12877,11 +12891,10 @@ async function fetchWalls() {
         incomingWalls = data.walls;
         meta = data;
       }
-
+      if (!incomingWalls) throw new Error("Invalid density response");
       if (incomingWalls) {
-        if (incomingWalls.length > 0 || !densityData.length || (meta && !meta.partial)) {
-          densityData = incomingWalls;
-        }
+        if (meta?.updatedAt && meta.updatedAt < densityLastUpdate) return;
+        densityData = incomingWalls;
         if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
         densityLastUpdate = (meta && meta.updatedAt) || Date.now();
         updateDensityStatusUI(meta);
@@ -12898,12 +12911,28 @@ async function fetchWalls() {
         }
       }
     }
-  } catch (e) { console.error("Failed to fetch walls:", e); }
+  } catch (e) {
+    if (densitySnapshotVersion !== startedVersion) return;
+    densityConnectionError = true;
+    const statusEl = $("density-status");
+    if (statusEl) { statusEl.textContent = "Нет связи со сканером · повторяем"; statusEl.style.color = "#f59e0b"; }
+    console.error("Failed to fetch walls:", e);
+  } finally { densityFetchPending = false; }
+}
+
+function densityEmptyMessage() {
+  if (densityConnectionError || (densityReceivedAt && Date.now() - densityReceivedAt > 30000)) return "Нет свежих данных · восстанавливаем связь…";
+  if (densityData.length) return "Нет плотностей по выбранным фильтрам";
+  if (!densityMeta) return "Подключаемся к сканеру стаканов…";
+  const venues = Object.values(densityMeta.exchangeStatuses || {});
+  if (!venues.some(item => item.symbolsTotal > 0)) return "Ожидаем список торговых пар…";
+  if (!venues.some(item => item.symbolsScanned > 0)) return "Ожидаем стаканы бирж · подробности в статусе";
+  return "Стаканы поступают · ожидаем подтверждённые плотности";
 }
 
 // Fallback polling (in case WS didn't deliver)
 setInterval(() => {
-  if (Date.now() - densityLastUpdate > 15000) fetchWalls();
+  if (Date.now() - densityReceivedAt > 15000) fetchWalls();
 }, 12000);
 
 // ── Filter ───────────────────────────────────────────────────────────────────
@@ -13429,7 +13458,7 @@ function drawDensityMap() {
   if (filtered.length === 0) {
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.font = "15px Inter"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("Сканирование стаканов...", cx, cy + 55);
+    ctx.fillText(densityEmptyMessage(), cx, cy + 55);
   }
 }
 

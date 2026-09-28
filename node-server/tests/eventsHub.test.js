@@ -248,6 +248,7 @@ test("published launch time is distinct from discovery and survives a feed outag
       currentFuture: { symbol: "BTC/USDT:USDT", base: "BTC", quote: "USDT", settle: "USDT", swap: true, info: {} },
       ...(expanded ? { future: { symbol: "NEXT/USDT:USDT", base: "NEXT", quote: "USDT", settle: "USDT", swap: true, info: { onboardDate: now + 86400000 } } } : {})
     } : { current: { symbol: "BTC/USDT", base: "BTC", quote: "USDT", spot: true, info: {} } },
+    unlockService: { refresh: async () => {}, snapshot: () => ({ rows: [] }) },
     fetchFeed: async () => { throw new Error("offline"); } });
   await hub.refreshMarkets(); expanded = true;
   await hub.refreshMarkets();
@@ -276,6 +277,7 @@ test("stream headlines wait for authenticated evidence before publishing or tran
   let finishTranslation;
   const hub = createEventsHub({ filePath, now: () => time,
     translate: () => new Promise(resolve => { finishTranslation = resolve; }),
+    unlockService: { refresh: async () => {}, snapshot: () => ({ rows: [] }) },
     fetchFeed: async () => "<rss></rss>" });
   const notifications = [];
   hub.subscribe(event => { if (event?.type !== "urgent") notifications.push(hub.snapshot().news[0]?.titleRu); });
@@ -328,4 +330,3 @@ test("developing unconfirmed reports are translated to Russian and surfaced in s
   assert.equal(hub.snapshot().developing[0].titleRu, "Кошелек Bitget опустошен в результате инцидента безопасности");
   assert.equal(urgentAlerts.length, 0, "translation does not trigger urgent toast");
 });
-

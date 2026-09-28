@@ -7,6 +7,7 @@ const { publisher, canonicalUrl, assessNews, sameClaim, isPublished } = require(
 const { createSourceReader, parseArticle, telegramLead } = require("./newsSources");
 const { ANNOUNCEMENT_FEEDS, parseAnnouncements, listingAnnouncements } = require("./exchangeAnnouncements");
 const { createUnlockService } = require("./unlockService");
+const { unlockSignals } = require("./unlockSignals");
 
 const VENUES = Object.freeze([
   ["GT", "Gate.io", "gate"], ["MX", "MEXC", "mexc"],
@@ -24,6 +25,8 @@ const FEEDS = Object.freeze([
   ["Decrypt", "https://decrypt.co/feed"],
   ["DL News", "https://www.dlnews.com/arc/outboundfeeds/rss/"],
   ["Blockworks", "https://blockworks.com/feed"],
+  ["Sui", "https://www.sui.io/blog/rss.xml"],
+  ["Arbitrum", "https://blog.arbitrum.io/rss/"],
   ["Federal Reserve", "https://www.federalreserve.gov/feeds/press_monetary.xml"],
   ["White House", "https://www.whitehouse.gov/presidential-actions/feed/"]
 ]);
@@ -205,16 +208,7 @@ function normalizeMarkets(markets, venue, now = Date.now()) {
   return [...rows.values()];
 }
 
-function createMarketFetcher(createClient = exchangeId => {
-  const ccxt = require("ccxt");
-  const client = new ccxt[exchangeId]({ enableRateLimit: true, timeout: 12000 });
-  if (exchangeId === "gate") {
-    client.options.fetchMarkets = { types: ["spot", "swap"] };
-    client.options.swap = { fetchMarkets: { settlementCurrencies: ["usdt"] } };
-    client.has.fetchCurrencies = false;
-  }
-  return client;
-}, deadlineMs = 30000) {
+function createMarketFetcher(createClient = require("./listingMarketClient").createListingMarketClient, deadlineMs = 30000) {
   const clients = new Map();
   const loaded = new Set();
   const pending = new Map();
@@ -285,6 +279,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   for (const item of state.news) item.verification = assessNews(item, state.news);
   let marketsRunning = false;
   let newsRunning = false;
+  let unlockRefreshPending = null;
   let marketTimer = null;
   let newsTimer = null;
   let stream = null;
@@ -602,7 +597,15 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     if (newsRunning || stopped) return;
     newsRunning = true;
     try {
-      await Promise.allSettled([unlockService.refresh(), ...FEEDS.map(async ([source, url]) => {
+      // Calendar pagination is independently cached and must not delay the
+      // next news poll. Publish its completion even when headlines do not change.
+      if (!unlockRefreshPending) {
+        const before = JSON.stringify(unlockService.snapshot().sources);
+        unlockRefreshPending = Promise.resolve().then(() => unlockService.refresh()).then(() => {
+          if (!stopped && before !== JSON.stringify(unlockService.snapshot().sources)) { publicCache = null; emit(); }
+        }).catch(() => {}).finally(() => { unlockRefreshPending = null; });
+      }
+      await Promise.allSettled([...FEEDS.map(async ([source, url]) => {
         try {
           const rows = parseNews(await fetchFeed(url), source, now()).filter(item => source !== "White House" || item.priority !== "regular");
           sourceHealth[source] = { status: rows.length ? "ok" : "no_recent_items", checkedAt: now(), latestAt: Math.max(0, ...rows.map(row => row.publishedAt)) || null };
@@ -639,7 +642,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       item.verification?.status === "pending" && item.verification.sources.length && item.publishedAt > now() - 7 * 86400000)
       .slice(0, 30).map(({ context, originVerified, ...item }) => item);
     publicCacheAt = now();
-    return publicCache = { listings: state.listings, announcements: listingAnnouncements(state.news), unlocks: unlockService.snapshot(), news, developing, venues: state.venues, sources: sourceHealth,
+    return publicCache = { listings: state.listings, announcements: listingAnnouncements(state.news), unlocks: { ...unlockService.snapshot(), signals: unlockSignals(state.news, now()) }, news, developing, venues: state.venues, sources: sourceHealth,
       translation: { provider: process.env.DEEPL_API_KEY ? "DeepL" : "MyMemory", pending: translationQueue.length + translating,
         untranslated: [...news, ...developing].filter(item => !item.titleRu && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)).length,
         pausedUntil: translationPauseUntil || null, lastError: translationLastError },

@@ -33,7 +33,7 @@
          otherwise show while fonts.css is still being parsed. -->
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/js/app.js?v=2105" as="script" />
+    <link rel="preload" href="/js/app.js?v=2106" as="script" />
     <link rel="stylesheet" href="/css/fonts.css?v=3" />
     <link rel="stylesheet" href="/css/app.css?v=1020" />
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
@@ -41,7 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/events.css?v=5" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=6" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1152,9 +1152,13 @@
                 <div class="events-section-title"><div><h2>Календарь разлоков</h2><p>Расписание вестинга не означает продажу токенов. Сверяйте дату и условия с первоисточником.</p></div></div>
                 <div class="events-filters">
                     <input id="events-unlocks-search" class="events-search" type="search" placeholder="Токен или проект" aria-label="Поиск разлоков">
+                    <div class="events-picker" data-picker="unlock-type"><button id="events-unlocks-type" type="button" class="events-picker-btn" aria-haspopup="listbox" aria-expanded="false"><span>Все типы</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Тип разлока"></div></div>
+                    <div class="events-picker" data-picker="unlock-source"><button id="events-unlocks-source" type="button" class="events-picker-btn" aria-haspopup="listbox" aria-expanded="false"><span>Все источники</span><span class="events-picker-arrow">⌄</span></button><div class="events-picker-menu" role="listbox" aria-label="Источник разлока"></div></div>
                     <div class="events-segment" role="group" aria-label="Период разлоков"><button type="button" data-unlock-period="30" class="on">30 дней</button><button type="button" data-unlock-period="90">90 дней</button><button type="button" data-unlock-period="365">Год</button><button type="button" data-unlock-period="past">Прошедшие</button></div>
                 </div>
                 <p id="events-unlocks-status" class="events-coverage" role="status"></p>
+                <details class="events-card"><summary>Публикации о разлоках · требуют проверки расписания</summary><p>Обнаружены в подключённых новостях и официальных лентах. Дата публикации не является датой разлока.</p><div id="events-unlocks-signals" class="events-feed"></div></details>
+                <p id="events-unlocks-count" class="events-coverage" aria-live="polite"></p>
                 <div id="events-unlocks-list" class="events-feed"></div>
                 <button id="events-unlocks-more" type="button" hidden>Показать ещё</button>
             </div>
@@ -3697,11 +3701,11 @@
     <script defer src="/js/formationEngine.js?v=2013"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
-    <script defer src="/js/app.js?v=2105"></script>
+    <script defer src="/js/app.js?v=2106"></script>
     <script defer src="/js/arbitrage.js?v=2017"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2018"></script>
-    <script defer src="/js/events.js?v=8"></script>
+    <script defer src="/js/events.js?v=10"></script>
 </body>
 
 </html>

@@ -4,6 +4,9 @@
 .events-heading h1{font-size:clamp(22px,2.3vw,30px);line-height:1.1;letter-spacing:-.035em;margin:0}
 .events-heading p,.events-section-title p{color:var(--t2,#939aab);font-size:13px;margin:0}
 .events-updated,.events-coverage{font-size:11px;color:var(--t2,#939aab);white-space:nowrap}
+#events-unlocks-status{white-space:normal;line-height:1.6;margin:0 0 14px;overflow-wrap:anywhere}
+#events-unlocks-panel>details{margin-top:18px}
+#events-unlocks-panel>details>summary{cursor:pointer;font-weight:600}
 .events-tabs{display:flex;gap:6px;max-width:1260px;margin:0 auto 18px;padding:5px;background:var(--bg2,#1c2028);border:1px solid var(--bd,#30343d);border-radius:12px;width:max-content;min-width:250px}
 .events-tabs button{flex:1;border:0;background:transparent;color:var(--t2,#939aab);font-family:inherit;font-size:13px;font-weight:600;padding:10px 20px;border-radius:8px;cursor:pointer}
 .events-tabs button.on{background:var(--ac,#8842ea);color:white;box-shadow:0 5px 18px #6730bf44}

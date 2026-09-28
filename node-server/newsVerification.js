@@ -2,6 +2,8 @@
 
 // Identity comes from the fetched publisher's URL, never a provider's source label.
 const PUBLISHERS = [
+  ["blog.sui.io", "sui", "Sui", "official"], ["blog.arbitrum.io", "arbitrum", "Arbitrum", "official"],
+  ["sui.io", "sui", "Sui", "official"],
   ["coindesk.com", "coindesk", "CoinDesk"], ["cointelegraph.com", "cointelegraph", "Cointelegraph"],
   ["theblock.co", "theblock", "The Block"], ["decrypt.co", "decrypt", "Decrypt"],
   ["federalreserve.gov", "fed", "Federal Reserve", "macro"],
@@ -18,7 +20,7 @@ function publisher(url) {
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port) return null;
     const origin = PUBLISHERS.find(([host]) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`));
     if (!origin) return null;
-    const officialPaths = { binance: /\/support\/announcement\//, bybit: /\//,
+    const officialPaths = { sui: parsed.hostname === "blog.sui.io" ? /^\/[^/]+/ : /^\/blog\/[^/]+/, arbitrum: /^\/[^/]+/, binance: /\/support\/announcement\//, bybit: /\//,
       okx: /\/help\//, kucoin: /\/announcement\//, fed: /\/newsevents\/pressreleases\//,
       sec: /\/(?:newsroom\/press-releases|news\/press-release)\//, whitehouse: /\/(?:presidential-actions|briefings-statements)\//,
       gate: /^\/announcements\/article\/\d+$/, mexc: /^\/(?:support|announcements)\/article\//,

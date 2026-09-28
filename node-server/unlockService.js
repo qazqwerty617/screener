@@ -1,6 +1,7 @@
 "use strict";
 
 const { primaryUnlocks, SCHEDULES, REVIEWED_AT } = require("./unlockSchedules");
+const { createPublicUnlocks } = require("./publicUnlocks");
 const DAY = 86400000;
 const positive = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
 function safeUrl(value) {
@@ -44,10 +45,11 @@ function normalizeEmissions(payload, now = Date.now()) {
     percentCirculating: row.circulatingSupply ? row.amount / row.circulatingSupply * 100 : null }));
 }
 
-function createUnlockService({ apiKey = process.env.DEFILLAMA_API_KEY || "", request = fetch, now = Date.now } = {}) {
+function createUnlockService({ apiKey = process.env.DEFILLAMA_API_KEY || "", request = fetch, now = Date.now, publicSources = true } = {}) {
+  const publicCalendar = publicSources ? createPublicUnlocks({ request, now }) : null;
   let rows = [], updatedAt = null, checkedAt = null, retryAt = 0, pending = null;
   let status = apiKey ? "pending" : "not_configured";
-  async function refresh() {
+  async function refreshPaid() {
     if (!apiKey || now() < retryAt) return;
     if (pending) return pending;
     pending = (async () => {
@@ -75,11 +77,13 @@ function createUnlockService({ apiKey = process.env.DEFILLAMA_API_KEY || "", req
     // Keep primary schedules when an aggregator fails. Both provenances are
     // retained separately; a disagreement must not silently become a new fact.
     const freshRows = updatedAt && now() - updatedAt < DAY ? rows : [];
-    return { rows: [...primary, ...freshRows].sort((a, b) => a.at - b.at), updatedAt,
+    const free = publicCalendar?.snapshot() || { rows: [], sources: {} };
+    return { rows: [...primary.map(row => ({ ...row, unlockType: "scheduled" })), ...free.rows, ...freshRows.map(row => ({ ...row, unlockType: "cliff" }))].sort((a, b) => a.at - b.at), updatedAt,
       sources: { primary: { status: "reviewed_schedule", reviewedAt: REVIEWED_AT, tokens: SCHEDULES.length },
+        ...free.sources,
         defillama: { status, checkedAt, updatedAt, stale: !!updatedAt && now() - updatedAt >= 3600000 } },
-      coverage: apiKey ? "primary_and_aggregator" : "primary_only" };
+      coverage: free.rows.length ? "public_calendars" : apiKey ? "primary_and_aggregator" : "primary_only" };
   }
-  return { refresh, snapshot };
+  return { refresh: () => Promise.allSettled([refreshPaid(), publicCalendar?.refresh()]), snapshot };
 }
 module.exports = { createUnlockService, normalizeEmissions };

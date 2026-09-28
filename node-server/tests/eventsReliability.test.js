@@ -6,10 +6,22 @@ const { createEventsHub, createMarketFetcher, normalizeMarkets, parseGateAnnounc
 const now = Date.now();
 function hubFor(t, options) {
   const filePath = path.join(os.tmpdir(), `events-reliability-${crypto.randomUUID()}.json`);
-  const hub = createEventsHub({ filePath, now: () => now, translate: async () => null, ...options });
+  const hub = createEventsHub({ filePath, now: () => now, translate: async () => null,
+    unlockService: { refresh: async () => {}, snapshot: () => ({ rows: [] }) }, ...options });
   t.after(() => { hub.stop(); try { fs.unlinkSync(filePath); } catch (_) {} });
   return hub;
 }
+
+test("a slow calendar does not stall news polls or emit duplicate completion updates", async t => {
+  let finish, calls=0, version=0, updates=0;
+  const hub=hubFor(t,{fetchFeed:async()=>"<rss/>",fetchGateAnnouncements:async()=>({code:0,data:{list:[]}}),
+    unlockService:{refresh:()=>{calls++;return new Promise(resolve=>finish=()=>{version++;resolve();});},snapshot:()=>({sources:{test:{version}}})}});
+  hub.subscribe(()=>updates++);
+  await hub.refreshNews(); await hub.refreshNews();
+  assert.equal(calls,1); assert.equal(updates,0);
+  finish(); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(updates,1); assert.equal(hub.snapshot().unlocks.sources.test.version,1);
+});
 test("a corroborated hack emits one toast; a later denial retracts it", t => {
   const hub = hubFor(t), events = [];
   hub.subscribe(event => { if (event) events.push(event); });

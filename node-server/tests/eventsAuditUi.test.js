@@ -60,3 +60,30 @@ test("a failed refresh preserves last data and the offline label across tab chan
   click("events-tab-unlocks");
   assert.match(w.document.getElementById("events-updated").textContent, /Нет связи/);
 });
+
+test("unlock source and type menus preserve uncertain date windows and separate discovery leads", async t => {
+  const date = new Date(), start = Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),1), end=Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1)-1;
+  const at = Date.now()+86400000;
+  const base={name:"Test",amount:1000,sources:["https://dropstab.com/coins/test/vesting"],precision:"day",at};
+  const rows=[{...base,symbol:"CLIFF",unlockType:"cliff",provider:"DropsTab"},
+    {...base,symbol:"LINEAR",unlockType:"linear",provider:"DropsTab"},
+    {...base,symbol:"PRIMARY",unlockType:"scheduled",provider:"Документация проекта",confidence:"schedule"},
+    {...base,symbol:"MONTH",at:start,windowStart:start,windowEnd:end,precision:"month",unlockType:"unknown",provider:"Tokenomist"}];
+  const {w,click}=await setup(t,{news:[],unlocks:{rows,signals:[{title:"Vesting schedule announcement",url:"https://blog.sui.io/vesting",source:"Sui",publishedAt:Date.now()}]}});
+  click("events-tab-unlocks"); const list=w.document.getElementById("events-unlocks-list");
+  assert.equal(list.querySelectorAll("article").length,4); assert.match(list.textContent,/любой день месяца/);
+  const pick=(kind,value)=>w.document.querySelector(`.events-picker[data-picker="unlock-${kind}"] [data-value="${value}"]`).click();
+  pick("type","linear"); assert.equal(list.querySelectorAll("article").length,1); assert.match(list.textContent,/LINEAR/);
+  pick("type","all"); pick("source","primary"); assert.match(list.textContent,/PRIMARY/); assert.doesNotMatch(list.textContent,/CLIFF/);
+  pick("source","Tokenomist"); assert.match(list.textContent,/MONTH/);
+  assert.match(w.document.getElementById("events-unlocks-signals").textContent,/расписание требует проверки/);
+  assert.doesNotMatch(list.textContent,/Vesting schedule announcement/);
+});
+
+test("an hour-precision unlock displays the actual hour rather than an unspecified hour label", async t => {
+  const at = Math.floor(Date.now() / 86400000) * 86400000 + 86400000 + 13 * 3600000;
+  const { w, click } = await setup(t, { news: [], unlocks: { rows: [{ at, amount: 50, name: "Hourly", symbol: "HOUR",
+    precision: "hour", provider: "Tokenomist", sources: [] }] } });
+  click("events-tab-unlocks");
+  assert.match(w.document.getElementById("events-unlocks-list").textContent, /\d{1,2}:00/);
+});

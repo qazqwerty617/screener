@@ -38,7 +38,7 @@ test("aggregator parsing does not turn a linear emission into a cliff or invent 
 });
 test("unlock service shares requests, backs off on failure and marks stale cached results", async () => {
   let clock = now, calls = 0, fail = false;
-  const service = createUnlockService({ apiKey: "test-key", now: () => clock, request: async () => {
+  const service = createUnlockService({ apiKey: "test-key", publicSources: false, now: () => clock, request: async () => {
     calls++; return new Response(fail ? "offline" : JSON.stringify([token]), { status: fail ? 503 : 200 });
   } });
   await Promise.all(Array.from({ length: 30 }, () => service.refresh()));
@@ -52,7 +52,7 @@ test("unlock service shares requests, backs off on failure and marks stale cache
   assert.ok(service.snapshot().rows.every(row => row.provider !== "DefiLlama"));
 });
 test("public schedules work without an API key and disclose limited coverage", async () => {
-  const service = createUnlockService({ apiKey: "", now: () => now, request: () => { throw new Error("must not request paid data"); } });
+  const service = createUnlockService({ apiKey: "", publicSources: false, now: () => now, request: () => { throw new Error("must not request paid data"); } });
   await service.refresh();
   assert.equal(service.snapshot().coverage, "primary_only");
   assert.equal(service.snapshot().sources.primary.tokens, 3);

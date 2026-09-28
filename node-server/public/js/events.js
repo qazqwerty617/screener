@@ -27,6 +27,7 @@
   let stream = null;
   let updateTimer = null;
   let unlockPeriod = "30", unlockLimit = 100;
+  let unlockType = "all", unlockSource = "all";
   let newsKind = "all", newsLimit = 40;
   const seenKey = "obsidian-urgent-news-seen-v1";
   const visibleAlerts = new Map();
@@ -141,7 +142,9 @@
     const menu = picker.querySelector(".events-picker-menu");
     const select = value => {
       if (kind === "exchange") selectedExchange = value;
-      else selectedMarket = value;
+      else if (kind === "market") selectedMarket = value;
+      else if (kind === "unlock-type") unlockType = value;
+      else if (kind === "unlock-source") unlockSource = value;
       const chosen = options.find(option => option[0] === value);
       const icon = kind === "exchange" ? node("img", "") : node("span", "events-market-icon", chosen[2]);
       if (kind === "exchange") { icon.src = `/img/${chosen[2]}.svg`; icon.alt = ""; }
@@ -151,7 +154,8 @@
         item.classList.toggle("on", active);
         item.setAttribute("aria-selected", String(active));
       });
-      closePickers(); renderListings();
+      closePickers();
+      if (kind.startsWith("unlock-")) { unlockLimit = 100; renderUnlocks(); } else renderListings();
     };
     for (const [value, label, glyph] of options) {
       const item = node("button", "events-picker-option");
@@ -358,26 +362,42 @@
     const payload = data?.unlocks;
     const primary = payload?.sources?.primary;
     const aggregator = payload?.sources?.defillama;
-    status.textContent = `Публичные расписания: ${primary?.tokens || 0} проекта · проверены ${dateTime(primary?.reviewedAt)}. ` +
-      (payload?.coverage === "primary_only" ? "Охват ограничен: дополнительный календарь не подключён."
-        : aggregator?.status === "ok" && !aggregator.stale ? `DefiLlama: обновлено ${dateTime(aggregator.updatedAt)}` : "DefiLlama: нет свежих данных.");
+    const health = source => source?.expired ? "кэш истёк, события скрыты" : source?.status === "error"
+      ? (source.updatedAt ? "источник недоступен, показан кэш" : "источник недоступен")
+      : source?.stale ? "данные устарели" : source?.status === "empty" ? "нет датированных событий в доступном календаре" : source?.status === "ok" ? `обновлено ${dateTime(source.updatedAt)}` : "загрузка";
+    const drops = payload?.sources?.dropstab, tokenomist = payload?.sources?.tokenomist;
+    status.textContent = `Официальные расписания: ${primary?.tokens || 0} проекта. ` +
+      (drops ? `DropsTab: ${drops.tokens || 0} проектов с событиями · проверено ${drops.scannedTokens || 0}/${drops.availableTokens ?? "?"} · ${health(drops)}${drops.partial ? " · неполный обход" : ""}. ` : "") +
+      (tokenomist ? `Tokenomist: ${tokenomist.tokens || 0} проектов · только публичная страница · ${health(tokenomist)}. ` : "") +
+      (aggregator?.status === "not_configured" ? "" : `DefiLlama: ${health(aggregator)}. `) +
+      "Охват ограничен доступными источниками. Данные разных поставщиков не суммируются; расхождения сверяйте по ссылкам.";
     const query = byId("events-unlocks-search").value.trim().toLowerCase();
+    const kind = unlockType, provider = unlockSource;
     const now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
     const rows = (payload?.rows || []).filter(item => {
       const at = Number(item.at);
       return Number.isFinite(at) && item.amount > 0 &&
-        (unlockPeriod === "past" ? at < today && at >= today - 90 * 86400000 : at >= today && at <= now + Number(unlockPeriod) * 86400000) &&
+        (unlockPeriod === "past" ? (item.windowEnd ?? at) < today && (item.windowEnd ?? at) >= today - 90 * 86400000
+          : (item.windowEnd ?? at) >= today && (item.windowStart ?? at) <= now + Number(unlockPeriod) * 86400000) &&
+        (kind === "all" || item.unlockType === kind) &&
+        (provider === "all" || (provider === "primary" ? item.confidence === "schedule" : item.provider === provider)) &&
         (!query || `${item.symbol || ""} ${item.name}`.toLowerCase().includes(query));
     }).sort((a, b) => unlockPeriod === "past" ? b.at - a.at : a.at - b.at);
     const fragment = document.createDocumentFragment();
     for (const item of rows.slice(0, unlockLimit)) {
       const card = node("article", "events-card");
       const at = new Date(item.at);
-      card.append(node("h3", "", `${item.symbol || item.name} · ${at.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" })}`));
+      const formatDay = date => new Date(date).toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
+      const dateLabel = item.precision === "month" ? at.toLocaleDateString("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" })
+        : item.precision === "week" ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
+      card.append(node("h3", "", `${item.symbol || item.name} · ${dateLabel}`));
+      const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию", unknown: "Тип выпуска не уточнён" };
+      card.append(node("p", "", `${item.name} · ${types[item.unlockType] || types.unknown}`));
       const amount = Number(item.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
-      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
+      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
       card.append(node("p", "", `${amount} токенов${share}`));
-      card.append(node("small", "", `${item.provider} · ${item.precision === "day" ? "дата по расписанию, точное время неизвестно" : dateTime(item.at)}`));
+      const precisionLabel = { month: "любой день месяца, дата приблизительная", week: "приблизительное окно ±3 дня", day: "точное время неизвестно", hour: `${dateTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${dateTime(item.at)} · оценка времени блока` }[item.precision];
+      card.append(node("small", "", `${item.provider} · ${precisionLabel || dateTime(item.at)}${item.stale ? " · УСТАРЕВШИЕ ДАННЫЕ" : ""}`));
       for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`));
       const sources = node("div", "events-news-sources");
       for (const url of item.sources || []) {
@@ -390,6 +410,19 @@
     list.replaceChildren(fragment);
     if (!rows.length) clearWithEmpty(list, "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
     byId("events-unlocks-more").hidden = rows.length <= unlockLimit;
+    const count = byId("events-unlocks-count");
+    if (count) count.textContent = `Событий по фильтрам: ${rows.length} · показано ${Math.min(rows.length, unlockLimit)}`;
+    const signals = byId("events-unlocks-signals");
+    if (signals) {
+      const cards = (payload?.signals || []).filter(item => !query || `${item.title} ${item.titleRu || ""}`.toLowerCase().includes(query)).map(item => {
+        const card = node("article", "events-card"), link = node("a", "events-source-link", item.titleRu || item.title);
+        try { const url = new URL(item.url); if (url.protocol !== "https:") return null; link.href = url.href; } catch (_) { return null; }
+        link.target = "_blank"; link.rel = "noopener noreferrer";
+        card.append(link, node("small", "", `${item.source} · опубликовано ${dateTime(item.publishedAt)} · расписание требует проверки`)); return card;
+      }).filter(Boolean);
+      signals.replaceChildren(...cards);
+      if (!cards.length) clearWithEmpty(signals, "Свежих публикаций по этому запросу нет.");
+    }
   }
 
   function render() {
@@ -447,6 +480,8 @@
       wired = true;
       wirePicker("exchange", [["all", "Все 11 бирж", "ALL"], ...VENUES.map(([code, name]) => [code, name, VENUE_ICONS[code]])]);
       wirePicker("market", MARKET_OPTIONS);
+      wirePicker("unlock-type", [["all", "Все типы", "◈"], ["cliff", "Разовые (cliff)", "◆"], ["linear", "Линейный вестинг", "↗"], ["scheduled", "Официальное расписание", "✓"], ["unknown", "Тип не уточнён", "?"]]);
+      wirePicker("unlock-source", [["all", "Все источники", "◈"], ["primary", "Официальные расписания", "✓"], ["DropsTab", "DropsTab", "D"], ["Tokenomist", "Tokenomist", "T"], ["DefiLlama", "DefiLlama", "L"]]);
       document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
       byId("events-news-search").addEventListener("input", () => { newsLimit = 40; renderNews(); });

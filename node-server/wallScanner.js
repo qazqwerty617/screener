@@ -2708,7 +2708,8 @@ function startScanning(tickers, apiFetch, onUpdate) {
   console.log(`[WALL] band=${MIN_DIST_PCT}%-${MAX_DIST_PCT}%, seed=${SEED_MULT}x grow=${GROW_MULT}x gap<=${MAX_TICK_GAP} ticks, output=${Number.isFinite(MAX_OUTPUT) ? MAX_OUTPUT : "unlimited"}, tiers=${TIERS.map(t => t.intervalMs).join("/")}ms`);
   console.log(`[WALL] volume floors: ${EXCHANGES.map(ex => `${ex} $${(minVolumeFor(ex) / 1000).toFixed(0)}K`).join(", ")}`);
 
-  const assetMetadataReady = refreshVenueAssetExclusions()
+  refreshVenueAssetExclusions()
+    .then(() => refreshUniverse(tickers))
     .catch(e => console.warn("[WALL] RWA metadata refresh failed; curated fallback active:", e.message));
   updateSpotTickers(tickers).catch(e => console.error("[SPOT] Initial load error:", e.message));
   setInterval(() => {
@@ -2716,9 +2717,9 @@ function startScanning(tickers, apiFetch, onUpdate) {
     refreshVenueAssetExclusions().catch(() => {});
   }, SPOT_REFRESH_MS);
 
-  // The first universe must not race the asset-class catalogue; otherwise a
-  // fresh deploy spends its first sweep and confirmation budget on RWA books.
-  assetMetadataReady.finally(() => startUniverseLoop(tickers));
+  // Curated exclusions are available immediately. A stalled metadata provider
+  // must never block every venue's universe; apply new exclusions on arrival.
+  startUniverseLoop(tickers);
   startPublishLoop();
 
   // Let the ticker WS feeds populate before the first book requests.

@@ -102,7 +102,7 @@ async function run() {
 
     echo "--- Restarting PM2 services ---"
     pm2 restart cryptoscreen-go || true
-    pm2 restart server --update-env
+    pm2 startOrRestart /root/nother/node-server/ecosystem.config.js --only server --update-env
     sleep 3
     pm2 status
 

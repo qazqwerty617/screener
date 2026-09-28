@@ -33,6 +33,7 @@
 const http = require("http");
 const https = require("https");
 const { execSync, exec, spawn } = require("child_process");
+const { pm2Environment, memoryLimitMB } = require("./pm2Environment");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -102,7 +103,7 @@ const CONFIG = {
   WS_TIMEOUT_MS: 7000,                 // Max WebSocket handshake timeout (adjusted for heavy event loop)
   MAX_FAILURES_BEFORE_RESTART: 4,      // Consec failures before auto-heal (40s buffer against tick bursts)
   MIN_NODE_MEMORY_FLOOR_MB: 750,       // Minimum floor before adaptive RAM trigger
-  MAX_NODE_MEMORY_CEILING_MB: 1150,    // Absolute hard ceiling before emergency recycle
+  MAX_NODE_MEMORY_CEILING_MB: memoryLimitMB(require("./ecosystem.config").apps.find(app => app.name === "server").max_memory_restart),
   MAX_LOG_SIZE_MB: 40,                 // Max PM2 logs size before flush
   MAX_AUTH_LOGS_ENTRIES: 2000,         // Retain latest N auth log records
   MAX_AUTH_LOG_AGE_DAYS: 30,           // Retain auth logs younger than 30 days
@@ -377,7 +378,7 @@ function log(level, message, meta = "") {
 // ═══ Command Runner (Sync & Async) ════════════════════════════════════════════
 function runCmd(cmd, silent = false) {
   try {
-    return execSync(cmd, { encoding: "utf8", timeout: 15000, stdio: silent ? "pipe" : "pipe" }).trim();
+    return execSync(cmd, { encoding: "utf8", timeout: 15000, stdio: silent ? "pipe" : "pipe", env: pm2Environment() }).trim();
   } catch (err) {
     if (!silent) log("warn", `Command notice (${cmd.slice(0, 40)}...): ${err.message}`);
     return null;
@@ -386,7 +387,7 @@ function runCmd(cmd, silent = false) {
 
 function runCmdAsync(cmd, timeoutMs = 15000) {
   return new Promise((resolve) => {
-    exec(cmd, { encoding: "utf8", timeout: timeoutMs }, (err, stdout) => {
+    exec(cmd, { encoding: "utf8", timeout: timeoutMs, env: pm2Environment() }, (err, stdout) => {
       if (err) return resolve({ ok: false, error: err.message, stdout: "" });
       resolve({ ok: true, stdout: (stdout || "").trim() });
     });
@@ -1042,9 +1043,10 @@ async function healServer(reason) {
 
   try {
     await gracefulDrainBeforeReload(CONFIG.NODE_PORT);
-    let res = runCmd("pm2 reload server --update-env", true);
+    const recoveryCommand = `pm2 startOrRestart "${path.join(__dirname, "ecosystem.config.js")}" --only server --update-env`;
+    let res = runCmd(recoveryCommand, true);
     if (!res || !res.includes("server")) {
-      res = runCmd("pm2 restart server --update-env", true);
+      res = runCmd(recoveryCommand, true);
     }
     
     if (res && res.includes("server")) {
@@ -1056,7 +1058,7 @@ async function healServer(reason) {
     log("error", "Standard PM2 reload failed. Forcing port release and fresh start...", err.message);
     freePortIfLocked(CONFIG.NODE_PORT, "server");
     const serverDir = path.join(__dirname);
-    runCmd(`cd "${serverDir}" && pm2 start server.js --name server --update-env`, true);
+    runCmd(`pm2 startOrRestart "${path.join(serverDir, "ecosystem.config.js")}" --only server --update-env`, true);
   }
 
   sendTelegramAlert(`🛠️ <b>[ORCHESTRATOR AUTO-HEAL]</b>\nАвтоматически устранен сбой сервера.\n• Причина: <code>${reason}</code>\n• Статус: Восстановлен и работает штатно (100% OK)`);
@@ -1332,7 +1334,12 @@ async function performHealthCheck() {
   const isZScoreAnomaly = memZScore >= 3.2 && serverMemMB > CONFIG.MIN_NODE_MEMORY_FLOOR_MB;
   const isHardCeilingExceeded = serverMemMB > CONFIG.MAX_NODE_MEMORY_CEILING_MB;
   
-  if (isZScoreAnomaly || isHardCeilingExceeded) {
+  // A catalogue refresh legitimately changes RSS. A z-score alone must not
+  // reset live order books when HTTP/WS remain healthy and RAM is in budget.
+  if (isZScoreAnomaly && serverMemMB > CONFIG.MAX_NODE_MEMORY_CEILING_MB * 0.85) {
+    log("warn", `Memory growth near configured budget (RAM: ${serverMemMB}MB, Z-Score: ${memZScore})`);
+  }
+  if (isHardCeilingExceeded) {
     log("warn", `Adaptive memory threshold triggered (RAM: ${serverMemMB}MB, Z-Score: ${memZScore}). Recycling server...`);
     await healServer(`adaptive_ram_zscore_${memZScore}`);
     return;
@@ -1755,7 +1762,7 @@ function ensurePm2EcosystemConfig() {
       script: "server.js",
       cwd: __dirname,
       node_args: "--max-old-space-size=1024 --expose-gc",
-      max_memory_restart: "750M",
+      max_memory_restart: "1800M",
       restart_delay: 2000,
       kill_timeout: 5000,
       autorestart: true,
@@ -1768,7 +1775,7 @@ function ensurePm2EcosystemConfig() {
       script: "orchestrator.js",
       cwd: __dirname,
       node_args: "--expose-gc",
-      max_memory_restart: "150M",
+      max_memory_restart: "350M",
       restart_delay: 3000,
       autorestart: true
     }
