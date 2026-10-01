@@ -35,7 +35,8 @@ function build(t, saved = {}) {
     sanitizeCandles: data => data,
     ChartInstance: class { constructor(grid) { this.el = w.document.createElement("div"); grid.append(this.el); } update(c) { Object.assign(this, c); } draw() {} dispose() {} }
   });
-  w.eval(section + "\nwindow.testRefresh = preloadFormationsInBackground;");
+  const overlayOptions = /window.getFormationsOverlayOpts = function[^]*?\n  };/.exec(source)[0];
+  w.eval(section + '\n' + overlayOptions + "\nwindow.testRefresh = preloadFormationsInBackground;");
   return { w, timers, requests, klines, respond: data => { response = data; }, respondRange: data => { ranges = data; } };
 }
 
@@ -61,6 +62,25 @@ test("background prepares chart candles before the formations tab is opened", as
   await flush();
   assert.ok(h.klines.has("BN|BTCUSDT|15m"), "opening the tab must not start its first candle download");
   assert.equal(h.w.chartInstances.length, 0, "background must not construct hidden charts");
+});
+
+test('retest eligibility uses the same minimum touches as its chart overlay', async t => {
+  const h = build(t, { formations_active_tab: 'retest', formations_min_cascade: '4' });
+  await h.w.testRefresh(); await flush();
+  h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
+  assert.equal(h.w.chartInstances.length, 0, 'three-touch retests must not create blank four-touch chart cards');
+  h.w.$('formations-settings-menu').querySelector('[data-value="3"]').click(); await flush();
+  assert.equal(h.w.chartInstances.length, 1);
+});
+
+test('overlay options select the exact market and timeframe snapshot', async t => {
+  const h = build(t, { formations_active_tab: 'breakout' });
+  await h.w.testRefresh(); await flush();
+  const same = h.w.getFormationsOverlayOpts('BN', 'BTCUSDT', '15m');
+  assert.equal(same.levels.length, 2);
+  assert.equal(h.w.getFormationsOverlayOpts('BB', 'BTCUSDT', '15m').levels.length, 0);
+  assert.equal(h.w.getFormationsOverlayOpts('BN', 'ETHUSDT', '15m').levels.length, 0);
+  assert.equal(h.w.getFormationsOverlayOpts('BN', 'BTCUSDT', '1h').levels.length, 0);
 });
 
 test("an empty server snapshot removes vanished formations and ends loading", async t => {

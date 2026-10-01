@@ -30,6 +30,7 @@
     [/^(\d+) записей$/, '$1 entries'], [/^(.+), (?:записей|событий): (\d+)$/, '$1, events: $2'],
     [/^(.+) токенов$/, '$1 tokens'], [/^([\d.,<>]+%) от указанного общего предложения$/, '$1 of stated total supply'],
     [/^обновлено (.+)$/, 'updated $1'], [/^Обновлено (.+)$/, 'Updated $1'],
+    [/^Переходы ([\d\s.,]+)$/, 'Visits $1'],
     [/^Новости (.+)$/, 'News $1'], [/^рынки (.+)$/, 'markets $1'],
     [/^Календарь UTC · в месяце: (\d+) записей с датой \+ (\d+) приблизительных окон · всего по фильтрам: (\d+)\. % = доля общего предложения\.$/, 'UTC calendar · this month: $1 dated entries + $2 approximate windows · matching filters: $3. % = share of total supply.'],
     [/^Кандидатов: (\d+) · сайтов проверено: (\d+) · проектов со ссылками на аккаунты: (\d+) · источников успешно прочитано за 10 минут: (\d+)\.$/, 'Candidates: $1 · websites checked: $2 · projects linking accounts: $3 · sources read successfully in 10 minutes: $4.'],
@@ -119,6 +120,7 @@
     }
     const select = document.getElementById('profile-language');
     if (select) select.value = language;
+    document.querySelectorAll('.profile-language-option').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.language === language)));
     observe();
     if (previous !== language) window.dispatchEvent(new CustomEvent('obsidian:languagechange', { detail: { language } }));
   }
@@ -126,6 +128,7 @@
   function init() {
     setLanguage(language, false);
     document.getElementById('profile-language')?.addEventListener('change', event => setLanguage(event.target.value));
+    document.querySelectorAll('.profile-language-option').forEach(button => button.addEventListener('click', () => setLanguage(button.dataset.language)));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
   window.addEventListener('storage', event => { if (event.key === key) setLanguage(event.newValue, false); });

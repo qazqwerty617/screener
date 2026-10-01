@@ -20,6 +20,22 @@ function build(t, markup = html) {
   dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
   return dom.window;
 }
+
+test('profile language buttons show the selected language and persist changes without a native popup', t => {
+  const w = build(t), buttons = [...w.document.querySelectorAll('.profile-language-option')];
+  assert.equal(buttons.length, 2); assert.equal(w.document.getElementById('profile-language').hidden, true);
+  assert.equal(buttons[0].getAttribute('aria-pressed'), 'true');
+  w.document.getElementById('profile-stat-plan').textContent = 'PRO (Активна)';
+  w.document.getElementById('profile-referral-summary-counts').textContent = 'Переходы 12 345 · PRO 24';
+  buttons[1].click();
+  assert.equal(w.document.documentElement.lang, 'en'); assert.equal(w.localStorage.getItem('obsidian_language'), 'en');
+  assert.equal(buttons[1].getAttribute('aria-pressed'), 'true'); assert.equal(buttons[0].getAttribute('aria-pressed'), 'false');
+  assert.equal(w.document.getElementById('profile-stat-plan').textContent, 'PRO (Active)');
+  assert.equal(w.document.getElementById('profile-referral-summary-counts').textContent, 'Visits 12 345 · PRO 24');
+  buttons[0].click();
+  assert.equal(w.document.documentElement.lang, 'ru'); assert.equal(buttons[0].getAttribute('aria-pressed'), 'true');
+  assert.equal(w.document.getElementById('profile-stat-plan').textContent, 'PRO (Активна)');
+});
 test('English covers all static controls, headings, hints and accessible labels', t => {
   const w = build(t); w.ObsidianI18n.setLanguage('en');
   const missing = new Set(), walker = w.document.createTreeWalker(w.document.body, 4);

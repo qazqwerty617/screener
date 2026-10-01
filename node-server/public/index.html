@@ -33,9 +33,9 @@
          otherwise show while fonts.css is still being parsed. -->
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/js/app.js?v=2112" as="script" />
+    <link rel="preload" href="/js/app.js?v=2113" as="script" />
     <link rel="stylesheet" href="/css/fonts.css?v=3" />
-    <link rel="stylesheet" href="/css/app.css?v=1022" />
+    <link rel="stylesheet" href="/css/app.css?v=1023" />
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
          `media="print"` + onload swap is the standard non-blocking stylesheet
          pattern: the browser fetches it at low priority without blocking paint. -->
@@ -3221,8 +3221,12 @@
                 </div>
             </div>
             <div class="profile-language-row">
-                <label for="profile-language">Язык интерфейса</label>
-                <select id="profile-language" class="profile-language-select" translate="no">
+                <span id="profile-language-label">Язык интерфейса</span>
+                <div class="profile-language-control" role="group" aria-labelledby="profile-language-label" translate="no">
+                    <button type="button" class="profile-language-option" data-language="ru" aria-pressed="true"><span class="profile-language-code">RU</span>Русский</button>
+                    <button type="button" class="profile-language-option" data-language="en" aria-pressed="false"><span class="profile-language-code">EN</span>English</button>
+                </div>
+                <select id="profile-language" hidden aria-hidden="true" tabindex="-1" translate="no">
                     <option value="ru">Русский</option>
                     <option value="en">English</option>
                 </select>
@@ -3774,12 +3778,12 @@
          inside app.js / journal.js / tradeOverlay.js fire exactly as before.
          The `?v=` on app.js must match the preload above or the file downloads
          twice. -->
-    <script defer src="/js/i18n-en.js?v=3"></script>
-    <script defer src="/js/i18n.js?v=3"></script>
-    <script defer src="/js/formationEngine.js?v=2014"></script>
+    <script defer src="/js/i18n-en.js?v=4"></script>
+    <script defer src="/js/i18n.js?v=4"></script>
+    <script defer src="/js/formationEngine.js?v=2015"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
-    <script defer src="/js/app.js?v=2112"></script>
+    <script defer src="/js/app.js?v=2113"></script>
     <script defer src="/js/arbitrage.js?v=2018"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2019"></script>

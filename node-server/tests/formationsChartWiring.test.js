@@ -18,7 +18,7 @@ test("formations mini charts render through the screener overlay renderer", () =
     !APP.includes('if (activeView === "formations" && this.levels && this.levels.length > 0)'),
     "the duplicate formations overlay in ChartInstance.draw must be removed"
   );
-  assert.match(APP, /const fmOpts = window\.getFormationsOverlayOpts\?\.\(\);/);
+  assert.match(APP, /window\.getFormationsOverlayOpts\?\.\(this\.ex, this\.sym, this\.tf\)/);
   assert.match(APP, /cellFormationBadges = renderFormationsOnChart\(/);
 });
 

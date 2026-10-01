@@ -66,8 +66,9 @@ for (const dpr of [1, 1.25, 1.5, 2]) test(`zoomed-out candle has no half-transpa
 });
 
 test('fractional Windows display scaling does not recreate a grid canvas on every frame', () => {
-  const begin = source.indexOf('    const cw = this.canvas.clientWidth;', source.indexOf('    this.refreshFormationLevels();', source.indexOf('    this.lastDrawTs = now;')));
+  const begin = source.indexOf('    const rect = this.canvas.parentElement', source.indexOf('    this.refreshFormationLevels();', source.indexOf('    this.lastDrawTs = now;')));
   const end = source.indexOf('    const ctx = this.ctx;', begin);
+  assert.ok(begin > 0 && end > begin, 'production canvas sizing block must be found');
   let reallocations = 0, width = 0, height = 0;
   const canvas = { clientWidth: 317, clientHeight: 243,
     get width() { return width; }, set width(value) { width = Math.trunc(value); reallocations++; },
@@ -76,4 +77,18 @@ test('fractional Windows display scaling does not recreate a grid canvas on ever
   const run = new Function('dpr', `return function() { ${source.slice(begin, end)} };`)(1.25);
   for (let i = 0; i < 60; i++) run.call({ canvas, ctx });
   assert.equal(reallocations, 2, `canvas reallocated ${reallocations} times in 60 frames`);
+});
+
+test('CSS serialization at fractional scaling does not rewrite canvas styles on every frame', () => {
+  const begin = source.indexOf('    const rect = this.canvas.parentElement', source.indexOf('    this.refreshFormationLevels();', source.indexOf('    this.lastDrawTs = now;')));
+  const end = source.indexOf('    const ctx = this.ctx;', begin);
+  assert.ok(begin > 0 && end > begin);
+  let writes = 0;
+  const style = new Proxy({}, {set(o, key, value) { writes++; o[key] = Number(parseFloat(value).toFixed(3)) + 'px'; return true; }});
+  const canvas = { clientWidth: 317, clientHeight: 243, width: 0, height: 0, style,
+    parentElement: {getBoundingClientRect: () => ({width: 317.4, height: 243.4, left: 10.3, top: 11.3})} };
+  const cell = { canvas, ctx: {setTransform() {}} };
+  const run = new Function('dpr', `return function() { ${source.slice(begin, end)} };`)(1.5);
+  for (let i = 0; i < 60; i++) run.call(cell);
+  assert.equal(writes, 4, 'only the first paint should set width, height, left and top');
 });

@@ -338,8 +338,8 @@
         const proxScore = Math.max(0, 1 - (outerDistPct / maxDist)) * 50;
 
         candidates.push({
-          price: +outerPrice.toFixed(6),
-          endPrice: +outerPrice.toFixed(6),
+          price: outerPrice,
+          endPrice: outerPrice,
           direction: resistance ? "up" : "down",
           swingIdx: firstTouch,
           swingTime: candles[firstTouch].t,
@@ -398,8 +398,8 @@
         const ti = countTouches(candles, s.price, s.idx, true, range);
         if (ti.length >= minC) {
           ups.push({
-            price: +s.price.toFixed(6),
-            endPrice: +s.price.toFixed(6),
+            price: s.price,
+            endPrice: s.price,
             swingIdx: s.idx,
             swingTime: candles[s.idx].t,
             direction: "up",
@@ -420,8 +420,8 @@
         const ti = countTouches(candles, s.price, s.idx, false, range);
         if (ti.length >= minC) {
           downs.push({
-            price: +s.price.toFixed(6),
-            endPrice: +s.price.toFixed(6),
+            price: s.price,
+            endPrice: s.price,
             swingIdx: s.idx,
             swingTime: candles[s.idx].t,
             direction: "down",
@@ -582,7 +582,7 @@
           candidates.push({
             p1: { idx: p1.idx, price: p1.price, t: candles[p1.idx].t },
             p2: { idx: p2.idx, price: p2.price, t: candles[p2.idx].t },
-            slope, endPrice: +endPrice.toFixed(6),
+            slope, endPrice,
             direction: isHigh ? "up" : "down",
             isHigh: isHigh,
             swingIndices: touches,
@@ -646,7 +646,7 @@
           const intersectX = ((dl.p1.price - dl.slope * dl.p1.idx) - (ul.p1.price - ul.slope * ul.p1.idx)) / dSlope;
           if (intersectX > n - 1) {
             const apexX = Math.floor(intersectX);
-            const intersectPrice = +(ul.p1.price + ul.slope * (intersectX - ul.p1.idx)).toFixed(6);
+            const intersectPrice = ul.p1.price + ul.slope * (intersectX - ul.p1.idx);
             ul.maxExtX = typeof ul.maxExtX === "number" ? Math.min(ul.maxExtX, apexX) : apexX;
             dl.maxExtX = typeof dl.maxExtX === "number" ? Math.min(dl.maxExtX, apexX) : apexX;
             ul.apex = { x: +intersectX.toFixed(2), price: intersectPrice };
@@ -791,8 +791,10 @@
             if (!brokenBack) {
               const distPct = Math.abs(lastPrice - level) / lastPrice;
               candidates.push({
-                price: +level.toFixed(6),
-                endPrice: +level.toFixed(6),
+                price: level,
+                endPrice: level,
+                holdTolerance: holdBuf,
+                departTime: candles[departIdx].t,
                 direction: bullish ? "up" : "down",
                 levelTouches: priorTouches.length,
                 swingIdx: priorTouches[0],
@@ -872,8 +874,9 @@
         const distPct = Math.abs(lastPrice - level) / lastPrice;
         const allTouches = [...priorTouches, touchIdx];
         candidates.push({
-          price: +level.toFixed(6),
-          endPrice: +level.toFixed(6),
+          price: level,
+          endPrice: level,
+          holdTolerance: holdBuf,
           direction: bullish ? "up" : "down",
           levelTouches: priorTouches.length,
           swingIdx: priorTouches[0],
@@ -982,6 +985,7 @@
         widthPct: width / ((upper + lower) / 2) * 100,
         touches: Math.min(upperVisits.length, lowerVisits.length),
         upperTouches: upperVisits.length, lowerTouches: lowerVisits.length,
+        touchTolerance: touchTol,
         upperTouchIndices: upperVisits.map(p => p.idx), lowerTouchIndices: lowerVisits.map(p => p.idx),
         touchIndices, touchTimes: touchIndices.map(i => candles[i].t),
         swingIdx: visits[0].idx, swingTime: candles[visits[0].idx].t,

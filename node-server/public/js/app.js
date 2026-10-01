@@ -440,7 +440,7 @@ function saveFovSettings() {
 // result until the current candle materially changes, so live charts can keep
 // moving at 60 fps without running O(n²/O(n³)) detectors every frame.
 const formationDetectionCache = new WeakMap();
-function getCachedFormationDetection(candles, key, detector) {
+function getCachedFormationDetection(candles, key, detector, source) {
   if (!Array.isArray(candles) || candles.length === 0) return [];
   let cache = formationDetectionCache.get(candles);
   if (!cache) {
@@ -450,11 +450,11 @@ function getCachedFormationDetection(candles, key, detector) {
   const last = candles[candles.length - 1];
   const signature = `${candles.length}|${candles[0]?.t || 0}|${last?.t || 0}|${last?.o || 0}|${last?.c || 0}|${last?.h || 0}|${last?.l || 0}|${last?.v || 0}`;
   const previous = cache.get(key);
-  if (previous && previous.signature === signature) {
+  if (previous && previous.signature === signature && previous.source === source) {
     return previous.value;
   }
   const value = detector() || [];
-  cache.set(key, { signature, value });
+  cache.set(key, { signature, value, source });
   return value;
 }
 
@@ -1501,20 +1501,25 @@ function queueChartResize() {
 function resizeChart() {
   const w = $("cwrap");
   if (!w || !w.clientWidth || !w.clientHeight) return;
-  chartW = w.clientWidth;
-  chartH = w.clientHeight;
   const dpr = window.devicePixelRatio || 1;
+  const rect = w.getBoundingClientRect?.();
+  chartW = Math.round((rect?.width || w.clientWidth) * dpr) / dpr;
+  chartH = Math.round((rect?.height || w.clientHeight) * dpr) / dpr;
   const pixelW = Math.round(chartW * dpr), pixelH = Math.round(chartH * dpr);
   if (canvas.width !== pixelW) canvas.width = pixelW;
   if (canvas.height !== pixelH) canvas.height = pixelH;
   canvas.style.width = chartW + "px";
   canvas.style.height = chartH + "px";
+  canvas.style.left = (Number.isFinite(rect?.left) ? Math.round(rect.left * dpr) / dpr - rect.left : 0) + 'px';
+  canvas.style.top = (Number.isFinite(rect?.top) ? Math.round(rect.top * dpr) / dpr - rect.top : 0) + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const volPixelH = Math.round(volH * dpr);
   if (volCv.width !== pixelW) volCv.width = pixelW;
   if (volCv.height !== volPixelH) volCv.height = volPixelH;
   volCv.style.width = chartW + "px";
-  volCv.style.height = volH + "px";
+  volCv.style.height = (volPixelH / dpr) + "px";
+  volCv.style.left = canvas.style.left;
+  volCv.style.bottom = (Number.isFinite(rect?.bottom) ? rect.bottom - Math.round(rect.bottom * dpr) / dpr : 0) + 'px';
   vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   if (candles.length && chartW) requestDraw();
 }
@@ -3179,10 +3184,82 @@ function drawDensityTimelineOnChart(ctx, options) {
 // types instead of the chart panel's global selection, so mini charts there are
 // drawn by this exact same code path — same colors, widths, dots and labels as
 // the screener — rather than by a private duplicate renderer.
+function projectFormationOverlayLevels(candles, levels, type) {
+  if (!candles.length || !levels.length) return [];
+  const interval = candles.length > 1 ? candles[1].t - candles[0].t : 0;
+  if (candles.some((c, i) => ![c.t, c.o, c.h, c.l, c.c].every(Number.isFinite) || c.l <= 0 ||
+    c.h < Math.max(c.o, c.c) || c.l > Math.min(c.o, c.c) ||
+    (i > 0 && (interval <= 0 || Math.abs(c.t - candles[i - 1].t - interval) > interval * .1)))) return [];
+  const first = candles[0].t, last = candles[candles.length - 1], byTime = new Map(candles.map((c, i) => [c.t, i]));
+  const at = time => byTime.get(Number(time)) ?? -1;
+  const result = [];
+  for (const original of levels) {
+    if (!original || typeof original !== 'object') continue;
+    const level = { ...original };
+    const times = Array.isArray(level.touchTimes) ? level.touchTimes : [];
+    const indices = Array.isArray(level.touchIndices) ? level.touchIndices : [];
+    const startTime = Number(level.swingTime) || Number(level.p1?.t) || first;
+    if (startTime > last.t) continue;
+    level.swingIdx = Math.max(0, at(startTime));
+    level.swingTime = candles[level.swingIdx].t;
+    level.touchIndices = times.length ? times.map(at) : indices;
+    if (type === 'ranges') {
+      if (!(level.lower > 0 && level.upper > level.lower)) continue;
+      const eps = Math.max(last.c * 1e-10, Number.EPSILON * last.c * 8);
+      const tolerance = Number(level.touchTolerance) || Math.min(last.c * .005, (level.upper - level.lower) * .08);
+      if (candles.slice(level.swingIdx).some(c => c.c > level.upper + eps || c.c < level.lower - eps ||
+        c.h > level.upper + tolerance || c.l < level.lower - tolerance)) continue;
+      const sideIndices = name => {
+        const selected = new Set(original[name + 'TouchIndices'] || []);
+        const sideTimes = original[name + 'TouchTimes'] || times.filter((_, i) => selected.has(indices[i]));
+        return sideTimes.map(at).filter(i => i >= 0);
+      };
+      level.upperTouchIndices = sideIndices('upper'); level.lowerTouchIndices = sideIndices('lower');
+      level.widthPct = (level.upper - level.lower) / ((level.upper + level.lower) / 2) * 100;
+    } else if (type === 'trendlines') {
+      const a = level.p1, b = level.p2;
+      if (!(a?.price > 0 && b?.price > 0 && b.t > a.t)) continue;
+      const slopeMs = (b.price - a.price) / (b.t - a.t);
+      const firstIndex = a.t < first ? 0 : at(a.t);
+      const secondIndex = b.t < first ? candles.length - 1 : at(b.t);
+      if (firstIndex < 0 || secondIndex <= firstIndex) continue;
+      const point = i => ({idx: i, t: candles[i].t, price: a.price + slopeMs * (candles[i].t - a.t)});
+      level.p1 = point(firstIndex); level.p2 = point(secondIndex);
+      level.endPrice = a.price + slopeMs * (last.t - a.t);
+      level.swingIndices = times.map(at);
+      const resistance = level.direction === 'up' || level.isHigh;
+      const eps = Math.max(1e-7, last.c * .00001);
+      if (candles.slice(firstIndex + 1).some(c => {
+        const price = a.price + slopeMs * (c.t - a.t);
+        return resistance ? c.h > price + eps || c.c > price + eps : c.l < price - eps || c.c < price - eps;
+      })) continue;
+    } else if (type === 'levels' || type === 'cascades') {
+      if (!(level.price > 0)) continue;
+      const resistance = level.direction === 'up', eps = Math.max(1e-7, last.c * (type === 'cascades' ? .0001 : .00001));
+      if (candles.slice(level.swingIdx + 1).some(c => resistance
+        ? c.h > level.price + eps || c.c > level.price
+        : c.l < level.price - eps || c.c < level.price)) continue;
+    } else if (type === 'retests') {
+      if (!(level.price > 0)) continue;
+      const hold = Number(level.holdTolerance);
+      if (hold > 0) {
+        const bullish = level.direction === 'up';
+        const validFrom = Number(level.touchTime) || Number(level.departTime);
+        if (validFrom && candles.some(c => c.t >= validFrom && (bullish
+          ? c.c < level.price - hold * (level.isApproachingRetest ? 1 : 1.5)
+          : c.c > level.price + hold * (level.isApproachingRetest ? 1 : 1.5)))) continue;
+        if (bullish ? last.c < level.price - hold : last.c > level.price + hold) continue;
+      }
+    }
+    result.push(level);
+  }
+  return result;
+}
+
 function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart, opts) {
   const cfg = opts || null;
   const enabled = cfg ? true : chartFormationsOnChart;
-  if (!enabled || !candles || candles.length < 40) return [];
+  if (!enabled || !candles || candles.length < 20) return [];
 
   const wantTypes = cfg && cfg.types ? cfg.types : null;
   const hasType = (name) => wantTypes
@@ -3192,6 +3269,10 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const fovNearest = (cfg && typeof cfg.nearest === "boolean") ? cfg.nearest : chartFovNearest;
   const fovShowTouches = (cfg && typeof cfg.showTouches === "boolean") ? cfg.showTouches : chartFovShowTouches;
   const wantApproaching = !!(cfg && cfg.approaching);
+  const supplied = Array.isArray(cfg?.levels) ? cfg.levels : null;
+  const resolveLevels = (type, key, detector) => supplied
+    ? getCachedFormationDetection(candles, `snapshot:${type}`, () => projectFormationOverlayLevels(candles, supplied, type), supplied)
+    : getCachedFormationDetection(candles, key, detector);
 
   const N = candles.length;
   const lastPrice = candles[N - 1].c;
@@ -3200,14 +3281,15 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
   if (hasType('ranges') && window.FormationEngine) {
     const min = Math.max(2, cfg?.minTouches || chartFovRangeMin);
-    const boxes = getCachedFormationDetection(candles, `overlay:range:${min}`, () => window.FormationEngine.detectRanges(candles, min));
+    const boxes = resolveLevels('ranges', `overlay:range:${min}`, () => window.FormationEngine.detectRanges(candles, min))
+      .filter(box => box.lowerTouches >= min && box.upperTouches >= min);
     for (const box of boxes) {
       const startX = Math.max(0, getCandleX(box.swingIdx));
       const upperY = toY(box.upper), lowerY = toY(box.lower);
       ctx.save();
       ctx.beginPath(); ctx.rect(0, TOP, PW, PH); ctx.clip();
       ctx.fillStyle = 'rgba(139,92,246,0.07)';
-      ctx.fillRect(startX, upperY, PW - startX, lowerY - upperY);
+      ctx.fillRect(startX, upperY, Math.max(0, PW - startX), lowerY - upperY);
       ctx.setLineDash([]); ctx.lineWidth = 1.5;
       for (const [price, color, indices] of [[box.upper, '#f87171', box.upperTouchIndices], [box.lower, '#34d399', box.lowerTouchIndices]]) {
         const y = toY(price);
@@ -3242,7 +3324,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       if (arr[m].t < t) l = m + 1;
       else r = m - 1;
     }
-    return minDiff <= 3600000 ? best : null;
+    return minDiff === 0 ? best : null;
   }
 
   const fmtColors = window.formationColorSettings || {
@@ -3260,7 +3342,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const hasCascades = hasType('cascades');
   if (hasCascades) {
     let levels = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:cascades:${cascadeMin}`, () => window.FormationEngine.detectCascades(candles, cascadeMin))
+      ? resolveLevels('cascades', `overlay:cascades:${cascadeMin}`, () => window.FormationEngine.detectCascades(candles, cascadeMin))
       : [];
 
     levels = levels.filter(lv => Math.abs(lv.price - lastPrice) / lastPrice <= 0.15);
@@ -3277,19 +3359,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
       const isUp = (lv.direction === "up" || lv.price >= lastPrice);
       const startIdx = lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0);
       if (typeof startIdx !== "number" || startIdx < 0) continue;
-
-      let pierced = false;
-      const eps = Math.max(1e-7, lastPrice * 0.00001);
-      for (let k = startIdx + 1; k < N; k++) {
-        const c = candles[k];
-        if (!c) continue;
-        if (isUp) {
-          if (c.h > lv.price + eps || c.c > lv.price || toY(c.h) < y - 1) { pierced = true; break; }
-        } else {
-          if (c.l < lv.price - eps || c.c < lv.price || toY(c.l) > y + 1) { pierced = true; break; }
-        }
-      }
-      if (pierced) continue;
 
       const lineColor = isUp ? getFmtColor(fmtColors.cascadeUp, fmtColors.cascadeUpOp) : getFmtColor(fmtColors.cascadeDown, fmtColors.cascadeDownOp);
       const touchColor = isUp ? getFmtDotColor(fmtColors.cascadeUp, fmtColors.cascadeUpOp) : getFmtDotColor(fmtColors.cascadeDown, fmtColors.cascadeDownOp);
@@ -3338,7 +3407,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   if (hasHorizontals) {
     const minTouches = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : (chartFovBreakoutMin || 2);
     let levels = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:levels:${minTouches}`, () => window.FormationEngine.detectHorizontals(candles, minTouches))
+      ? resolveLevels('levels', `overlay:levels:${minTouches}`, () => window.FormationEngine.detectHorizontals(candles, minTouches))
       : [];
 
     levels = levels.filter(lv => {
@@ -3363,21 +3432,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         ? Math.min(...lv.touchIndices)
         : (lv.swingTime ? getIdxFromTime(lv.swingTime, candles) : ((typeof lv.swingIdx === 'number') ? lv.swingIdx : 0));
       const startIdx = (typeof firstTouchIdx === "number" && firstTouchIdx >= 0) ? firstTouchIdx : 0;
-
-      let pierced = false;
-      const eps = Math.max(1e-7, lastPrice * 0.00001);
-      const touchSet = new Set(Array.isArray(lv.touchIndices) ? lv.touchIndices : [startIdx]);
-      for (let k = startIdx + 1; k < N; k++) {
-        if (touchSet.has(k)) continue;
-        const c = candles[k];
-        if (!c) continue;
-        if (isUp) {
-          if (c.h > lv.price + eps || c.c > lv.price || toY(c.h) < y - 1) { pierced = true; break; }
-        } else {
-          if (c.l < lv.price - eps || c.c < lv.price || toY(c.l) > y + 1) { pierced = true; break; }
-        }
-      }
-      if (pierced) continue;
 
       const startX = getCandleX(startIdx);
 
@@ -3424,7 +3478,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   if (hasTrendlines) {
     const trendlineMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovTrendlineMin;
     let trendlines = window.FormationEngine
-      ? getCachedFormationDetection(candles, `overlay:trendline:${trendlineMin}`, () => window.FormationEngine.detectTrendlines(candles, trendlineMin))
+      ? resolveLevels('trendlines', `overlay:trendline:${trendlineMin}`, () => window.FormationEngine.detectTrendlines(candles, trendlineMin))
       : [];
     const minTouches = Math.max(1, trendlineMin || 2);
     trendlines = trendlines.filter(tl => (tl.touches || 1) >= minTouches && Math.abs(tl.endPrice - lastPrice) / lastPrice <= 0.15);
@@ -3451,20 +3505,6 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
       const slope = (tl.p2.price - tl.p1.price) / (idx2 - idx1);
       const isResistance = isUp;
-
-      let pierced = false;
-      const eps = Math.max(1e-7, lastPrice * 0.00001);
-      for (let k = idx1 + 1; k < N; k++) {
-        const line = tl.p1.price + slope * (k - idx1);
-        const c = candles[k];
-        if (!c) continue;
-        if (isResistance) {
-          if (c.h > line + eps || c.c > line + eps || toY(c.h) < toY(line) - 1) { pierced = true; break; }
-        } else {
-          if (c.l < line - eps || c.c < line - eps || toY(c.l) > toY(line) + 1) { pierced = true; break; }
-        }
-      }
-      if (pierced) continue;
 
       const extIdx = N - 1 + 10;
       const x1 = getCandleX(idx1);
@@ -3518,6 +3558,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
         }
       }
       ctx.restore();
+      scaleBadges.push({ price: tl.endPrice, y: toY(tl.endPrice), color: lineColor });
     }
   }
 
@@ -3527,8 +3568,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
     let retests = [];
     if (window.FormationEngine) {
       retests = wantApproaching
-        ? getCachedFormationDetection(candles, 'overlay:retest:approaching', () => window.FormationEngine.detectApproachingRetests(candles))
-        : getCachedFormationDetection(candles, 'overlay:retest', () => window.FormationEngine.detectRetests(candles));
+        ? resolveLevels('retests', 'overlay:retest:approaching', () => window.FormationEngine.detectApproachingRetests(candles))
+        : resolveLevels('retests', 'overlay:retest', () => window.FormationEngine.detectRetests(candles));
     }
 
     const retestMin = (cfg && Number.isFinite(cfg.minTouches)) ? cfg.minTouches : chartFovRetestMin;
@@ -3640,15 +3681,15 @@ function drawChart() {
   const fixedVolumeHeight = 65;
   const timeBarHeight = 22;
   const indicatorHeightPer = 80;
-  const newVolH = fixedVolumeHeight + timeBarHeight + (activeIndicators.length * indicatorHeightPer);
+  const dpr = window.devicePixelRatio || 1;
+  const newVolH = Math.round((fixedVolumeHeight + timeBarHeight + (activeIndicators.length * indicatorHeightPer)) * dpr) / dpr;
 
   // Update volH if needed and adjust canvas
-  const dpr = window.devicePixelRatio || 1;
   if (newVolH !== volH) {
     volH = newVolH;
     const volCanvas = document.getElementById('vol-canvas');
     if (volCanvas) {
-      volCanvas.height = volH * dpr;
+      volCanvas.height = Math.round(volH * dpr);
       volCanvas.style.height = volH + 'px';
       vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
@@ -3709,6 +3750,16 @@ function drawChart() {
       autoMn = lc.l * 0.98;
       autoMx = lc.h * 1.02;
     } else return;
+  }
+  const mainFormationOpts = (activeView === "formations" && window.isFormationFullChartOpen?.())
+    ? window.getFormationsOverlayOpts?.(activeEx, activeSym, activeTf) : null;
+  if (Array.isArray(mainFormationOpts?.levels)) {
+    const type = [...mainFormationOpts.types][0];
+    const levels = getCachedFormationDetection(candles, `snapshot:${type}`,
+      () => projectFormationOverlayLevels(candles, mainFormationOpts.levels, type), mainFormationOpts.levels);
+    for (const level of levels) for (const price of type === 'ranges' ? [level.lower, level.upper] : [level.endPrice || level.price]) {
+      if (Number.isFinite(price) && price > 0) { autoMn = Math.min(autoMn, price); autoMx = Math.max(autoMx, price); }
+    }
   }
   const autoPad = (autoMx - autoMn) * 0.15 || autoMx * 0.01 || 0.01;
   autoMn = Math.max(0, autoMn - autoPad);
@@ -3982,9 +4033,6 @@ function drawChart() {
 
   // Formations Overlay. Inside the Formations tab the expanded chart honours
   // that tab's toolbar selection; on the screener it uses the chart panel's.
-  const mainFormationOpts = (activeView === "formations" && window.isFormationFullChartOpen?.())
-    ? window.getFormationsOverlayOpts?.()
-    : null;
   const formationScaleBadges = renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart, mainFormationOpts) || [];
 
   ctx.restore();
@@ -11336,12 +11384,14 @@ class ChartInstance {
       </div>
       <div class="cell-canvas-wrap">
         <canvas class="cell-canvas" style="cursor: crosshair;"></canvas>
+        <span class="cell-formation-state" hidden></span>
       </div>
     `;
     container.appendChild(this.el);
 
     this.canvas = this.el.querySelector(".cell-canvas");
     this.ctx = this.canvas.getContext("2d");
+    this.formationState = this.el.querySelector('.cell-formation-state');
     this.headerExIcon = this.el.querySelector(".cell-ex-icon");
     this.headerSym = this.el.querySelector(".cell-sym");
     this.headerTf = this.el.querySelector(".cell-tf");
@@ -11578,7 +11628,11 @@ class ChartInstance {
     const now = performance.now();
     if (!force && now - this._lastFormationDetectAt < 900) return;
     this._lastFormationDetectAt = now;
-    const next = window.detectChartLevelsFn?.(this.candles) || [];
+    const opts = window.getFormationsOverlayOpts?.(this.ex, this.sym, this.tf);
+    const type = opts?.types ? [...opts.types][0] : null;
+    const next = Array.isArray(opts?.levels)
+      ? getCachedFormationDetection(this.candles, `snapshot:${type}`, () => projectFormationOverlayLevels(this.candles, opts.levels, type), opts.levels)
+      : window.detectChartLevelsFn?.(this.candles) || [];
     this.levels = next;
   }
 
@@ -11803,7 +11857,7 @@ class ChartInstance {
       candles.length > 0
     ) {
       this.candles = candles.map(c => ({ ...c }));
-      this.levels = window.detectChartLevelsFn(this.candles);
+      if (activeView !== 'formations') this.levels = window.detectChartLevelsFn(this.candles);
       this.loadingKlines = false;
       this.draw(true);
       return;
@@ -11826,7 +11880,7 @@ class ChartInstance {
       }
       if (candList.length > 0) {
         this.candles = candList;
-        this.levels = window.detectChartLevelsFn(this.candles);
+        if (activeView !== 'formations') this.levels = window.detectChartLevelsFn(this.candles);
         this.loadingKlines = false;
         this.draw(true);
         return;
@@ -11844,7 +11898,7 @@ class ChartInstance {
 
       if (Array.isArray(fastCandles) && fastCandles.length > 0) {
         this.candles = sanitizeCandles(fastCandles);
-        this.levels = window.detectChartLevelsFn(this.candles);
+        if (activeView !== 'formations') this.levels = window.detectChartLevelsFn(this.candles);
         storeKlinesCache(key, this.candles);
         this.loadingKlines = false;
         this.draw(true);
@@ -11863,7 +11917,7 @@ class ChartInstance {
             if (this._loadToken !== myToken) return;
             if (Array.isArray(parsed) && parsed.length > this.candles.length) {
               this.candles = mergeCandles(this.candles, parsed, 10000);
-              this.levels = window.detectChartLevelsFn(this.candles);
+              if (activeView !== 'formations') this.levels = window.detectChartLevelsFn(this.candles);
               storeKlinesCache(key, this.candles);
               this.draw(true);
             }
@@ -11952,8 +12006,10 @@ class ChartInstance {
       this.dirty = false;
       this._interactionDirty = false;
       if (this.loadingKlines && this.canvas) {
-        const cw = this.canvas.clientWidth;
-        const ch = this.canvas.clientHeight;
+        const rect = this.canvas.parentElement?.getBoundingClientRect?.() || this.canvas.getBoundingClientRect?.();
+        const scale = window.devicePixelRatio || 1;
+        const cw = Math.round((rect?.width || this.canvas.clientWidth) * scale) / scale;
+        const ch = Math.round((rect?.height || this.canvas.clientHeight) * scale) / scale;
         if (cw && ch && cw >= 30 && ch >= 30) {
           const dpr = window.devicePixelRatio || 1;
           const width = Math.round(cw * dpr), height = Math.round(ch * dpr);
@@ -11962,6 +12018,12 @@ class ChartInstance {
             this.canvas.height = height;
           }
           this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          if (this.canvas.style) {
+            this.canvas.style.width = cw + 'px'; this.canvas.style.height = ch + 'px';
+            this.canvas.style.left = (Number.isFinite(rect?.left) ? Math.round(rect.left * dpr) / dpr - rect.left : 0) + 'px';
+            this.canvas.style.top = (Number.isFinite(rect?.top) ? Math.round(rect.top * dpr) / dpr - rect.top : 0) + 'px';
+            this._canvasCssDimensions = null;
+          }
           this.ctx.fillStyle = getCanvasBgColorFor(this.canvas);
           this.ctx.fillRect(0, 0, cw, ch);
           this.ctx.fillStyle = "rgba(160, 160, 180, 0.4)";
@@ -12034,8 +12096,9 @@ class ChartInstance {
     this.refreshFormationLevels();
 
     const dpr = window.devicePixelRatio || 1;
-    const cw = this.canvas.clientWidth;
-    const ch = this.canvas.clientHeight;
+    const rect = this.canvas.parentElement?.getBoundingClientRect?.() || this.canvas.getBoundingClientRect?.();
+    const cw = Math.round((rect?.width || this.canvas.clientWidth) * dpr) / dpr;
+    const ch = Math.round((rect?.height || this.canvas.clientHeight) * dpr) / dpr;
 
     if (!cw || !ch || cw < 30 || ch < 30) {
       if (!this._layoutPending) {
@@ -12054,6 +12117,16 @@ class ChartInstance {
       this.canvas.height = pixelHeight;
     }
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (this.canvas.style) {
+      const dimensions = [cw + 'px', ch + 'px',
+        (Number.isFinite(rect?.left) ? Math.round(rect.left * dpr) / dpr - rect.left : 0) + 'px',
+        (Number.isFinite(rect?.top) ? Math.round(rect.top * dpr) / dpr - rect.top : 0) + 'px'];
+      // CSSOM rounds serialized decimals. Compare requested geometry instead,
+      // otherwise fractional DPR rewrites the same four styles every frame.
+      const previous = this._canvasCssDimensions;
+      ['width', 'height', 'left', 'top'].forEach((field, i) => { if (previous?.[i] !== dimensions[i]) this.canvas.style[field] = dimensions[i]; });
+      this._canvasCssDimensions = dimensions;
+    }
 
     const ctx = this.ctx;
     ctx.fillStyle = getCanvasBgColorFor(this.canvas);
@@ -12100,6 +12173,21 @@ class ChartInstance {
 
     let autoMn = Infinity, autoMx = -Infinity;
     vis.forEach(c => { if (c.l < autoMn) autoMn = c.l; if (c.h > autoMx) autoMx = c.h; });
+    const fmOpts = activeView === 'formations' ? window.getFormationsOverlayOpts?.(this.ex, this.sym, this.tf) : null;
+    let confirmedLevels = [];
+    if (Array.isArray(fmOpts?.levels)) {
+      const type = [...fmOpts.types][0];
+      confirmedLevels = getCachedFormationDetection(this.candles, `snapshot:${type}`,
+        () => projectFormationOverlayLevels(this.candles, fmOpts.levels, type), fmOpts.levels);
+      // Fit the actual selected boundaries, including those beyond the recent
+      // candle extremes. User-controlled Y scaling is still preserved below.
+      for (const level of confirmedLevels) {
+        const prices = type === 'ranges' ? [level.lower, level.upper] : [level.endPrice || level.price];
+        for (const price of prices) if (Number.isFinite(price) && price > 0) {
+          autoMn = Math.min(autoMn, price); autoMx = Math.max(autoMx, price);
+        }
+      }
+    }
     const autoPad = (autoMx - autoMn) * 0.15 || autoMx * 0.01;
     autoMn = Math.max(0, autoMn - autoPad);
     autoMx += autoPad;
@@ -12119,7 +12207,7 @@ class ChartInstance {
     const gridStep = calcNiceStep(pr, Math.max(3, Math.floor(PH / 40)));
     let gridPrice = Math.ceil(mn / gridStep) * gridStep;
     ctx.setLineDash([]);
-    ctx.font = "9px Inter";
+    ctx.font = "11px Inter, sans-serif";
     ctx.textAlign = "left";
     const cellBackground = getCanvasBgColorFor(this.canvas);
     const axisColor = getAxisTextColor(cellBackground);
@@ -12258,7 +12346,6 @@ class ChartInstance {
     let cellFormationBadges = [];
     try {
       if (activeView === "formations") {
-        const fmOpts = window.getFormationsOverlayOpts?.();
         if (fmOpts) {
           cellFormationBadges = renderFormationsOnChart(
             ctx, this.candles, s, candleWidth, futureGap, toY, PW, PH, 0, viewStart, fmOpts
@@ -12271,6 +12358,15 @@ class ChartInstance {
       }
     } catch (e) {
       console.warn("[ChartInstance] renderFormationsOnChart error:", e);
+    }
+    if (this.formationState) {
+      const missing = activeView === 'formations' && !this.loadingKlines && cellFormationBadges.length === 0;
+      this.formationState.hidden = !missing;
+      if (missing) {
+        const text = confirmedLevels.length ? 'Разметка вне видимой области' : 'Разметка не подтверждена на текущих свечах';
+        const translated = window.ObsidianI18n?.t(text) || text;
+        if (this.formationState.textContent !== translated) this.formationState.textContent = translated;
+      }
     }
 
     // Price badges on the right scale for the formation levels, same look as the
@@ -15667,7 +15763,7 @@ window.addEventListener("resize", () => {
   // Options for renderFormationsOnChart so the Formations tab draws through the
   // screener's overlay renderer while still honouring its own toolbar (selected
   // formation type, min touches, "nearest", "approaching retest").
-  window.getFormationsOverlayOpts = function () {
+  window.getFormationsOverlayOpts = function (ex = activeEx, sym = activeSym, tf = activeTf) {
     const typeMap = {
       breakout: "levels",
       trendline: "trendlines",
@@ -15682,7 +15778,8 @@ window.addEventListener("resize", () => {
       minTouches: formationsMinCascade,
       nearest: !!$("formations-nearest-toggle")?.checked,
       approaching: !!$("formations-approaching-toggle")?.checked,
-      showTouches: true
+      showTouches: true,
+      levels: formationsMapClientCache.get(formationMapType() + ':' + tf)?.[ex + ':' + sym] || []
     };
   };
 
@@ -16458,9 +16555,10 @@ window.addEventListener("resize", () => {
               l.lowerTouches >= min && l.upperTouches >= min &&
               Math.min(curP - l.lower, l.upper - curP) / curP <= formationsFilters.distancePct / 100)) return false;
           } else if (activeFormation === 'retest') {
+            const minT = Math.max(1, formationsMinCascade || 2);
             const hasQualifying = lvls.some(l => {
               const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
-              return dist <= formationsFilters.distancePct / 100;
+              return (Number(l.touches) || 0) >= minT && dist <= formationsFilters.distancePct / 100;
             });
             if (!hasQualifying) return false;
           } else {

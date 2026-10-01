@@ -1,6 +1,8 @@
 /* UI copy only. Market symbols, source publications and user text stay intact. */
 window.ObsidianEnglish = Object.freeze(Object.fromEntries(`
 Range / Боковик|Range / Sideways
+Разметка не подтверждена на текущих свечах|Formation is not confirmed on the current candles
+Разметка вне видимой области|Formation is outside the visible area
 Касаний каждой границы|Touches on each boundary
 Касаний каждой границы:|Touches on each boundary:
 До ближайшей границы:|Distance to nearest boundary:
@@ -464,6 +466,7 @@ Telegram оповещения|Telegram alerts
 или зайти через|or sign in with
 Войти через Telegram|Sign in with Telegram
 Профиль трейдера|Trader profile
+PRO (Активна)|PRO (Active)
 Трейдер #8492|Trader #8492
 Индивидуальный ID|Account ID
 Способ входа|Sign-in method
