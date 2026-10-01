@@ -24,6 +24,32 @@ function build(t, extra = '') {
   return { w, sent };
 }
 const signal = { ex: 'BN', sym: 'BTCUSDT', tf: '15m', type: 'level', direction: 'short', targetPrice: 100.3, curPrice: 100, touches: 3, distPct: 0.3 };
+const rangeSignal = { ...signal, type: 'range', direction: 'neutral',
+  meta: { lower: 99.5, upper: 102, lowerTouches: 3, upperTouches: 3, widthPct: 2.48 } };
+
+test('new range notifications stay off for existing accounts until explicitly enabled', t => {
+  const { w, sent } = build(t);
+  w.handleServerFormationAlert(rangeSignal);
+  assert.equal(sent.length, 0);
+});
+
+test('range notifications honour venue, timeframe, each boundary count and LIVE edge distance', t => {
+  const { w, sent } = build(t);
+  w.settings.range = { enabled: true, timeframes: ['15m'], minTouches: 3, distancePct: 0.6 };
+  w.settings.exchanges = ['BN'];
+  for (const data of [
+    { ...rangeSignal, ex: 'BB' }, { ...rangeSignal, tf: '4h' },
+    { ...rangeSignal, meta: { ...rangeSignal.meta, lowerTouches: 2 } },
+    { ...rangeSignal, curPrice: 98 }, { ...rangeSignal, curPrice: 101 },
+    { ...rangeSignal, meta: { ...rangeSignal.meta, upper: NaN } }
+  ]) w.handleServerFormationAlert(data);
+  assert.equal(sent.length, 0);
+  w.handleServerFormationAlert({ ...rangeSignal, targetPrice: 102 });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].targetPrice, 99.5, 'nearest edge is recalculated from live price');
+  w.handleServerFormationAlert(rangeSignal);
+  assert.equal(sent.length, 1, 'range obeys coin cooldown');
+});
 test('a hidden auth modal allows a matching WebSocket alert and duplicates obey cooldown', t => {
   const { w, sent } = build(t);
   w.handleServerFormationAlert(signal); w.handleServerFormationAlert(signal);
@@ -91,8 +117,30 @@ test('account refresh does not detach the notification controls from saved setti
   const saved = JSON.parse(w.localStorage.getItem('obsidian_formation_alert_settings'));
   assert.deepEqual(saved.exchanges, ['BN']);
   assert.equal(saved.level.enabled, false);
+  assert.equal(saved.range.enabled, false);
   w.handleServerFormationAlert({ ...signal, ex: 'BB', sym: 'SOLUSDT', type: 'trendline' });
   w.handleServerFormationAlert(signal);
   w.handleServerFormationAlert({ ...signal, type: 'trendline' });
   assert.deepEqual(sent.map(s => `${s.ex}:${s.type}`), ['BN:trendline']);
+});
+
+test('Range modal controls save and survive account refresh without enabling other types', async t => {
+  const helpers = source.slice(source.indexOf('  function setupButtonGroup('), source.indexOf('  // Open & Close Formations Modal'));
+  const sync = /  function syncFormationUI\(\) \{[^]*?\n  \}/.exec(source)[0];
+  const { w } = build(t, helpers + '\n' + sync + '\nwindow.syncFormationUI = syncFormationUI;');
+  const ui = new JSDOM(fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8'));
+  w.document.body.append(w.document.importNode(ui.window.document.getElementById('modal-formation-alerts-overlay'), true));
+  ui.window.close();
+  w.settings.level.enabled = false;
+  w.syncFormationUI();
+  const toggle = w.$('set-fmt-range-enabled'); toggle.checked = true; toggle.onchange();
+  w.document.querySelector('#fmt-range-touches-group [data-val="4"]').click();
+  w.document.querySelector('#fmt-range-dist-group [data-val="0.2"]').click();
+  await new Promise(resolve => setImmediate(resolve));
+  const saved = JSON.parse(w.localStorage.getItem('obsidian_formation_alert_settings'));
+  assert.equal(saved.range.enabled, true); assert.equal(saved.range.minTouches, 4); assert.equal(saved.range.distancePct, 0.2);
+  assert.equal(saved.level.enabled, false);
+  w.restoreFormationAlertsFromAccount(saved); w.syncFormationUI();
+  assert.equal(toggle.checked, true);
+  assert.equal(w.$('fmt-range-touches-group').querySelector('.active').dataset.val, '4');
 });

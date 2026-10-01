@@ -36,7 +36,9 @@ function collectFormationPrices(signal) {
     meta.p1Price,
     meta.p2Price,
     meta.targetPrice,
-    meta.pastPrice
+    meta.pastPrice,
+    meta.lower,
+    meta.upper
   ];
   return raw.map(Number).filter(v => Number.isFinite(v) && v > 0);
 }
@@ -256,7 +258,7 @@ function renderServerChartSnapshot(candles, meta, signal) {
     ctx.font = "600 11px sans-serif";
     ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
     const touches = signal?.meta?.touches || 2;
-    const subText = sigType === "trendline" ? `Наклонная линия · ${touches} касания` : sigType === "level" ? `Уровень S/R · ${touches} касания` : "Подтвержденный ретест";
+    const subText = sigType === "range" ? `Range · ${Number(signal.meta.widthPct).toFixed(2)}% · ${signal.meta.lowerTouches}/${signal.meta.upperTouches}` : sigType === "trendline" ? `Наклонная линия · ${touches} касания` : sigType === "level" ? `Уровень S/R · ${touches} касания` : "Подтвержденный ретест";
     ctx.fillText(subText, W - 22, 36);
   }
   ctx.restore();
@@ -407,6 +409,22 @@ function renderServerChartSnapshot(candles, meta, signal) {
         ctx.stroke();
       }
     });
+  } else if (sigType === "range") {
+    const offset = candles.length - numCandles;
+    const originX = Math.max(0, toX((signal.meta.swingIdx || 0) - offset));
+    const upperY = toY(signal.meta.upper), lowerY = toY(signal.meta.lower);
+    ctx.fillStyle = 'rgba(139,92,246,0.07)';
+    ctx.fillRect(originX, upperY, PW - originX, lowerY - upperY);
+    for (const [price, color, indices] of [[signal.meta.upper, '#f87171', signal.meta.upperTouchIndices],
+      [signal.meta.lower, '#34d399', signal.meta.lowerTouchIndices]]) {
+      const y = toY(price);
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1.6; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(originX, y); ctx.lineTo(PW, y); ctx.stroke();
+      for (const i of indices || []) {
+        if (i - offset < 0 || i - offset >= numCandles) continue;
+        ctx.beginPath(); ctx.arc(toX(i - offset), y, 3.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
   } else if (sigType === "level" || sigType === "retest" || sigType === "price_level" || sigType === "price") {
     const lvlPrice = signal?.price || lastCandle.c;
     const ly = toY(lvlPrice);

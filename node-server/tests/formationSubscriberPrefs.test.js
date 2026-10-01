@@ -22,6 +22,24 @@ test('Binance trendline preferences survive subscriber construction without broa
   assert.deepEqual(result[0].settings.exchanges, ['BN']);
   assert.equal(result[0].settings.level.enabled, false);
   assert.equal(result[0].settings.retest.enabled, false);
+  assert.equal(result[0].settings.range.enabled, false);
+});
+
+test('actual Telegram range gate honours venue, timeframe, two boundaries and fresh price', () => {
+  const begin = source.indexOf('        // Check exchange filter', start);
+  const finish = source.indexOf('        // Per-coin gate', begin);
+  const gate = new Function('signals', 's', `const out = []; for (const signal of signals) {
+    const {ex,sym,base,tf,type,price,meta} = signal, touches=meta.touches, dist=meta.dist, fallbackCurPrice=signal.curPrice;
+    ${source.slice(begin, finish)}
+    out.push(ex + ':' + type + ':' + tf);
+  } return out;`);
+  const good = { ex: 'BN', sym: 'BTCUSDT', base: 'BTC', tf: '15m', type: 'range', price: 102, curPrice: 100,
+    meta: { lower: 99.5, upper: 102, lowerTouches: 3, upperTouches: 3, touches: 3, dist: 2 } };
+  const s = { exchanges: ['BN'], range: { enabled: true, timeframes: ['15m'], minTouches: 3, distancePct: 0.6 } };
+  assert.deepEqual(gate([ { ...good, ex: 'BB' }, { ...good, tf: '4h' },
+    { ...good, curPrice: 98 }, { ...good, curPrice: 101 },
+    { ...good, meta: { ...good.meta, upperTouches: 2 } }, good ], s), ['BN:range:15m']);
+  assert.deepEqual(gate([good], { ...s, range: { ...s.range, enabled: false } }), []);
 });
 
 test('the actual Telegram dispatch gate admits only selected types, venues and timeframes', () => {

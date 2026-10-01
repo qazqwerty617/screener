@@ -9,7 +9,7 @@ const formationEngine = require("./public/js/formationEngine");
 
 function scanAll(rawCandles, minTouches) {
   try { return formationEngine.scanAll(rawCandles, minTouches || 2); }
-  catch (_) { return { horizontals: [], cascades: [], trendlines: [], retests: [] }; }
+  catch (_) { return { horizontals: [], cascades: [], trendlines: [], retests: [], approachingRetests: [], ranges: [] }; }
 }
 
 function detectChartLevelsAndTouches(rawCandles) {
@@ -32,6 +32,7 @@ function detectApproachingRetests(rawCandles) {
 }
 
 module.exports = {
+  detectRanges: (raw, min) => { try { return formationEngine.detectRanges(raw, min); } catch (_) { return []; } },
   scanAll,
   detectChartLevelsAndTouches,
   detectHorizontals,

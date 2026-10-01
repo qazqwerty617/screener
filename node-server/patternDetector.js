@@ -498,6 +498,14 @@ function scanCandles(meta, candles, cfgOverride = {}, precomputedFormations) {
   try {
     const fmAll = precomputedFormations || formationEngine.scanAll(candles, 2);
 
+    for (const box of fmAll.ranges || []) {
+      if (!(box.lower > 0 && box.upper > box.lower) || priceNow < box.lower || priceNow > box.upper) continue;
+      const target = priceNow - box.lower <= box.upper - priceNow ? box.lower : box.upper;
+      signals.push({ type: 'range', ex, sym, base, tf, price: target,
+        direction: 'neutral', confidence: Math.min(5, box.touches), ts: now,
+        meta: { ...box, dist: Math.abs(priceNow - target) / priceNow * 100 } });
+    }
+
     // 1. Dominant Unbroken Trendlines
     if (fmAll.trendlines) {
       for (const tl of fmAll.trendlines) {

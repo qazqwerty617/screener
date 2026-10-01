@@ -386,6 +386,7 @@ let chartFovCascadesMin = 2;                 // min touches for cascades (defaul
 let chartFovBreakoutMin = 2;                 // min touches for horiz levels (default 2+)
 let chartFovTrendlineMin = 2;                // min touches for trendlines (default 2+)
 let chartFovRetestMin = 2;                   // min touches for retests (default 2+)
+let chartFovRangeMin = 2;
 let chartFovRetestApproaching = false;       // approach to retest toggle
 let chartFovNearest = false;                 // show nearest level only
 let chartFovShowLabels = true;               // show Resistance / Support labels
@@ -403,6 +404,7 @@ function loadFovSettingsFromStorage() {
     if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
     if (typeof saved.trendlineMin === 'number') chartFovTrendlineMin = saved.trendlineMin;
     if (typeof saved.retestMin === 'number') chartFovRetestMin = saved.retestMin;
+    if (Number.isInteger(saved.rangeMin)) chartFovRangeMin = Math.max(2, Math.min(4, saved.rangeMin));
     if (typeof saved.retestApproaching === 'boolean') chartFovRetestApproaching = saved.retestApproaching;
     if (typeof saved.nearest === 'boolean') chartFovNearest = saved.nearest;
     if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
@@ -419,6 +421,7 @@ function saveFovSettings() {
     breakoutMin: chartFovBreakoutMin,
     trendlineMin: chartFovTrendlineMin,
     retestMin: chartFovRetestMin,
+    rangeMin: chartFovRangeMin,
     retestApproaching: chartFovRetestApproaching,
     nearest: chartFovNearest,
     showLabels: chartFovShowLabels,
@@ -815,6 +818,7 @@ async function syncPreferencesToServer() {
         breakoutMin: chartFovBreakoutMin,
         trendlineMin: chartFovTrendlineMin,
         retestMin: chartFovRetestMin,
+        rangeMin: chartFovRangeMin,
         retestApproaching: chartFovRetestApproaching,
         nearest: chartFovNearest,
         showLabels: chartFovShowLabels,
@@ -871,6 +875,7 @@ function applyAccountPreferences(prefs) {
     if (typeof f.breakoutMin === 'number') chartFovBreakoutMin = f.breakoutMin;
     if (typeof f.trendlineMin === 'number') chartFovTrendlineMin = f.trendlineMin;
     if (typeof f.retestMin === 'number') chartFovRetestMin = f.retestMin;
+    if (Number.isInteger(f.rangeMin)) chartFovRangeMin = Math.max(2, Math.min(4, f.rangeMin));
     if (typeof f.retestApproaching === 'boolean') chartFovRetestApproaching = f.retestApproaching;
     if (typeof f.nearest === 'boolean') chartFovNearest = f.nearest;
     if (typeof f.showLabels === 'boolean') chartFovShowLabels = f.showLabels;
@@ -882,6 +887,7 @@ function applyAccountPreferences(prefs) {
       breakoutMin: chartFovBreakoutMin,
       trendlineMin: chartFovTrendlineMin,
       retestMin: chartFovRetestMin,
+      rangeMin: chartFovRangeMin,
       retestApproaching: chartFovRetestApproaching,
       nearest: chartFovNearest,
       showLabels: chartFovShowLabels,
@@ -3148,6 +3154,39 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const lastPrice = candles[N - 1].c;
   const getCandleX = (idx) => Math.round((idx - viewStart) * candleW + candleW / 2);
   const scaleBadges = [];
+
+  if (hasType('ranges') && window.FormationEngine) {
+    const min = Math.max(2, cfg?.minTouches || chartFovRangeMin);
+    const boxes = getCachedFormationDetection(candles, `overlay:range:${min}`, () => window.FormationEngine.detectRanges(candles, min));
+    for (const box of boxes) {
+      const startX = Math.max(0, getCandleX(box.swingIdx));
+      const upperY = toY(box.upper), lowerY = toY(box.lower);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, TOP, PW, PH); ctx.clip();
+      ctx.fillStyle = 'rgba(139,92,246,0.07)';
+      ctx.fillRect(startX, upperY, PW - startX, lowerY - upperY);
+      ctx.setLineDash([]); ctx.lineWidth = 1.5;
+      for (const [price, color, indices] of [[box.upper, '#f87171', box.upperTouchIndices], [box.lower, '#34d399', box.lowerTouchIndices]]) {
+        const y = toY(price);
+        ctx.strokeStyle = color; ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(startX, y); ctx.lineTo(PW, y); ctx.stroke();
+        if (fovShowTouches) for (const i of indices) {
+          const x = getCandleX(i);
+          if (x < 0 || x > PW) continue;
+          ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+        }
+        scaleBadges.push({ price, y, color });
+      }
+      ctx.fillStyle = '#a78bfa'; ctx.font = 'bold 11px Inter, sans-serif';
+      const label = `Range · ${box.widthPct.toFixed(2)}% · ${box.lowerTouches}/${box.upperTouches}`;
+      const labelY = Math.max(TOP + 14, upperY - 8);
+      const labelWidth = ctx.measureText(label).width + 10;
+      ctx.fillStyle = 'rgba(12,14,20,0.9)';
+      ctx.fillRect(startX + 3, labelY - 12, labelWidth, 16);
+      ctx.fillStyle = '#a78bfa'; ctx.fillText(label, startX + 8, labelY);
+      ctx.restore();
+    }
+  }
 
   function getIdxFromTime(t, arr) {
     if (!t || !arr || !arr.length) return null;
@@ -9402,7 +9441,8 @@ const formationIdToName = {
   "fmt-cascades": "cascades",
   "fmt-levels": "levels",
   "fmt-trendlines": "trendlines",
-  "fmt-retests": "retests"
+  "fmt-retests": "retests",
+  "fmt-ranges": "ranges"
 };
 const smcIdToName = {
   "smc-ob": "ob",
@@ -9424,23 +9464,25 @@ function syncIndicatorButtonsUI() {
 }
 window.syncIndicatorButtonsUI = syncIndicatorButtonsUI;
 
-const formationTouchLabels = { cascades: "Каскады", levels: "Горизонталки", trendlines: "Наклонки", retests: "Ретест" };
+const formationTouchLabels = { cascades: "Каскады", levels: "Горизонталки", trendlines: "Наклонки", retests: "Ретест", ranges: "Range / Боковик" };
 function getFormationTouchMinimum(type) {
   switch (type) {
     case "cascades": return chartFovCascadesMin;
     case "levels": return chartFovBreakoutMin;
     case "trendlines": return chartFovTrendlineMin;
     case "retests": return chartFovRetestMin;
+    case "ranges": return chartFovRangeMin;
     default: return 2;
   }
 }
 function setFormationTouchMinimum(type, value) {
-  if (!Number.isInteger(value) || value < 1 || value > 4 || (type === "retests" && value < 2)) return;
+  if (!Number.isInteger(value) || value < 1 || value > 4 || ((type === "retests" || type === "ranges") && value < 2)) return;
   switch (type) {
     case "cascades": chartFovCascadesMin = value; break;
     case "levels": chartFovBreakoutMin = value; break;
     case "trendlines": chartFovTrendlineMin = value; break;
     case "retests": chartFovRetestMin = value; break;
+    case "ranges": chartFovRangeMin = value; break;
     default: return;
   }
   try { saveFovSettings(); } catch (_) {}
@@ -9456,7 +9498,7 @@ function openFormationTouchMenu(type, event) {
   menu.innerHTML = `<div class="formation-touch-menu-title">${formationTouchLabels[type]} · мин. касаний</div><div class="formation-touch-menu-options"></div>`;
   const options = menu.querySelector(".formation-touch-menu-options");
   const current = getFormationTouchMinimum(type);
-  for (let value = type === "retests" ? 2 : 1; value <= 4; value++) {
+  for (let value = type === "retests" || type === "ranges" ? 2 : 1; value <= 4; value++) {
     const option = document.createElement("button");
     option.type = "button"; option.textContent = `${value}+`;
     option.classList.toggle("on", value === current);
@@ -9683,6 +9725,7 @@ if (settingsBtn && settingsOverlay) {
       if (typeof saved.breakoutMin === 'number') chartFovBreakoutMin = saved.breakoutMin;
       if (typeof saved.trendlineMin === 'number') chartFovTrendlineMin = saved.trendlineMin;
       if (typeof saved.retestMin === 'number') chartFovRetestMin = saved.retestMin;
+      if (Number.isInteger(saved.rangeMin)) chartFovRangeMin = Math.max(2, Math.min(4, saved.rangeMin));
       if (typeof saved.retestApproaching === 'boolean') chartFovRetestApproaching = saved.retestApproaching;
       if (typeof saved.nearest === 'boolean') chartFovNearest = saved.nearest;
       if (typeof saved.showLabels === 'boolean') chartFovShowLabels = saved.showLabels;
@@ -15447,6 +15490,9 @@ window.addEventListener("resize", () => {
         const minT = Math.max(1, formationsMinCascade || 2);
         const res = getCachedFormationDetection(candles, `view:trendline:${minT}`, () => window.FormationEngine ? window.FormationEngine.detectTrendlines(candles, minT) : window.detectChartTrendlines(candles, minT));
         return (res || []).filter(tl => (tl.touches || 2) >= minT && Math.abs(tl.endPrice - lastP) / lastP <= 0.15);
+      } else if (activeFormation === 'range') {
+        const min = Math.max(2, formationsMinCascade || 2);
+        return getCachedFormationDetection(candles, `view:range:${min}`, () => window.FormationEngine?.detectRanges(candles, min) || []);
       } else if (activeFormation === 'retest') {
         const showApproaching = $("formations-approaching-toggle")?.checked;
         const res = getCachedFormationDetection(candles, `view:retest:${showApproaching ? 1 : 0}`, () => showApproaching
@@ -15473,6 +15519,7 @@ window.addEventListener("resize", () => {
       breakout: "levels",
       trendline: "trendlines",
       retest: "retests",
+      range: "ranges",
       cascades: "cascades",
       levels: "levels"
     };
@@ -15572,7 +15619,7 @@ window.addEventListener("resize", () => {
   const formationsMapClientCache = new Map(); // "type:tf" -> mapData for 0ms instant UI switching
   formationsCols = [1, 2, 4, 6, 9, 12].includes(formationsCols) ? formationsCols : 2;
   formationsTf = ['1m', '5m', '15m', '1h', '4h', '1d', '3d', '1w'].includes(formationsTf) ? formationsTf : '15m';
-  activeFormation = ['cascades', 'breakout', 'trendline', 'retest'].includes(activeFormation) ? activeFormation : 'cascades';
+  activeFormation = ['cascades', 'breakout', 'trendline', 'retest', 'range'].includes(activeFormation) ? activeFormation : 'cascades';
   formationsMinCascade = Math.max(1, Math.min(5, formationsMinCascade));
   let formationsFilters = { search: '', minVolume: 80000, distancePct: 15 };
   try { Object.assign(formationsFilters, JSON.parse(localStorage.getItem('formations_filters') || '{}')); } catch (_) {}
@@ -15796,7 +15843,8 @@ window.addEventListener("resize", () => {
 
   function acceptFormationSnapshot(snapshot) {
     if (!snapshot || !formationTimeframes.includes(snapshot.tf) || !snapshot.maps) throw new Error('Invalid formation snapshot');
-    for (const type of ['cascades', 'levels', 'trendline', 'retest', 'approaching']) {
+    for (const type of ['cascades', 'levels', 'trendline', 'retest', 'approaching', 'range']) {
+      if (type === 'range' && snapshot.maps.range === undefined) snapshot.maps.range = {};
       const map = snapshot.maps[type];
       if (!map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(levels => !Array.isArray(levels))) {
         throw new Error('Invalid formation map');
@@ -15902,10 +15950,10 @@ window.addEventListener("resize", () => {
     formationsExchanges: Array.from(fgExcMenu?.querySelectorAll('.exc-item.on') || []).map(item => item.dataset.cex)
   });
   window.applyFormationsPreferences = prefs => {
-    if (['cascades', 'breakout', 'trendline', 'retest'].includes(prefs.formationsActiveTab)) activeFormation = prefs.formationsActiveTab;
+    if (['cascades', 'breakout', 'trendline', 'retest', 'range'].includes(prefs.formationsActiveTab)) activeFormation = prefs.formationsActiveTab;
     if (formationTimeframes.includes(prefs.formationsTf)) formationsTf = prefs.formationsTf;
     if ([1, 2, 4, 6, 9, 12].includes(prefs.formationsCols)) formationsCols = prefs.formationsCols;
-    if (Number.isFinite(prefs.formationsMinCascade)) formationsMinCascade = Math.max(1, Math.min(5, Math.round(prefs.formationsMinCascade)));
+    if (Number.isFinite(prefs.formationsMinCascade)) formationsMinCascade = Math.max(activeFormation === 'range' ? 2 : 1, Math.min(activeFormation === 'range' ? 6 : 5, Math.round(prefs.formationsMinCascade)));
     if (typeof prefs.formationsNearest === 'boolean' && formationsNearestToggle) formationsNearestToggle.checked = prefs.formationsNearest;
     if (typeof prefs.formationsApproaching === 'boolean' && formationsApproachingToggle) formationsApproachingToggle.checked = prefs.formationsApproaching;
     if (prefs.formationsFilters) {
@@ -15957,6 +16005,8 @@ window.addEventListener("resize", () => {
       fgSelectText.textContent = "Наклонный уровень";
     } else if (activeFormation === 'retest') {
       fgSelectText.textContent = "Ретест уровня";
+    } else if (activeFormation === 'range') {
+      fgSelectText.textContent = "Range / Боковик";
     }
 
     const approachingWrap = $("formations-approaching-wrap");
@@ -15978,6 +16028,7 @@ window.addEventListener("resize", () => {
     });
 
     updateSettingsMenuItems();
+    syncFormationsSettings();
   }
 
   function updateSettingsMenuItems() {
@@ -15986,6 +16037,12 @@ window.addEventListener("resize", () => {
     if (!menu) return;
     const items = menu.querySelectorAll(".custom-grid-select-item");
     if (items.length < 5) return;
+    items.forEach((item, i) => { item.dataset.value = String(i + (activeFormation === 'range' ? 2 : 1)); });
+    if (activeFormation === 'range') {
+      if (header) header.textContent = "Касаний каждой границы";
+      items.forEach((item, i) => { item.textContent = `${i + 2}+`; });
+      return;
+    }
     if (activeFormation === 'cascades') {
       if (header) header.textContent = "Мин. уровней каскада";
       items[0].textContent = "1+ уровень";
@@ -16041,6 +16098,8 @@ window.addEventListener("resize", () => {
     fgSelectMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
       item.onclick = () => {
         activeFormation = item.dataset.value;
+        formationsMinCascade = Math.max(activeFormation === 'range' ? 2 : 1, Math.min(activeFormation === 'range' ? 6 : 5, formationsMinCascade));
+        localStorage.setItem('formations_min_cascade', formationsMinCascade);
         localStorage.setItem('formations_active_tab', activeFormation);
         schedulePreferencesSync();
         syncFormationsSelect();
@@ -16065,8 +16124,9 @@ window.addEventListener("resize", () => {
   const fgSettingsMenu = $("formations-settings-menu");
 
   function syncFormationsSettings() {
-    if (!fgSettingsMenu) return;
-    fgSettingsMenu.querySelectorAll(".custom-grid-select-item").forEach(item => {
+    const menu = $("formations-settings-menu");
+    if (!menu) return;
+    menu.querySelectorAll(".custom-grid-select-item").forEach(item => {
       const val = parseInt(item.dataset.value, 10);
       if (val === formationsMinCascade) {
         item.classList.add("on");
@@ -16197,6 +16257,12 @@ window.addEventListener("resize", () => {
       if (!lvls || lvls.length === 0) return Infinity;
       let minD = Infinity;
       for (const l of lvls) {
+        if (activeFormation === 'range') {
+          if (c.p < l.lower || c.p > l.upper) continue;
+          const d = Math.min(c.p - l.lower, l.upper - c.p) / c.p;
+          if (d < minD) minD = d;
+          continue;
+        }
         const lp = l.endPrice !== undefined ? l.endPrice : l.price;
         if (lp === undefined) continue;
         const d = Math.abs(lp - c.p) / c.p;
@@ -16233,6 +16299,11 @@ window.addEventListener("resize", () => {
               return count >= minT && dist <= formationsFilters.distancePct / 100;
             });
             if (!hasQualifying) return false;
+          } else if (activeFormation === 'range') {
+            const min = Math.max(2, formationsMinCascade || 2);
+            if (!lvls.some(l => l.lower > 0 && l.upper > l.lower && curP >= l.lower && curP <= l.upper &&
+              l.lowerTouches >= min && l.upperTouches >= min &&
+              Math.min(curP - l.lower, l.upper - curP) / curP <= formationsFilters.distancePct / 100)) return false;
           } else if (activeFormation === 'retest') {
             const hasQualifying = lvls.some(l => {
               const dist = (curP > 0 && l.price) ? Math.abs(l.price - curP) / curP : 0;
@@ -18277,6 +18348,7 @@ function copyPayField(elementId) {
 // FORMATION ALERTS & NOTIFICATIONS CONTROLLER
 // ══════════════════════════════════════════════════════════════════════════
 const DEFAULT_FORMATION_ALERT_SETTINGS = {
+  range: { enabled: false, timeframes: ["5m", "15m", "1h", "4h"], minTouches: 2, distancePct: 1 },
   enabled: false,
   soundEnabled: false,
   toastEnabled: false,
@@ -18330,6 +18402,7 @@ function loadFormationAlertSettings() {
         inPlayOnly: !!parsed.inPlayOnly,
         trendline: { ...DEFAULT_FORMATION_ALERT_SETTINGS.trendline, ...(parsed.trendline || {}) },
         level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(parsed.level || {}) },
+        range: { ...DEFAULT_FORMATION_ALERT_SETTINGS.range, ...(parsed.range || {}) },
         retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(parsed.retest || {}) }
       };
     } else {
@@ -18602,6 +18675,7 @@ function initNotificationsUI() {
               ...data.settings,
               trendline: { ...DEFAULT_FORMATION_ALERT_SETTINGS.trendline, ...(data.settings.trendline || {}) },
               level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(data.settings.level || {}) },
+              range: { ...DEFAULT_FORMATION_ALERT_SETTINGS.range, ...(data.settings.range || {}) },
               retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(data.settings.retest || {}) }
             });
             localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
@@ -18724,6 +18798,21 @@ function initNotificationsUI() {
     setupDistanceGroup("fmt-level-dist-group", "fmt-level-custom-dist", "fmt-level-custom-btn", s.level.distancePct, dist => { s.level.distancePct = dist; autoSaveSettings(); });
     setupButtonGroup("fmt-level-dir-group", s.level.direction, val => { s.level.direction = val; autoSaveSettings(); });
 
+    const setRange = $("set-fmt-range-enabled");
+    const cardRange = $("fmt-card-range"), bodyRange = $("fmt-range-body");
+    if (setRange) {
+      setRange.checked = !!s.range.enabled;
+      const updateRange = () => {
+        cardRange?.classList.toggle("active", setRange.checked);
+        if (bodyRange) bodyRange.style.opacity = setRange.checked ? "1" : "0.45";
+      };
+      updateRange();
+      setRange.onchange = () => { s.range.enabled = setRange.checked; updateRange(); autoSaveSettings(); };
+    }
+    setupTfGroup("fmt-range-tf-group", s.range.timeframes, tfs => { s.range.timeframes = tfs; autoSaveSettings(); });
+    setupButtonGroup("fmt-range-touches-group", s.range.minTouches, val => { s.range.minTouches = Number(val); autoSaveSettings(); });
+    setupDistanceGroup("fmt-range-dist-group", "fmt-range-custom-dist", "fmt-range-custom-btn", s.range.distancePct, dist => { s.range.distancePct = dist; autoSaveSettings(); });
+
     // 4. Retest (Подтвержденный ретест)
     const setRet = $("set-fmt-retest-enabled");
     const cardRet = $("fmt-card-retest");
@@ -18805,7 +18894,7 @@ function initNotificationsUI() {
 
   // Formation Modal Save button
   $("btn-save-formation-alerts")?.addEventListener("click", async () => {
-    for (const id of ['fmt-trendline-custom-dist', 'fmt-level-custom-dist']) {
+    for (const id of ['fmt-trendline-custom-dist', 'fmt-level-custom-dist', 'fmt-range-custom-dist']) {
       const input = $(id);
       if (input && input.style.display !== 'none' && (!input.value || !input.checkValidity())) {
         input.reportValidity(); input.focus(); return;
@@ -18886,6 +18975,16 @@ function initNotificationsUI() {
     // 5. Retest (Подтвержденный ретест)
     const setRet = $("set-fmt-retest-enabled");
     if (setRet) currentFormationAlertSettings.retest.enabled = setRet.checked;
+
+    const setRange = $("set-fmt-range-enabled");
+    if (setRange) currentFormationAlertSettings.range.enabled = setRange.checked;
+    const activeRangeTouch = $("fmt-range-touches-group")?.querySelector("button.fmt-btn.active");
+    if (activeRangeTouch) currentFormationAlertSettings.range.minTouches = Math.max(2, Number(activeRangeTouch.dataset.val) || 2);
+    const activeRangeTfs = Array.from($("fmt-range-tf-group")?.querySelectorAll("button.fmt-btn.active[data-tf]") || []).map(b => b.dataset.tf);
+    if (activeRangeTfs.length) currentFormationAlertSettings.range.timeframes = activeRangeTfs;
+    const activeRangeDist = $("fmt-range-dist-group")?.querySelector("button.fmt-btn.active");
+    const rangeDistance = activeRangeDist?.dataset.val === 'custom' ? Number($("fmt-range-custom-dist")?.value) : Number(activeRangeDist?.dataset.val);
+    if (Number.isFinite(rangeDistance) && rangeDistance > 0) currentFormationAlertSettings.range.distancePct = rangeDistance;
 
     // 6. Exchanges, Cooldown, Volume, Blacklist
     const activeExs = Array.from($("fmt-exchanges-group")?.querySelectorAll("button.fmt-btn.active[data-ex]") || []).map(b => b.dataset.ex);
@@ -18983,7 +19082,8 @@ function initNotificationsUI() {
     const isTl = data.type === "trendline" && !!s.trendline?.enabled;
     const isLvl = data.type === "level" && !!s.level?.enabled;
     const isRet = data.type === "retest" && !!s.retest?.enabled;
-    if (!isTl && !isLvl && !isRet) return;
+    const isRange = data.type === "range" && !!s.range?.enabled;
+    if (!isTl && !isLvl && !isRet && !isRange) return;
 
     // In-Play Only Filter: if enabled, strictly only allow active movers
     if (s.inPlayOnly && typeof isClientCoinInPlay === "function") {
@@ -19032,6 +19132,16 @@ function initNotificationsUI() {
         if ((targetDir === "support" || targetDir === "down" || targetDir === "long") && !isSupport) return;
         if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short") && isSupport) return;
       }
+    } else if (data.type === "range") {
+      const { lower, upper, lowerTouches, upperTouches } = data.meta || {};
+      const current = Number(data.curPrice), min = Math.max(2, Number(s.range.minTouches) || 2);
+      if (!(lower > 0 && upper > lower && current >= lower && current <= upper) ||
+          !(lowerTouches >= min && upperTouches >= min)) return;
+      if (!(s.range.timeframes || ["5m", "15m", "1h", "4h"]).includes(data.tf)) return;
+      const liveDist = Math.min(current - lower, upper - current) / current * 100;
+      if (liveDist > (Number(s.range.distancePct) || 1)) return;
+      data.targetPrice = current - lower <= upper - current ? lower : upper;
+      data.distPct = liveDist.toFixed(2);
     } else if (data.type === "retest") {
       const stage = data.meta?.status === 'approaching' ? 'approaching' : 'confirmed';
       if (s.retest.stage && s.retest.stage !== 'both' && s.retest.stage !== stage) return;
@@ -19170,7 +19280,9 @@ function initNotificationsUI() {
       try {
         showToast({
           title: data.typeName,
-          message: `${symDisp} (${exFull}) [${data.tf}]: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
+          message: data.type === 'range'
+            ? `${symDisp} (${exFull}) [${data.tf}]: ${fP(data.meta.lower)}–${fP(data.meta.upper)} · ${Number(data.meta.widthPct).toFixed(2)}% · ${data.meta.lowerTouches}/${data.meta.upperTouches} касания · ${data.distPct}% до границы`
+            : `${symDisp} (${exFull}) [${data.tf}]: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
           actionLabel: "Перейти к формации",
           type: "price_alert",
           hint: "Нажмите, чтобы открыть формацию на графике",
@@ -19189,13 +19301,13 @@ function initNotificationsUI() {
     if (!window.getFormationSnapshot) return;
     isScanningFormationAlerts = true;
     try {
-      const tfs = new Set(['trendline', 'level', 'retest'].flatMap(type => s[type]?.enabled ? s[type].timeframes || [] : []));
+      const tfs = new Set(['trendline', 'level', 'retest', 'range'].flatMap(type => s[type]?.enabled ? s[type].timeframes || [] : []));
       let received = false;
       for (const tf of tfs) {
         const snapshot = await window.getFormationSnapshot(tf);
         if (!snapshot?.updatedAt) continue;
         received = true;
-        for (const [mapType, type] of [['trendline', 'trendline'], ['levels', 'level'], ['retest', 'retest'], ['approaching', 'retest']]) {
+        for (const [mapType, type] of [['trendline', 'trendline'], ['levels', 'level'], ['retest', 'retest'], ['approaching', 'retest'], ['range', 'range']]) {
           for (const [key, items] of Object.entries(snapshot.maps[mapType] || {})) {
             const c = coins.get(key);
             if (!c?.p) continue;
@@ -19207,7 +19319,7 @@ function initNotificationsUI() {
                 touches: item.touches || item.touchIndices?.length || 2,
                 distPct: (Math.abs(c.p - targetPrice) / c.p * 100).toFixed(2),
                 direction: isLong ? 'long' : 'short', silent: !hasCompletedInitialWarmup,
-                typeName: type === 'trendline' ? 'Наклонный уровень' : type === 'level' ? 'Горизонтальный уровень' : mapType === 'approaching' ? 'Приближение к ретесту' : 'Подтверждённый ретест',
+                typeName: type === 'range' ? 'Range / Боковик' : type === 'trendline' ? 'Наклонный уровень' : type === 'level' ? 'Горизонтальный уровень' : mapType === 'approaching' ? 'Приближение к ретесту' : 'Подтверждённый ретест',
                 meta: { ...item, status: mapType === 'approaching' ? 'approaching' : 'confirmed' }
               });
             }

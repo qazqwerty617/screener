@@ -909,11 +909,97 @@
     return kept;
   }
 
-  // ── 5. Unified scan (one normalize + one swings pass) ──────────────────────
+  // Active horizontal ranges. Only confirmed pivots count as visits; adjacent
+  // candles at a boundary cannot manufacture another touch. Work is bounded
+  // to 400 bars and at most 36 boundary pairs, including on long histories.
+  function _detectRanges(ctx, minimum) {
+    if (!ctx || ctx.n < 30) return [];
+    const { candles, n, lastPrice, range, sw, prof } = ctx;
+    const minTouches = Math.max(2, Math.min(10, Math.ceil(Number(minimum) || 2)));
+    const start = Math.max(0, n - 400);
+    const steps = [];
+    for (let i = start; i < n; i++) {
+      const c = candles[i];
+      if (!c || ![c.t, c.o, c.h, c.l, c.c].every(Number.isFinite) ||
+          c.l <= 0 || c.h < Math.max(c.o, c.c) || c.l > Math.min(c.o, c.c)) return [];
+      if (i > start) {
+        const step = c.t - candles[i - 1].t;
+        if (step <= 0) return [];
+        steps.push(step);
+      }
+    }
+    steps.sort((a, b) => a - b);
+    const interval = steps[steps.length >> 1];
+    // Missing bars cannot certify containment or a genuine round trip.
+    if (steps.some(d => d > interval * 1.5)) return [];
+    const tol = Math.min(lastPrice * 0.005, Math.max(lastPrice * 0.0005, range * 0.3));
+    const clusters = side => {
+      const points = sw.filter(p => p.idx >= start && p.type === side).sort((a, b) => a.price - b.price);
+      const groups = [];
+      for (const p of points) {
+        let g = groups[groups.length - 1];
+        if (!g || p.price - g[0].price > tol) groups.push(g = []);
+        g.push(p);
+      }
+      return groups.filter(g => g.length >= minTouches)
+        .sort((a, b) => b.length - a.length || b[b.length - 1].idx - a[a.length - 1].idx).slice(0, 6);
+    };
+    const candidates = [];
+    for (const highs of clusters('high')) for (const lows of clusters('low')) {
+      const upper = Math.max(...highs.map(p => p.price));
+      const lower = Math.min(...lows.map(p => p.price));
+      const width = upper - lower;
+      if (width < Math.max(range * 3, lastPrice * 0.002) || width / lastPrice > 0.5) continue;
+      const touchTol = Math.min(tol, width * 0.08);
+      const eps = Math.max(lastPrice * 1e-10, Number.EPSILON * lastPrice * 8);
+      if (lastPrice < lower - eps || lastPrice > upper + eps) continue;
+      let lastBreak = start - 1;
+      for (let i = start; i < n; i++) {
+        const c = candles[i];
+        if (c.c > upper + eps || c.c < lower - eps || c.h > upper + touchTol || c.l < lower - touchTol) lastBreak = i;
+      }
+      const events = [...highs.filter(p => upper - p.price <= touchTol).map(p => ({ ...p, side: 'upper' })),
+        ...lows.filter(p => p.price - lower <= touchTol).map(p => ({ ...p, side: 'lower' }))]
+        .filter(p => p.idx > lastBreak).sort((a, b) => a.idx - b.idx);
+      const visits = [];
+      for (const event of events) {
+        const previous = visits[visits.length - 1];
+        if (previous && (previous.side === event.side || event.idx - previous.idx < prof.swW)) continue;
+        visits.push(event);
+      }
+      const upperVisits = visits.filter(p => p.side === 'upper');
+      const lowerVisits = visits.filter(p => p.side === 'lower');
+      if (upperVisits.length < minTouches || lowerVisits.length < minTouches ||
+          visits[visits.length - 1].idx - visits[0].idx < 18 || n - visits[visits.length - 1].idx > 80) continue;
+      // A slow rising/falling channel must not become a horizontal range just
+      // because its last few pivots happen to fit a wide tolerance band.
+      if ([upperVisits, lowerVisits].some(v => Math.abs(v[v.length - 1].price - v[0].price) > width * 0.06)) continue;
+      const nearest = lastPrice - lower <= upper - lastPrice ? lower : upper;
+      const touchIndices = visits.map(p => p.idx);
+      candidates.push({
+        isRange: true, status: 'active', lower, upper,
+        price: nearest, endPrice: nearest, direction: 'neutral',
+        widthPct: width / ((upper + lower) / 2) * 100,
+        touches: Math.min(upperVisits.length, lowerVisits.length),
+        upperTouches: upperVisits.length, lowerTouches: lowerVisits.length,
+        upperTouchIndices: upperVisits.map(p => p.idx), lowerTouchIndices: lowerVisits.map(p => p.idx),
+        touchIndices, touchTimes: touchIndices.map(i => candles[i].t),
+        swingIdx: visits[0].idx, swingTime: candles[visits[0].idx].t,
+        lastTouchAge: n - 1 - visits[visits.length - 1].idx,
+        distPct: Math.abs(nearest - lastPrice) / lastPrice * 100,
+        strength: visits.length * 10 + (visits[visits.length - 1].idx - visits[0].idx) / 20
+      });
+    }
+    candidates.sort((a, b) => b.strength - a.strength);
+    // One dominant box per market avoids overlapping contradictory ranges.
+    return candidates.slice(0, 1);
+  }
+
+  // ── Unified scan (one normalize + one swings pass) ──────────────────────
 
   function scanAll(raw, minTouches) {
     const ctx = buildCtx(raw);
-    if (!ctx) return { horizontals: [], cascades: [], trendlines: [], retests: [] };
+    if (!ctx) return { horizontals: [], cascades: [], trendlines: [], retests: [], approachingRetests: [], ranges: [] };
     const mt = minTouches || 2;
     return {
       horizontals: _detectHorizontals(ctx, mt),
@@ -921,6 +1007,7 @@
       trendlines: _detectTrendlines(ctx, mt),
       retests: _detectRetests(ctx, false),
       approachingRetests: _detectRetests(ctx, true),
+      ranges: ctx.candles.length === raw.length ? _detectRanges(ctx, mt) : [],
     };
   }
 
@@ -929,6 +1016,12 @@
   return {
     normalize,
     scanAll,
+    detectRanges: (raw, min) => {
+      try {
+        const ctx = buildCtx(raw);
+        return ctx && ctx.candles.length === raw.length ? _detectRanges(ctx, min) : [];
+      } catch (_) { return []; }
+    },
     detectCascades: (raw, min) => _detectCascades(buildCtx(raw), Number.isFinite(min) ? min : 2),
     detectHorizontals: (raw, min) => _detectHorizontals(buildCtx(raw), Number.isFinite(min) ? min : 2),
     detectTrendlines: (raw, min) => _detectTrendlines(buildCtx(raw), Number.isFinite(min) ? min : 2),

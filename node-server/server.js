@@ -124,12 +124,13 @@ const cachedFormationMaps = {
   levels: Object.create(null),
   trendline: Object.create(null),
   retest: Object.create(null),
-  approaching: Object.create(null)
+  approaching: Object.create(null),
+  range: Object.create(null)
 };
 const formationUpdatedAt = Object.create(null);
 
 function updateFormationSnapshot(coinKey, tf, formations) {
-  const types = { cascades: 'cascades', levels: 'horizontals', trendline: 'trendlines', retest: 'retests', approaching: 'approachingRetests' };
+  const types = { cascades: 'cascades', levels: 'horizontals', trendline: 'trendlines', retest: 'retests', approaching: 'approachingRetests', range: 'ranges' };
   for (const [type, field] of Object.entries(types)) {
     const bucket = cachedFormationMaps[type][tf] ||= Object.create(null);
     const levels = formations[field] || [];
@@ -165,7 +166,7 @@ function loadFormationMaps() {
     }
     let restoredCoins = 0;
     if (raw.cachedFormationMaps && typeof raw.cachedFormationMaps === "object") {
-      for (const type of ["cascades", "levels", "trendline", "retest", "approaching"]) {
+      for (const type of ["cascades", "levels", "trendline", "retest", "approaching", "range"]) {
         const typeObj = raw.cachedFormationMaps[type];
         if (!typeObj || typeof typeObj !== "object") continue;
         if (!cachedFormationMaps[type]) cachedFormationMaps[type] = Object.create(null);
@@ -207,7 +208,8 @@ function saveFormationMaps(force = false) {
         levels: cachedFormationMaps.levels,
         trendline: cachedFormationMaps.trendline,
         retest: cachedFormationMaps.retest,
-        approaching: cachedFormationMaps.approaching
+        approaching: cachedFormationMaps.approaching,
+        range: cachedFormationMaps.range
       },
       formationUpdatedAt,
       cachedTfMaps
@@ -248,7 +250,7 @@ function pruneFormationCaches() {
     }
   }
   const buckets = [cachedTfMaps, cachedFormationMaps.cascades, cachedFormationMaps.levels,
-                   cachedFormationMaps.trendline, cachedFormationMaps.retest, cachedFormationMaps.approaching,
+                   cachedFormationMaps.trendline, cachedFormationMaps.retest, cachedFormationMaps.approaching, cachedFormationMaps.range,
                    formationUpdatedAt];
   for (const bucket of buckets) {
     for (const tf in bucket) {
@@ -4441,7 +4443,10 @@ app.get("/api/formations/map", (req, res) => {
     if (map[key].length >= 8) continue;
     const meta = signal.meta || {};
 
-    if (type === "trendline" && Number.isFinite(meta.p1Idx) && Number.isFinite(meta.p2Idx)) {
+    if (type === "range") {
+      if (!(meta.lower > 0 && meta.upper > meta.lower)) continue;
+      map[key].push({ ...meta, isRange: true, price: signal.price, endPrice: signal.price });
+    } else if (type === "trendline" && Number.isFinite(meta.p1Idx) && Number.isFinite(meta.p2Idx)) {
       map[key].push({
         p1: { idx: meta.p1Idx, price: meta.p1Price },
         p2: { idx: meta.p2Idx, price: meta.p2Price },
@@ -5481,6 +5486,11 @@ server.listen(PORT, BIND_HOST, () => {
         const isSupport = signal.direction === "long" || signal.meta?.levelType === "support" || signal.meta?.direction === "down";
         if (!isSupport && actualPrice >= signal.price) continue;
         if (isSupport && actualPrice <= signal.price) continue;
+      } else if (signal.type === "range") {
+        const { lower, upper, lowerTouches, upperTouches } = signal.meta || {};
+        if (!(lower > 0 && upper > lower && actualPrice >= lower && actualPrice <= upper) ||
+            !(lowerTouches >= 2 && upperTouches >= 2)) continue;
+        typeName = "Range / Боковик";
       } else if (signal.type === "retest") {
         const liveDist = actualPrice > 0
           ? (Math.abs(actualPrice - signal.price) / actualPrice) * 100
@@ -5547,6 +5557,12 @@ server.listen(PORT, BIND_HOST, () => {
           blacklist: Array.isArray(prefs.blacklist) ? prefs.blacklist : [],
           blacklistCustom: typeof prefs.blacklistCustom === "string" ? prefs.blacklistCustom : "",
           inPlayOnly: !!prefs.inPlayOnly,
+          range: {
+            enabled: prefs.range?.enabled === true,
+            timeframes: Array.isArray(prefs.range?.timeframes) && prefs.range.timeframes.length ? prefs.range.timeframes : ["5m", "15m", "1h", "4h"],
+            minTouches: Math.max(2, Number(prefs.range?.minTouches) || 2),
+            distancePct: Math.max(0.01, Number(prefs.range?.distancePct) || 1)
+          },
           trendline: {
             enabled: prefs.trendline?.enabled !== undefined ? !!prefs.trendline.enabled : true,
             timeframes: Array.isArray(prefs.trendline?.timeframes) && prefs.trendline.timeframes.length > 0 ? prefs.trendline.timeframes : ["5m", "15m", "1h", "4h"],
@@ -5591,6 +5607,12 @@ server.listen(PORT, BIND_HOST, () => {
             blacklist: Array.isArray(s.blacklist) ? s.blacklist : [],
             blacklistCustom: typeof s.blacklistCustom === "string" ? s.blacklistCustom : "",
             inPlayOnly: !!s.inPlayOnly,
+            range: {
+              enabled: s.range?.enabled === true,
+              timeframes: Array.isArray(s.range?.timeframes) && s.range.timeframes.length ? s.range.timeframes : ["5m", "15m", "1h", "4h"],
+              minTouches: Math.max(2, Number(s.range?.minTouches) || 2),
+              distancePct: Math.max(0.01, Number(s.range?.distancePct) || 1)
+            },
             trendline: {
               enabled: s.trendline?.enabled !== undefined ? !!s.trendline.enabled : true,
               timeframes: Array.isArray(s.trendline?.timeframes) && s.trendline.timeframes.length > 0 ? s.trendline.timeframes : ["5m", "15m", "1h", "4h"],
@@ -5629,6 +5651,7 @@ server.listen(PORT, BIND_HOST, () => {
           exchanges: ["all"],
           blacklist: [],
           blacklistCustom: "",
+          range: { enabled: false },
           trendline: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], minTouches: 4, distancePct: 0.5, direction: "all" },
           level: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], minTouches: 4, distancePct: 0.5, direction: "all" },
           retest: { enabled: true, timeframes: ["1m", "5m", "15m", "1h", "4h"], direction: "all", maxAgeCandles: 20 }
@@ -5733,6 +5756,14 @@ server.listen(PORT, BIND_HOST, () => {
             if ((targetDir === "support" || targetDir === "down" || targetDir === "long" || targetDir === "Long") && !isSupport) continue;
             if ((targetDir === "resistance" || targetDir === "up" || targetDir === "short" || targetDir === "Short") && isSupport) continue;
           }
+        } else if (type === "range") {
+          if (!s.range?.enabled || !(s.range.timeframes || ["5m", "15m", "1h", "4h"]).includes(tf)) continue;
+          const { lower, upper, lowerTouches, upperTouches } = meta || {};
+          const minT = Math.max(2, Number(s.range.minTouches) || 2);
+          if (!(lower > 0 && upper > lower && actualPrice >= lower && actualPrice <= upper) ||
+              !(lowerTouches >= minT && upperTouches >= minT)) continue;
+          const liveDist = Math.min(actualPrice - lower, upper - actualPrice) / actualPrice * 100;
+          if (liveDist > (Number(s.range.distancePct) || 1)) continue;
         } else if (type === "retest") {
           if (!s.retest?.enabled) continue;
           const stage = meta?.status === 'approaching' ? 'approaching' : 'confirmed';
@@ -5850,6 +5881,15 @@ server.listen(PORT, BIND_HOST, () => {
             `• <b>Текущая цена:</b> $${actualPriceStr}\n` +
             `─────────────────────────\n` +
             `⚡ <b>Obsidian Screener</b>`;
+        } else if (type === "range") {
+          msg = `⚡ <b>Сигнал формации: Range / Боковик</b>\n\n` +
+            `• <b>Монета:</b> ${sym.toUpperCase()} (${exFull})\n` +
+            `• <b>Таймфрейм:</b> ${tf}\n` +
+            `• <b>Поддержка:</b> $${formatDynamicPrice(meta.lower)} · ${meta.lowerTouches} касания\n` +
+            `• <b>Сопротивление:</b> $${formatDynamicPrice(meta.upper)} · ${meta.upperTouches} касания\n` +
+            `• <b>Ширина:</b> ${Number(meta.widthPct).toFixed(2)}%\n` +
+            `• <b>Текущая цена:</b> $${actualPriceStr}\n` +
+            `─────────────────────────\n⚡ <b>Obsidian Screener</b>`;
         } else if (type === "retest") {
           const dirLabel = signal.direction === "long" ? "Long (Отскок вверх)" : "Short (Отскок вниз)";
           const srcLabel = meta?.sourceType === "trendline" ? "Пробой трендовой линии" : "Пробой уровня";

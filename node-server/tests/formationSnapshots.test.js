@@ -36,6 +36,15 @@ test('expired cached signals are excluded without waiting for another scan', () 
   assert.deepEqual(h.get('15m').result.maps.trendline, {});
   assert.equal(h.get('15m').result.scanned, 0);
 });
+
+test('Range snapshot preserves both boundaries and removes a broken box on the next scan', () => {
+  const h = build();
+  const box = { lower: 80, upper: 100, lowerTouches: 3, upperTouches: 4, isRange: true };
+  h.updateFormationSnapshot('BN:BTCUSDT', '15m', { ranges: [box] });
+  assert.deepEqual(h.get('15m').result.maps.range['BN:BTCUSDT'], [box]);
+  h.updateFormationSnapshot('BN:BTCUSDT', '15m', { ranges: [] });
+  assert.deepEqual(h.get('15m').result.maps.range, {});
+});
 test('all UI timeframes have snapshot responses; unknown timeframes fail explicitly', () => {
   const h = build();
   for (const tf of ['1m', '5m', '15m', '1h', '4h', '1d', '3d', '1w']) assert.equal(h.get(tf).status, 200);

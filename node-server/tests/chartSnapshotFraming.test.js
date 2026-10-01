@@ -15,6 +15,13 @@ const {
 const W = 1200, H = 680, TOP = 52, PR = 105, PW = W - PR, BTM = 28, VOL_H = 105;
 const PH = H - TOP - VOL_H - BTM;
 
+test('Range snapshot includes both boundaries in its scale and every touch in its framing', () => {
+  const signal = { type: 'range', price: 100, meta: { lower: 80, upper: 100, swingIdx: 30, touchIndices: [30, 50, 70, 90] } };
+  assert.deepEqual(collectFormationPrices(signal), [100, 80, 100]);
+  assert.ok(collectFormationIndices(signal).includes(30));
+  assert.ok(resolveVisibleCount(makeCandles(220), signal) >= 190);
+});
+
 function mulberry32(a) {
   return function () {
     a |= 0; a = a + 0x6D2B79F5 | 0;

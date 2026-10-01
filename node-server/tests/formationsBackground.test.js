@@ -18,6 +18,7 @@ function build(t, saved = {}) {
   const requests = [];
   const klines = new Map();
   let response = { "BN:BTCUSDT": [{ price: 102, direction: "up", touches: 3 }, { price: 103, direction: "up", touches: 3 }] };
+  let ranges;
   Object.assign(w, {
     $: id => w.document.getElementById(id), activeView: "screener", fullChartOpen: false,
     coins: new Map([["BN:BTCUSDT", { ex: "BN", sym: "BTCUSDT", p: 100, v: 1e8 }]]), chartInstances: [],
@@ -27,7 +28,7 @@ function build(t, saved = {}) {
     setTimeout: fn => { timers.push(fn); return timers.length; }, setInterval: () => 0, clearTimeout() {},
     fetch: async url => { requests.push(url); if (response instanceof Error) throw response; return { ok: true, json: async () => url.includes('/snapshot') ? {
       tf: new URL(url, 'http://localhost').searchParams.get('tf'), updatedAt: Date.now(),
-      maps: { cascades: response, levels: response, trendline: response, retest: response, approaching: {} }
+      maps: { cascades: response, levels: response, trendline: response, retest: response, approaching: {}, ...(ranges ? { range: ranges } : {}) }
     } : response }; },
     touchKlinesCache: key => klines.get(key), storeKlinesCache: (key, data) => klines.set(key, { data, ts: Date.now() }),
     fetchChartKlines: async () => [{ t: 1, o: 100, h: 101, l: 99, c: 100, v: 1 }],
@@ -35,8 +36,24 @@ function build(t, saved = {}) {
     ChartInstance: class { constructor(grid) { this.el = w.document.createElement("div"); grid.append(this.el); } update(c) { Object.assign(this, c); } draw() {} dispose() {} }
   });
   w.eval(section + "\nwindow.testRefresh = preloadFormationsInBackground;");
-  return { w, timers, requests, klines, respond: data => { response = data; } };
+  return { w, timers, requests, klines, respond: data => { response = data; }, respondRange: data => { ranges = data; } };
 }
+
+test('Range workspace uses both live boundaries and per-side minimum touches', async t => {
+  const h = build(t, { formations_active_tab: 'range', formations_min_cascade: '2' });
+  h.respondRange({ 'BN:BTCUSDT': [{ lower: 99, upper: 102, lowerTouches: 3, upperTouches: 3, price: 99 }] });
+  await h.w.testRefresh(); await flush();
+  h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
+  assert.equal(h.w.chartInstances.length, 1);
+  assert.equal(h.w.$('formations-select-text').textContent, 'Range / Боковик');
+  h.w.$('formations-settings-menu').querySelector('[data-value="4"]').click(); await flush();
+  assert.equal(h.w.chartInstances.length, 0, 'minimum touches applies to each side');
+  h.w.$('formations-settings-menu').querySelector('[data-value="2"]').click(); await flush();
+  assert.equal(h.w.chartInstances.length, 1);
+  h.w.coins.get('BN:BTCUSDT').p = 103;
+  h.w.loadFormations(); await flush();
+  assert.equal(h.w.chartInstances.length, 0, 'cached range cannot survive a live breakout');
+});
 
 test("background prepares chart candles before the formations tab is opened", async t => {
   const h = build(t);

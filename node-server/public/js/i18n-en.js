@@ -1,5 +1,10 @@
 /* UI copy only. Market symbols, source publications and user text stay intact. */
 window.ObsidianEnglish = Object.freeze(Object.fromEntries(`
+Range / Боковик|Range / Sideways
+Касаний каждой границы|Touches on each boundary
+Касаний каждой границы:|Touches on each boundary:
+До ближайшей границы:|Distance to nearest boundary:
+Чередующиеся касания поддержки и сопротивления. Только активный боковик.|Alternating support and resistance touches. Active ranges only.
 Общие|General
 Язык интерфейса|Interface language
 Язык сохраняется на этом устройстве. Публикации источников остаются на языке оригинала.|Language is saved on this device. Source publications remain in their original language.
