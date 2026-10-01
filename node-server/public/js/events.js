@@ -30,7 +30,7 @@
   let unlockMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
   let unlockSelectedDay;
   let unlockPage = 0, unlockWindowPage = 0;
-  let unlockType = "all", unlockSource = "all";
+  let unlockType = "all", unlockSource = "primary";
   let newsKind = "all", newsLimit = 40;
   let socialPlatform = "all", socialTopic = "all", socialPage = 0, socialSourcePage = 0;
   let socialData = null, socialRequestKey = "", socialSequence = 0, socialAbort = null, socialSearchTimer = null;
@@ -82,6 +82,9 @@
   function publicationTitle(item) {
     return window.ObsidianI18n?.language === 'en' ? (item.title || item.titleRu) : (item.titleRu || item.title);
   }
+  function evidenceCount(item) {
+    return Math.max(2,new Set((item.verification?.sources||[]).map(source=>source.publisher||source.name)).size);
+  }
 
   function urgentText(item) {
     const russianTitle = item.titleRu || (/[а-яё]/i.test(item.title || "") ? item.title : "");
@@ -120,7 +123,7 @@
     header.append(node("span", "", `✦ ${label}`), close);
     const body = node("div", "toast-body", urgentText(item));
     const footer = node("div", "toast-urgent-footer");
-    const source = node("span", "", item.verification.status === "official" ? `${item.source} · официально` : `${item.source} · 2 источника`);
+    const source = node("span", "", item.verification.status === "official" ? `${item.source} · официально` : `${item.source} · ${evidenceCount(item)} источников`);
     const link = node("a", "", "Открыть источник ↗");
     link.href = item.url; link.target = "_blank"; link.rel = "noopener noreferrer";
     footer.append(source, link); card.append(header, body, footer);
@@ -198,8 +201,13 @@
       item.addEventListener("click", () => select(value));
       menu.append(item);
     }
-    menu.querySelector(`[data-value="all"]`).classList.add("on");
-    menu.querySelector(`[data-value="all"]`).setAttribute("aria-selected", "true");
+    const initial = kind === "unlock-source" ? unlockSource : "all";
+    menu.querySelector(`[data-value="${initial}"]`).classList.add("on");
+    menu.querySelector(`[data-value="${initial}"]`).setAttribute("aria-selected", "true");
+    if (initial !== "all") {
+      const chosen = options.find(option => option[0] === initial);
+      button.replaceChildren(node("span", "events-market-icon", chosen[2]), node("span", "", chosen[1]), node("span", "events-picker-arrow", "⌄"));
+    }
     button.addEventListener("click", () => {
       const open = !picker.classList.contains("open"); closePickers();
       picker.classList.toggle("open", open);
@@ -257,7 +265,7 @@
       heading.append(primary); link.append(heading);
       const sources = node("div", "events-news-sources");
       sources.append(node("small", "", item.verification.status === "official" ? "Официальный источник"
-        : item.verification.status === "corroborated" ? "Сверено по 2 источникам" : "Сообщает источник"));
+        : item.verification.status === "corroborated" ? `Сверено по ${evidenceCount(item)} источникам` : "Сообщает источник"));
       for (const evidence of item.verification.sources || []) {
         try { if (new URL(evidence.url).protocol !== "https:") continue; } catch (_) { continue; }
         const source = node("a", "events-source-link", `${evidence.name} ↗`);
@@ -485,30 +493,52 @@
     const payload = data?.unlocks;
     const primary = payload?.sources?.primary;
     const aggregator = payload?.sources?.defillama;
+    const plans=payload?.sources?.projectPlans;
+    const en=window.ObsidianI18n?.language==='en';
     const health = source => source?.expired ? "кэш истёк, события скрыты" : source?.status === "error"
       ? (source.updatedAt ? "источник недоступен, показан кэш" : "источник недоступен")
       : source?.stale ? "данные устарели" : source?.status === "empty" ? "нет датированных событий в доступном календаре" : source?.status === "ok" ? `обновлено ${dateTime(source.updatedAt)}` : "загрузка";
-    status.textContent = `Официальные расписания: ${primary?.tokens || 0} проекта. ` +
+    const planStatus=plans?.expiredDocuments&& !plans.documentedTokens?(en?'cached plans expired and were hidden':'кэш планов истёк и скрыт')
+      :plans?.status==='cached'?(en?'saved snapshot; rechecking':'сохранённый снимок; проверяем обновления')
+      :plans?.status==='rate_limited'?(en?'provider rate limit; retry scheduled':'источник ограничил запросы; повтор запланирован')
+      :plans?.status==='error'?(en?'provider unavailable':'источник недоступен'):plans?.partial?(en?'scan in progress / incomplete':'обход продолжается / есть пропуски'):(en?'catalog checked':'каталог проверен');
+    const planWarnings=plans?(en?`${plans.errors?` · ${plans.errors} request failures`:''}${plans.superseded?` · superseded plans excluded: ${plans.superseded}`:''}${plans.reviewRequired?` · plans pending review: ${plans.reviewRequired}`:''}${plans.staleDocuments?` · ${plans.staleDocuments} documents need rechecking`:''}${plans.expiredDocuments?` · ${plans.expiredDocuments} expired documents hidden`:''}`
+      :`${plans.errors?` · ${plans.errors} ошибок запросов`:''}${plans.superseded?` · устаревших планов исключено: ${plans.superseded}`:''}${plans.reviewRequired?` · планов на повторной проверке: ${plans.reviewRequired}`:''}${plans.staleDocuments?` · ${plans.staleDocuments} документов требуют повторной проверки`:''}${plans.expiredDocuments?` · ${plans.expiredDocuments} истёкших документов скрыто`:''}`):'';
+    const warnings=byId('events-unlocks-plan-warnings');
+    if(warnings){
+      warnings.replaceChildren();
+      for(const plan of plans?.excludedPlans||[]){
+        const text=plan.status==='review_required'?(en?'old forecast hidden pending review of newer team terms':'старый прогноз скрыт до проверки новых условий команды'):(en?'old forecast superseded by newer official terms':'старый прогноз исключён после официального пересмотра');
+        const line=node('p','',`${plan.symbol}: ${text} · `);
+        line.append(socialLink(en?'Official update ↗':'Официальное обновление ↗',plan.url));warnings.append(line);
+      }
+      warnings.hidden=!warnings.children.length;
+    }
+    status.textContent = (Number.isFinite(primary?.totalOfficialTokens)?(en?`Official-source coverage: ${primary.totalOfficialTokens} distinct projects with future entries. `:`Охват официальных источников: ${primary.totalOfficialTokens} уникальных проектов с будущими записями. `):'') +
+      (en?`Official schedules: ${primary?.tokens||0} projects. `:`Официальные расписания: ${primary?.tokens || 0} проектов. `) +
+      (plans?(en?`Team-submitted plans: ${plans.documentedTokens||0} documents, ${plans.tokens||0} projects with future entries; checked ${plans.scannedTokens||0}/${plans.availableTokens??'?'} assets · ${planStatus}${plans.unsupported?` · ${plans.unsupported} unsupported documents`:''}${plans.notPublished?` · ${plans.notPublished} without a published plan`:''}${planWarnings}. `
+        :`Планы команд: ${plans.documentedTokens||0} документов, ${plans.tokens||0} проектов с будущими записями; проверено ${plans.scannedTokens||0}/${plans.availableTokens??'?'} активов · ${planStatus}${plans.unsupported?` · ${plans.unsupported} документов не удалось разобрать`:''}${plans.notPublished?` · ${plans.notPublished} без опубликованного плана`:''}${planWarnings}. `):'') +
       [["dropstab", "DropsTab"], ["coinmarketcap", "CoinMarketCap"], ["tokenomist", "Tokenomist"]].map(([key, name]) => {
         const source = payload?.sources?.[key];
         return source ? `${name}: ${source.tokens || 0} проектов с событиями${source.inactiveTokens ? ` (из них ${source.inactiveTokens} помечены неактивными)` : ""} · получено ${source.scannedTokens || 0}/${source.availableTokens ?? "?"} записей каталога · ${health(source)}${source.partial ? " · часть каталога недоступна" : ""}. ` : "";
       }).join("") +
       (aggregator?.status === "not_configured" ? "" : `DefiLlama: ${health(aggregator)}. `) +
-      "Охват ограничен доступными источниками. Проекты и события у поставщиков пересекаются; количества не суммируются. Публичные календари показывают ближайшие порции, а не полное расписание на год.";
+      (en?"Coverage depends on available sources. Projects and entries overlap and their counts are not additive. Public calendars usually provide upcoming portions, not complete annual schedules. Team plans forecast monthly circulating supply; they are not exact unlocks."
+        :"Охват ограничен доступными источниками. Проекты и события у поставщиков пересекаются; количества не суммируются. Публичные календари показывают ближайшие порции, а не полное расписание на год. Планы команд прогнозируют обращение за месяц, а не точный разлок.");
     const query = byId("events-unlocks-search").value.trim().toLowerCase();
     const kind = unlockType, provider = unlockSource;
     const rows = (payload?.rows || []).filter(item => {
       const at = Number(item.at);
-      return Number.isFinite(at) && item.amount > 0 &&
+      return Number.isFinite(at) && (item.amount > 0 || item.amount===null&&item.confidence==='schedule') &&
         (!byId("events-unlocks-hide-inactive").checked || item.marketStatus !== "inactive") &&
         (kind === "all" || item.unlockType === kind) &&
-        (provider === "all" || (provider === "primary" ? item.confidence === "schedule" : item.provider === provider)) &&
+        (provider === "all" || (provider === "primary" ? ['schedule','project_plan'].includes(item.confidence) : ['schedule','project_plan'].includes(provider)?item.confidence===provider:item.provider === provider)) &&
         (!query || `${item.symbol || ""} ${item.name}`.toLowerCase().includes(query));
     }).sort((a, b) => a.at - b.at);
 
     const byDay = new Map();
     for (const item of rows) {
-      if (["month", "week"].includes(item.precision)) continue;
+      if (["month", "week","period"].includes(item.precision)) continue;
       const key = utcDayKey(new Date(Number(item.at)));
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key).push(item);
@@ -554,16 +584,17 @@
 
     const count = byId("events-unlocks-count");
     const monthStart = unlockMonth.getTime(), monthEnd = Date.UTC(year, monthIndex + 1, 1);
-    const windows = rows.filter(item => ["month", "week"].includes(item.precision) &&
+    const windows = rows.filter(item => ["month", "week","period"].includes(item.precision) &&
       Number(item.windowStart) < monthEnd && Number(item.windowEnd) >= monthStart);
-    if (count) count.textContent = `Календарь UTC · в месяце: ${monthEvents} записей с датой + ${windows.length} приблизительных окон · всего по фильтрам: ${rows.length}. % = доля общего предложения.`;
+    if (count) count.textContent = en?`UTC calendar · this month: ${monthEvents} dated entries + ${windows.length} periods/windows · matching filters: ${rows.length}. Percentages use each source's supply basis.`
+      :`Календарь UTC · в месяце: ${monthEvents} записей с датой + ${windows.length} периодов и окон · всего по фильтрам: ${rows.length}. База процента указана в источнике.`;
     const selectedDate = new Date(`${unlockSelectedDay}T12:00:00Z`);
     byId("events-unlocks-day-label").textContent = formatDate(selectedDate, 'utcFullDay') + " · UTC";
     const selectedItems = byDay.get(unlockSelectedDay) || [];
     byId("events-unlocks-day-count").textContent = selectedItems.length ? `${selectedItems.length} записей` : "";
 
     renderUnlockCards(list, selectedItems, unlockPage, page => { unlockPage = page; renderUnlocks(); });
-    if (!selectedItems.length) clearWithEmpty(list, rows.length ? "На эту дату разлоков нет. Приблизительные окна указаны отдельно ниже." : "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
+    if (!selectedItems.length) clearWithEmpty(list, rows.length ? "На эту дату разлоков нет. Периоды и окна указаны отдельно ниже." : "Разлоков по выбранным фильтрам нет. Проверьте охват источников выше.");
     const windowList = byId("events-unlocks-windows");
     byId("events-unlocks-windows-section").hidden = !windows.length;
     renderUnlockCards(windowList, windows, unlockWindowPage, page => { unlockWindowPage = page; renderUnlocks(); });
@@ -582,6 +613,7 @@
   }
 
   function renderUnlockCards(list, items, requestedPage, onPage) {
+    const en=window.ObsidianI18n?.language==='en';
     const page = Math.min(requestedPage, Math.max(0, Math.ceil(items.length / 100) - 1));
     const fragment = document.createDocumentFragment();
     for (const item of items.slice(page * 100, (page + 1) * 100)) {
@@ -589,19 +621,21 @@
       const at = new Date(item.at);
       const formatDay = date => formatDate(date, 'utcFullDay');
       const dateLabel = item.precision === "month" ? formatDate(at, 'utcMonth')
-        : item.precision === "week" ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
+        : ['week','period'].includes(item.precision) ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
       card.append(node("h3", "", `${item.symbol || item.name} · ${dateLabel}`));
-      const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию", tge: "Первичный выпуск (TGE)", inflationary: "Возрастающая эмиссия", deflationary: "Убывающая эмиссия", "non-linear": "Нелинейный выпуск", unknown: "Тип выпуска не уточнён" };
-      card.append(node("p", "", `${item.name} · ${types[item.unlockType] || types.unknown}`));
+      const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию",circulation:en?'Team plan · monthly circulating-supply change':"План команды · изменение обращения за месяц", tge: "Первичный выпуск (TGE)", inflationary: "Возрастающая эмиссия", deflationary: "Убывающая эмиссия", "non-linear": "Нелинейный выпуск", unknown: "Тип выпуска не уточнён" };
+      card.append(node("p", "", `${item.name} · ${item.precision==='period'?(en?'Continuous vesting over the period':'Непрерывный вестинг за период'):types[item.unlockType] || types.unknown}`));
       const amount = formatAmount(item.amount);
-      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
-      card.append(node("p", "", `${amount} токенов${share}`));
+      const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% ${en?'of stated total supply':'от указанного общего предложения'}` : "";
+      card.append(node("p", "", item.amount===null?(en?'Stage amount not specified':'Объём этапа не указан'):`${item.upperBound?(en?'Up to ':'До '):''}${amount} ${en?'tokens':'токенов'}${share}`));
       const utcTime = value => formatDate(Number(value), 'utcTime') + " UTC";
-      const precisionLabel = { month: "любой день месяца, дата приблизительная", week: "приблизительное окно ±3 дня", day: "точное время неизвестно · дата UTC", hour: `${utcTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${utcTime(item.at)} · оценка времени блока` }[item.precision];
+      const precisionLabel = { month: en?'Monthly period · exact release date not provided':"Месячный период · точная дата выпуска не указана",period:en?'Continuous vesting over the period · not a single cliff':"Непрерывный вестинг за период · не разовый cliff", week: "приблизительное окно ±3 дня", day: "точное время неизвестно · дата UTC", hour: `${utcTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${utcTime(item.at)} · оценка времени блока` }[item.precision];
       card.append(node("small", "", `${item.provider} · ${precisionLabel || utcTime(item.at)}${item.stale ? " · УСТАРЕВШИЕ ДАННЫЕ" : ""}`));
       if (item.marketStatus === "inactive") card.append(node("small", "", "Источник пометил проект неактивным; доступность торгов не подтверждена."));
       if (item.allocationMismatch) card.append(node("small", "", "Сумма распределений источника расходится с итогом. Показан итог без разбивки."));
-      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${formatAmount(allocation.amount)}`));
+      if(item.documentDate)card.append(node('small','',`${en?'Document dated':'Документ от'} ${item.documentDate}${item.checkedAt?` · ${en?'checked':'проверен'} ${dateTime(item.checkedAt)}`:''}`));
+      if(item.note){const note=node('small','',en&&item.noteEn?item.noteEn:item.note);note.style.display='block';card.append(note);}
+      for (const allocation of item.allocations || []) if(allocation.amount!==null)card.append(node("div", "", `${allocation.label}: ${formatAmount(allocation.amount)}`));
       const sources = node("div", "events-news-sources");
       for (const url of item.sources || []) {
         let parsed; try { parsed = new URL(url); if (parsed.protocol !== "https:") continue; } catch (_) { continue; }
@@ -687,8 +721,8 @@
       wired = true;
       wirePicker("exchange", [["all", "Все 11 бирж", "ALL"], ...VENUES.map(([code, name]) => [code, name, VENUE_ICONS[code]])]);
       wirePicker("market", MARKET_OPTIONS);
-      wirePicker("unlock-type", [["all", "Все типы", "◈"], ["cliff", "Разовые (cliff)", "◆"], ["linear", "Линейный вестинг", "↗"], ["scheduled", "Официальное расписание", "✓"], ["tge", "Первичный выпуск (TGE)", "●"], ["inflationary", "Возрастающая эмиссия", "↗"], ["deflationary", "Убывающая эмиссия", "↘"], ["non-linear", "Нелинейный выпуск", "≈"], ["unknown", "Тип не уточнён", "?"]]);
-      wirePicker("unlock-source", [["all", "Все источники", "◈"], ["primary", "Официальные расписания", "✓"], ["DropsTab", "DropsTab", "D"], ["CoinMarketCap", "CoinMarketCap", "C"], ["Tokenomist", "Tokenomist", "T"], ["DefiLlama", "DefiLlama", "L"]]);
+      wirePicker("unlock-type", [["all", "Все типы", "◈"], ["cliff", "Разовые (cliff)", "◆"], ["linear", "Линейный вестинг", "↗"], ["scheduled", "Официальное расписание", "✓"],["circulation","Планы обращения","◷"], ["tge", "Первичный выпуск (TGE)", "●"], ["inflationary", "Возрастающая эмиссия", "↗"], ["deflationary", "Убывающая эмиссия", "↘"], ["non-linear", "Нелинейный выпуск", "≈"], ["unknown", "Тип не уточнён", "?"]]);
+      wirePicker("unlock-source", [["all", "Все источники", "◈"], ["primary", "Официальные источники", "✓"],["schedule","Документация проектов","✓"],["project_plan","Планы команд · Upbit","◷"], ["DropsTab", "DropsTab", "D"], ["CoinMarketCap", "CoinMarketCap", "C"], ["Tokenomist", "Tokenomist", "T"], ["DefiLlama", "DefiLlama", "L"]]);
       document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
       byId("events-news-search").addEventListener("input", () => { newsLimit = 40; queueSearchRender(); });

@@ -55,7 +55,7 @@ test("column names, not a hardcoded column offset, define token identity and eve
 });
 test("free sources paginate all public projects, share concurrent polls and never call the paid API", async () => {
   let calls = 0;
-  const service = createUnlockService({ apiKey: "", now: () => now, request: async (url, opts) => {
+  const service = createUnlockService({ apiKey: "", now: () => now, officialPlans:{refresh:async()=>{},snapshot:()=>({rows:[],source:null})},request: async (url, opts) => {
     calls++; assert.doesNotMatch(url, /pro-api/);
     if (url.includes("coinmarketcap")) return new Response("offline", { status: 503 });
     if (url.includes("tokenomist")) return new Response(page());
@@ -67,7 +67,7 @@ test("free sources paginate all public projects, share concurrent polls and neve
   const result = service.snapshot();
   assert.equal(result.sources.dropstab.scannedTokens, 3); assert.equal(result.sources.dropstab.tokens, 3);
   assert.equal(result.sources.dropstab.partial, false); assert.equal(result.sources.tokenomist.partial, true);
-  assert.equal(result.coverage, "public_calendars"); assert.equal(result.sources.primary.tokens, 3);
+  assert.equal(result.coverage, "public_calendars"); assert.equal(result.sources.primary.tokens, require('../unlockSchedules').SCHEDULES.length);
 });
 test("outages retain bounded stale cache; expired data disappears; recovery clears the error", async () => {
   let time = now, fail = false;

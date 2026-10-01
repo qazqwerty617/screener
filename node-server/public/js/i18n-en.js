@@ -118,6 +118,32 @@ Smart Money & Структура|Smart Money & Structure
 Обнаружены в подключённых новостях и официальных лентах. Дата публикации не является датой разлока.|Found in connected news and official feeds. A publication date is not an unlock date.
 Приблизительно|Approximate
 Приблизительные окна этого месяца|Approximate windows this month
+Периоды и окна этого месяца|Periods and windows this month
+Здесь показаны непрерывный вестинг, месячные планы команд и события без точного дня. План обращения может включать эмиссию; это не разовый разлок.|Continuous vesting, team monthly plans and events without an exact date. Circulating-supply plans may include emissions; they are not one-off unlocks.
+Официальные источники|Official sources
+Документация проектов|Project documentation
+Документация проекта|Project documentation
+Планы обращения|Circulating-supply plans
+Планы команд|Team plans
+План команды|Team plan
+Непрерывный вестинг за период|Continuous vesting over the period
+Расчёт по официальному расписанию|Calculated from official schedule
+На эту дату разлоков нет. Периоды и окна указаны отдельно ниже.|No unlocks on this date. Periods and windows are listed separately below.
+Документация устанавливает максимальный выпуск. База процента — 10 млрд при создании; новая эмиссия стейкинга не включена.|Documentation sets a maximum release. Percentages use the 10B genesis supply; new staking emissions are excluded.
+Указан максимальный месячный выпуск команды и инвесторов. Документация не обещает точный день или фактический выпуск всего лимита.|Maximum monthly team and investor release. Documentation does not guarantee an exact date or full release of the cap.
+Непрерывный вестинг распределён по календарным месяцам. База процента — выпуск при genesis; вознаграждения стейкинга исключены.|Continuous vesting is grouped by calendar month. Percentages use genesis supply; staking rewards are excluded.
+Показаны команда и инвесторы. Другие распределения и PoL-эмиссия не включены; база процента — genesis, а не текущая общая эмиссия.|Team and investors only. Other allocations and PoL emissions are excluded; percentages use genesis supply, not current total issuance.
+Стратегические партнёры: обновлённая месячная порция 12,7 млн после выкупа. Пере-заблокированные токены фонда до Zero mainnet исключены. Месячный период не задаёт время исполнения.|Strategic partners: revised 12.7M monthly portion after the buyback. Foundation tokens re-locked until Zero mainnet are excluded. A monthly period does not specify execution time.
+Официально указаны этапы 6, 18, 30 и 42 месяца. Точный день и объём этапа здесь не подтверждены; данные графика не заменяются догадкой.|Official milestones: 6, 18, 30 and 42 months. Exact stage dates and amounts are unconfirmed here; they are not guessed from a chart.
+Официальные этапы: 12, 24, 36, 48 и 60 месяцев после запуска. Объём этапа здесь не установлен; месячный план команды доступен отдельно, когда опубликован.|Official milestones: 12, 24, 36, 48 and 60 months after launch. Stage amounts are unspecified here; a published team monthly plan is provided separately.
+Ранние участники и инвесторы|Early contributors and investors
+Команда и инвесторы|Team and investors
+Команда и инвесторы · cliff|Team and investors · cliff
+Первоначальная команда|Initial core contributors
+Команда|Team
+R&D и экосистема|R&D and ecosystem
+Стратегические партнёры · пересмотренный выпуск|Strategic partners · revised release
+Этап официального расписания|Official schedule milestone
 Точный день неизвестен. Окна, пересекающие границу месяца, видны в обоих месяцах.|Exact day unknown. Windows spanning two months appear in both.
 Исполнимые межбиржевые спреды, фандинг, переводы и DEX-пулы с точной проверкой контрактов.|Executable cross-exchange spreads, funding, transfers and DEX pools with exact contract verification.
 обновление…|updating…

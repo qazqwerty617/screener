@@ -1,6 +1,6 @@
 "use strict";
 const test = require("node:test"), assert = require("node:assert/strict");
-const { primaryUnlocks } = require("../unlockSchedules");
+const { primaryUnlocks,SCHEDULES,monthAt } = require("../unlockSchedules");
 const { normalizeEmissions, createUnlockService } = require("../unlockService");
 const now = Date.UTC(2026, 8, 26);
 test("XPL cliff and monthly ecosystem vesting are calculated separately from official schedules", () => {
@@ -55,6 +55,50 @@ test("public schedules work without an API key and disclose limited coverage", a
   const service = createUnlockService({ apiKey: "", publicSources: false, now: () => now, request: () => { throw new Error("must not request paid data"); } });
   await service.refresh();
   assert.equal(service.snapshot().coverage, "primary_only");
-  assert.equal(service.snapshot().sources.primary.tokens, 3);
+  assert.equal(service.snapshot().sources.primary.tokens, SCHEDULES.length);
   assert.ok(service.snapshot().rows.length > 20);
+});
+
+test("Starknet caps stop at the stated final month; ZK retains monthly precision",()=>{
+  const strk=primaryUnlocks(Date.UTC(2024,3,15),1300).filter(r=>r.symbol==='STRK');
+  assert.equal(strk.length,36);
+  assert.equal(strk.filter(r=>r.amount===64e6).length,12);
+  assert.equal(strk.filter(r=>r.amount===127e6).length,24);
+  assert.equal(strk.at(-1).at,Date.UTC(2027,2,15));assert.ok(strk.every(r=>r.upperBound));
+  const zk=primaryUnlocks(Date.UTC(2025,5,1),1200).filter(r=>r.symbol==='ZK');
+  assert.equal(zk.length,37);assert.equal(zk[0].amount,21e9*.036);
+  assert.ok(zk.slice(1).every(r=>r.amount===21e9*.008));
+  assert.ok(zk.every(r=>r.precision==='month'&&r.windowEnd>=r.windowStart));
+  assert.equal(zk.at(-1).windowEnd,Date.UTC(2028,6,1)-1);
+});
+test("continuous vesting portions integrate to their complete allocation and stop at partial final months",()=>{
+  for(const symbol of ['TIA','BERA']){
+    const schedule=SCHEDULES.find(s=>s.symbol===symbol),start=Date.parse(schedule.linear[0].from);
+    const rows=primaryUnlocks(start,1300).filter(r=>r.symbol===symbol);
+    assert.ok(rows.every(r=>r.precision==='period'&&r.unlockType==='linear'));
+    assert.ok(Math.abs(rows.reduce((sum,r)=>sum+r.amount,0)-schedule.linear.reduce((sum,a)=>sum+a.amount,0))<.0001);
+    for(const phase of schedule.linear){
+      const end=Date.parse(phase.to),parts=rows.flatMap(r=>r.allocations.filter(a=>a.label===phase.label).map(a=>({r,a})));
+      assert.ok(parts.every(({r})=>r.windowStart>=start));
+      assert.ok(Math.abs(parts.reduce((sum,{a})=>sum+a.amount,0)-phase.amount)<.0001);
+      assert.equal(parts.at(-1).r.at,Date.UTC(new Date(end).getUTCFullYear(),new Date(end).getUTCMonth(),1));
+    }
+  }
+  const tia=primaryUnlocks(now).filter(r=>r.symbol==='TIA');
+  assert.equal(tia.find(r=>r.at===Date.UTC(2026,10,1)).allocations.length,1,'core contributors cease after October 30');
+});
+test("official unknown tranche amounts remain unknown rather than zero; month arithmetic clamps",()=>{
+  const rows=primaryUnlocks(now);
+  for(const symbol of ['PYTH','ONDO']) {
+    const future=rows.find(r=>r.symbol===symbol&&r.at>now);
+    assert.ok(future);assert.equal(future.amount,null);assert.equal(future.percentSupply,null);
+  }
+  assert.equal(monthAt(new Date('2024-01-31T00:00:00Z'),1),Date.UTC(2024,1,29));
+  assert.equal(monthAt(new Date('2025-01-31T00:00:00Z'),1),Date.UTC(2025,1,28));
+  assert.equal(rows.find(r=>r.symbol==='ZRO'&&r.at>=now).amount,255e6/24+12.7e6);
+});
+test("official coverage counts unique future projects without adding provider overlaps",()=>{
+  const officialPlans={snapshot:()=>({rows:[{symbol:'XPL',amount:100,at:now+86400000,confidence:'project_plan'}],source:{status:'ok',tokens:1}}),refresh:async()=>{}};
+  const service=createUnlockService({publicSources:false,officialPlans,now:()=>now});
+  assert.equal(service.snapshot().sources.primary.totalOfficialTokens,SCHEDULES.length);
 });

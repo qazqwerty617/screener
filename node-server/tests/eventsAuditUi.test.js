@@ -28,7 +28,7 @@ async function setup(t, payload, fixedNow) {
 test("unlock calendar groups a large day, retains provenance, and omits unsafe links", async t => {
   const at = Math.floor(Date.now() / 86400000) * 86400000 + 86400000;
   const rows = Array.from({ length: 125 }, (_, i) => ({ id: String(i), symbol: i ? `TOKEN${i}` : "XPL", name: "Token", at,
-    amount: 1000, precision: "day", provider: "Primary", sources: ["https://www.plasma.org/", "javascript:alert(1)"] }));
+    amount: 1000, precision: "day", provider: "Primary", confidence:"schedule", sources: ["https://www.plasma.org/", "javascript:alert(1)"] }));
   const { w, click } = await setup(t, { news: [], unlocks: { rows, coverage: "primary_only", sources: { primary: { tokens: 3, reviewedAt: at } } } });
   click("events-tab-unlocks");
   const list = w.document.getElementById("events-unlocks-list");
@@ -87,6 +87,8 @@ test("unlock source and type menus preserve uncertain date windows and separate 
     {...base,symbol:"MONTH",at:start,windowStart:start,windowEnd:end,precision:"month",unlockType:"unknown",provider:"Tokenomist"}];
   const {w,click}=await setup(t,{news:[],unlocks:{rows,signals:[{title:"Vesting schedule announcement",url:"https://blog.sui.io/vesting",source:"Sui",publishedAt:Date.now()}]}});
   click("events-tab-unlocks"); const list=w.document.getElementById("events-unlocks-list");
+  assert.match(w.document.getElementById("events-unlocks-source").textContent,/Официальные источники/);
+  w.document.querySelector('.events-picker[data-picker="unlock-source"] [data-value="all"]').click();
   assert.equal(w.document.querySelectorAll("#events-unlocks-calendar .events-calendar-day").length,new Date(date.getFullYear(),date.getMonth()+1,0).getDate());
   assert.equal(w.document.querySelector("#events-unlocks-calendar .unlock-entry.uncertain"), null);
   assert.match(w.document.getElementById("events-unlocks-windows").textContent, /MONTH/);
@@ -99,7 +101,7 @@ test("unlock source and type menus preserve uncertain date windows and separate 
   pick("source","Tokenomist");
   w.document.querySelector(`[data-unlock-date="${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-01"]`).click();
   assert.doesNotMatch(list.textContent,/MONTH/);
-  assert.match(w.document.getElementById("events-unlocks-windows").textContent,/любой день месяца/);
+  assert.match(w.document.getElementById("events-unlocks-windows").textContent,/Месячный период/);
   assert.match(w.document.getElementById("events-unlocks-signals").textContent,/расписание требует проверки/);
   assert.doesNotMatch(list.textContent,/Vesting schedule announcement/);
 });
@@ -109,6 +111,7 @@ test("an hour-precision unlock displays the actual hour rather than an unspecifi
   const { w, click } = await setup(t, { news: [], unlocks: { rows: [{ at, amount: 50, name: "Hourly", symbol: "HOUR",
     precision: "hour", provider: "Tokenomist", sources: [] }] } });
   click("events-tab-unlocks");
+  w.document.querySelector('.events-picker[data-picker="unlock-source"] [data-value="all"]').click();
   const key = new Date(at).toISOString().slice(0, 10);
   if (!w.document.querySelector(`[data-unlock-date="${key}"]`)) click("events-unlocks-next-month");
   w.document.querySelector(`[data-unlock-date="${key}"]`).click();
@@ -121,6 +124,7 @@ test("weekly windows intersect both months without masquerading as exact days; U
   const exact = { id: "exact", symbol: "EXACT", name: "Exact", at, amount: 100, precision: "time", provider: "CoinMarketCap", marketStatus: "inactive" };
   const { w, click } = await setup(t, { news: [], unlocks: { rows: [week, exact] } }, at + 60000);
   click("events-tab-unlocks");
+  w.document.querySelector('.events-picker[data-picker="unlock-source"] [data-value="all"]').click();
   const list = w.document.getElementById("events-unlocks-list"), windows = w.document.getElementById("events-unlocks-windows");
   assert.match(list.textContent, /EXACT/); assert.match(list.textContent, /01.10.2026, 00:00:00 UTC/);
   assert.match(list.textContent, /неактивным/); assert.match(windows.textContent, /WEEK/);
@@ -132,4 +136,27 @@ test("weekly windows intersect both months without masquerading as exact days; U
   assert.match(list.textContent, /EXACT/);
   click("events-unlocks-hide-inactive"); assert.doesNotMatch(list.textContent, /EXACT/);
   click("events-unlocks-hide-inactive"); assert.match(list.textContent, /EXACT/);
+});
+test("official defaults separate monthly plans and continuous vesting; unknown amounts never become zero",async t=>{
+  const at=Date.UTC(2026,9,2),monthStart=Date.UTC(2026,9,1),monthEnd=Date.UTC(2026,10,1)-1;
+  const rows=[{id:'unknown',symbol:'ONDO',name:'Ondo',at,amount:null,confidence:'schedule',provider:'Документация проекта',precision:'day',unlockType:'scheduled',sources:[]},
+    {id:'circulation',symbol:'SUI',name:'Sui',at:monthStart,amount:1000,confidence:'project_plan',provider:'План команды · Upbit',precision:'month',unlockType:'circulation',windowStart:monthStart,windowEnd:monthEnd,sources:['https://static.upbit.com/guide/circulating_supply/SUI_20260422.pdf']},
+    {id:'linear',symbol:'TIA',name:'Celestia',at:monthStart,amount:5000,confidence:'schedule',provider:'Документация проекта',precision:'period',unlockType:'linear',windowStart:monthStart,windowEnd:monthEnd,sources:[]},
+    {id:'aggregate',symbol:'UNREVIEWED',name:'Unreviewed',at,amount:1000,confidence:'aggregated',provider:'Tokenomist',precision:'day',sources:[]}];
+  const {w,click}=await setup(t,{news:[],unlocks:{rows,sources:{primary:{tokens:10,totalOfficialTokens:11},projectPlans:{status:'rate_limited',documentedTokens:2,tokens:1,scannedTokens:4,availableTokens:4,superseded:1,errors:1,reviewRequired:1,excludedPlans:[{symbol:'JUP',status:'review_required',url:'https://discuss.jup.ag/t/proposal-net-zero-emissions/39948'}]}}}},at+60000);
+  click('events-tab-unlocks');const calendar=w.document.getElementById('events-unlocks-calendar'),list=w.document.getElementById('events-unlocks-list'),windows=w.document.getElementById('events-unlocks-windows');
+  assert.match(list.textContent,/Объём этапа не указан/);assert.doesNotMatch(list.textContent,/0 токенов|UNREVIEWED/);
+  assert.doesNotMatch(calendar.textContent,/SUI|TIA/);assert.match(windows.textContent,/SUI/);assert.match(windows.textContent,/Непрерывный вестинг/);
+  assert.match(w.document.getElementById('events-unlocks-status').textContent,/устаревших планов исключено: 1/);
+  assert.match(w.document.getElementById('events-unlocks-status').textContent,/11 уникальных проектов/);
+  assert.match(w.document.getElementById('events-unlocks-status').textContent,/планов на повторной проверке: 1/);
+  const warnings=w.document.getElementById('events-unlocks-plan-warnings');
+  assert.equal(warnings.hidden,false);assert.match(warnings.textContent,/JUP: старый прогноз скрыт до проверки/);
+  assert.equal(warnings.querySelector('a').href,'https://discuss.jup.ag/t/proposal-net-zero-emissions/39948');
+  w.document.querySelector('.events-picker[data-picker="unlock-source"] [data-value="project_plan"]').click();
+  assert.doesNotMatch(windows.textContent,/TIA/);assert.match(windows.textContent,/SUI/);
+  w.document.querySelector('.events-picker[data-picker="unlock-source"] [data-value="all"]').click();
+  assert.match(list.textContent,/UNREVIEWED/);
+  w.document.querySelector('.events-picker[data-picker="unlock-type"] [data-value="circulation"]').click();
+  assert.doesNotMatch(windows.textContent,/TIA/);assert.match(windows.textContent,/SUI/);
 });

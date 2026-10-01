@@ -2,6 +2,7 @@
 
 const { primaryUnlocks, SCHEDULES, REVIEWED_AT } = require("./unlockSchedules");
 const { createPublicUnlocks } = require("./publicUnlocks");
+const { createOfficialUnlockPlans } = require("./officialUnlockPlans");
 const DAY = 86400000;
 const positive = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
 function safeUrl(value) {
@@ -45,8 +46,9 @@ function normalizeEmissions(payload, now = Date.now()) {
     percentCirculating: row.circulatingSupply ? row.amount / row.circulatingSupply * 100 : null }));
 }
 
-function createUnlockService({ apiKey = process.env.DEFILLAMA_API_KEY || "", request = fetch, now = Date.now, publicSources = true } = {}) {
+function createUnlockService({ apiKey = process.env.DEFILLAMA_API_KEY || "", request = fetch, now = Date.now, publicSources = true, officialPlans = null } = {}) {
   const publicCalendar = publicSources ? createPublicUnlocks({ request, now }) : null;
+  const projectPlans=officialPlans||(publicSources?createOfficialUnlockPlans({request,now}):null);
   let rows = [], updatedAt = null, checkedAt = null, retryAt = 0, pending = null;
   let status = apiKey ? "pending" : "not_configured";
   async function refreshPaid() {
@@ -78,12 +80,15 @@ function createUnlockService({ apiKey = process.env.DEFILLAMA_API_KEY || "", req
     // retained separately; a disagreement must not silently become a new fact.
     const freshRows = updatedAt && now() - updatedAt < DAY ? rows : [];
     const free = publicCalendar?.snapshot() || { rows: [], sources: {} };
-    return { rows: [...primary.map(row => ({ ...row, unlockType: "scheduled" })), ...free.rows, ...freshRows.map(row => ({ ...row, unlockType: "cliff" }))].sort((a, b) => a.at - b.at), updatedAt,
-      sources: { primary: { status: "reviewed_schedule", reviewedAt: REVIEWED_AT, tokens: SCHEDULES.length },
+    const plans=projectPlans?.snapshot()||{rows:[],source:null};
+    const officialSymbols=new Set([...primary,...plans.rows].filter(row=>(row.windowEnd||row.at)>=now()).map(row=>row.symbol));
+    return { rows: [...primary, ...plans.rows, ...free.rows, ...freshRows.map(row => ({ ...row, unlockType: "cliff" }))].sort((a, b) => a.at - b.at), updatedAt,
+      sources: { primary: { status: "reviewed_schedule", reviewedAt: REVIEWED_AT, tokens: SCHEDULES.length, activeTokens:new Set(primary.filter(row=>(row.windowEnd||row.at)>=now()).map(row=>row.symbol)).size, totalOfficialTokens:officialSymbols.size },
+        ...(plans.source?{projectPlans:plans.source}:{}),
         ...free.sources,
         defillama: { status, checkedAt, updatedAt, stale: !!updatedAt && now() - updatedAt >= 3600000 } },
-      coverage: free.rows.length ? "public_calendars" : apiKey ? "primary_and_aggregator" : "primary_only" };
+      coverage: free.rows.length ? "public_calendars" : apiKey ? "primary_and_aggregator" : plans.rows.length ? "primary_and_project_plans" : "primary_only" };
   }
-  return { refresh: () => Promise.allSettled([refreshPaid(), publicCalendar?.refresh()]), snapshot };
+  return { refresh: () => Promise.allSettled([refreshPaid(), publicCalendar?.refresh(),projectPlans?.refresh()]), snapshot };
 }
 module.exports = { createUnlockService, normalizeEmissions };

@@ -37,6 +37,8 @@ function alertKind(title) {
   if (/\bHack VC\b/i.test(title) && !/\b(exploit|breach|stolen|hacked)\b/i.test(title)) return null;
   if (/\b(FOMC statement|Federal Reserve (?:issues|lowers|raises))\b/i.test(title)) return "macro";
   if (/\b(hack(?:ed|ers?)?|exploit(?:ed)?|security (?:breach|incident)|(?:crypto |exchange )?heist|funds? (?:stolen|drained)|wallets? drained|cyberattack)\b/i.test(title)) return "security";
+  if (/\b(?:attack|breach)\b/i.test(title) && !/\bbreach of (?:contract|agreement|duty)\b/i.test(title) &&
+    /\$\s*\d|\b(?:malicious|cyber|stolen|compromis(?:e|ed)|funds?)\b/i.test(title)) return "security";
   if (/\b(insolvenc[ey]|bankrupt(?:cy)?|withdrawals? (?:halted|suspended|frozen)|major (?:exchange |network )?outage)\b/i.test(title)) return "risk";
   if (/\b(trump|fed(?:eral)? reserve)\b/i.test(title) && /\b(announc(?:es?|ed)|signs?|imposes?|emergency|rate (?:cut|hike)|tariffs?|sanctions?)\b/i.test(title)
     && /\b(crypto|bitcoin|btc|tariffs?|sanctions?|interest|rates?|fed(?:eral)? reserve)\b/i.test(title)) return "macro";

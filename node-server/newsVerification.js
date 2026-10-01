@@ -57,8 +57,34 @@ function amounts(title) {
   return [...String(title).toLowerCase().replace(/,/g, "").matchAll(/\$\s*(\d+(?:\.\d+)?)\s*(billion|million|bn|[mbk])?/g)]
     .map(([, n, unit]) => Number(n) * ({ billion: 1e9, bn: 1e9, b: 1e9, million: 1e6, m: 1e6, k: 1e3 }[unit] || 1)).sort((a, b) => a - b).join(",");
 }
+// Headlines are prose, not identical bags of capitalized words. Isolate the
+// victim and loss of a security incident before comparing publishers' wording.
+function securityClaim(title) {
+  const text = String(title).replace(/^[\s\"'“”]+/, "");
+  const primary = text.split(/\b(?:after|amid|as crypto|days? after|weeks? after)\b/i)[0];
+  if (!/\b(?:hack(?:ed|ers?)?|exploit(?:ed)?|breach|attack|heist|stolen|drained)\b/i.test(primary)) return null;
+  let victim = /\b(?:costs?|hits?|targets?)\s+([A-Z][\w.-]*(?:\s+[A-Z][\w.-]*){0,3})(?=\s+\$|\s+(?:with|in|for|as|after)\b|[,.:]|$)/.exec(primary)?.[1];
+  victim ||= /^(.{2,80}?)\s+(?:suffers?|suffered|loses?|lost|hit\s+by|hacked|exploited|pauses?|suspends?|halts?|denies?|denied|confirms?|reports?|has\s+been|was|is)\b/i.exec(primary)?.[1];
+  victim ||= /\b(?:stolen|drained)\s+from\s+(.{2,60}?)(?=\s+(?:in|after|as|following)\b|[,.:]|$)/i.exec(primary)?.[1];
+  if (!victim) return null;
+  victim = victim.toLowerCase().replace(/^(?:the |company |exchange |protocol )+/, "").replace(/\s+/g, " ").trim();
+  // Prevented attacks and recovery stories do not independently establish loss.
+  const outcome = /\b(?:prevent(?:s|ed)?|avert(?:s|ed)?|thwart(?:s|ed)?|blocks?|blocked|patch(?:es|ed)?|fix(?:es|ed)?)\b/i.test(primary) ? "prevented"
+    : /\b(?:recover(?:s|ed)?|return(?:s|ed)?|repaid|arrest(?:s|ed)?|sentenced)\b/i.test(primary) ? "aftermath" : "incident";
+  return { victim, amount: amounts(primary), outcome, primary };
+}
 function sameClaim(a, b) {
-  if (!sameSubject(a, b) || (a.alertKind || "news") !== (b.alertKind || "news")) return false;
+  if ((a.alertKind || "news") !== (b.alertKind || "news")) return false;
+  if (a.alertKind === "security") {
+    const left = securityClaim(a.title), right = securityClaim(b.title);
+    if (left && right) {
+      if (left.victim !== right.victim || left.outcome !== right.outcome || left.amount !== right.amount) return false;
+      // A matching explicit loss plus a named victim is a stronger signature
+      // than incidental vocabulary shared by two articles about crypto.
+      if (left.amount) return true;
+    }
+  }
+  if (!sameSubject(a, b)) return false;
   const leftNames = subjects(a.title), rightNames = subjects(b.title);
   if (leftNames.size !== rightNames.size || [...leftNames].some(name => !rightNames.has(name))) return false;
   const phase = title => /\b(prevent(?:s|ed)?|blocks?|blocked|averts?|thwarts?|patch(?:es|ed)?|fix(?:es|ed)?)\b/i.test(title) ? "prevented"
@@ -90,7 +116,12 @@ function assessNews(item, rows) {
   const origin = publisher(item.url);
   if (!own) return { status: "pending", sources: [] };
   const relevant = rows.filter(other => evidence(other) && Math.abs(other.publishedAt - item.publishedAt) <= 2 * 3600000);
-  if (DENIAL.test(item.title) || relevant.some(other => other !== item && DENIAL.test(other.title) && sameSubject(item, other) &&
+  const deniedSubject = other => {
+    const left = securityClaim(item.title), right = securityClaim(other.title);
+    return left && right ? left.victim === right.victim : sameSubject(item, other);
+  };
+  const denial = other => DENIAL.test(securityClaim(other.title)?.primary || other.title);
+  if (denial(item) || relevant.some(other => other !== item && denial(other) && deniedSubject(other) &&
     (item.alertKind === other.alertKind || /hack|exploit|breach/i.test(item.title) && /hack|exploit|breach/i.test(other.title)))) {
     return { status: "disputed", sources: [own] };
   }
@@ -101,14 +132,16 @@ function assessNews(item, rows) {
     (origin[3] !== "exchange" || new RegExp(`\\b${origin[1]}\\b`, "i").test(item.title))) {
     return { status: "official", sources: [own] };
   }
+  const sources=[own],seen=new Set([own.publisher]);
   for (const other of relevant) {
     const second = evidence(other);
-    if (second.publisher === own.publisher || DOUBT.test(other.title) || DENIAL.test(other.title) || !sameClaim(item, other)) continue;
+    if (seen.has(second.publisher) || DOUBT.test(other.title) || denial(other) || !sameClaim(item, other)) continue;
     const a = attribution(item), b = attribution(other);
     // Syndication, identical headlines and a common quoted wire remain one report.
     if (a || b || item.title.toLowerCase().replace(/\W/g, "") === other.title.toLowerCase().replace(/\W/g, "")) continue;
-    return { status: "corroborated", sources: [own, second] };
+    sources.push(second);seen.add(second.publisher);
   }
+  if(sources.length>1)return {status:"corroborated",sources};
   // A named publisher's ordinary reporting can appear as a sourced report.
   // Security, solvency and market-moving alerts still require independent evidence.
   return item.alertKind ? { status: "pending", sources: [own] } : { status: "reported", sources: [own] };

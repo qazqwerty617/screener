@@ -41,7 +41,7 @@
          pattern: the browser fetches it at low priority without blocking paint. -->
     <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
-    <link rel="stylesheet" href="/css/events.css?v=9" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/events.css?v=10" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
     <script type="application/ld+json">
             {
@@ -1172,13 +1172,14 @@
                     <label class="unlock-inactive-filter"><input id="events-unlocks-hide-inactive" type="checkbox"> Скрыть неактивные по источнику</label>
                 </div>
                 <p id="events-unlocks-status" class="events-coverage" role="status"></p>
+                <div id="events-unlocks-plan-warnings" class="events-coverage" hidden></div>
                 <details class="events-card"><summary>Публикации о разлоках · требуют проверки расписания</summary><p>Обнаружены в подключённых новостях и официальных лентах. Дата публикации не является датой разлока.</p><div id="events-unlocks-signals" class="events-feed"></div></details>
                 <div class="events-calendar-bar events-unlock-calendar-bar"><button id="events-unlocks-prev-month" type="button" aria-label="Предыдущий месяц">‹</button><strong id="events-unlocks-month-label"></strong><button id="events-unlocks-next-month" type="button" aria-label="Следующий месяц">›</button><button id="events-unlocks-today" type="button">Сегодня</button><span class="events-calendar-legend events-unlock-legend"><i class="cliff"></i> Cliff <i class="linear"></i> Linear <i class="scheduled"></i> Официально <i class="uncertain"></i> Приблизительно</span></div>
                 <p id="events-unlocks-count" class="events-coverage events-unlock-count" aria-live="polite"></p>
                 <div class="events-calendar-scroll"><div id="events-unlocks-calendar" class="events-calendar events-unlock-calendar" role="grid" aria-label="Календарь разлоков"></div></div>
                 <div class="events-day-heading"><h2 id="events-unlocks-day-label"></h2><span id="events-unlocks-day-count"></span></div>
                 <div id="events-unlocks-list" class="events-feed events-unlock-day-list"></div>
-                <section id="events-unlocks-windows-section" hidden><div class="events-day-heading"><h2>Приблизительные окна этого месяца</h2></div><p class="events-coverage">Точный день неизвестен. Окна, пересекающие границу месяца, видны в обоих месяцах.</p><div id="events-unlocks-windows" class="events-feed"></div></section>
+                <section id="events-unlocks-windows-section" hidden><div class="events-day-heading"><h2>Периоды и окна этого месяца</h2></div><p class="events-coverage">Здесь показаны непрерывный вестинг, месячные планы команд и события без точного дня. План обращения может включать эмиссию; это не разовый разлок.</p><div id="events-unlocks-windows" class="events-feed"></div></section>
             </div>
         </section>
         <div id="arbitrage-view" class="arb-view" style="display:none">
@@ -3778,8 +3779,8 @@
          inside app.js / journal.js / tradeOverlay.js fire exactly as before.
          The `?v=` on app.js must match the preload above or the file downloads
          twice. -->
-    <script defer src="/js/i18n-en.js?v=4"></script>
-    <script defer src="/js/i18n.js?v=4"></script>
+    <script defer src="/js/i18n-en.js?v=5"></script>
+    <script defer src="/js/i18n.js?v=5"></script>
     <script defer src="/js/formationEngine.js?v=2016"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
@@ -3787,7 +3788,7 @@
     <script defer src="/js/arbitrage.js?v=2018"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2019"></script>
-    <script defer src="/js/events.js?v=15"></script>
+    <script defer src="/js/events.js?v=16"></script>
 </body>
 
 </html>
