@@ -431,7 +431,7 @@ function saveFovSettings() {
 // result until the current candle materially changes, so live charts can keep
 // moving at 60 fps without running O(n²/O(n³)) detectors every frame.
 const formationDetectionCache = new WeakMap();
-function getCachedFormationDetection(candles, key, detector, ttlMs = 900) {
+function getCachedFormationDetection(candles, key, detector) {
   if (!Array.isArray(candles) || candles.length === 0) return [];
   let cache = formationDetectionCache.get(candles);
   if (!cache) {
@@ -439,14 +439,13 @@ function getCachedFormationDetection(candles, key, detector, ttlMs = 900) {
     formationDetectionCache.set(candles, cache);
   }
   const last = candles[candles.length - 1];
-  const signature = `${candles.length}|${last?.t || 0}|${last?.c || 0}|${last?.h || 0}|${last?.l || 0}`;
-  const now = performance.now();
+  const signature = `${candles.length}|${candles[0]?.t || 0}|${last?.t || 0}|${last?.o || 0}|${last?.c || 0}|${last?.h || 0}|${last?.l || 0}|${last?.v || 0}`;
   const previous = cache.get(key);
-  if (previous && previous.signature === signature && now - previous.at < ttlMs) {
+  if (previous && previous.signature === signature) {
     return previous.value;
   }
   const value = detector() || [];
-  cache.set(key, { signature, at: now, value });
+  cache.set(key, { signature, value });
   return value;
 }
 
@@ -1055,6 +1054,7 @@ function storeKlinesCache(key, data, ts = Date.now()) {
 }
 const KLINE_REQUESTS = new Map();
 const GRID_KLINE_QUEUE = new Map();
+let mainHistoryWarmKey = null;
 let klFetchToken = 0;
 const marketListeners = new Map();
 let mainMarketUnsubscribe = null;
@@ -1232,7 +1232,7 @@ function processTickData(dt) {
           v: 0
         };
         candles.push(newCandle);
-        if (candles.length > 3000) candles.splice(0, candles.length - 3000);
+        if (candles.length > 20000) candles.splice(0, candles.length - 20000);
         clearCandleCaches(candles);
         if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + Math.min(numBars, 100));
         if (numBars > 1) {
@@ -1668,8 +1668,12 @@ function drawTradingSessions(_ctx, viewStart, s, e, candleW, PW, PH, TOP) {
 }
 
 
-function clearCandleCaches(data) {
-  if (data && data._cache) delete data._cache;
+function clearCandleCaches(data, tailOnly = false) {
+  if (data && data._cache) {
+    if (tailOnly) delete data._cache[`oi_${data.length}`];
+    else delete data._cache;
+  }
+  if (data && !tailOnly) formationDetectionCache.delete(data);
 }
 
 function calcEMA(data, period) {
@@ -1681,12 +1685,20 @@ function calcEMA(data, period) {
   if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
   const k = 2 / (period + 1);
+  const cached = data._cache[key];
+  if (cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t) {
+    const i = data.length - 1;
+    cached[i] = i ? lastC * k + cached[i - 1] * (1 - k) : lastC;
+    cached._lastC = lastC;
+    return cached;
+  }
   let ema = new Array(data.length);
   ema[0] = data[0].c;
   for (let i = 1; i < data.length; i++) {
     ema[i] = data[i].c * k + ema[i - 1] * (1 - k);
   }
   ema._len = data.length;
+  ema._firstT = data[0].t;
   ema._lastC = lastC;
   ema._lastT = lastT;
   data._cache[key] = ema;
@@ -1701,12 +1713,14 @@ function calcBB(data, period = 20, stdDevMult = 2) {
   const key = `bb_${period}_${stdDevMult}`;
   if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
-  let bb = new Array(data.length);
+  const cached = data._cache[key];
+  const reuse = cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t;
+  let bb = reuse ? cached : new Array(data.length);
   if (data.length < period) {
     for (let i = 0; i < data.length; i++) bb[i] = { middle: 0, upper: 0, lower: 0 };
   } else {
-    for (let i = 0; i < period - 1; i++) bb[i] = { middle: 0, upper: 0, lower: 0 };
-    for (let i = period - 1; i < data.length; i++) {
+    if (!reuse) for (let i = 0; i < period - 1; i++) bb[i] = { middle: 0, upper: 0, lower: 0 };
+    for (let i = reuse ? data.length - 1 : period - 1; i < data.length; i++) {
       let sum = 0;
       for (let j = i - period + 1; j <= i; j++) sum += data[j].c;
       const mean = sum / period;
@@ -1724,6 +1738,7 @@ function calcBB(data, period = 20, stdDevMult = 2) {
     }
   }
   bb._len = data.length;
+  bb._firstT = data[0].t;
   bb._lastC = lastC;
   bb._lastT = lastT;
   data._cache[key] = bb;
@@ -1736,12 +1751,23 @@ function calcVWAP(data) {
   const last = data[data.length - 1];
   const signature = [data.length, data[0].t, last.t, last.h, last.l, last.c, last.v, last.baseVolume].join(":");
   if (data._cache.vwap?._signature === signature) return data._cache.vwap;
+  const cached = data._cache.vwap;
+  if (cached?._len === data.length && cached._firstT === data[0].t && cached._lastT === last.t) {
+    const tp = (Number(last.h) + Number(last.l) + Number(last.c)) / 3;
+    const volume = last.baseVolume == null ? Number(last.v) / tp : Number(last.baseVolume);
+    const valid = Number.isFinite(tp) && tp > 0 && Number.isFinite(volume) && volume > 0;
+    const sumV = cached._sumVBeforeLast + (valid ? volume : 0);
+    cached[data.length - 1] = sumV > 0 ? (cached._sumPVBeforeLast + (valid ? tp * volume : 0)) / sumV : null;
+    cached._signature = signature;
+    return cached;
+  }
   const vwap = new Array(data.length);
   let sumPV = 0, sumV = 0, session = null;
   for (let i = 0; i < data.length; i++) {
     const bar = data[i];
     const day = Math.floor(Number(bar.t) / 86400000);
     if (day !== session) { sumPV = 0; sumV = 0; session = day; }
+    if (i === data.length - 1) { vwap._sumPVBeforeLast = sumPV; vwap._sumVBeforeLast = sumV; }
     const tp = (Number(bar.h) + Number(bar.l) + Number(bar.c)) / 3;
     // Screener candles carry quote turnover. Approximate base volume from HLC3
     // when an exact base-volume field is unavailable; never weight by USD twice.
@@ -1753,6 +1779,9 @@ function calcVWAP(data) {
     vwap[i] = sumV > 0 ? sumPV / sumV : null;
   }
   vwap._signature = signature;
+  vwap._len = data.length;
+  vwap._firstT = data[0].t;
+  vwap._lastT = last.t;
   data._cache.vwap = vwap;
   return vwap;
 }
@@ -1767,6 +1796,14 @@ function calcVolumeSMA(data, period = 20) {
     return data._cache[key];
   }
 
+  const cached = data._cache[key];
+  if (cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t) {
+    let sum = 0;
+    for (let i = Math.max(0, data.length - period); i < data.length; i++) sum += Number(data[i].v) || 0;
+    cached[data.length - 1] = sum / Math.min(period, data.length);
+    cached._lastV = lastV;
+    return cached;
+  }
   const sma = new Array(data.length);
   let runningSum = 0;
   for (let i = 0; i < data.length; i++) {
@@ -1780,6 +1817,7 @@ function calcVolumeSMA(data, period = 20) {
     }
   }
   sma._len = data.length;
+  sma._firstT = data[0].t;
   sma._lastV = lastV;
   sma._lastT = lastT;
   data._cache[key] = sma;
@@ -1794,6 +1832,15 @@ function calcRSI(data, period = 14) {
   const key = `rsi_${period}`;
   if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
 
+  const cached = data._cache[key];
+  if (cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t && data.length > period + 1) {
+    const diff = lastC - data[data.length - 2].c;
+    const gain = (cached._gainBeforeLast * (period - 1) + Math.max(0, diff)) / period;
+    const loss = (cached._lossBeforeLast * (period - 1) + Math.max(0, -diff)) / period;
+    cached[data.length - 1] = loss === 0 ? 100 : 100 - (100 / (1 + gain / loss));
+    cached._lastC = lastC;
+    return cached;
+  }
   let rsi = new Array(data.length).fill(50);
   if (data.length > period) {
     let gains = 0, losses = 0;
@@ -1805,6 +1852,7 @@ function calcRSI(data, period = 14) {
     let avgLoss = losses / period;
     rsi[period] = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
     for (let i = period + 1; i < data.length; i++) {
+      if (i === data.length - 1) { rsi._gainBeforeLast = avgGain; rsi._lossBeforeLast = avgLoss; }
       const diff = data[i].c - data[i - 1].c;
       avgGain = (avgGain * (period - 1) + (diff > 0 ? diff : 0)) / period;
       avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
@@ -1812,6 +1860,7 @@ function calcRSI(data, period = 14) {
     }
   }
   rsi._len = data.length;
+  rsi._firstT = data[0].t;
   rsi._lastC = lastC;
   rsi._lastT = lastT;
   data._cache[key] = rsi;
@@ -1824,7 +1873,16 @@ function calcATR(data, period = 14) {
   const lastC = data[data.length - 1].c;
   const lastT = data[data.length - 1].t;
   const key = `atr_${period}`;
-  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
+  const last = data[data.length - 1], cached = data._cache[key];
+  const reuse = cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t;
+  if (reuse && cached._lastC === lastC && cached._lastH === last.h && cached._lastL === last.l) return cached;
+  if (reuse && data.length > period + 1) {
+    const i = data.length - 1, pc = data[i - 1].c;
+    const tr = Math.max(last.h - last.l, Math.abs(last.h - pc), Math.abs(last.l - pc));
+    cached[i] = (cached[i - 1] * (period - 1) + tr) / period;
+    cached._lastC = lastC; cached._lastH = last.h; cached._lastL = last.l;
+    return cached;
+  }
 
   let atr = new Array(data.length).fill(0);
   if (data.length > 0) {
@@ -1841,6 +1899,9 @@ function calcATR(data, period = 14) {
     }
   }
   atr._len = data.length;
+  atr._firstT = data[0].t;
+  atr._lastH = last.h;
+  atr._lastL = last.l;
   atr._lastC = lastC;
   atr._lastT = lastT;
   data._cache[key] = atr;
@@ -1857,6 +1918,15 @@ function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
 
   const emaS = calcEMA(data, shortP);
   const emaL = calcEMA(data, longP);
+  const cached = data._cache[key];
+  if (cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t) {
+    const i = data.length - 1, k = 2 / (signalP + 1);
+    cached.macd[i] = emaS[i] - emaL[i];
+    cached.signal[i] = i ? cached.macd[i] * k + cached.signal[i - 1] * (1 - k) : cached.macd[i];
+    cached.hist[i] = cached.macd[i] - cached.signal[i];
+    cached._lastC = lastC;
+    return cached;
+  }
   let macd = new Array(data.length).fill(0);
   for (let i = 0; i < data.length; i++) macd[i] = emaS[i] - emaL[i];
 
@@ -1868,7 +1938,7 @@ function calcMACD(data, shortP = 12, longP = 26, signalP = 9) {
   let hist = new Array(data.length).fill(0);
   for (let i = 0; i < data.length; i++) hist[i] = macd[i] - signal[i];
 
-  const res = { macd, signal, hist, _len: data.length, _lastC: lastC, _lastT: lastT };
+  const res = { macd, signal, hist, _len: data.length, _firstT: data[0].t, _lastC: lastC, _lastT: lastT };
   data._cache[key] = res;
   return res;
 }
@@ -1879,7 +1949,16 @@ function calcCVD(data) {
   const lastC = data[data.length - 1].c;
   const lastT = data[data.length - 1].t;
   const key = "cvd";
-  if (data._cache[key] && data._cache[key]._len === data.length && data._cache[key]._lastC === lastC && data._cache[key]._lastT === lastT) return data._cache[key];
+  const last = data[data.length - 1], cached = data._cache[key];
+  const signature = `${lastC}|${last.h}|${last.l}|${last.v || 0}`;
+  const reuse = cached?._len === data.length && cached._lastT === lastT && cached._firstT === data[0].t;
+  if (reuse && cached._signature === signature) return cached;
+  if (reuse) {
+    const i = data.length - 1, range = Math.max(1e-8, last.h - last.l);
+    cached[i] = (i ? cached[i - 1] : 0) + (last.v || 0) * ((last.c - last.l) / range - (last.h - last.c) / range);
+    cached._signature = signature; cached._lastC = lastC;
+    return cached;
+  }
 
   let cvd = new Array(data.length).fill(0);
   let sum = 0;
@@ -1893,6 +1972,8 @@ function calcCVD(data) {
     cvd[i] = sum;
   }
   cvd._len = data.length;
+  cvd._firstT = data[0].t;
+  cvd._signature = signature;
   cvd._lastC = lastC;
   cvd._lastT = lastT;
   data._cache[key] = cvd;
@@ -3521,6 +3602,7 @@ function drawChart() {
   if (viewStart < 80 && candles.length > 0 && !isLoadingOlderCandles && !hasReachedStartOfHistory) {
     loadOlderHistory(activeEx, activeSym, activeTf);
   }
+  if (viewStart < Math.max(160, n * 2)) prefetchMainHistory(activeEx, activeSym, activeTf, klFetchToken);
 
   // тФАтФА Auto price range тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   let autoMn = Infinity,
@@ -8148,7 +8230,7 @@ async function fetchKlines(ex, sym, tf) {
 
     // 1. Instant cache hit (0ms)
     if (cached && Array.isArray(cached.data) && cached.data.length > 0) {
-      const sanitized = sanitizeCandles(cached.data);
+      const sanitized = sanitizeCandles(cached.data, 20000);
       const liveTicker = coins.get(`${ex}:${sym}`);
       const lastCandle = sanitized[sanitized.length - 1];
       const isOutlier = (liveTicker && liveTicker.p > 0 && lastCandle && lastCandle.c > 0 && Math.abs(lastCandle.c - liveTicker.p) / liveTicker.p > 0.15);
@@ -8183,15 +8265,18 @@ async function fetchKlines(ex, sym, tf) {
       }
     }
 
-    // Refresh the recent tail of an already displayed cache. Deep history is
-    // fetched on pan; switching timeframes must not launch full-history pages.
+    // Keep the first paint light, then prepare history for the one open chart.
+    // Obsolete market tasks and hidden views do not start background pages.
+    if (loadedSuccess) setTimeout(() => primeMainHistory(ex, sym, tf, fetchToken), 0);
+
+    // Refresh only the recent tail, preserving previously loaded history.
     if (cached && loadedSuccess && Date.now() - cached.ts >= 10000) setTimeout(() => {
       if (fetchToken !== klFetchToken) return;
       fetchServerKlines(ex, sym, tf, 1)
         .then(parsed => {
           if (fetchToken !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf) return;
           if (Array.isArray(parsed) && parsed.length > 0) {
-            candles = mergeCandles(candles, parsed);
+            candles = mergeCandles(candles, parsed, 20000);
             isLoadingKlines = false;
             storeKlinesCache(key, candles);
             chartNeedsDraw = true;
@@ -8217,8 +8302,35 @@ async function fetchKlines(ex, sym, tf) {
 }
 
 
+function prefetchMainHistory(ex, sym, tf, token) {
+  if (token !== klFetchToken || activeEx !== ex || activeSym !== sym || activeTf !== tf || document.hidden ||
+      !(activeView === 'screener' && screenerView !== 'multichart' || window.isFormationFullChartOpen?.()) ||
+      hasReachedStartOfHistory || !candles.length || candles.length >= 20000) return;
+  const before = candles[0].t - 1;
+  const key = `${token}|${ex}|${sym}|${tf}|${before}`;
+  if (key === mainHistoryWarmKey) return;
+  mainHistoryWarmKey = key;
+  fetchOlderKlines(ex, sym, tf, before).catch(() => {});
+}
+
+async function primeMainHistory(ex, sym, tf, token) {
+  const isCurrent = () => token === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf && !document.hidden &&
+    (activeView === 'screener' && screenerView !== 'multichart' || window.isFormationFullChartOpen?.());
+  if (!isCurrent()) return;
+  // Warm only the active chart, bounded to three small venue pages. Grid cells
+  // stay demand-driven so opening a workspace cannot flood the exchanges.
+  for (let page = 0; page < 3 && candles.length < 1200 && isCurrent(); page++) {
+    const length = candles.length;
+    await loadOlderHistory(ex, sym, tf);
+    if (candles.length <= length) break;
+  }
+  prefetchMainHistory(ex, sym, tf, token);
+}
+
 async function fetchOlderKlines(ex, sym, tf, before) {
   const key = `older|${ex}|${sym}|${tf}|${before}`;
+  const cached = touchKlinesCache(key);
+  if (cached && Date.now() - cached.ts < KLINES_CACHE_TTL_MS) return cached.data;
   if (KLINE_REQUESTS.has(key)) return KLINE_REQUESTS.get(key);
   const request = (async () => {
     const controller = new AbortController();
@@ -8231,7 +8343,9 @@ async function fetchOlderKlines(ex, sym, tf, before) {
       const decoded = decodeKlinePayload(payload, 20000);
       if (payload.length && !decoded.length) throw new Error('Invalid history candles');
       if (decoded.length && !decoded.some(c => c.t <= before)) throw new Error('History cursor did not advance');
-      return decoded.filter(c => c.t <= before);
+      const page = decoded.filter(c => c.t <= before);
+      if (page.length) storeKlinesCache(key, page);
+      return page;
     } finally { clearTimeout(timer); }
   })();
   KLINE_REQUESTS.set(key, request);
@@ -8340,8 +8454,8 @@ function appendCandle(k) {
       refetchMissingHistory(activeEx, activeSym, activeTf);
     }
     candles.push(clean);
-    if (candles.length > 3000) {
-      candles.splice(0, candles.length - 3000);
+    if (candles.length > 20000) {
+      candles.splice(0, candles.length - 20000);
     }
     if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
     clearCandleCaches(candles);
@@ -8440,8 +8554,8 @@ function applyMainMarketTick(data, isRelay = false) {
       v: 0
     };
     candles.push(last);
-    if (candles.length > 3000) {
-      candles.splice(0, candles.length - 3000);
+    if (candles.length > 20000) {
+      candles.splice(0, candles.length - 20000);
     }
     if (offsetX > 0) offsetX = getClampedOffsetX(offsetX + 1);
     clearCandleCaches(candles);
@@ -8794,7 +8908,7 @@ function rafLoop() {
 
   if (activeView === "screener" && screenerView === "multichart" || activeView === "formations") {
     chartInstances.forEach(inst => {
-      if (inst.dirty) inst.draw(true);
+      if (inst.dirty) inst.draw();
     });
   }
 
@@ -11308,7 +11422,7 @@ class ChartInstance {
   }
 
   refreshFormationLevels(force = false) {
-    if (activeView !== 'formations' || this.loadingKlines || this.candles.length < 30) return;
+    if (document.hidden || activeView !== 'formations' || this.loadingKlines || this.candles.length < 30) return;
     const now = performance.now();
     if (!force && now - this._lastFormationDetectAt < 900) return;
     this._lastFormationDetectAt = now;
@@ -11350,15 +11464,17 @@ class ChartInstance {
         }).catch(() => {}).finally(() => { this._gapRefresh = false; });
       }
       this.candles.push(clean);
-      if (this.candles.length > 1500) this.candles.splice(0, this.candles.length - 1500);
+      if (this.candles.length > 10000) this.candles.splice(0, this.candles.length - 10000);
     } else {
       const target = this.candles.find(c => c.t === clean.t);
-      if (target) Object.assign(target, clean);
+      if (!target) return;
+      Object.assign(target, clean);
       clearCandleCaches(this.candles);
       this.dirty = true;
+      this.refreshFormationLevels(true);
       return;
     }
-    clearCandleCaches(this.candles);
+    clearCandleCaches(this.candles, clean.t === last.t);
     this.headerPrice.textContent = fP(clean.c);
     this.dirty = true;
     this.refreshFormationLevels();
@@ -11371,6 +11487,7 @@ class ChartInstance {
     let last = this.candles[this.candles.length - 1];
     const eventTime = +data[0], tfMs = TF_MS[this.tf] || 60000;
     if (!(eventTime > 1e11) || eventTime < last.t || eventTime < (this._lastTradeTime || 0)) return;
+    const historyChanged = eventTime >= last.t + tfMs;
     if (last) {
       const refP = last.c > 0 ? last.c : (last.o > 0 ? last.o : 0);
       if (refP > 0 && (p > refP * 1.15 || p < refP * 0.85)) return;
@@ -11388,7 +11505,7 @@ class ChartInstance {
       if (p < last.l) last.l = p;
       if (lo < last.l && (refP <= 0 || lo >= refP * 0.85)) last.l = lo;
     }
-    clearCandleCaches(this.candles);
+    clearCandleCaches(this.candles, !historyChanged);
     this.headerPrice.textContent = fP(p);
     this.dirty = true;
     this.refreshFormationLevels();
@@ -11467,7 +11584,7 @@ class ChartInstance {
           const expectedStart = last.t + numBars * tfMs;
           last = { t: expectedStart, o: last.c, h: Math.max(last.c, p), l: Math.min(last.c, p), c: p, v: 0 };
           this.candles.push(last);
-          if (this.candles.length > 1500) this.candles.splice(0, this.candles.length - 1500);
+          if (this.candles.length > 10000) this.candles.splice(0, this.candles.length - 10000);
           candleChanged = true;
         } else if (now >= last.t && now < candleEnd) {
           if (last.c !== p) {
@@ -11551,9 +11668,9 @@ class ChartInstance {
         for (let i = 0; i < cached.data.length; i += 6) {
           flat.push({ t: cached.data[i], o: cached.data[i + 1], h: cached.data[i + 2], l: cached.data[i + 3], c: cached.data[i + 4], v: cached.data[i + 5] });
         }
-        candList = sanitizeCandles(flat);
+        candList = sanitizeCandles(flat, 10000);
       } else {
-        candList = sanitizeCandles(cached.data);
+        candList = sanitizeCandles(cached.data, 10000);
       }
       if (candList.length > 0) {
         this.candles = candList;
@@ -11593,7 +11710,7 @@ class ChartInstance {
             const parsed = await fetchServerKlines(this.ex, this.sym, this.tf, 0);
             if (this._loadToken !== myToken) return;
             if (Array.isArray(parsed) && parsed.length > this.candles.length) {
-              this.candles = mergeCandles(this.candles, parsed);
+              this.candles = mergeCandles(this.candles, parsed, 10000);
               this.levels = window.detectChartLevelsFn(this.candles);
               storeKlinesCache(key, this.candles);
               this.draw(true);
@@ -11668,6 +11785,11 @@ class ChartInstance {
 
   draw(force = false) {
     if (this._disposed) return;
+    // Input and stream handlers invalidate; the shared render loop paints.
+    if (force || document.hidden || (activeView !== 'formations' && !(activeView === 'screener' && screenerView === 'multichart'))) {
+      this.dirty = true;
+      return;
+    }
     if (activeView === "screener" && screenerView !== "multichart") return;
     if (!this.candles.length) {
       if (this.loadingKlines && this.canvas) {
@@ -11739,7 +11861,7 @@ class ChartInstance {
           const expectedStart = last.t + Math.floor((now - last.t) / tfMs) * tfMs;
           const newCandle = { t: expectedStart, o: last.c, h: Math.max(last.c, liveP), l: Math.min(last.c, liveP), c: liveP, v: 0 };
           this.candles.push(newCandle);
-          if (this.candles.length > 1500) this.candles.shift();
+          if (this.candles.length > 10000) this.candles.shift();
         } else if (now >= last.t && now < candleEnd) {
           last.c = liveP;
           if (liveP > last.h) last.h = liveP;
@@ -15808,7 +15930,9 @@ window.addEventListener("resize", () => {
   };
 
   async function preloadFormationsInBackground() {
+    if (document.hidden) return;
     await refreshFormationSnapshot(formationsTf, true);
+    if (document.hidden) return;
     // Warm other timeframes gradually; selecting any formation type is local.
     const others = formationTimeframes.filter(tf => tf !== formationsTf);
     const nextTf = others[formationBackgroundIndex++ % others.length];
@@ -19292,7 +19416,11 @@ if (document.readyState === "loading") {
   let pdIsSeeded = false;
 
   function pdTrackPrice(key, price) {
-    if (!price || price <= 0) return;
+    if (!pdSettings.enabled || !Number.isFinite(price) || price <= 0) return;
+    const colon = key.indexOf(':');
+    if (colon <= 0 || !pdIsExchangeAllowed(key.slice(0, colon))) return;
+    const spot = /_SPOT$/i.test(key.slice(colon + 1));
+    if (pdSettings.marketType === 'futures' && spot || pdSettings.marketType === 'spot' && !spot) return;
     const now = Date.now();
     let ring = pdPriceRing.get(key);
     if (!ring) {
@@ -19302,7 +19430,8 @@ if (document.readyState === "loading") {
     const lastSample = ring[ring.length - 1];
     if (!lastSample || now - lastSample.t >= 2000) {
       ring.push({ t: now, p: price });
-      if (ring.length > 900) ring.shift(); // 30 mins history at 2s resolution
+      const maxSamples = Math.max(4, Math.min(900, Math.ceil((Number(pdSettings.periodMinutes) || 1) * 30) + 3));
+      if (ring.length > maxSamples) ring.splice(0, ring.length - maxSamples);
     }
 
     // Instant real-time breakout detection on live tick
@@ -19410,7 +19539,7 @@ if (document.readyState === "loading") {
 
   // Hook into price updates in coins map (1s resolution fallback)
   setInterval(() => {
-    if (!window.coins) return;
+    if (!pdSettings.enabled || !window.coins) return;
     for (const [key, c] of window.coins.entries()) {
       if (c && c.p > 0) pdTrackPrice(key, c.p);
     }
@@ -19681,7 +19810,7 @@ if (document.readyState === "loading") {
       pdScanController = null;
       pdScanRunning = false;
     }
-    if (!pdSettings.enabled) return;
+    if (!pdSettings.enabled) { pdPriceRing.clear(); return; }
     const generation = pdScanGeneration;
     // First result almost immediately, then align with the server's 1s cache.
     setTimeout(() => pdRunScan(generation), 100);

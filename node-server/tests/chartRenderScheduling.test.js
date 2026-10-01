@@ -38,20 +38,23 @@ test("one changed ticker schedules exactly one multichart update", () => {
   assert.deepEqual(runTickerFrame(["BN:BTCUSDT"]), { calls: 1, pending: 0 });
 });
 
-test("a live grid candle mutation invalidates cached indicator data", () => {
+test("a live grid wick mutation preserves closed indicator work and updates the current ATR", () => {
   const klass = /class ChartInstance \{[^]*?\n\}/.exec(source);
   assert.ok(klass, "missing ChartInstance");
-  const Chart = new Function("TF_MS", "clearCandleCaches", `
+  const {Chart, calcATR} = new Function("TF_MS", `
     const activeView = "screener", screenerView = "multichart";
     const sanitizeCandle = value => value;
     const fP = String;
+    const formationDetectionCache = new WeakMap();
+    ${block('clearCandleCaches')}
+    ${block('calcATR')}
     ${klass[0]}
-    return ChartInstance;
-  `)({ "1m": 60000 }, data => { delete data._cache; });
+    return {Chart:ChartInstance, calcATR};
+  `)({ "1m": 60000 });
 
   const candle = { t: 1_700_000_000_000, o: 100, h: 101, l: 99, c: 100, v: 10 };
-  const candles = [candle];
-  candles._cache = { atr_14: [123], cvd: [456] };
+  const candles = Array.from({length:30},(_,i)=>({...candle,t:candle.t-(29-i)*60000}));
+  const original=calcATR(candles),before=original.at(-1);
   const cell = {
     candles,
     tf: "1m",
@@ -63,7 +66,10 @@ test("a live grid candle mutation invalidates cached indicator data", () => {
   };
 
   Chart.prototype.applyOfficialTick.call(cell, [candle.t + 1, 100, 102, 98]);
-  assert.equal(candles._cache, undefined);
+  const updated=calcATR(candles);
+  assert.equal(updated,original,'closed ATR calculations are retained');
+  assert.ok(updated.at(-1)>before);
+  assert.equal(updated.at(-1),calcATR(candles.map(c=>({...c}))).at(-1));
 });
 
 test("the global ticker feed only updates headers when an official chart stream is active", () => {

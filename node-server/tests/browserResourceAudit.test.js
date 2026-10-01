@@ -119,3 +119,66 @@ test("only visible grid markets interpolate while real prices remain intact", ()
   c.document.hidden=true; coin.p=101; c.scheduleInterp('BN:BTCUSDT');
   assert.equal(c.interpActive.size,0); assert.equal(coin.p,101); assert.equal(coin.displayP,101);
 });
+
+test("a burst of forced grid redraws only invalidates the cell until the next render frame", () => {
+  const c={document:{hidden:false},activeView:'formations',screenerView:'multichart',window:{},coins:new Map(),
+    TF_MS:{'1m':60000}};
+  vm.createContext(c);vm.runInContext(/class ChartInstance \{[^]*?\n\}/.exec(source)[0]+';this.Chart=ChartInstance;',c);
+  const cell={candles:[{t:Date.now(),o:100,h:101,l:99,c:100,v:1}],tf:'1m',dirty:false,
+    refreshFormationLevels(){throw new Error('expensive chart calculation ran outside the render frame');}};
+  for(let i=0;i<500;i++) c.Chart.prototype.draw.call(cell,true);
+  assert.equal(cell.dirty,true);
+});
+
+test('disabled pump alerts never allocate histories during a 50000-market burst',()=>{
+  const c={pdSettings:{enabled:false,marketType:'both',periodMinutes:1},pdPriceRing:new Map(),pdIsSeeded:false,
+    pdIsExchangeAllowed:ex=>ex==='BN',pdCheckLiveTick(){}};
+  vm.createContext(c);
+  const start=source.indexOf('  function pdTrackPrice('),end=source.indexOf('  function pdCheckLiveTick(',start);
+  vm.runInContext(source.slice(start,end),c);
+  for(let i=0;i<50000;i++)c.pdTrackPrice(`BN:TOKEN${i}USDT`,100);
+  assert.equal(c.pdPriceRing.size,0);
+});
+
+test('pump histories only retain selected markets and the configured observation period',()=>{
+  let time=1700000000000;
+  const c={Date:{now:()=>time},pdSettings:{enabled:true,marketType:'futures',periodMinutes:1},pdPriceRing:new Map(),pdIsSeeded:false,
+    pdIsExchangeAllowed:ex=>ex==='BN',pdCheckLiveTick(){}};
+  vm.createContext(c);
+  const start=source.indexOf('  function pdTrackPrice('),end=source.indexOf('  function pdCheckLiveTick(',start);
+  vm.runInContext(source.slice(start,end),c);
+  for(let i=0;i<1000;i++){c.pdTrackPrice('BN:BTCUSDT',100);c.pdTrackPrice('BB:BTCUSDT',100);c.pdTrackPrice('BN:BTCUSDT_SPOT',100);time+=2000;}
+  assert.equal(c.pdPriceRing.size,1);assert.ok(c.pdPriceRing.get('BN:BTCUSDT').length<=33);
+});
+
+test('a hidden browser does not fetch and parse formation snapshots',async()=>{
+  let calls=0;
+  const c={document:{hidden:true},refreshFormationSnapshot:async()=>{calls++},formationsTf:'15m',
+    formationTimeframes:['15m','1h'],formationBackgroundIndex:0};
+  vm.createContext(c);vm.runInContext(/async function preloadFormationsInBackground\([^]*?\n  \}/.exec(source)[0],c);
+  await c.preloadFormationsInBackground();assert.equal(calls,0);
+});
+
+test('unchanged formation candles reuse their detection despite elapsed wall time',()=>{
+  let time=0,calls=0;const c={formationDetectionCache:new WeakMap(),performance:{now:()=>time}};
+  vm.createContext(c);vm.runInContext(block('getCachedFormationDetection'),c);
+  const bars=[{t:1700000000000,o:100,h:101,l:99,c:100,v:1000}];
+  for(let i=0;i<1000;i++){time+=1000;c.getCachedFormationDetection(bars,'trendline:3',()=>{calls++;return []})}
+  assert.equal(calls,1);
+});
+test('a closed-candle correction invalidates formation detection with an unchanged live candle',()=>{
+  let calls=0;const c={formationDetectionCache:new WeakMap(),performance:{now:()=>0}};
+  vm.createContext(c);vm.runInContext(block('getCachedFormationDetection')+'\n'+block('clearCandleCaches'),c);
+  const bars=[{t:1700000000000,h:101,l:99,c:100},{t:1700000060000,h:101,l:99,c:100}];
+  const detect=()=>{calls++;return [bars[0].h]};
+  c.getCachedFormationDetection(bars,'trendline:3',detect);
+  bars[0].h=102;c.clearCandleCaches(bars);
+  assert.equal(c.getCachedFormationDetection(bars,'trendline:3',detect)[0],102);assert.equal(calls,2);
+});
+test('live grid streams do not run formation detection in a hidden browser',()=>{
+  let calls=0;const c={document:{hidden:true},activeView:'formations',performance:{now:()=>2000},
+    window:{detectChartLevelsFn(){calls++;return []}}};
+  vm.createContext(c);vm.runInContext(/class ChartInstance \{[^]*?\n\}/.exec(source)[0]+';this.Chart=ChartInstance;',c);
+  c.Chart.prototype.refreshFormationLevels.call({candles:Array(40).fill({}),_lastFormationDetectAt:0});
+  assert.equal(calls,0);
+});

@@ -10,7 +10,7 @@ const section = source.slice(source.indexOf("  let formationsCols ="), source.in
 const flush = async () => { for (let i = 0; i < 25; i++) await new Promise(resolve => setImmediate(resolve)); };
 
 function build(t, saved = {}) {
-  const dom = new JSDOM(html, { url: "http://localhost", runScripts: "outside-only" });
+  const dom = new JSDOM(html, { url: "http://localhost", runScripts: "outside-only", pretendToBeVisual: true });
   t.after(() => dom.window.close());
   const w = dom.window;
   for (const [key, value] of Object.entries(saved)) w.localStorage.setItem(key, value);

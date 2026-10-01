@@ -2610,6 +2610,9 @@ function startKlinesRefresh(ex, sym, tf, useLite, key) {
   return promise;
 }
 
+const { createHistoryPageStore, parseHistoryResponse } = require("./historyPages");
+const historicalPages = createHistoryPageStore();
+
 app.get("/api/klines", async (req, res) => {
   let { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0", before } = req.query;
   sym = normalizeExchangeSymbol(ex, sym);
@@ -2617,12 +2620,13 @@ app.get("/api/klines", async (req, res) => {
   res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.setHeader("Pragma", "no-cache");
 
-  if (before) {
+  if (before !== undefined) {
     const beforeTs = Number(before);
-    if (Number.isFinite(beforeTs) && beforeTs > 0) {
-      try {
+    if (!Number.isFinite(beforeTs) || beforeTs <= 0) return res.status(400).json({ error: "Invalid history cursor" });
+    try {
+      return res.json(await historicalPages.get({ex,sym,tf,before:beforeTs}, async () => {
         if (syntheticSourceTf(ex, tf)) {
-          return res.json(await fetchSyntheticHistory(ex, sym, tf, beforeTs));
+          return await fetchSyntheticHistory(ex, sym, tf, beforeTs);
         } else if (ex === "HL") {
           const tfMs = (() => {
             const low = tf.toLowerCase();
@@ -2636,15 +2640,15 @@ app.get("/api/klines", async (req, res) => {
             type: "candleSnapshot",
             req: { coin: sym, interval: tf.toLowerCase(), startTime: beforeTs - (1000 * tfMs), endTime: beforeTs }
           });
-          const parsed = (Array.isArray(data) ? data : []).map(k => ({ t: +k.t, o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.v * +k.c }));
-          return res.json(parsed);
+          const parsed = parseHistoryResponse(ex, data, parseKlines);
+          return parsed;
         } else if (ex === "KC") {
           const tfMs = getTfMs(tf);
           const isSpot = sym.endsWith("_SPOT") || sym.includes("_SPOT");
           if (isSpot) {
             const url = getKlinesUrl(ex, sym, tf, 400, beforeTs);
             const data = url ? await apiFetch(url, 4000, 0) : null;
-            return res.json(parseKlines(ex, data));
+            return parseHistoryResponse(ex, data, parseKlines);
           }
           const cleanSym = normalizeExchangeSymbol(ex, sym.replace(/_SPOT$/i, ""));
           const gran = TF_MAP.KC[tf] || "60";
@@ -2656,22 +2660,26 @@ app.get("/api/klines", async (req, res) => {
             apiFetch(url0, 4000, 0),
             apiFetch(url1, 4000, 0)
           ]);
-          const p0 = r0 ? parseKlines(ex, r0) : [];
-          const p1 = r1 ? parseKlines(ex, r1) : [];
+          const p0 = parseHistoryResponse(ex, r0, parseKlines);
+          const p1 = parseHistoryResponse(ex, r1, parseKlines);
           const combined = [...p1, ...p0].sort((a, b) => a.t - b.t);
-          return res.json(combined);
+          return combined;
         } else {
-          const lim = ex === "OX" ? 100 : 1000;
-          const url = getKlinesUrl(ex, sym, tf, lim, beforeTs);
-          if (!url) return res.json([]);
+          const lim = ex === "OX" ? 100 : ex === "BG" ? 200 : 1000;
+          let url = getKlinesUrl(ex, sym, tf, lim, beforeTs);
+          if (!url) return [];
+          // Latest-candle endpoints have shallow retention. Deep paging uses
+          // the venue's history API, with its own documented page limit.
+          if (ex === "OX" || ex === "BG") url = url.replace('/market/candles?', '/market/history-candles?');
           const data = await apiFetch(url, 4000, 0);
-          const parsed = parseKlines(ex, data);
-          return res.json(parsed);
+          const parsed = parseHistoryResponse(ex, data, parseKlines);
+          return parsed;
         }
-      } catch (e) {
-        res.setHeader("Retry-After", "2");
-        return res.status(503).json({ error: "Historical candles temporarily unavailable" });
-      }
+
+      }));
+    } catch (e) {
+      res.setHeader("Retry-After", "2");
+      return res.status(503).json({ error: "Historical candles temporarily unavailable" });
     }
   }
   

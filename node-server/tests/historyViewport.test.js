@@ -5,7 +5,7 @@ const bar=t=>({t,o:100,h:101,l:99,c:100,v:1});
 test('zoomed-out single chart requests missing left history even without dragging',()=>{
   let calls=0;
   const ctx=vm.createContext({PW:1000,candleW:2,candles:Array.from({length:300},(_,i)=>bar(1700000000000+i*60000)),offsetX:0,
-    isLoadingOlderCandles:false,hasReachedStartOfHistory:false,activeEx:'BN',activeSym:'BTCUSDT',activeTf:'1m',loadOlderHistory:()=>calls++});
+    isLoadingOlderCandles:false,hasReachedStartOfHistory:false,activeEx:'BN',activeSym:'BTCUSDT',activeTf:'1m',klFetchToken:1,prefetchMainHistory(){},loadOlderHistory:()=>calls++});
   const start=src.indexOf('  const n = Math.max(1, PW / candleW);');
   vm.runInContext('(function(){'+src.slice(start,src.indexOf('  let autoMn',start))+'})()',ctx);
   assert.equal(calls,1);
@@ -15,7 +15,7 @@ function mainFixture(fetcher){
   const ctx=vm.createContext({console:{warn(){}},isLoadingOlderCandles:false,hasReachedStartOfHistory:false,candles:[bar(1700000600000),bar(1700000660000)],
     klFetchToken:1,activeEx:'BN',activeSym:'BTCUSDT',activeTf:'1m',TF_MS:{'1m':60000},offsetX:0,
     AbortController,setTimeout,clearTimeout,fetch:fetcher,sanitizeCandles:c=>c,drawChart(){},requestAnimationFrame(){},window:{requestMainChartDraw(){}},
-    KLINES_CACHE:cache,storeKlinesCache:(key,data)=>cache.set(key,{ts:Date.now(),data}),KLINE_REQUESTS:new Map(),decodeKlinePayload:x=>x,mergeCandles:(a,b)=>[...b,...a]});
+    KLINES_CACHE:cache,KLINES_CACHE_TTL_MS:300000,touchKlinesCache:key=>cache.get(key),storeKlinesCache:(key,data)=>cache.set(key,{ts:Date.now(),data}),KLINE_REQUESTS:new Map(),decodeKlinePayload:x=>x,mergeCandles:(a,b)=>[...b,...a],prefetchMainHistory(){}});
   const helper=/(?:async )?function fetchOlderKlines\([^]*?\n\}/.exec(src);if(helper)vm.runInContext(helper[0],ctx);
   const start=src.indexOf('async function loadOlderHistory(');
   ctx.chartNeedsDraw=false;
@@ -45,7 +45,7 @@ test('prepending a grid history page preserves distance from the newest candle',
 test('server reports a failed older-page request as retryable, not successful empty history',async()=>{
   const server=fs.readFileSync(path.join(__dirname,'../server.js'),'utf8');
   const start=server.indexOf('  let { ex = "BN", sym = "BTCUSDT", tf = "4h", lite = "0", before }');
-  const ctx=vm.createContext({normalizeExchangeSymbol:(ex,sym)=>sym,syntheticSourceTf:()=>null,setPublicCors(){},getKlinesUrl:()=> 'https://example.invalid',apiFetch:async()=>{throw new Error('temporary upstream failure');},parseKlines:()=>[]});
+  const ctx=vm.createContext({normalizeExchangeSymbol:(ex,sym)=>sym,syntheticSourceTf:()=>null,setPublicCors(){},getKlinesUrl:()=> 'https://example.invalid',apiFetch:async()=>{throw new Error('temporary upstream failure');},parseKlines:()=>[],historicalPages:require('../historyPages').createHistoryPageStore()});
   const route=vm.runInContext('(async (req,res)=>{'+server.slice(start,server.indexOf('  const useLite =',start))+'})',ctx);
   const res={code:200,setHeader(){},status(n){this.code=n;return this;},json(){return this;}};
   await route({query:{ex:'BN',sym:'BTCUSDT',tf:'1m',before:'1700000000000'}},res);

@@ -47,3 +47,28 @@ for (const grid of [false,true]) test(`${grid?'grid':'single'} late closed-candl
   }
   assert.equal(bars.length,6); assert.equal(bars.at(-1).t,1700000300000);
 });
+
+for (const grid of [false,true]) test(`${grid?'grid':'single'} a new live candle preserves deep loaded history`,()=>{
+  const bars=Array.from({length:4000},(_,i)=>bar(1700000000000+i*60000));
+  const ctx=vm.createContext({candles:bars,offsetX:0,activeTf:'1m',activeEx:'BN',activeSym:'BTCUSDT',TF_MS:{'1m':60000},sanitizeCandle:c=>c,
+    isLoadingKlines:false,lastMarketEventAt:0,clearCandleCaches(){},updateOHLC(){},checkPriceAlerts(){},fP:String});
+  const next=bar(bars.at(-1).t+60000);
+  if(grid) {
+    vm.runInContext(/class ChartInstance \{[^]*?\n\}/.exec(source)[0]+';this.Chart=ChartInstance;',ctx);
+    ctx.Chart.prototype.applyOfficialKline.call({candles:bars,tf:'1m',headerPrice:{},refreshFormationLevels(){}},[next.t,next.o,next.h,next.l,next.c,next.v]);
+  } else {
+    vm.runInContext(source.slice(source.indexOf('function appendCandle('),source.indexOf('let lastAppliedTradeTime')),ctx);
+    ctx.appendCandle(next);
+  }
+  assert.equal(bars.length,4001);assert.equal(bars[0].t,1700000000000);
+});
+
+test('a closed grid candle correction refreshes formation levels without waiting for another tick',()=>{
+  const bars=Array.from({length:40},(_,i)=>bar(1700000000000+i*60000));let detected=0;
+  const ctx=vm.createContext({document:{hidden:false},activeView:'formations',performance:{now:()=>100},
+    window:{detectChartLevelsFn(data){detected++;return [data[10].h]}},sanitizeCandle:c=>c,clearCandleCaches(){},TF_MS:{'1m':60000}});
+  vm.runInContext(/class ChartInstance \{[^]*?\n\}/.exec(source)[0]+';this.Chart=ChartInstance;',ctx);
+  const cell=Object.assign(Object.create(ctx.Chart.prototype),{candles:bars,tf:'1m',_lastFormationDetectAt:100});
+  cell.applyOfficialKline([bars[10].t,100,103,98,102,11]);
+  assert.equal(detected,1);assert.equal(cell.levels[0],103);
+});

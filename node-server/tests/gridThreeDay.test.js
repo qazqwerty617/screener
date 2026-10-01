@@ -77,6 +77,7 @@ test('an empty grid attempt retries, but a disposed cell cannot restart loading'
 
 test('historical 3d pagination goes through source aggregation and stops before the cursor',async()=>{
   const {ctx}=serverHarness('KC');let handler;
+  ctx.historicalPages=require('../historyPages').createHistoryPageStore();
   ctx.app={get:(_,fn)=>handler=fn};ctx.setPublicCors=()=>{};
   vm.runInContext(/app\.get\("\/api\/klines", async \(req, res\) => \{[^]*?\n\}\);/.exec(server)[0],ctx);
   let received,code=200;const res={setHeader(){},status(n){code=n;return this},json(x){received=x;return this}};

@@ -5,6 +5,8 @@ const code=source.slice(source.indexOf('async function fetchKlines('),source.ind
 function fixture(cached,fetchHistory) {
   const cache=new Map(cached?[['BN|BTCUSDT|5m',cached]]:[]);
   const events=[],timers=[],ctx=vm.createContext({console,klFetchToken:0,klWs:null,klPoll:null,currentLoadedEx:null,currentLoadedSym:null,currentLoadedTf:null,
+    document:{hidden:false},activeView:'screener',screenerView:'single',window:{},hasReachedStartOfHistory:false,
+    mainHistoryWarmKey:null,loadOlderHistory:async()=>{},
     activeEx:'BN',activeSym:'BTCUSDT',activeTf:'5m',candles:[],coins:new Map(),interpActive:new Set(),chartW:500,chartH:300,volH:100,
     ctx:{clearRect(){},fillText(){}},vCtx:{clearRect(){}},KLINES_CACHE:cache,touchKlinesCache:key=>cache.get(key),storeKlinesCache:(key,data)=>cache.set(key,{ts:Date.now(),data}),KLINES_CACHE_TTL_MS:300000,
     sanitizeCandles:c=>c,fetchChartKlines:()=>{events.push('history');return fetchHistory();},fetchServerKlines:async(ex,sym,tf,lite)=>{events.push(`server:${lite}`);return [];},
