@@ -334,7 +334,7 @@ API ключ|API key
 Использовать один цвет|Use one color
 Применить|Apply
 Авто-сканер формаций|Automatic formation scanner
-Поиск наклонных линий, уровней и ретестов с отправкой в Telegram|Find trendlines, levels and retests with Telegram alerts
+Поиск наклонных линий, уровней, ретестов и боковиков с отправкой в Telegram|Find trendlines, levels, retests and ranges with Telegram alerts
 Наклонный уровень (Наклонка)|Trendline
 Поиск сформированных наклонных линий тренда|Find established trendlines
 Таймфреймы:|Timeframes:

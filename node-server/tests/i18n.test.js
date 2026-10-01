@@ -21,8 +21,22 @@ test('English covers all static controls, headings, hints and accessible labels'
   }
   assert.deepEqual([...missing], []);
 });
+
+test('language belongs to trader profile and settings open directly on Appearance', t => {
+  const w = build(t);
+  assert.equal(w.document.querySelector('#profile-modal #profile-language').value, 'ru');
+  assert.equal(w.document.querySelector('#settings-modal [data-tab="general"]'), null);
+  assert.equal(w.document.querySelector('#tab-general'), null);
+  assert.equal(w.document.querySelector('#settings-modal .settings-tab.active').dataset.tab, 'appearance');
+  const select = w.document.getElementById('profile-language');
+  select.value = 'en'; select.dispatchEvent(new w.Event('change'));
+  assert.equal(w.document.documentElement.lang, 'en');
+  assert.equal(w.localStorage.getItem('obsidian_language'), 'en');
+  select.value = 'ru'; select.dispatchEvent(new w.Event('change'));
+  assert.equal(w.document.documentElement.lang, 'ru');
+});
 test('language switches preserve nested controls, prices and user content', async t => {
-  const w = build(t, '<label>Настройки <button id="b">Сохранить</button></label><span id="price">123.456</span><p translate="no">Новости</p><input value="Моя заметка" placeholder="Введите имя..."><select id="settings-language"><option value="ru">Русский</option><option value="en">English</option></select>');
+  const w = build(t, '<label>Настройки <button id="b">Сохранить</button></label><span id="price">123.456</span><p translate="no">Новости</p><input value="Моя заметка" placeholder="Введите имя..."><select id="profile-language"><option value="ru">Русский</option><option value="en">English</option></select>');
   let clicks = 0; w.document.getElementById('b').onclick = () => clicks++;
   w.ObsidianI18n.setLanguage('en');
   assert.equal(w.document.getElementById('b').textContent, 'Save');

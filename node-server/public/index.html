@@ -33,9 +33,9 @@
          otherwise show while fonts.css is still being parsed. -->
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa1ZL7.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/UcC73FwrK3iLTeHuS_nVMrMxCp50SjIa0ZL7SUc.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="/js/app.js?v=2109" as="script" />
+    <link rel="preload" href="/js/app.js?v=2110" as="script" />
     <link rel="stylesheet" href="/css/fonts.css?v=3" />
-    <link rel="stylesheet" href="/css/app.css?v=1021" />
+    <link rel="stylesheet" href="/css/app.css?v=1022" />
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
          `media="print"` + onload swap is the standard non-blocking stylesheet
          pattern: the browser fetches it at low priority without blocking paint. -->
@@ -2182,7 +2182,7 @@
                     <div class="fmt-modal-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></div>
                     <div>
                         <div class="fmt-modal-title">Авто-сканер формаций</div>
-                        <div class="fmt-modal-subtitle">Поиск наклонных линий, уровней и ретестов с отправкой в Telegram</div>
+                        <div class="fmt-modal-subtitle">Поиск наклонных линий, уровней, ретестов и боковиков с отправкой в Telegram</div>
                     </div>
                 </div>
                 <button type="button" class="fmt-modal-close" id="fmt-modal-close" title="Закрыть">×</button>
@@ -2411,7 +2411,7 @@
                                         </div>
                                     </div>
                                 </div>
-                                
+
                             </div>
                         </div>
                         <!-- 4. General Notification Channels & Filters -->
@@ -2551,8 +2551,7 @@
         <div id="settings-modal" class="settings-modal">
             <div class="settings-body">
                 <div class="settings-sidebar">
-                    <div class="settings-tab active" data-tab="general"><span>Общие</span></div>
-                    <div class="settings-tab" data-tab="appearance">
+                    <div class="settings-tab active" data-tab="appearance">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
@@ -2577,18 +2576,7 @@
                 </div>
 
                 <div class="settings-content">
-                    <div class="settings-pane active" id="tab-general">
-                        <h2>Общие</h2>
-                        <div class="settings-group">
-                            <label for="settings-language">Язык интерфейса</label>
-                            <select id="settings-language" class="settings-language" translate="no">
-                                <option value="ru">Русский</option>
-                                <option value="en">English</option>
-                            </select>
-                            <p class="settings-language-hint">Язык сохраняется на этом устройстве. Публикации источников остаются на языке оригинала.</p>
-                        </div>
-                    </div>
-                    <div class="settings-pane" id="tab-appearance">
+                    <div class="settings-pane active" id="tab-appearance">
                         <h2>Оформление</h2>
                         <div class="settings-group">
                             <label>Цветовая схема</label>
@@ -3232,6 +3220,13 @@
                     <span class="profile-email" id="profile-email-display">obsidian.pro@trader.io</span>
                 </div>
             </div>
+            <div class="profile-language-row">
+                <label for="profile-language">Язык интерфейса</label>
+                <select id="profile-language" class="profile-language-select" translate="no">
+                    <option value="ru">Русский</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
             <div class="profile-stats-grid">
                 <div class="profile-stat-card">
                     <span class="profile-stat-label">Индивидуальный ID</span>
@@ -3779,12 +3774,12 @@
          inside app.js / journal.js / tradeOverlay.js fire exactly as before.
          The `?v=` on app.js must match the preload above or the file downloads
          twice. -->
-    <script defer src="/js/i18n-en.js?v=2"></script>
-    <script defer src="/js/i18n.js?v=1"></script>
+    <script defer src="/js/i18n-en.js?v=3"></script>
+    <script defer src="/js/i18n.js?v=2"></script>
     <script defer src="/js/formationEngine.js?v=2014"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
-    <script defer src="/js/app.js?v=2109"></script>
+    <script defer src="/js/app.js?v=2110"></script>
     <script defer src="/js/arbitrage.js?v=2017"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2018"></script>

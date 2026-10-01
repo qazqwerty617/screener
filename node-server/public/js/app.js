@@ -1486,13 +1486,15 @@ function resizeChart() {
   chartW = w.clientWidth;
   chartH = w.clientHeight;
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = chartW * dpr;
-  canvas.height = chartH * dpr;
+  const pixelW = Math.round(chartW * dpr), pixelH = Math.round(chartH * dpr);
+  if (canvas.width !== pixelW) canvas.width = pixelW;
+  if (canvas.height !== pixelH) canvas.height = pixelH;
   canvas.style.width = chartW + "px";
   canvas.style.height = chartH + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  volCv.width = chartW * dpr;
-  volCv.height = volH * dpr;
+  const volPixelH = Math.round(volH * dpr);
+  if (volCv.width !== pixelW) volCv.width = pixelW;
+  if (volCv.height !== volPixelH) volCv.height = volPixelH;
   volCv.style.width = chartW + "px";
   volCv.style.height = volH + "px";
   vCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3714,7 +3716,8 @@ function drawChart() {
 
   // тФАтФА Candles тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const bodyRatio = candleW > 4 ? 0.78 : 0.88;
-  const hw = Math.max(0.5, (candleW * bodyRatio) / 2);
+  const bodyPixelW = Math.max(1, Math.min(Math.round(candleW * bodyRatio * dpr), Math.floor(candleW * dpr)));
+  const hw = bodyPixelW / (2 * dpr);
   const cs = window.candleSettings || {
     body: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
     border: { show: true, up: "#26c97a", upOp: 100, down: "#ff4560", downOp: 100 },
@@ -3740,15 +3743,14 @@ function drawChart() {
     const bT = Math.abs(yC - yO) < 2 ? Math.min(yO, yC) - 1 : Math.min(yO, yC);
 
     const leftX = Math.round((rawX - hw) * dpr);
-    const rightX = Math.round((rawX + hw) * dpr);
-    const fillPixelW = Math.max(1, rightX - leftX);
+    const fillPixelW = bodyPixelW;
     const fillX = leftX / dpr;
     const fillY = Math.round(bT * dpr) / dpr;
     const fillW = fillPixelW / dpr;
     const fillH = Math.max(2 / dpr, Math.round(bH * dpr) / dpr);
 
-    // Wick is placed at exact mathematical pixel center of candle body (TigerTrade standard)
-    const wickPixel = Math.round(leftX + fillPixelW / 2);
+    // Keep a one-device-pixel wick inside the snapped candle body.
+    const wickPixel = leftX + Math.floor((fillPixelW - 1) / 2);
     const wickX = (wickPixel + 0.5) / dpr;
 
     if (cs.wick.show) {
@@ -3767,15 +3769,18 @@ function drawChart() {
       ctx.fillRect(fillX, fillY, fillW, fillH);
     }
 
-    if (cs.border.show) {
+    if (cs.border.show && fillPixelW > 1) {
       const strokeLeftX = (leftX + 0.5) / dpr;
-      const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
-      const strokeW = Math.max(1 / dpr, fillW);
-      const strokeH = Math.max(1 / dpr, fillH);
+      const strokeTopY = fillY + 0.5 / dpr;
+      const strokeW = (fillPixelW - 1) / dpr;
+      const strokeH = Math.max(0, fillH - 1 / dpr);
 
       ctx.strokeStyle = up ? upBorderCol : dnBorderCol;
       ctx.lineWidth = 1 / dpr;
       ctx.strokeRect(strokeLeftX, strokeTopY, strokeW, strokeH);
+    } else if (cs.border.show && !cs.body.show) {
+      ctx.fillStyle = up ? upBorderCol : dnBorderCol;
+      ctx.fillRect(fillX, fillY, fillW, fillH);
     }
   });
 
@@ -8352,6 +8357,30 @@ function prefetchMainHistory(ex, sym, tf, token) {
   fetchOlderKlines(ex, sym, tf, before).catch(() => {});
 }
 
+// Warm only an instrument the user points at, never the whole market list.
+// Clicks share the pending request; no extra direct-exchange hedge is opened.
+const chartIntentRequests = new Map();
+async function warmChartOnIntent(ex, sym, tf) {
+  if (document.hidden || activeView !== 'screener' || screenerView !== 'chart') return;
+  const key = `${ex}|${sym}|${tf}`;
+  const cached = touchKlinesCache(key);
+  if (cached?.data?.length && Date.now() - cached.ts < 10000) return cached.data;
+  if (chartIntentRequests.has(key)) return chartIntentRequests.get(key);
+  if (chartIntentRequests.size >= 2) return;
+  const request = (async () => {
+    const data = await fetchServerKlines(ex, sym, tf, 1);
+    if (!data?.length) return;
+    const existing = touchKlinesCache(key);
+    const merged = existing?.data?.length ? mergeCandles(existing.data, data, 20000) : data;
+    storeKlinesCache(key, merged);
+    return merged;
+  })();
+  chartIntentRequests.set(key, request);
+  try { return await request; }
+  catch (_) { return; }
+  finally { chartIntentRequests.delete(key); }
+}
+
 async function primeMainHistory(ex, sym, tf, token) {
   const isCurrent = () => token === klFetchToken && activeEx === ex && activeSym === sym && activeTf === tf && !document.hidden &&
     (activeView === 'screener' && screenerView !== 'multichart' || window.isFormationFullChartOpen?.());
@@ -8930,14 +8959,12 @@ function startRender() {
   requestAnimationFrame(rafLoop);
 }
 
-// Coalesce canvas and visible table work to at most 30 frames per second.
-// Market ingestion and alerts run independently in the stream handlers.
+// Input-driven chart paints follow display frames. Table work has its own
+// 30 Hz budget; a table throttle must never discard a pointer/zoom frame.
 function rafLoop() {
   const now = performance.now();
   requestAnimationFrame(rafLoop);
-  if (document.hidden || now - lastRafTs < 1000 / 30) return;
-  const dt = Math.min((now - lastRafTs) / 1000, 0.05); // max 50ms step for stability
-  lastRafTs = now;
+  if (document.hidden) return;
 
   // 1. TOP PRIORITY: Paint chart immediately on the very first microsecond of the frame (Vataga model)
   if (chartNeedsDraw) {
@@ -8952,7 +8979,13 @@ function rafLoop() {
   }
 
   // 2. Process background ticker table rows AFTER chart is already painted
-  processTickData(dt);
+  const elapsed = now - lastRafTs;
+  const tableInterval = 1000 / 30;
+  if (elapsed >= tableInterval - 0.5) {
+    const dt = Math.min(elapsed / 1000, 0.05);
+    lastRafTs += Math.max(1, Math.floor((elapsed + 0.5) / tableInterval)) * tableInterval;
+    processTickData(dt);
+  }
 }
 
 function isUsdtFutures(c) {
@@ -9088,6 +9121,16 @@ function createRow(c) {
     cells.dot.classList.remove("tagged");
   }
   el.addEventListener("click", () => selectCoin(c));
+  let intentTimer = null;
+  el.addEventListener('pointerenter', () => {
+    clearTimeout(intentTimer);
+    const tf = activeTf;
+    intentTimer = setTimeout(() => {
+      intentTimer = null;
+      if (el.isConnected && tf === activeTf) void warmChartOnIntent(c.ex, c.sym, tf);
+    }, 90);
+  });
+  el.addEventListener('pointerleave', () => { clearTimeout(intentTimer); intentTimer = null; });
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     showColorPicker(e, c);
@@ -9669,7 +9712,7 @@ const settingsClose = $("settings-close");
 
 if (settingsBtn && settingsOverlay) {
   const openSettings = () => {
-    document.querySelector('.settings-tab[data-tab="general"]')?.click();
+    document.querySelector('.settings-tab[data-tab="appearance"]')?.click();
     settingsOverlay.style.display = "flex";
     settingsOverlay.classList.add("open");
     if (typeof window.pdDiscardDraft === "function") window.pdDiscardDraft();
@@ -11929,9 +11972,10 @@ class ChartInstance {
       return;
     }
 
-    if (this.canvas.width !== cw * dpr || this.canvas.height !== ch * dpr) {
-      this.canvas.width = cw * dpr;
-      this.canvas.height = ch * dpr;
+    const pixelWidth = Math.round(cw * dpr), pixelHeight = Math.round(ch * dpr);
+    if (this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight) {
+      this.canvas.width = pixelWidth;
+      this.canvas.height = pixelHeight;
     }
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -11994,7 +12038,7 @@ class ChartInstance {
       pr = mx - mn || 1;
 
     const toY = (p) => ((mx - p) / pr) * PH;
-    const hw = Math.max(0.5, (candleWidth - 2) / 2);
+    const hw = Math.max(0.5 / dpr, candleWidth * (candleWidth > 4 ? 0.78 : 0.88) / 2);
 
     const gridStep = calcNiceStep(pr, Math.max(3, Math.floor(PH / 40)));
     let gridPrice = Math.ceil(mn / gridStep) * gridStep;
@@ -12077,6 +12121,12 @@ class ChartInstance {
       wick: { ...defaultCs.wick, ...(rawCs.wick || {}) }
     };
 
+    const candleColors = {};
+    for (const part of ['body', 'border', 'wick']) for (const side of ['up', 'down']) {
+      candleColors[part + side] = hexToRgba(cs[part][side], cs[part][side + 'Op']);
+    }
+    const pixelW = Math.max(1, Math.min(Math.round(candleWidth * (candleWidth > 4 ? 0.78 : 0.88) * dpr), Math.floor(candleWidth * dpr)));
+
     vis.forEach((c, i) => {
       const rawX = (s + i - viewStart) * candleWidth + candleWidth / 2;
       if (rawX > PW + candleWidth) return;
@@ -12088,11 +12138,16 @@ class ChartInstance {
       const bH = Math.max(2, Math.abs(yC - yO));
       const bT = Math.abs(yC - yO) < 2 ? Math.min(yO, yC) - 1 : Math.min(yO, yC);
 
+      const leftX = Math.round(rawX * dpr - pixelW / 2);
+      const topY = Math.round(bT * dpr);
+      const fillX = leftX / dpr, fillY = topY / dpr;
+      const fillW = pixelW / dpr, fillH = Math.max(2 / dpr, Math.round(bH * dpr) / dpr);
+
       if (cs.wick.show) {
-        const wickX = (Math.floor(rawX * dpr) + 0.5) / dpr;
+        const wickX = (leftX + Math.floor((pixelW - 1) / 2) + 0.5) / dpr;
         const wickYH = Math.round(yH * dpr) / dpr;
         const wickYL = Math.round(yL * dpr) / dpr;
-        ctx.strokeStyle = hexToRgba(cs.wick[side], cs.wick[side + "Op"]);
+        ctx.strokeStyle = candleColors['wick' + side];
         ctx.lineWidth = 1 / dpr;
         ctx.beginPath();
         ctx.moveTo(wickX, wickYH);
@@ -12100,31 +12155,18 @@ class ChartInstance {
         ctx.stroke();
       }
       if (cs.body.show) {
-        const leftX = Math.round((rawX - hw) * dpr);
-        const rightX = Math.round((rawX + hw) * dpr);
-        const topY = Math.round(bT * dpr);
-        const bottomY = Math.round((bT + bH) * dpr);
-
-        const fillX = leftX / dpr;
-        const fillY = topY / dpr;
-        const fillW = Math.max(1 / dpr, (rightX - leftX) / dpr);
-        const fillH = Math.max(2 / dpr, (bottomY - topY) / dpr);
-
-        ctx.fillStyle = hexToRgba(cs.body[side], cs.body[side + "Op"]);
+        ctx.fillStyle = candleColors['body' + side];
         ctx.fillRect(fillX, fillY, fillW, fillH);
       }
-      if (cs.border.show) {
-        const strokeLeftX = (Math.floor((rawX - hw) * dpr) + 0.5) / dpr;
-        const strokeTopY = (Math.floor(bT * dpr) + 0.5) / dpr;
-        const strokeRightX = (Math.floor((rawX + hw) * dpr) + 0.5) / dpr;
-        const strokeBottomY = (Math.floor((bT + bH) * dpr) + 0.5) / dpr;
-
-        const strokeW = Math.max(1 / dpr, strokeRightX - strokeLeftX);
-        const strokeH = Math.max(1 / dpr, strokeBottomY - strokeTopY);
-
-        ctx.strokeStyle = hexToRgba(cs.border[side], cs.border[side + "Op"]);
+      if (cs.border.show && pixelW > 1) {
+        const strokeLeftX = fillX + 0.5 / dpr, strokeTopY = fillY + 0.5 / dpr;
+        const strokeW = (pixelW - 1) / dpr, strokeH = Math.max(0, fillH - 1 / dpr);
+        ctx.strokeStyle = candleColors['border' + side];
         ctx.lineWidth = 1 / dpr;
         ctx.strokeRect(strokeLeftX, strokeTopY, strokeW, strokeH);
+      } else if (cs.border.show && !cs.body.show) {
+        ctx.fillStyle = candleColors['border' + side];
+        ctx.fillRect(fillX, fillY, fillW, fillH);
       }
     });
 

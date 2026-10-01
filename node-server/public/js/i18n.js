@@ -112,7 +112,7 @@
     observer.disconnect();
     document.documentElement.lang = language;
     if (document.body) translate(document.body);
-    const select = document.getElementById('settings-language');
+    const select = document.getElementById('profile-language');
     if (select) select.value = language;
     observe();
     window.dispatchEvent(new CustomEvent('obsidian:languagechange', { detail: { language } }));
@@ -120,7 +120,7 @@
   window.ObsidianI18n = { t, translate, setLanguage, get language() { return language; }, get locale() { return language === 'en' ? 'en-US' : 'ru-RU'; } };
   function init() {
     setLanguage(language, false);
-    document.getElementById('settings-language')?.addEventListener('change', event => setLanguage(event.target.value));
+    document.getElementById('profile-language')?.addEventListener('change', event => setLanguage(event.target.value));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
   window.addEventListener('storage', event => { if (event.key === key) setLanguage(event.newValue, false); });
