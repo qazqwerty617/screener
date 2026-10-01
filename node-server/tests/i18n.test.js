@@ -2,6 +2,17 @@
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const { JSDOM } = require('jsdom');
 const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+
+test('default Russian startup and repeated language selection do not walk the whole interface',t=>{
+  const dom=new JSDOM('<p>Настройки</p>',{url:'http://localhost',runScripts:'outside-only'});t.after(()=>dom.window.close());
+  const w=dom.window,original=w.document.createTreeWalker.bind(w.document);let walks=0;
+  w.document.createTreeWalker=(...args)=>{walks++;return original(...args);};
+  for(const file of ['i18n-en.js','i18n.js'])w.eval(fs.readFileSync(path.join(__dirname,'../public/js',file),'utf8'));
+  w.document.dispatchEvent(new w.Event('DOMContentLoaded'));assert.equal(walks,0);
+  w.ObsidianI18n.setLanguage('en');assert.equal(w.document.querySelector('p').textContent,'Settings');
+  const translatedWalks=walks;w.ObsidianI18n.setLanguage('en');assert.equal(walks,translatedWalks);
+  w.ObsidianI18n.setLanguage('ru');assert.equal(w.document.querySelector('p').textContent,'Настройки');
+});
 function build(t, markup = html) {
   const dom = new JSDOM(markup, { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());

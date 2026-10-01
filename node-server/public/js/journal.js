@@ -374,6 +374,12 @@
   // ── EQUITY CURVE CANVAS RENDERER (SMOOTH & INTERACTIVE) ────────────────────
   let equityHoverIndex = -1;
   let equityListenersAttached = false;
+  let equityDrawQueued = false;
+  function queueEquityDraw() {
+    if (equityDrawQueued || document.hidden) return;
+    equityDrawQueued = true;
+    requestAnimationFrame(() => { equityDrawQueued = false; drawEquityChart(true); });
+  }
 
   function attachEquityCanvasListeners(canvas) {
     if (equityListenersAttached || !canvas) return;
@@ -385,26 +391,20 @@
       const pts = canvas._equityPoints;
       if (!pts || pts.length === 0) return;
 
-      let minDist = Infinity;
-      let nearestIdx = -1;
-      pts.forEach((pt, i) => {
-        const dist = Math.abs(pt.screenX - mouseX);
-        if (dist < minDist) {
-          minDist = dist;
-          nearestIdx = i;
-        }
-      });
+      const firstX = pts[0].screenX, span = pts[pts.length - 1].screenX - firstX;
+      const position = span > 0 ? (mouseX - firstX) / span * (pts.length - 1) : 0;
+      const nearestIdx = Math.max(0, Math.min(pts.length - 1, Math.ceil(position - .5)));
 
       if (nearestIdx !== equityHoverIndex) {
         equityHoverIndex = nearestIdx;
-        drawEquityChart();
+        queueEquityDraw();
       }
     });
 
     canvas.addEventListener("mouseleave", () => {
       if (equityHoverIndex !== -1) {
         equityHoverIndex = -1;
-        drawEquityChart();
+        queueEquityDraw();
       }
     });
   }
@@ -431,9 +431,21 @@
     }
   }
 
-  function drawEquityChart() {
+  function getEquityPoints(canvas, reusePoints) {
+    if (reusePoints === true && canvas._equityPoints) return canvas._equityPoints;
+    const sorted = [...getFilteredTrades()].sort((a, b) => new Date(a.date) - new Date(b.date));
+    let cumPnl = 0;
+    const points = [{ x: 0, pnl: 0, date: 'Старт', sym: '—', tradePnl: 0, side: '—' }];
+    sorted.forEach((t, i) => {
+      cumPnl += t.pnl;
+      points.push({ x: i + 1, pnl: cumPnl, date: t.date, sym: t.symbol, tradePnl: t.pnl, side: t.side, pnlPercent: t.pnlPercent });
+    });
+    return points;
+  }
+
+  function drawEquityChart(reusePoints = false) {
     const canvas = document.getElementById("journal-equity-canvas");
-    if (!canvas) return;
+    if (!canvas || document.hidden || document.getElementById('journal-view')?.style?.display === 'none') return;
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
 
@@ -441,30 +453,15 @@
     const W = rect.width || 600;
     const H = rect.height || 240;
 
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    ctx.scale(dpr, dpr);
+    const pixelW = Math.round(W * dpr), pixelH = Math.round(H * dpr);
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     ctx.clearRect(0, 0, W, H);
     attachEquityCanvasListeners(canvas);
 
-    const tradeList = getFilteredTrades();
-    const sorted = [...tradeList].sort((a, b) => new Date(a.date) - new Date(b.date));
-
-    let cumPnl = 0;
-    const points = [{ x: 0, pnl: 0, date: "Старт", sym: "—", tradePnl: 0, side: "—" }];
-    sorted.forEach((t, i) => {
-      cumPnl += t.pnl;
-      points.push({
-        x: i + 1,
-        pnl: cumPnl,
-        date: t.date,
-        sym: t.symbol,
-        tradePnl: t.pnl,
-        side: t.side,
-        pnlPercent: t.pnlPercent
-      });
-    });
+    const points = getEquityPoints(canvas, reusePoints);
 
     const padL = 60, padR = 20, padT = 25, padB = 30;
     const plotW = W - padL - padR;
@@ -1099,7 +1096,7 @@
       b.classList.toggle("on", b.dataset.jTool === tool);
     });
     if (chartState.canvas) {
-      renderInteractiveChart(chartState.canvas);
+      requestInteractiveChartDraw(chartState.canvas);
     }
   }
 
@@ -1313,7 +1310,7 @@
           if (chartState.trade) {
             saveJournalDrawings(chartState.trade.id, []);
           }
-          renderInteractiveChart(chartState.canvas);
+          requestInteractiveChartDraw(chartState.canvas);
         }
       };
     }
@@ -1495,7 +1492,7 @@
       if (cached && cached.length > 0) {
         chartState.candles = cached;
         resetChartViewState(canvas);
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
         return;
       }
     }
@@ -1577,7 +1574,7 @@
         journalCandlesCache.set(cacheKey, candles);
         chartState.candles = candles;
         resetChartViewState(canvas);
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
       } else {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#0b0e14";
@@ -1715,7 +1712,7 @@
         chartState.draft = null;
         chartState.drawingPhase = 0;
         setJournalTool("none");
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
         return;
       }
 
@@ -1726,7 +1723,7 @@
           if (hit) {
             chartState.drawings.splice(i, 1);
             if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
-            renderInteractiveChart(canvas);
+            requestInteractiveChartDraw(canvas);
             return;
           }
         }
@@ -1762,7 +1759,7 @@
           });
           if (chartState.trade) saveJournalDrawings(chartState.trade.id, chartState.drawings);
           setJournalTool("none");
-          renderInteractiveChart(canvas);
+          requestInteractiveChartDraw(canvas);
           return;
         }
 
@@ -1775,7 +1772,7 @@
             points: [pt]
           };
           chartState.drawingPhase = 1;
-          renderInteractiveChart(canvas);
+          requestInteractiveChartDraw(canvas);
           return;
         }
 
@@ -1787,7 +1784,7 @@
             b: { ...pt }
           };
           chartState.drawingPhase = 1;
-          renderInteractiveChart(canvas);
+          requestInteractiveChartDraw(canvas);
           return;
         }
 
@@ -1800,7 +1797,7 @@
             b: { ...pt }
           };
           chartState.drawingPhase = 1;
-          renderInteractiveChart(canvas);
+          requestInteractiveChartDraw(canvas);
           return;
         } else {
           chartState.draft.b = pt;
@@ -1809,7 +1806,7 @@
           chartState.draft = null;
           chartState.drawingPhase = 0;
           setJournalTool("none");
-          renderInteractiveChart(canvas);
+          requestInteractiveChartDraw(canvas);
           return;
         }
       }
@@ -1885,7 +1882,7 @@
           if (d.points) d.points = drag.points.map(p => ({ ...p, t: p.t + dt, p: p.p + dp }));
         }
         canvas.style.cursor = "grabbing";
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
         return;
       }
 
@@ -1900,7 +1897,7 @@
         } else {
           chartState.draft.b = pt;
         }
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
         return;
       }
 
@@ -1912,7 +1909,7 @@
         half = Math.max(Math.abs(center) * 0.0001, Math.min(Math.abs(center) * 50, half));
         chartState.customMinP = center - half;
         chartState.customMaxP = center + half;
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
         return;
       }
 
@@ -1928,7 +1925,7 @@
           chartState.customMinP = chartState.dragStartMinP + dPrice;
           chartState.customMaxP = chartState.dragStartMaxP + dPrice;
         }
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
       } else {
         // Cursor appearance
         if (chartState.tool && chartState.tool !== "none") {
@@ -1946,7 +1943,7 @@
           canvas.style.cursor = isOverDrawing ? "pointer" : "crosshair";
         }
         if (chartState.mouseX >= 0 && chartState.mouseX <= rect.width && chartState.mouseY >= 0 && chartState.mouseY <= rect.height) {
-          renderInteractiveChart(canvas);
+          requestInteractiveChartDraw(canvas);
         }
       }
     });
@@ -1977,19 +1974,19 @@
           canvas.style.cursor = "crosshair";
         }
       }
-      renderInteractiveChart(canvas);
+      requestInteractiveChartDraw(canvas);
     });
 
     canvas.addEventListener("mouseleave", () => {
       chartState.mouseX = -1;
       chartState.mouseY = -1;
-      renderInteractiveChart(canvas);
+      requestInteractiveChartDraw(canvas);
     });
 
     canvas.addEventListener("dblclick", () => {
       chartState.customMinP = null;
       chartState.customMaxP = null;
-      renderInteractiveChart(canvas);
+      requestInteractiveChartDraw(canvas);
     });
 
     canvas.addEventListener("wheel", (e) => {
@@ -2009,7 +2006,7 @@
         half = Math.max(Math.abs(center) * 0.0001, Math.min(Math.abs(center) * 50, half));
         chartState.customMinP = center - half;
         chartState.customMaxP = center + half;
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
         return;
       }
 
@@ -2019,7 +2016,7 @@
       
       chartState.candleWidth = newWidth;
       chartState.scrollOffset = (candleUnderMouse * newWidth) - mouseX;
-      renderInteractiveChart(canvas);
+      requestInteractiveChartDraw(canvas);
     }, { passive: false });
 
     const resetBtn = document.getElementById("j-chart-reset-btn");
@@ -2031,19 +2028,19 @@
         chartState.customMinP = null;
         chartState.customMaxP = null;
         resetChartViewState(canvas);
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
       };
     }
     if (zoomInBtn) {
       zoomInBtn.onclick = () => {
         chartState.candleWidth = Math.min(60, chartState.candleWidth * 1.25);
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
       };
     }
     if (zoomOutBtn) {
       zoomOutBtn.onclick = () => {
         chartState.candleWidth = Math.max(4, chartState.candleWidth * 0.8);
-        renderInteractiveChart(canvas);
+        requestInteractiveChartDraw(canvas);
       };
     }
   }
@@ -2084,14 +2081,28 @@
     chartState.scrollOffset = Math.max(0, centerX - chartW / 2);
   }
 
+  let interactiveDrawFrame = null, interactiveDrawCanvas = null;
+  function requestInteractiveChartDraw(canvas = chartState.canvas) {
+    if (!canvas || document.hidden) return;
+    interactiveDrawCanvas = canvas;
+    if (interactiveDrawFrame !== null) return;
+    interactiveDrawFrame = requestAnimationFrame(() => {
+      interactiveDrawFrame = null;
+      const target = interactiveDrawCanvas;
+      interactiveDrawCanvas = null;
+      if (!document.hidden && target?.isConnected && target === chartState.canvas && target.clientWidth && target.clientHeight) renderInteractiveChart(target);
+    });
+  }
+
   function renderInteractiveChart(canvas = chartState.canvas) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr || 900 * dpr;
-    canvas.height = rect.height * dpr || 460 * dpr;
-    ctx.scale(dpr, dpr);
+    const width = Math.round((rect.width || 900) * dpr), height = Math.round((rect.height || 460) * dpr);
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const W = rect.width;
     const H = rect.height;

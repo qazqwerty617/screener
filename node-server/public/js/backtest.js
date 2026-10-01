@@ -814,7 +814,18 @@
     const color = settings?.[side] || (up ? '#63dbb5' : '#f48b89');
     return color + Math.round((settings?.[side + 'Op'] ?? 100) / 100 * 255).toString(16).padStart(2, '0');
   }
+  const chartDateFormat = new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'UTC' });
+  let drawQueued = false;
   function draw() {
+    if (drawQueued || document.hidden || $('backtest-view')?.style.display === 'none') return;
+    drawQueued = true;
+    requestAnimationFrame(() => {
+      drawQueued = false;
+      if (!document.hidden && $('backtest-view')?.style.display !== 'none') paint();
+    });
+  }
+
+  function paint() {
     const theme = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
     const background = typeof getCurrentBgColor === 'function' ? getCurrentBgColor() : theme?.bg || '#101c28';
     const grid = theme?.grid || '#253744';
@@ -856,7 +867,7 @@
       const x = m.plot.w * i / 6 + .5;
       ctx.strokeStyle = grid; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, m.plot.h); ctx.stroke();
       const c = m.data[Math.min(m.data.length - 1, Math.floor(m.data.length * i / 6))];
-      if (c) { ctx.fillStyle = axis; ctx.fillText(new Date(c.t).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", timeZone: "UTC" }), Math.min(x + 3, m.plot.w - 38), m.h - 7); }
+      if (c) { ctx.fillStyle = axis; ctx.fillText(chartDateFormat.format(c.t), Math.min(x + 3, m.plot.w - 38), m.h - 7); }
     }
 
     if (state.session && m.data.length) {

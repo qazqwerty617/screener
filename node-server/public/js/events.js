@@ -26,6 +26,7 @@
   let refreshTimer = null;
   let stream = null;
   let updateTimer = null;
+  let searchFrame = null;
   let unlockMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
   let unlockSelectedDay;
   let unlockPage = 0, unlockWindowPage = 0;
@@ -38,9 +39,30 @@
   let seenAlerts = [];
   try { seenAlerts = JSON.parse(window.sessionStorage.getItem(seenKey)) || []; } catch (_) {}
   if (!Array.isArray(seenAlerts)) seenAlerts = [];
-  const dateTime = value => value != null && Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), {
-    day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
-  }) : "Время неизвестно";
+  const dateStyles = {
+    news: { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' },
+    month: { month: 'long', year: 'numeric' }, day: { day: 'numeric', month: 'long' },
+    fullDay: { day: 'numeric', month: 'long', year: 'numeric' }, time: { hour: '2-digit', minute: '2-digit' },
+    utcMonth: { timeZone: 'UTC', month: 'long', year: 'numeric' }, utcDay: { timeZone: 'UTC', day: 'numeric', month: 'long' },
+    utcFullDay: { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' },
+    utcTime: { timeZone: 'UTC', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }
+  };
+  let formatLocale, dateFormats = {}, amountFormat;
+  function formatDate(value, style) {
+    const locale = window.ObsidianI18n?.locale || 'ru-RU';
+    if (locale !== formatLocale) { formatLocale = locale; dateFormats = {}; amountFormat = null; }
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return 'Invalid Date';
+    const format = dateFormats[style] || (dateFormats[style] = new Intl.DateTimeFormat(locale, dateStyles[style]));
+    return format.format(date);
+  }
+  function formatAmount(value) {
+    const locale = window.ObsidianI18n?.locale || 'ru-RU';
+    if (locale !== formatLocale) { formatLocale = locale; dateFormats = {}; amountFormat = null; }
+    if (!amountFormat) amountFormat = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 });
+    return amountFormat.format(Number(value));
+  }
+  const dateTime = value => value != null && Number.isFinite(Number(value)) ? formatDate(Number(value), 'news') : 'Время неизвестно';
   const dayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   selectedDay = dayKey(new Date());
   const utcDayKey = date => date.toISOString().slice(0, 10);
@@ -397,7 +419,7 @@
     for (const label of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", label));
     const year = month.getFullYear(), monthIndex = month.getMonth();
     const label = byId("events-month-label");
-    if (label) label.textContent = month.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { month: "long", year: "numeric" });
+    if (label) label.textContent = formatDate(month, 'month');
     const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
     for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
     const days = new Date(year, monthIndex + 1, 0).getDate();
@@ -407,7 +429,7 @@
       const items = byDay.get(key) || [];
       const cell = node("button", "events-calendar-day");
       cell.type = "button"; cell.dataset.date = key;
-      cell.setAttribute("aria-label", `${date.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { day: "numeric", month: "long" })}, событий: ${items.length}`);
+      cell.setAttribute("aria-label", `${formatDate(date, 'day')}, событий: ${items.length}`);
       if (key === selectedDay) cell.classList.add("selected");
       if (key === dayKey(new Date())) cell.classList.add("today");
       const head = node("span", "events-calendar-day-head");
@@ -425,7 +447,7 @@
       calendar.append(cell);
     }
     const selectedDate = new Date(`${selectedDay}T12:00:00`);
-    byId("events-day-label").textContent = selectedDate.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { day: "numeric", month: "long", year: "numeric" });
+    byId("events-day-label").textContent = formatDate(selectedDate, 'fullDay');
     const selectedItems = (byDay.get(selectedDay) || []).sort((a, b) =>
       Number(eventTime(a)) - Number(eventTime(b)));
     byId("events-day-count").textContent = selectedItems.length ? `${selectedItems.length} событий` : "";
@@ -438,7 +460,7 @@
       const venue = VENUES.find(([code]) => code === item.exchange)?.[1] || item.exchange;
       text.append(node("strong", "", item.symbol), node("small", "", `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"} · ${removed ? item.delistAt ? "делистинг · дата биржи" : "исчезла из каталога" : item.launchAt ? "дата из каталога" : "обнаружено"}`));
       const time = eventTime(item);
-      card.append(icon, text, node("time", "", new Date(Number(time)).toLocaleTimeString((window.ObsidianI18n?.locale || "ru-RU"), { hour: "2-digit", minute: "2-digit" })));
+      card.append(icon, text, node("time", "", formatDate(Number(time), 'time')));
       dayList.append(card);
     }
     if (!selectedItems.length) clearWithEmpty(dayList, "На эту дату событий нет");
@@ -498,7 +520,7 @@
     calendar.replaceChildren();
     for (const weekday of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", weekday));
     const year = unlockMonth.getUTCFullYear(), monthIndex = unlockMonth.getUTCMonth();
-    byId("events-unlocks-month-label").textContent = unlockMonth.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", month: "long", year: "numeric" });
+    byId("events-unlocks-month-label").textContent = formatDate(unlockMonth, 'utcMonth');
     const offset = (unlockMonth.getUTCDay() + 6) % 7;
     for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
     const days = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
@@ -508,7 +530,7 @@
       monthEvents += items.length;
       const cell = node("button", "events-calendar-day unlock-calendar-day");
       cell.type = "button"; cell.dataset.unlockDate = key;
-      cell.setAttribute("aria-label", `${date.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", day: "numeric", month: "long" })} UTC, записей: ${items.length}`);
+      cell.setAttribute("aria-label", `${formatDate(date, 'utcDay')} UTC, записей: ${items.length}`);
       if (key === unlockSelectedDay) cell.classList.add("selected");
       if (key === utcDayKey(new Date())) cell.classList.add("today");
       const head = node("span", "events-calendar-day-head");
@@ -536,7 +558,7 @@
       Number(item.windowStart) < monthEnd && Number(item.windowEnd) >= monthStart);
     if (count) count.textContent = `Календарь UTC · в месяце: ${monthEvents} записей с датой + ${windows.length} приблизительных окон · всего по фильтрам: ${rows.length}. % = доля общего предложения.`;
     const selectedDate = new Date(`${unlockSelectedDay}T12:00:00Z`);
-    byId("events-unlocks-day-label").textContent = selectedDate.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }) + " · UTC";
+    byId("events-unlocks-day-label").textContent = formatDate(selectedDate, 'utcFullDay') + " · UTC";
     const selectedItems = byDay.get(unlockSelectedDay) || [];
     byId("events-unlocks-day-count").textContent = selectedItems.length ? `${selectedItems.length} записей` : "";
 
@@ -565,21 +587,21 @@
     for (const item of items.slice(page * 100, (page + 1) * 100)) {
       const card = node("article", "events-card");
       const at = new Date(item.at);
-      const formatDay = date => new Date(date).toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
-      const dateLabel = item.precision === "month" ? at.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", month: "long", year: "numeric" })
+      const formatDay = date => formatDate(date, 'utcFullDay');
+      const dateLabel = item.precision === "month" ? formatDate(at, 'utcMonth')
         : item.precision === "week" ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
       card.append(node("h3", "", `${item.symbol || item.name} · ${dateLabel}`));
       const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию", tge: "Первичный выпуск (TGE)", inflationary: "Возрастающая эмиссия", deflationary: "Убывающая эмиссия", "non-linear": "Нелинейный выпуск", unknown: "Тип выпуска не уточнён" };
       card.append(node("p", "", `${item.name} · ${types[item.unlockType] || types.unknown}`));
-      const amount = Number(item.amount).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), { maximumFractionDigits: 2 });
+      const amount = formatAmount(item.amount);
       const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
       card.append(node("p", "", `${amount} токенов${share}`));
-      const utcTime = value => new Date(Number(value)).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC" }) + " UTC";
+      const utcTime = value => formatDate(Number(value), 'utcTime') + " UTC";
       const precisionLabel = { month: "любой день месяца, дата приблизительная", week: "приблизительное окно ±3 дня", day: "точное время неизвестно · дата UTC", hour: `${utcTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${utcTime(item.at)} · оценка времени блока` }[item.precision];
       card.append(node("small", "", `${item.provider} · ${precisionLabel || utcTime(item.at)}${item.stale ? " · УСТАРЕВШИЕ ДАННЫЕ" : ""}`));
       if (item.marketStatus === "inactive") card.append(node("small", "", "Источник пометил проект неактивным; доступность торгов не подтверждена."));
       if (item.allocationMismatch) card.append(node("small", "", "Сумма распределений источника расходится с итогом. Показан итог без разбивки."));
-      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), { maximumFractionDigits: 2 })}`));
+      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${formatAmount(allocation.amount)}`));
       const sources = node("div", "events-news-sources");
       for (const url of item.sources || []) {
         let parsed; try { parsed = new URL(url); if (parsed.protocol !== "https:") continue; } catch (_) { continue; }
@@ -610,6 +632,15 @@
     else if (selectedTab === "social") renderSocial();
     else if (selectedTab === "listings") renderListings();
     else renderUnlocks();
+  }
+
+  function queueSearchRender() {
+    if (searchFrame !== null) return;
+    const tab = selectedTab;
+    searchFrame = window.requestAnimationFrame(() => {
+      searchFrame = null;
+      if (!document.hidden && selectedTab === tab && byId('events-view')?.style.display === 'block') render();
+    });
   }
 
   function setTab(tab) {
@@ -660,7 +691,7 @@
       wirePicker("unlock-source", [["all", "Все источники", "◈"], ["primary", "Официальные расписания", "✓"], ["DropsTab", "DropsTab", "D"], ["CoinMarketCap", "CoinMarketCap", "C"], ["Tokenomist", "Tokenomist", "T"], ["DefiLlama", "DefiLlama", "L"]]);
       document.addEventListener("click", event => { if (!event.target.closest(".events-picker")) closePickers(); });
       byId("events-tab-news").addEventListener("click", () => setTab("news"));
-      byId("events-news-search").addEventListener("input", () => { newsLimit = 40; renderNews(); });
+      byId("events-news-search").addEventListener("input", () => { newsLimit = 40; queueSearchRender(); });
       byId("events-news-more").addEventListener("click", () => { newsLimit += 40; renderNews(); });
       document.querySelectorAll("[data-news-kind]").forEach(button => button.addEventListener("click", () => {
         newsKind = button.dataset.newsKind; newsLimit = 40;
@@ -681,7 +712,7 @@
           socialPage = socialSourcePage = 0; void loadSocial();
         });
       }
-      byId("events-unlocks-search").addEventListener("input", () => { unlockPage = unlockWindowPage = 0; renderUnlocks(); });
+      byId("events-unlocks-search").addEventListener("input", () => { unlockPage = unlockWindowPage = 0; queueSearchRender(); });
       byId("events-unlocks-hide-inactive").addEventListener("change", () => { unlockPage = unlockWindowPage = 0; renderUnlocks(); });
       for (const [id, offset] of [["events-unlocks-prev-month", -1], ["events-unlocks-next-month", 1]]) {
         byId(id).addEventListener("click", () => {
@@ -696,7 +727,7 @@
         unlockMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
         unlockSelectedDay = utcDayKey(today); unlockPage = unlockWindowPage = 0; renderUnlocks();
       });
-      byId("events-search").addEventListener("input", renderListings);
+      byId("events-search").addEventListener("input", queueSearchRender);
       for (const [attribute, update] of [["kind", value => { selectedKind = value; }],
         ["phase", value => { selectedPhase = value; }]]) {
         document.querySelectorAll(`.events-segment [data-${attribute}]`).forEach(button => button.addEventListener("click", () => {
@@ -731,7 +762,11 @@
     if (!data || Date.now() - lastRequest > 60000) void refresh();
   }
 
-  function deactivate() { closePickers(); }
+  function deactivate() {
+    closePickers();
+    if (searchFrame !== null) window.cancelAnimationFrame(searchFrame);
+    searchFrame = null;
+  }
   function stopAlerts() {
     socialAbort?.abort(); socialSequence++; socialRequestKey = "";
     if (socialSearchTimer) window.clearTimeout(socialSearchTimer);

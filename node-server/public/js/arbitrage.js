@@ -22,6 +22,29 @@
     minByMode: { spreads: "0", funding: "0", dex: "0" },
     requestErrors: { cex: false, dex: false },
   };
+  let sparkObserver = null, sparkDrawQueued = false;
+  const visibleSparks = new Set();
+
+  function scheduleSparks() {
+    if (sparkDrawQueued || !state.active || state.mode !== 'spreads' || document.hidden) return;
+    sparkDrawQueued = true;
+    requestAnimationFrame(() => { sparkDrawQueued = false; drawSparks(); });
+  }
+
+  function observeSparks(root, remove = false) {
+    if (!window.IntersectionObserver) return;
+    if (!sparkObserver) sparkObserver = new window.IntersectionObserver(entries => {
+      for (const {target, isIntersecting} of entries) {
+        if (isIntersecting && target.isConnected) visibleSparks.add(target);
+        else visibleSparks.delete(target);
+      }
+      scheduleSparks();
+    });
+    for (const canvas of root.querySelectorAll('canvas[data-spark]')) {
+      if (remove) { sparkObserver.unobserve(canvas); visibleSparks.delete(canvas); }
+      else sparkObserver.observe(canvas);
+    }
+  }
 
   function esc(value) {
     return String(value ?? "").replace(/[&<>'"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[ch]);
@@ -310,6 +333,7 @@
   }
 
   function render() {
+    if (!state.active || document.hidden) return;
     if (state.mode === "dex") {
       if (!state.dexData) return;
       const rows = filteredRows();
@@ -445,10 +469,61 @@
     }
   }
 
+  function patchTableRows(body, entries) {
+    const retained = body._arbRows || (body._arbRows = new Map());
+    const keys = new Set();
+    let cursor = body.firstElementChild, template;
+    for (const [key, html] of entries) {
+      keys.add(key);
+      let record = retained.get(key);
+      if (!record || record.html !== html) {
+        if (!template) template = document.createElement('template');
+        // Compare source markup, not translated DOM, and parse only changed
+        // cells. A quote update must not rebuild eleven cells and a sparkline.
+        const head = html.match(/<tr\b[^>]*>/)[0];
+        const cells = html.match(/<td\b[^>]*>[\s\S]*?<\/td>/g) || [];
+        if (!record) {
+          template.innerHTML = html.trim();
+          record = { el: template.content.firstElementChild, html, head, cells };
+          retained.set(key, record);
+          observeSparks(record.el);
+        } else {
+          if (record.head !== head) {
+            template.innerHTML = head + '</tr>';
+            const next = template.content.firstElementChild;
+            for (const attr of [...record.el.attributes]) if (!next.hasAttribute(attr.name)) record.el.removeAttribute(attr.name);
+            for (const attr of next.attributes) if (record.el.getAttribute(attr.name) !== attr.value) record.el.setAttribute(attr.name, attr.value);
+          }
+          for (let i = 0; i < cells.length; i++) {
+            if (record.cells[i] === cells[i]) continue;
+            template.innerHTML = cells[i];
+            const cell = record.el.children[i], replacement = template.content.firstElementChild;
+            if (!cell) { record.el.append(replacement.cloneNode(true)); continue; }
+            for (const attr of [...cell.attributes]) if (!replacement.hasAttribute(attr.name)) cell.removeAttribute(attr.name);
+            for (const attr of replacement.attributes) if (cell.getAttribute(attr.name) !== attr.value) cell.setAttribute(attr.name, attr.value);
+            const star = cell.querySelector('button[data-fav]'), nextStar = replacement.querySelector('button[data-fav]');
+            if (star && nextStar && star.dataset.fav === nextStar.dataset.fav) star.className = nextStar.className;
+            else {
+              observeSparks(cell, true);
+              cell.replaceChildren(...replacement.childNodes);
+              observeSparks(cell);
+            }
+          }
+          while (record.el.children.length > cells.length) record.el.lastElementChild.remove();
+          record.html = html; record.head = head; record.cells = cells;
+        }
+      }
+      if (record.el === cursor) cursor = cursor.nextElementSibling;
+      else body.insertBefore(record.el, cursor);
+    }
+    while (cursor) { const next = cursor.nextElementSibling; cursor.remove(); cursor = next; }
+    for (const key of retained.keys()) if (!keys.has(key)) { observeSparks(retained.get(key).el, true); retained.delete(key); }
+  }
+
   function renderSpreads(rows) {
     const body = $("arb-spreads-body");
     if (!body) return;
-    body.innerHTML = rows.map(r => `
+    patchTableRows(body, rows.map(r => [r.key, `
       <tr data-key="${esc(r.key)}">
         <td><button class="arb-star ${state.favorites.has(r.base) ? "on" : ""}" data-fav="${esc(r.base)}">★</button></td>
         <td>${pairCell(r)}</td>
@@ -461,14 +536,14 @@
         <td class="arb-num">${money(r.liquidity)}</td>
         <td>${sparkCell(r, "net")}</td>
         <td>${scoreCell(r)}</td>
-      </tr>`).join("");
-    requestAnimationFrame(drawSparks);
+      </tr>`]));
+    scheduleSparks();
   }
 
   function renderFunding(rows) {
     const body = $("arb-funding-body");
     if (!body) return;
-    body.innerHTML = rows.map(r => `
+    patchTableRows(body, rows.map(r => [r.key, `
       <tr data-key="${esc(r.key)}">
         <td><button class="arb-star ${state.favorites.has(r.base) ? "on" : ""}" data-fav="${esc(r.base)}">★</button></td>
         <td>${pairCell(r)}</td>
@@ -481,7 +556,7 @@
         <td class="arb-num">${money(r.liquidity)}</td>
         <td class="arb-countdown" data-until="${r.nextEventAt || 0}">${countdown(r.nextEventAt)}</td>
         <td>${scoreCell(r)}</td>
-      </tr>`).join("");
+      </tr>`]));
   }
 
   function shortContract(address) {
@@ -492,7 +567,7 @@
   function renderDex(rows) {
     const body = $("arb-dex-body");
     if (!body) return;
-    body.innerHTML = rows.filter(r => r.contractMatch === "exact").map(r => `
+    patchTableRows(body, rows.filter(r => r.contractMatch === "exact").map(r => [r.key, `
       <tr data-dex-id="${esc(r.key)}" tabindex="0" aria-label="Открыть детали ${esc(r.base)}: ${esc(r.buyVenue)} — ${esc(r.sellVenue)}">
         <td>${pairCell(r)}</td>
         <td><div class="arb-dex-route"><strong>${esc(r.buyVenue)}</strong><i>→</i><strong>${esc(r.sellVenue)}</strong><small>${r.direction === "cex_to_dex" ? "купить CEX · продать DEX" : "купить DEX · продать CEX"}</small></div></td>
@@ -505,7 +580,7 @@
         <td class="arb-num arb-dex-edge" title="Индикативная оценка до газа, вывода и закрытия хеджа">${pct(r.netPct)}</td>
         <td class="arb-num">${money(r.liquidityUsd)}</td>
         <td class="arb-num">${money(r.volume24hUsd)}</td>
-      </tr>`).join("");
+      </tr>`]));
   }
 
   function updateFreshness(generatedAt, poolGeneratedAt = 0) {
@@ -552,7 +627,10 @@
   }
 
   function drawSparks() {
-    document.querySelectorAll("canvas[data-spark]").forEach(canvas => {
+    if (!state.active || state.mode !== 'spreads' || document.hidden) return;
+    const canvases = sparkObserver ? visibleSparks : document.querySelectorAll('canvas[data-spark]');
+    canvases.forEach(canvas => {
+      if (!canvas.isConnected) return;
       const key = canvas.dataset.spark;
       const pts = state.trail.get(key) || [];
       const values = pts.map(x => x[1]);

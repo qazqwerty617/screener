@@ -6,6 +6,7 @@
   const attributes = ['title', 'placeholder', 'aria-label'];
   const skip = 'script,style,code,[translate="no"],[data-i18n-skip],.journal-note';
   let language = 'ru';
+  let appliedLanguage = null;
   try { if (localStorage.getItem(key) === 'en') language = 'en'; } catch (_) {}
   const normalize = value => value.trim().replace(/\s+/g, ' ');
   const patterns = [
@@ -107,15 +108,19 @@
     });
   }
   function setLanguage(next, persist = true) {
+    const previous = appliedLanguage;
     language = next === 'en' ? 'en' : 'ru';
     if (persist) { try { localStorage.setItem(key, language); } catch (_) {} }
     observer.disconnect();
     document.documentElement.lang = language;
-    if (document.body) translate(document.body);
+    if (document.body) {
+      if (previous !== language && (language === 'en' || previous === 'en')) translate(document.body);
+      appliedLanguage = language;
+    }
     const select = document.getElementById('profile-language');
     if (select) select.value = language;
     observe();
-    window.dispatchEvent(new CustomEvent('obsidian:languagechange', { detail: { language } }));
+    if (previous !== language) window.dispatchEvent(new CustomEvent('obsidian:languagechange', { detail: { language } }));
   }
   window.ObsidianI18n = { t, translate, setLanguage, get language() { return language; }, get locale() { return language === 'en' ? 'en-US' : 'ru-RU'; } };
   function init() {

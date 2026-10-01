@@ -1488,6 +1488,16 @@ if (typeof document !== "undefined" && document.fonts && document.fonts.ready) {
   });
 }
 
+let chartResizeQueued = false;
+function queueChartResize() {
+  if (chartResizeQueued) return;
+  chartResizeQueued = true;
+  requestAnimationFrame(() => {
+    chartResizeQueued = false;
+    resizeChart();
+  });
+}
+
 function resizeChart() {
   const w = $("cwrap");
   if (!w || !w.clientWidth || !w.clientHeight) return;
@@ -10880,11 +10890,11 @@ $("si").addEventListener("input", (e) => {
     initChartGrid();
   }
 });
-window.addEventListener("resize", resizeChart);
+window.addEventListener("resize", queueChartResize);
 if (typeof ResizeObserver !== "undefined" && $("cwrap")) {
   try {
     const cwrapObserver = new ResizeObserver(() => {
-      resizeChart();
+      queueChartResize();
     });
     cwrapObserver.observe($("cwrap"));
   } catch (_) {}
@@ -12950,7 +12960,7 @@ function loadBacktestModule() {
   if (!backtestModulePromise) {
     backtestModulePromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "/js/backtest.js?v=2016";
+      script.src = "/js/backtest.js?v=2017";
       script.onload = () => {
         if (window.CryptoBacktest) resolve(window.CryptoBacktest);
         else { script.remove(); reject(new Error("Модуль бэктеста не запустился")); }
@@ -14751,7 +14761,7 @@ window.addEventListener("resize", () => {
     }
 
     rp.style.width = newWidth + "px";
-    resizeChart();
+    queueChartResize();
   };
 
   window.onmouseup = () => {
@@ -14835,6 +14845,7 @@ window.addEventListener("resize", () => {
     const origConnect = connectWS;
     setInterval(() => {
       if (!ws) return;
+      if (document.hidden || dbg.style.display === 'none') { msgCount = 0; binCount = 0; return; }
       const wsStates = ["CONNECTING", "OPEN", "CLOSING", "CLOSED"];
       dbg.innerHTML =
         "WS: " + (wsStates[ws.readyState] || ws.readyState) +

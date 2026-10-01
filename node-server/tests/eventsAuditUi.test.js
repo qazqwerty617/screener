@@ -6,7 +6,7 @@ const html = fs.readFileSync(path.join(__dirname, "../public/index.html"), "utf8
 const script = fs.readFileSync(path.join(__dirname, "../public/js/events.js"), "utf8");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function setup(t, payload, fixedNow) {
-  const dom = new JSDOM(html, { url: "https://obsidianscreener.com", runScripts: "outside-only" });
+  const dom = new JSDOM(html, { url: "https://obsidianscreener.com", runScripts: "outside-only", pretendToBeVisual: true });
   const w = dom.window;
   if (fixedNow != null) {
     const RealDate = w.Date;
@@ -48,6 +48,7 @@ test("unlock calendar groups a large day, retains provenance, and omits unsafe l
   assert.equal(list.querySelectorAll('a[href^="javascript:"]').length, 0);
   const search = w.document.getElementById("events-unlocks-search");
   search.value = "XPL"; search.dispatchEvent(new w.Event("input"));
+  await new Promise(resolve => w.requestAnimationFrame(resolve));
   assert.equal(list.querySelectorAll("article").length, 1);
   assert.match(w.document.getElementById("events-unlocks-status").textContent, /Охват ограничен/);
   assert.equal(w.document.getElementById("events-news-panel").hidden, true);
@@ -64,6 +65,7 @@ test("developing reports remain searchable but cannot raise confirmed toasts", a
   assert.equal(w.document.querySelectorAll(".toast-urgent-news").length, 0);
   const search = w.document.getElementById("events-news-search");
   search.value = "Solana"; search.dispatchEvent(new w.Event("input"));
+  await new Promise(resolve => w.requestAnimationFrame(resolve));
   assert.doesNotMatch(w.document.getElementById("events-developing-list").textContent, /Bitget/);
 });
 test("a failed refresh preserves last data and the offline label across tab changes", async t => {
