@@ -31,12 +31,14 @@ function build(t, saved = {}) {
       maps: { cascades: response, levels: response, trendline: response, retest: response, approaching: {}, ...(ranges ? { range: ranges } : {}) }
     } : response }; },
     touchKlinesCache: key => klines.get(key), storeKlinesCache: (key, data) => klines.set(key, { data, ts: Date.now() }),
-    fetchChartKlines: async () => [{ t: 1, o: 100, h: 101, l: 99, c: 100, v: 1 }],
+    fetchChartKlines: async () => Array.from({length: 40}, (_,i)=>({ t: 1+i*900000, o: 100, h: 101, l: 99, c: 100, v: 1 })),
     sanitizeCandles: data => data,
     ChartInstance: class { constructor(grid) { this.el = w.document.createElement("div"); grid.append(this.el); } update(c) { Object.assign(this, c); } draw() {} dispose() {} }
   });
   const overlayOptions = /window.getFormationsOverlayOpts = function[^]*?\n  };/.exec(source)[0];
-  w.eval(section + '\n' + overlayOptions + "\nwindow.testRefresh = preloadFormationsInBackground;");
+  const geometry = ['getCachedFormationDetection', 'projectFormationOverlayLevels', 'qualifyFormationLevels']
+    .map(name=>new RegExp('function '+name+'\\([^]*?\\n\\}').exec(source)[0]).join('\n');
+  w.eval('const formationDetectionCache = new WeakMap();\n'+geometry+'\n'+section + '\n' + overlayOptions + "\nwindow.testRefresh = preloadFormationsInBackground;");
   return { w, timers, requests, klines, respond: data => { response = data; }, respondRange: data => { ranges = data; } };
 }
 
@@ -56,6 +58,23 @@ test('Range workspace uses both live boundaries and per-side minimum touches', a
   assert.equal(h.w.chartInstances.length, 0, 'cached range cannot survive a live breakout');
 });
 
+test('a range invalidated by the loaded candles cannot leave a blank formation card', async t => {
+  const h = build(t, { formations_active_tab: 'range', formations_min_cascade: '3' });
+  const engine = require('../public/js/formationEngine');
+  const full = Array.from({length: 400}, (_, i) => {
+    const c = 100 + 10 * Math.cos(i * Math.PI / 50), o = 100 + 10 * Math.cos((i - 1) * Math.PI / 50);
+    return {t: 1700000000000 + i * 900000, o, h: Math.max(o,c)+.1, l: Math.min(o,c)-.1, c, v: 100};
+  });
+  const levels = engine.detectRanges(full, 3), short = full.slice(-300).map(c => ({...c}));
+  assert.equal(levels.length, 1);
+  short.at(-1).h = 120;
+  h.respondRange({'BN:BTCUSDT': levels}); h.w.coins.get('BN:BTCUSDT').p = 109.98;
+  await h.w.testRefresh(); await flush();
+  h.klines.set('BN|BTCUSDT|15m', {data: short, ts: Date.now()});
+  h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
+  assert.equal(h.w.chartInstances.length, 0, 'unconfirmed geometry must be removed, not displayed with a warning');
+});
+
 test("background prepares chart candles before the formations tab is opened", async t => {
   const h = build(t);
   await h.w.testRefresh();
@@ -64,8 +83,88 @@ test("background prepares chart candles before the formations tab is opened", as
   assert.equal(h.w.chartInstances.length, 0, "background must not construct hidden charts");
 });
 
+test('cold or failed candle downloads never create unconfirmed chart placeholders', async t => {
+  const h = build(t);
+  let release;
+  h.w.fetchChartKlines = () => new Promise(resolve => { release = resolve; });
+  h.w.activeView = 'formations';
+  await h.w.testRefresh(); await flush();
+  assert.equal(h.w.chartInstances.length, 0);
+  assert.ok(release);
+  release([]); await flush();
+  assert.equal(h.w.chartInstances.length, 0);
+  assert.equal(h.klines.size, 0);
+});
+
+test('invalid geometry is removed and restored only after valid candle recovery', async t => {
+  const h = build(t, {formations_active_tab: 'breakout'});
+  await h.w.testRefresh(); await flush();
+  h.w.activeView = 'formations'; h.w.loadFormations();
+  assert.equal(h.w.chartInstances.length, 1);
+  const cached = h.klines.get('BN|BTCUSDT|15m'), original = cached.data.at(-1).h;
+  cached.data.at(-1).h = 110; h.w.loadFormations();
+  assert.equal(h.w.chartInstances.length, 0);
+  cached.data.at(-1).h = original; h.w.loadFormations();
+  assert.equal(h.w.chartInstances.length, 1);
+});
+
+test('notification navigation cannot inject a coin without the selected formation', async t => {
+  const h = build(t);
+  await h.w.testRefresh(); await flush();
+  h.w.coins.set('BB:ETHUSDT', {ex: 'BB', sym: 'ETHUSDT', p: 100, v: 1e9});
+  h.w._formationPriorityCoin = {ex: 'BB', sym: 'ETHUSDT'};
+  h.w.activeView = 'formations'; h.w.loadFormations();
+  assert.deepEqual(Array.from(h.w.chartInstances, c=>c.sym), ['BTCUSDT']);
+});
+
+test('malformed snapshot rows preserve the last valid workspace instead of crashing it', async t => {
+  const h = build(t);
+  await h.w.testRefresh(); await flush();
+  h.respond({'BN:BTCUSDT': [null]});
+  await h.w.testRefresh(); await flush();
+  h.w.activeView = 'formations'; h.w.loadFormations();
+  assert.equal(h.w.chartInstances.length, 1);
+  assert.match(h.w.$('formations-page-info').textContent, /Нет связи/);
+});
+
+test('invalid first candidates cannot prevent later confirmed markets from filling the page', async t => {
+  const h = build(t);
+  const maps = {};
+  for (let i=0;i<30;i++) {
+    const sym = 'TEST'+i+'USDT';
+    h.w.coins.set('BN:'+sym, {ex:'BN',sym,p:100,v:1e9-i});
+    maps['BN:'+sym] = [{price:102,direction:'up',touches:3},{price:103,direction:'up',touches:3}];
+  }
+  h.respond(maps);
+  h.w.fetchChartKlines = async (ex,sym) => Array.from({length:40},(_,i)=>({t:1+i*900000,o:100,h:Number(sym.match(/\d+/)[0])<18?110:101,l:99,c:100}));
+  await h.w.testRefresh(); await flush();
+  h.w.activeView='formations'; h.w.loadFormations(); await flush();
+  assert.ok(h.w.chartInstances.length);
+  assert.ok(h.w.chartInstances.every(c=>Number(c.sym.match(/\d+/)[0])>=18));
+});
+
+test('large invalid candidate sets have bounded requests and resume at later markets', async t => {
+  const h=build(t), maps={}, fetched=[];
+  let now=Date.now(); h.w.Date.now=()=>now;
+  for(let i=0;i<200;i++) {
+    const sym='TEST'+i+'USDT';
+    h.w.coins.set('BN:'+sym,{ex:'BN',sym,p:100,v:1e9-i});
+    maps['BN:'+sym]=[{price:102,direction:'up',touches:3},{price:103,direction:'up',touches:3}];
+  }
+  h.respond(maps);
+  h.w.fetchChartKlines=async(ex,sym)=>{fetched.push(sym);return Array.from({length:40},(_,i)=>({t:1+i*900000,o:100,c:100,h:110,l:99}));};
+  const budget=Math.max(24,h.w.getFormationsPreferences().formationsCols*4);
+  await h.w.testRefresh(); await flush();
+  assert.equal(fetched.length,budget,'warmup must yield after its bounded cycle');
+  h.w.loadFormations(); await flush(); assert.equal(fetched.length,budget);
+  now+=16000; h.w.loadFormations(); await flush();
+  assert.equal(fetched.length,budget*2);
+  assert.equal(fetched[budget],'TEST'+budget+'USDT','later candidates must not starve behind the first rejected markets');
+});
+
 test('retest eligibility uses the same minimum touches as its chart overlay', async t => {
   const h = build(t, { formations_active_tab: 'retest', formations_min_cascade: '4' });
+  h.respond({'BN:BTCUSDT': [{price: 99.5, direction: 'up', touches: 3}]});
   await h.w.testRefresh(); await flush();
   h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
   assert.equal(h.w.chartInstances.length, 0, 'three-touch retests must not create blank four-touch chart cards');
@@ -134,11 +233,13 @@ test('reload restores the selected workspace and its warmed chart candles', asyn
 
 test('approaching retest mode uses its own map and keeps a valid empty result', async t => {
   const h = build(t, { formations_active_tab: 'retest', formations_approaching: 'true' });
+  h.respond({'BN:BTCUSDT': [{price: 99.5, direction: 'up', touches: 3}]});
   await h.w.testRefresh(); await flush();
   h.w.activeView = 'formations'; h.w.loadFormations(); await flush();
   assert.equal(h.w.chartInstances.length, 0);
   const toggle = h.w.$('formations-approaching-toggle');
   toggle.checked = false; toggle.dispatchEvent(new h.w.Event('change'));
+  await flush();
   assert.equal(h.w.chartInstances.length, 1);
 });
 

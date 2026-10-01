@@ -3186,12 +3186,23 @@ function drawDensityTimelineOnChart(ctx, options) {
 // the screener — rather than by a private duplicate renderer.
 function projectFormationOverlayLevels(candles, levels, type) {
   if (!candles.length || !levels.length) return [];
-  const interval = candles.length > 1 ? candles[1].t - candles[0].t : 0;
-  if (candles.some((c, i) => ![c.t, c.o, c.h, c.l, c.c].every(Number.isFinite) || c.l <= 0 ||
-    c.h < Math.max(c.o, c.c) || c.l > Math.min(c.o, c.c) ||
-    (i > 0 && (interval <= 0 || Math.abs(c.t - candles[i - 1].t - interval) > interval * .1)))) return [];
-  const first = candles[0].t, last = candles[candles.length - 1], byTime = new Map(candles.map((c, i) => [c.t, i]));
-  const at = time => byTime.get(Number(time)) ?? -1;
+  const interval = candles.length > 1 ? candles[1]?.t - candles[0]?.t : 0;
+  for (let i=0;i<candles.length;i++) {
+    const c=candles[i];
+    if (!c || !Number.isFinite(c.t) || !Number.isFinite(c.o) || !Number.isFinite(c.h) || !Number.isFinite(c.l) ||
+      !Number.isFinite(c.c) || c.l <= 0 || c.h < Math.max(c.o,c.c) || c.l > Math.min(c.o,c.c) ||
+      (i > 0 && (interval <= 0 || Math.abs(c.t-candles[i-1].t-interval) > interval*.1))) return [];
+  }
+  const first = candles[0].t, last = candles[candles.length - 1];
+  const at = time => {
+    const target=Number(time); let lo=0,hi=candles.length-1;
+    while(lo<=hi) {
+      const mid=(lo+hi)>>>1, t=candles[mid].t;
+      if(t===target) return mid;
+      if(t<target) lo=mid+1; else hi=mid-1;
+    }
+    return -1;
+  };
   const result = [];
   for (const original of levels) {
     if (!original || typeof original !== 'object') continue;
@@ -3228,14 +3239,14 @@ function projectFormationOverlayLevels(candles, levels, type) {
       level.endPrice = a.price + slopeMs * (last.t - a.t);
       level.swingIndices = times.map(at);
       const resistance = level.direction === 'up' || level.isHigh;
-      const eps = Math.max(1e-7, last.c * .00001);
+      const eps = Math.max(Number.EPSILON * last.c * 16, last.c * .00001);
       if (candles.slice(firstIndex + 1).some(c => {
         const price = a.price + slopeMs * (c.t - a.t);
         return resistance ? c.h > price + eps || c.c > price + eps : c.l < price - eps || c.c < price - eps;
       })) continue;
     } else if (type === 'levels' || type === 'cascades') {
       if (!(level.price > 0)) continue;
-      const resistance = level.direction === 'up', eps = Math.max(1e-7, last.c * (type === 'cascades' ? .0001 : .00001));
+      const resistance = level.direction === 'up', eps = Math.max(Number.EPSILON * last.c * 16, last.c * (type === 'cascades' ? .0001 : .00001));
       if (candles.slice(level.swingIdx + 1).some(c => resistance
         ? c.h > level.price + eps || c.c > level.price
         : c.l < level.price - eps || c.c < level.price)) continue;
@@ -3256,6 +3267,33 @@ function projectFormationOverlayLevels(candles, levels, type) {
   return result;
 }
 
+// Shared by list eligibility and its overlays. A market must have geometry
+// that meets the same live-price, distance and touch settings in both places.
+function qualifyFormationLevels(levels, type, price, minTouches = 2, distancePct = 15) {
+  if (!(price > 0) || !Number.isFinite(price)) return [];
+  const maxDistance = Math.max(0, Number(distancePct)) / 100;
+  const eps = price * Number.EPSILON * 16;
+  const qualified = levels.filter(level => {
+    if (type === 'ranges') return level.lower > 0 && level.upper > level.lower &&
+      price >= level.lower - eps && price <= level.upper + eps &&
+      level.lowerTouches >= Math.max(2, minTouches) && level.upperTouches >= Math.max(2, minTouches) &&
+      Math.min(Math.abs(price-level.lower), Math.abs(price-level.upper)) / price <= maxDistance;
+    if (level.direction !== 'up' && level.direction !== 'down') return false;
+    const target = type === 'trendlines' ? level.endPrice : level.price;
+    if (!(target > 0) || !Number.isFinite(target) || Math.abs(target-price)/price > maxDistance) return false;
+    if (type !== 'cascades' && !(Number(level.touches) >= minTouches)) return false;
+    if (type === 'retests') {
+      const hold = Number(level.holdTolerance) || 0;
+      return level.direction === 'up' ? price >= target-hold-eps : price <= target+hold+eps;
+    }
+    return level.direction === 'up' || level.isHigh ? price <= target+eps : price >= target-eps;
+  });
+  if (type !== 'cascades') return qualified;
+  const counts = {up: 0, down: 0};
+  for (const level of qualified) if (level.direction in counts) counts[level.direction]++;
+  return qualified.filter(level => counts[level.direction] >= minTouches);
+}
+
 function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, PH, TOP, viewStart, opts) {
   const cfg = opts || null;
   const enabled = cfg ? true : chartFormationsOnChart;
@@ -3271,7 +3309,8 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
   const wantApproaching = !!(cfg && cfg.approaching);
   const supplied = Array.isArray(cfg?.levels) ? cfg.levels : null;
   const resolveLevels = (type, key, detector) => supplied
-    ? getCachedFormationDetection(candles, `snapshot:${type}`, () => projectFormationOverlayLevels(candles, supplied, type), supplied)
+    ? qualifyFormationLevels(getCachedFormationDetection(candles, `snapshot:${type}`, () => projectFormationOverlayLevels(candles, supplied, type), supplied),
+      type, candles[candles.length-1].c, cfg.minTouches || 2, cfg.distancePct ?? 15)
     : getCachedFormationDetection(candles, key, detector);
 
   const N = candles.length;
@@ -11384,14 +11423,12 @@ class ChartInstance {
       </div>
       <div class="cell-canvas-wrap">
         <canvas class="cell-canvas" style="cursor: crosshair;"></canvas>
-        <span class="cell-formation-state" hidden></span>
       </div>
     `;
     container.appendChild(this.el);
 
     this.canvas = this.el.querySelector(".cell-canvas");
     this.ctx = this.canvas.getContext("2d");
-    this.formationState = this.el.querySelector('.cell-formation-state');
     this.headerExIcon = this.el.querySelector(".cell-ex-icon");
     this.headerSym = this.el.querySelector(".cell-sym");
     this.headerTf = this.el.querySelector(".cell-tf");
@@ -12359,14 +12396,14 @@ class ChartInstance {
     } catch (e) {
       console.warn("[ChartInstance] renderFormationsOnChart error:", e);
     }
-    if (this.formationState) {
-      const missing = activeView === 'formations' && !this.loadingKlines && cellFormationBadges.length === 0;
-      this.formationState.hidden = !missing;
-      if (missing) {
-        const text = confirmedLevels.length ? 'Разметка вне видимой области' : 'Разметка не подтверждена на текущих свечах';
-        const translated = window.ObsidianI18n?.t(text) || text;
-        if (this.formationState.textContent !== translated) this.formationState.textContent = translated;
-      }
+    if (activeView === 'formations' && fmOpts && !this.loadingKlines &&
+      qualifyFormationLevels(confirmedLevels, [...fmOpts.types][0], lastPrice, fmOpts.minTouches, fmOpts.distancePct).length === 0) {
+      // Hide immediately; defer disposal/re-pagination until outside draw().
+      this.el.hidden = true;
+      storeKlinesCache(`${this.ex}|${this.sym}|${this.tf}`, this.candles);
+      window.revalidateFormationCards?.();
+    } else {
+      this.el.hidden = false;
     }
 
     // Price badges on the right scale for the formation levels, same look as the
@@ -15779,6 +15816,7 @@ window.addEventListener("resize", () => {
       nearest: !!$("formations-nearest-toggle")?.checked,
       approaching: !!$("formations-approaching-toggle")?.checked,
       showTouches: true,
+      distancePct: formationsFilters.distancePct,
       levels: formationsMapClientCache.get(formationMapType() + ':' + tf)?.[ex + ':' + sym] || []
     };
   };
@@ -16083,6 +16121,15 @@ window.addEventListener("resize", () => {
   const formationRequests = new Map();
   let formationBackgroundIndex = 0;
   let formationWarmup = null;
+  let formationCandidates = [];
+  let formationWarmSchedule = { key: '', since: 0, used: 0, cursor: 0 };
+  const formationWarmRetryAt = new Map();
+  let formationRevalidationPending = false;
+  window.revalidateFormationCards = () => {
+    if (formationRevalidationPending || activeView !== 'formations') return;
+    formationRevalidationPending = true;
+    requestAnimationFrame(() => { formationRevalidationPending = false; window.loadFormations(); });
+  };
   let formationLoadError = false;
   const formationTimeframes = ["1m", "5m", "15m", "1h", "4h", "1d", "3d", "1w"];
 
@@ -16096,7 +16143,8 @@ window.addEventListener("resize", () => {
     for (const type of ['cascades', 'levels', 'trendline', 'retest', 'approaching', 'range']) {
       if (type === 'range' && snapshot.maps.range === undefined) snapshot.maps.range = {};
       const map = snapshot.maps[type];
-      if (!map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(levels => !Array.isArray(levels))) {
+      if (!map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(levels =>
+        !Array.isArray(levels) || levels.some(level => !level || typeof level !== 'object' || Array.isArray(level)))) {
         throw new Error('Invalid formation map');
       }
     }
@@ -16133,28 +16181,49 @@ window.addEventListener("resize", () => {
 
   function warmFormationCharts() {
     if (formationWarmup) return formationWarmup;
+    if (document.hidden) return Promise.resolve();
     const tf = formationsTf;
     const selection = activeFormation;
-    const page = formationsPage;
-    const start = formationsPage * formationsCols;
-    const targets = formationsAllCoins.slice(start, start + Math.min(24, formationsCols * 2));
+    const scheduleKey = tf + '|' + selection + '|' + formationsPage;
+    const now = Date.now();
+    if (formationWarmSchedule.key !== scheduleKey) formationWarmSchedule = {key: scheduleKey, since: now, used: 0, cursor: 0};
+    else if (now - formationWarmSchedule.since >= 15000) { formationWarmSchedule.since = now; formationWarmSchedule.used = 0; }
+    const schedule = formationWarmSchedule;
+    const limit = Math.min(24, formationsCols * 2, Math.max(24, formationsCols * 4) - schedule.used);
+    if (limit <= 0) return Promise.resolve();
+    const enough = formationsAllCoins.length >= (formationsPage + 2) * formationsCols;
+    const pool = enough ? formationsAllCoins.slice(formationsPage * formationsCols, (formationsPage + 2) * formationsCols) : formationCandidates;
+    const targets = [];
+    let visited = 0;
+    // Bound warmup work even when hundreds of stale candidates all fail.
+    // Continue through the pool next cycle so early misses cannot starve it.
+    while (visited < pool.length && targets.length < limit) {
+      const c = pool[(schedule.cursor + visited++) % pool.length];
+      const key = c.ex + '|' + c.sym + '|' + tf, cached = touchKlinesCache(key);
+      if (!(cached?.data?.length && now-cached.ts < 60000) && !(formationWarmRetryAt.get(key) > now)) targets.push(c);
+    }
+    schedule.cursor = pool.length ? (schedule.cursor + visited) % pool.length : 0;
+    if (!targets.length) return Promise.resolve();
+    schedule.used += targets.length;
     let index = 0;
     const worker = async () => {
-      while (index < targets.length && tf === formationsTf && selection === activeFormation) {
+      while (index < targets.length && tf === formationsTf && selection === activeFormation && !document.hidden) {
         const c = targets[index++];
         const key = c.ex + '|' + c.sym + '|' + tf;
         const cached = touchKlinesCache(key);
         if (cached?.data?.length && Date.now() - cached.ts < 60000) continue;
         try {
           const data = await fetchChartKlines(c.ex, c.sym, tf);
-          if (Array.isArray(data) && data.length) storeKlinesCache(key, data);
-        } catch (_) {}
+          if (Array.isArray(data) && data.length >= 20) { storeKlinesCache(key, data); formationWarmRetryAt.delete(key); }
+          else formationWarmRetryAt.set(key, Date.now()+30000);
+        } catch (_) { formationWarmRetryAt.set(key, Date.now()+30000); }
       }
     };
     formationWarmup = Promise.all([worker(), worker(), worker()]).finally(() => {
       formationWarmup = null;
+      if (tf === formationsTf && selection === activeFormation) window.loadFormations();
+      else warmFormationCharts();
       persistFormationWorkspace();
-      if (tf !== formationsTf || selection !== activeFormation || page !== formationsPage) warmFormationCharts();
     });
     return formationWarmup;
   }
@@ -16500,6 +16569,17 @@ window.addEventListener("resize", () => {
     }
 
     const onlyFormations = true;
+    const candleType = {breakout: 'levels', trendline: 'trendlines', retest: 'retests', range: 'ranges', cascades: 'cascades'}[activeFormation];
+    const liveCandles = new Map(chartInstances.filter(inst => inst.tf === formationsTf && inst.candles?.length)
+      .map(inst => [inst.ex + ':' + inst.sym, inst.candles]));
+    const validate = c => {
+      const raw = liveCandles.get(c.ex+':'+c.sym) || touchKlinesCache(c.ex+'|'+c.sym+'|'+formationsTf)?.data;
+      if (!Array.isArray(raw) || raw.length < 20) return false;
+      const data = typeof raw[0] === 'number' ? Array.from({length: raw.length/6}, (_,i) => ({t:raw[i*6],o:raw[i*6+1],h:raw[i*6+2],l:raw[i*6+3],c:raw[i*6+4]})) : raw;
+      const source = formationsCoinsLevelsMap.get(c.ex+':'+c.sym) || [];
+      const projected = getCachedFormationDetection(data, `snapshot:${candleType}`, () => projectFormationOverlayLevels(data, source, candleType), source);
+      return qualifyFormationLevels(projected, candleType, c.p, formationsMinCascade, formationsFilters.distancePct).length > 0;
+    };
 
     const getMinDist = (c) => {
       if (!c.p) return Infinity;
@@ -16521,7 +16601,7 @@ window.addEventListener("resize", () => {
       return minD;
     };
 
-    formationsAllCoins = Array.from(coins.values())
+    formationsAllCoins = Object.keys(selectedMap || {}).map(key => coins.get(key)).filter(Boolean)
       .filter(c => {
         if (!isUsdtFutures(c) || c.v < formationsFilters.minVolume) return false;
         if (formationsFilters.search && !String(c.sym).toUpperCase().includes(String(formationsFilters.search).toUpperCase())) return false;
@@ -16599,17 +16679,13 @@ window.addEventListener("resize", () => {
       if (idx > 0) {
         const [targetCoin] = formationsAllCoins.splice(idx, 1);
         formationsAllCoins.unshift(targetCoin);
-      } else if (idx === -1) {
-        const found = Array.from(coins.values()).find(c => {
-          const cSym = (c.sym || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-          return (!pEx || c.ex === pEx) && (cSym === pRaw || cSym.startsWith(pRaw) || pRaw.startsWith(cSym));
-        });
-        if (found) {
-          formationsAllCoins.unshift(found);
-        }
       }
       window._formationPriorityCoin = null;
     }
+
+    formationCandidates = formationsAllCoins;
+    formationsAllCoins = formationCandidates.filter(validate);
+    for (const key of formationWarmRetryAt.keys()) if (formationWarmRetryAt.get(key) < Date.now()) formationWarmRetryAt.delete(key);
 
     const currentScanKey = [
       activeFormation,

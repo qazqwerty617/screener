@@ -9,27 +9,32 @@
 
   function normalize(raw) {
     if (!Array.isArray(raw) || raw.length === 0) return [];
-    const first = raw[0];
-    // Fast path: already normalized objects
-    if (first && typeof first === "object" && !Array.isArray(first) &&
-        typeof first.c === "number" && first.c > 0 && first.h >= first.l) {
-      return raw;
-    }
-    const out = [];
+    let out = null, previous = null, interval = 0;
     for (let i = 0, len = raw.length; i < len; i++) {
       const item = raw[i];
+      if (!item || typeof item !== 'object') return [];
       let t, o, h, l, c, v;
       if (Array.isArray(item)) {
         t = +item[0]; o = +item[1]; h = +item[2]; l = +item[3]; c = +item[4]; v = +item[5] || 0;
       } else {
         t = +item.t; o = +item.o; h = +item.h; l = +item.l; c = +item.c; v = +item.v || 0;
       }
-      if (c > 0 && h >= l && t === t && o === o && h === h && l === l && c === c) {
-        out.push({ t, o, h, l, c, v });
+      if (!Number.isFinite(t) || !Number.isFinite(o) || !Number.isFinite(h) || !Number.isFinite(l) ||
+        !Number.isFinite(c) || l <= 0 || h < Math.max(o,c) || l > Math.min(o,c)) return [];
+      if (previous !== null) {
+        const step = t - previous;
+        if (step <= 0 || (interval && Math.abs(step - interval) > interval * .1)) return [];
+        interval ||= step;
       }
+      previous = t;
+      const same = !Array.isArray(item) && item.t === t && item.o === o && item.h === h && item.l === l && item.c === c;
+      if (!same && !out) out = raw.slice(0, i);
+      if (out) out.push(same ? item : { t, o, h, l, c, v });
     }
-    return out;
+    return out || raw;
   }
+
+  const priceEpsilon = (price, fraction = 0) => Math.max(Math.abs(price) * fraction, Math.abs(price) * Number.EPSILON * 16);
 
   function atr(candles, period) {
     const n = candles.length;
@@ -106,8 +111,12 @@
   // ── Precomputed context (shared across all detectors in a single scan) ─────
 
   function buildCtx(raw) {
-    const candles = normalize(raw);
-    if (candles.length < 10) return null;
+    const normalized = normalize(raw);
+    if (normalized.length < 10) return null;
+    // Structural pivots already use the latest 400 bars. Retain an extra 200
+    // for trendline back-projection; older data must not inflate scan work.
+    const offset = Math.max(0, normalized.length - 600);
+    const candles = offset ? normalized.slice(offset) : normalized;
     const n = candles.length;
     const lastPrice = candles[n - 1].c;
     const range = atr(candles, 24);
@@ -119,14 +128,23 @@
       if (sw[i].type === "high") highs.push(sw[i]);
       else lows.push(sw[i]);
     }
-    return { candles, n, lastPrice, range, prof, sw, highs, lows };
+    const maxH = new Float64Array(n + 1), minL = new Float64Array(n + 1);
+    const maxC = new Float64Array(n + 1), minC = new Float64Array(n + 1);
+    maxH[n] = maxC[n] = -Infinity; minL[n] = minC[n] = Infinity;
+    for (let i = n - 1; i >= 0; i--) {
+      maxH[i] = Math.max(candles[i].h, maxH[i+1]); minL[i] = Math.min(candles[i].l, minL[i+1]);
+      maxC[i] = Math.max(candles[i].c, maxC[i+1]); minC[i] = Math.min(candles[i].c, minC[i+1]);
+    }
+    return { candles, n, lastPrice, range, prof, sw, highs, lows, offset, maxH, minL, maxC, minC };
   }
 
   // ── Level cleanliness & touch tracking ─────────────────────────────────────
 
-  function isClean(candles, level, startIdx, resistance, tol = 0) {
+  function isClean(candles, level, startIdx, resistance, tol = 0, ctx) {
     const lastPrice = candles[candles.length - 1]?.c || level;
-    const eps = Math.max(1e-7, lastPrice * 0.0001);
+    const eps = priceEpsilon(lastPrice, .0001);
+    if (ctx) return resistance ? ctx.maxH[startIdx+1] <= level + eps && ctx.maxC[startIdx+1] <= level
+      : ctx.minL[startIdx+1] >= level - eps && ctx.minC[startIdx+1] >= level;
     for (let i = startIdx + 1, len = candles.length; i < len; i++) {
       const c = candles[i];
       if (resistance) {
@@ -205,7 +223,7 @@
     if (!ctx) return [];
     const { candles, n, lastPrice, range, prof, highs, lows } = ctx;
     const touchTol = Math.min(Math.max(range * 0.035, lastPrice * 0.0005), lastPrice * 0.0012);
-    const eps = Math.max(1e-7, lastPrice * 0.00001);
+    const eps = priceEpsilon(lastPrice, .00001);
     const minT = Number.isFinite(minTouches) ? Math.max(1, minTouches) : 2;
     const maxDist = prof.maxDistPct || 0.10;
     const minSpacing = n < 50 ? 6 : 8;
@@ -231,22 +249,13 @@
         }
 
         // Collect all potential touch indices within touchTol of this swing level
-        const rawTouches = [p.idx];
-        for (let k = 0; k < pts.length; k++) {
-          const pt = pts[k];
-          if (pt.idx === p.idx) continue;
-          if (Math.abs(pt.price - lvlPrice) <= touchTol) {
-            rawTouches.push(pt.idx);
-          }
-        }
+        const rawTouches = [];
         for (let k = 0; k < n; k++) {
-          if (rawTouches.includes(k)) continue;
           const wick = resistance ? candles[k].h : candles[k].l;
           if (Math.abs(wick - lvlPrice) <= touchTol) {
             rawTouches.push(k);
           }
         }
-        rawTouches.sort((a, b) => a - b);
 
         // Cluster raw touches into distinct visits (minimum spacing + deep pullback)
         const clusters = [];
@@ -319,19 +328,9 @@
         // Check if level was pierced by ANY candle between first touch and n - 1
         const firstTouch = validTouches[0];
         const lastTouch = validTouches[validTouches.length - 1];
-        let levelPierced = false;
-        for (let k = firstTouch + 1; k < n; k++) {
-          const c = candles[k];
-          if (resistance) {
-            if (c.h > outerPrice + eps || c.c > outerPrice) {
-              levelPierced = true; break;
-            }
-          } else {
-            if (c.l < outerPrice - eps || c.c < outerPrice) {
-              levelPierced = true; break;
-            }
-          }
-        }
+        const levelPierced = resistance
+          ? ctx.maxH[firstTouch+1] > outerPrice + eps || ctx.maxC[firstTouch+1] > outerPrice
+          : ctx.minL[firstTouch+1] < outerPrice - eps || ctx.minC[firstTouch+1] < outerPrice;
         if (levelPierced) continue;
 
         const age = n - 1 - lastTouch;
@@ -394,7 +393,7 @@
         if (s.price <= lastPrice) continue;
         const dp = (s.price - lastPrice) / lastPrice;
         if (dp > maxDist) continue;
-        if (!isClean(candles, s.price, s.idx, true, 0)) continue;
+        if (!isClean(candles, s.price, s.idx, true, 0, ctx)) continue;
         const ti = countTouches(candles, s.price, s.idx, true, range);
         if (ti.length >= minC) {
           ups.push({
@@ -416,7 +415,7 @@
         if (s.price >= lastPrice) continue;
         const dp = (lastPrice - s.price) / lastPrice;
         if (dp > maxDist) continue;
-        if (!isClean(candles, s.price, s.idx, false, 0)) continue;
+        if (!isClean(candles, s.price, s.idx, false, 0, ctx)) continue;
         const ti = countTouches(candles, s.price, s.idx, false, range);
         if (ti.length >= minC) {
           downs.push({
@@ -469,19 +468,14 @@
     const slopeLimit = range * 0.25;
     const maxLookback = prof.maxLook ? prof.maxLook * 2 : 300;
     const maxDist = prof.maxDistPct || 0.10;
-    let cMin = Infinity, cMax = -Infinity;
-    for (let k = 0; k < n; k++) {
-      if (candles[k].h > cMax) cMax = candles[k].h;
-      if (candles[k].l < cMin) cMin = candles[k].l;
-    }
-    const chartSpan = Math.max(1e-9, cMax - cMin);
+    const chartSpan = Math.max(priceEpsilon(lastPrice), ctx.maxH[0] - ctx.minL[0]);
     const touchTol = Math.min(chartSpan * 0.010, range * 0.12, lastPrice * 0.00018);
-    const eps = Math.max(1e-7, lastPrice * 0.00001);
+    const eps = priceEpsilon(lastPrice, .00001);
     const pullbackMin = Math.max(range * 0.08, lastPrice * 0.0008);
 
     function linesIntersectSameSide(l1, l2) {
       const dSlope = l1.slope - l2.slope;
-      if (Math.abs(dSlope) < 1e-9) {
+      if (Math.abs(dSlope) < priceEpsilon(lastPrice, 1e-12)) {
         const dPrice = Math.abs(l1.endPrice - l2.endPrice) / l2.endPrice;
         return dPrice < 0.010;
       }
@@ -510,19 +504,27 @@
           if (!isHigh && (slope <= 0 || slope > slopeLimit)) continue;
           if (Math.abs(p1.price - p2.price) / p1.price < 0.001) continue;
 
+          // Reject impossible current geometry before scanning historical bars.
+          const endPrice = p1.price + slope * (n - 1 - p1.idx);
+          if (!(endPrice > 0)) continue;
+          const distPct = Math.abs(endPrice - lastPrice) / lastPrice;
+          if (distPct > maxDist || (isHigh ? candles[n-1].h > endPrice + eps || lastPrice > endPrice + eps
+            : candles[n-1].l < endPrice - eps || lastPrice < endPrice - eps)) continue;
+
           // Check non-piercing: no candle or wick can pierce through the line
           // Also back-project by min(span, 50) bars before p1 to ensure p1 is a true swing extremum
-          let crossed = false;
+          let crossed = false, anchorDeparture = false;
           const checkStart = Math.max(0, p1.idx - Math.min(span, 50));
           for (let k = checkStart; k < n; k++) {
             const line = p1.price + slope * (k - p1.idx);
             if (!(line > 0)) { crossed = true; break; }
             const c = candles[k];
+            if (k > p1.idx && k < p2.idx && (isHigh ? line - c.h : c.l - line) >= pullbackMin) anchorDeparture = true;
             if (isHigh ? (c.h > line + eps || c.c > line) : (c.l < line - eps || c.c < line)) {
               crossed = true; break;
             }
           }
-          if (crossed) continue;
+          if (crossed || !anchorDeparture) continue;
 
           // Anchor points p1 and p2 form the 2 primary structural touches
           const touches = [p1.idx, p2.idx];
@@ -558,14 +560,25 @@
             }
             if (!hadPullback) continue;
 
+            // An inserted pivot must also depart before the next established
+            // touch, otherwise it merely splits that same visit in two.
+            if (nextTouch !== Infinity) {
+              hadPullback = false;
+              for (let pb = s.idx + 1; pb < nextTouch; pb++) {
+                const linePb = p1.price + slope * (pb - p1.idx);
+                if (isHigh ? linePb - candles[pb].h >= pullbackMin : candles[pb].l - linePb >= pullbackMin) {
+                  hadPullback = true; break;
+                }
+              }
+              if (!hadPullback) continue;
+            }
+
             touches.push(s.idx);
           }
 
           touches.sort((a, b) => a - b);
           if (touches.length < minimum) continue;
 
-          const endPrice = p1.price + slope * (n - 1 - p1.idx);
-          if (!(endPrice > 0)) continue;
 
           if (isHigh) {
             if (lastPrice > endPrice + eps || candles[n - 1].c > endPrice + eps || candles[n - 1].h > endPrice + eps) continue;
@@ -573,8 +586,6 @@
             if (lastPrice < endPrice - eps || candles[n - 1].c < endPrice - eps || candles[n - 1].l < endPrice - eps) continue;
           }
 
-          const distPct = Math.abs(endPrice - lastPrice) / lastPrice;
-          if (distPct > maxDist) continue;
 
           const totalSpan = n - 1 - p1.idx;
           const strength = touches.length * 30 + Math.min(totalSpan, 150) * 0.3 - (distPct / maxDist) * 10;
@@ -625,7 +636,7 @@
           break;
         }
         const dSlope = ul.slope - dl.slope;
-        if (Math.abs(dSlope) > 1e-9) {
+        if (Math.abs(dSlope) > priceEpsilon(lastPrice, 1e-12)) {
           const intersectX = ((dl.p1.price - dl.slope * dl.p1.idx) - (ul.p1.price - ul.slope * ul.p1.idx)) / dSlope;
           // If they already crossed within past candles (before n - 1), drop the invalid one
           if (intersectX <= n - 1 && intersectX >= Math.max(ul.p1.idx, dl.p1.idx)) {
@@ -642,7 +653,7 @@
     for (const ul of filteredUpLines) {
       for (const dl of filteredDownLines) {
         const dSlope = ul.slope - dl.slope;
-        if (Math.abs(dSlope) > 1e-9) {
+        if (Math.abs(dSlope) > priceEpsilon(lastPrice, 1e-12)) {
           const intersectX = ((dl.p1.price - dl.slope * dl.p1.idx) - (ul.p1.price - ul.slope * ul.p1.idx)) / dSlope;
           if (intersectX > n - 1) {
             const apexX = Math.floor(intersectX);
@@ -846,7 +857,7 @@
         // Reaction / Bounce check:
         // Either rejection wick on touchCandle or candle closing away in breakout direction
         const touchCandle = candles[touchIdx];
-        const touchRange = touchCandle.h - touchCandle.l + 1e-9;
+        const touchRange = Math.max(touchCandle.h - touchCandle.l, priceEpsilon(touchCandle.c));
         const lowerWick = touchCandle.c >= touchCandle.o ? touchCandle.o - touchCandle.l : touchCandle.c - touchCandle.l;
         const upperWick = touchCandle.c >= touchCandle.o ? touchCandle.h - touchCandle.c : touchCandle.h - touchCandle.o;
         const hasPinbarRejection = bullish
@@ -920,21 +931,7 @@
     const { candles, n, lastPrice, range, sw, prof } = ctx;
     const minTouches = Math.max(2, Math.min(10, Math.ceil(Number(minimum) || 2)));
     const start = Math.max(0, n - 400);
-    const steps = [];
-    for (let i = start; i < n; i++) {
-      const c = candles[i];
-      if (!c || ![c.t, c.o, c.h, c.l, c.c].every(Number.isFinite) ||
-          c.l <= 0 || c.h < Math.max(c.o, c.c) || c.l > Math.min(c.o, c.c)) return [];
-      if (i > start) {
-        const step = c.t - candles[i - 1].t;
-        if (step <= 0) return [];
-        steps.push(step);
-      }
-    }
-    steps.sort((a, b) => a - b);
-    const interval = steps[steps.length >> 1];
-    // Missing bars cannot certify containment or a genuine round trip.
-    if (steps.some(d => d > interval * 1.5)) return [];
+    // buildCtx has already certified every OHLC row and interval once.
     const tol = Math.min(lastPrice * 0.005, Math.max(lastPrice * 0.0005, range * 0.3));
     const clusters = side => {
       const points = sw.filter(p => p.idx >= start && p.type === side).sort((a, b) => a.price - b.price);
@@ -1001,18 +998,37 @@
 
   // ── Unified scan (one normalize + one swings pass) ──────────────────────
 
+  function restoreIndices(rows, offset) {
+    if (!offset) return rows;
+    for (const row of rows) {
+      for (const field of ['swingIdx','touchIdx','breakIdx','maxExtX']) if (Number.isFinite(row[field])) row[field] += offset;
+      for (const field of ['touchIndices','swingIndices','upperTouchIndices','lowerTouchIndices']) {
+        if (Array.isArray(row[field])) row[field] = row[field].map(i => i + offset);
+      }
+      for (const field of ['p1','p2']) if (row[field]) row[field].idx += offset;
+      if (row.apex) row.apex.x += offset;
+    }
+    return rows;
+  }
+  function run(detector, raw, option) {
+    const ctx = buildCtx(raw);
+    return restoreIndices(detector(ctx, option), ctx?.offset || 0);
+  }
+
   function scanAll(raw, minTouches) {
     const ctx = buildCtx(raw);
     if (!ctx) return { horizontals: [], cascades: [], trendlines: [], retests: [], approachingRetests: [], ranges: [] };
     const mt = minTouches || 2;
-    return {
+    const result = {
       horizontals: _detectHorizontals(ctx, mt),
       cascades: _detectCascades(ctx, mt),
       trendlines: _detectTrendlines(ctx, mt),
       retests: _detectRetests(ctx, false),
       approachingRetests: _detectRetests(ctx, true),
-      ranges: ctx.candles.length === raw.length ? _detectRanges(ctx, mt) : [],
+      ranges: _detectRanges(ctx, mt),
     };
+    for (const rows of Object.values(result)) restoreIndices(rows, ctx.offset);
+    return result;
   }
 
   // ── Public API (individual methods still work for backward compat) ─────────
@@ -1022,14 +1038,13 @@
     scanAll,
     detectRanges: (raw, min) => {
       try {
-        const ctx = buildCtx(raw);
-        return ctx && ctx.candles.length === raw.length ? _detectRanges(ctx, min) : [];
+        return run(_detectRanges, raw, min);
       } catch (_) { return []; }
     },
-    detectCascades: (raw, min) => _detectCascades(buildCtx(raw), Number.isFinite(min) ? min : 2),
-    detectHorizontals: (raw, min) => _detectHorizontals(buildCtx(raw), Number.isFinite(min) ? min : 2),
-    detectTrendlines: (raw, min) => _detectTrendlines(buildCtx(raw), Number.isFinite(min) ? min : 2),
-    detectRetests: raw => _detectRetests(buildCtx(raw), false),
-    detectApproachingRetests: raw => _detectRetests(buildCtx(raw), true),
+    detectCascades: (raw, min) => run(_detectCascades, raw, Number.isFinite(min) ? min : 2),
+    detectHorizontals: (raw, min) => run(_detectHorizontals, raw, Number.isFinite(min) ? min : 2),
+    detectTrendlines: (raw, min) => run(_detectTrendlines, raw, Number.isFinite(min) ? min : 2),
+    detectRetests: raw => run(_detectRetests, raw, false),
+    detectApproachingRetests: raw => run(_detectRetests, raw, true),
   };
 });

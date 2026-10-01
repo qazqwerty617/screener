@@ -17,6 +17,7 @@ function render(candles, levels, type = 'ranges', minTouches = 3) {
     hexToRgba: x => x};
   vm.createContext(c); vm.runInContext(renderer, c);
   vm.runInContext(/function projectFormationOverlayLevels\([^]*?\n\}/.exec(source)[0], c);
+  vm.runInContext(/function qualifyFormationLevels\([^]*?\n\}/.exec(source)[0], c);
   return c.renderFormationsOnChart(ctx, candles, 0, 2, 0, p => (115-p)*10, 600, 300, 0, 0,
     {types: new Set([type]), minTouches, showTouches: true, levels});
 }
@@ -24,6 +25,32 @@ function project(candles, levels, type = 'ranges') {
   const c = {}; vm.createContext(c); vm.runInContext(/function projectFormationOverlayLevels\([^]*?\n\}/.exec(source)[0], c);
   return c.projectFormationOverlayLevels(candles, levels, type);
 }
+
+function qualify(levels, type, price, touches=2, distance=15) {
+  const c={}; vm.createContext(c);
+  vm.runInContext(/function qualifyFormationLevels\([^]*?\n\}/.exec(source)[0],c);
+  return c.qualifyFormationLevels(levels,type,price,touches,distance);
+}
+for (const type of ['levels','trendlines','retests']) test(`${type} eligibility rejects the broken live side and shares touch/distance settings`,()=>{
+  const support = type==='retests'?'up':'down', resistance = type==='retests'?'down':'up';
+  const row={price:100,endPrice:100,direction:support,touches:3};
+  assert.equal(qualify([row],type,100.1,3).length,1);
+  assert.equal(qualify([row],type,99.9,3).length,0);
+  assert.equal(qualify([row],type,100.1,4).length,0);
+  assert.equal(qualify([row],type,100.1,3,.01).length,0);
+  assert.equal(qualify([{...row,direction:resistance}],type,99.9,3).length,1);
+  assert.equal(qualify([{...row,direction:resistance}],type,100.1,3).length,0);
+});
+test('cascade minimum counts only clean nearby levels on the same side',()=>{
+  const rows=[{price:101,direction:'up'},{price:102,direction:'up'},{price:99,direction:'down'}];
+  assert.equal(qualify(rows,'cascades',100,2,5).length,2);
+  assert.equal(qualify(rows,'cascades',101.5,2,5).length,0,'a pierced first step invalidates the two-step cascade');
+  assert.equal(qualify(rows,'cascades',100,2,.5).length,0,'distant steps cannot satisfy the cascade minimum');
+});
+test('projection rejects null candle rows without crashing the formations list',()=>{
+  const full=waves(),levels=engine.detectRanges(full,3); full[250]=null;
+  assert.equal(project(full,levels).length,0);
+});
 
 for (const detector of ['detectHorizontals', 'detectCascades']) test(`${detector} preserves tiny token prices instead of rounding the formation to zero`, () => {
   const cs = waves().map(c => ({ ...c, o: c.o * 1e-9, h: c.h * 1e-9, l: c.l * 1e-9, c: c.c * 1e-9 }));
@@ -36,7 +63,7 @@ for (const detector of ['detectHorizontals', 'detectCascades']) test(`${detector
 for (const [type, detector] of [['levels', 'detectHorizontals'], ['cascades', 'detectCascades']]) test(`confirmed ${type} use the selected snapshot after earlier anchors leave the loaded page`, () => {
   const full = waves(), levels = engine[detector](full, 2), short = full.slice(-100);
   assert.ok(levels.length);
-  assert.ok(render(short, levels, type, 2).length, 'short client history must still draw the original level');
+  assert.ok(render(short, levels, type, type === 'cascades' ? 1 : 2).length, 'short client history must still draw the original level');
   assert.equal(render(short, [], type, 2).length, 0);
 });
 

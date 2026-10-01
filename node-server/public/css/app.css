@@ -1206,7 +1206,8 @@ body.user-is-pro .exc-free-tag {
     height: 100%;
     display: block;
 }
-.cell-formation-state { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 80px); padding: 5px 8px; border: 1px solid var(--bd2); border-radius: 5px; background: var(--bg2); color: var(--t2); font: 11px var(--font); pointer-events: none; }
+
+.grid-cell[hidden] { display: none; }
 
 /* .grid-cell.active {
     border-color: var(--ac);
@@ -8205,7 +8206,7 @@ body {
 
 /* ═══ Formation Alert Settings Modal (Deep Matte Black & Muted Dark Violet) ═══ */
 .formation-alerts-modal {
-    width: 980px;
+    width: 1080px;
     max-width: 95vw;
     max-height: 90vh;
     display: flex;
@@ -8219,6 +8220,8 @@ body {
 }
 
 .fmt-modal-header {
+    flex-shrink: 0;
+    gap: 12px;
     padding: 14px 22px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
@@ -8228,6 +8231,7 @@ body {
 }
 
 .fmt-modal-icon {
+    flex-shrink: 0;
     width: 32px;
     height: 32px;
     border-radius: 6px;
@@ -8255,6 +8259,7 @@ body {
 }
 
 .fmt-modal-close {
+    flex-shrink: 0;
     background: none;
     border: none;
     color: #64748b;
@@ -8273,14 +8278,17 @@ body {
 
 .fmt-modal-content {
     padding: 16px 20px;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
-    max-height: calc(90vh - 120px);
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
     background: #08090d;
 }
 
 .fmt-modal-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
 }
 
@@ -8294,12 +8302,14 @@ body {
 }
 
 .fmt-grid-col {
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 14px;
 }
 
 .fmt-card {
+    min-width: 0;
     background: #0f1016;
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 8px;
@@ -8324,12 +8334,14 @@ body {
 }
 
 .fmt-card-title-group {
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 9px;
 }
 
 .fmt-card-icon {
+    flex-shrink: 0;
     width: 26px;
     height: 26px;
     border-radius: 5px;
@@ -8362,7 +8374,8 @@ body {
 }
 
 .fmt-setting-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.8fr);
     align-items: center;
     justify-content: space-between;
     gap: 10px;
@@ -8373,8 +8386,22 @@ body {
     font-size: 11.5px;
     color: #717a8a;
     font-weight: 500;
-    white-space: nowrap;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    min-width: 0;
+    flex-wrap: wrap;
 }
+
+.fmt-setting-row > :last-child {
+    min-width: 0;
+    max-width: 100%;
+    justify-self: end;
+}
+
+.fmt-card-header .switch { flex-shrink: 0; }
+.fmt-card-title-group > div:last-child { min-width: 0; }
+.fmt-modal-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.fmt-modal-heading > div:last-child { min-width: 0; }
 
 .fmt-btn-group {
     display: inline-flex;
@@ -8384,10 +8411,12 @@ body {
     padding: 2.5px;
     border-radius: 5px;
     border: 1px solid rgba(255, 255, 255, 0.05);
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .fmt-btn {
+    flex: 0 0 auto;
     padding: 3.5px 8px;
     background: transparent;
     border: 1px solid transparent;
@@ -8433,12 +8462,30 @@ body {
 }
 
 .fmt-modal-footer {
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    gap: 10px;
     padding: 12px 20px;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
     align-items: center;
     justify-content: space-between;
     background: #0c0d12;
+}
+
+.fmt-footer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.fmt-footer-primary { margin-left: auto; }
+.fmt-footer-actions button { white-space: normal; }
+
+@media (max-width: 560px) {
+    .formation-alerts-modal { max-height: 94vh; max-height: 94dvh; }
+    .fmt-modal-header, .fmt-modal-footer { padding: 12px; }
+    .fmt-modal-content { padding: 12px; }
+    .fmt-card { padding: 12px; }
+    .fmt-setting-row { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+    .fmt-setting-row > :last-child { justify-self: start; }
+    .fmt-setting-row:has(> .switch) { grid-template-columns: minmax(0, 1fr) auto; }
+    .fmt-btn-group { justify-content: flex-start; }
 }
 
 .formations-alert-btn {

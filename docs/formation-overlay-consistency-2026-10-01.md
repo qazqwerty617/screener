@@ -20,7 +20,8 @@ The projection validates loaded OHLC and candle continuity, and checks that a
 Range, horizontal level or trendline has not broken since its snapshot. Retest
 snapshots include their hold tolerance and validation timestamps so the browser
 can invalidate failed holds without rejecting legitimate rejection wicks.
-Unavailable or unconfirmed geometry gets an explicit localized chart status.
+The follow-up [formation quality audit](formation-quality-2026-10-01.md) replaces
+the initial missing-geometry status with removal of unconfirmed cards.
 The retest list now applies the same minimum-touch setting as its overlay.
 
 Formation prices were rounded to six decimal places, turning levels on cheap

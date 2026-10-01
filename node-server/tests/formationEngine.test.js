@@ -8,6 +8,13 @@ function baseCandles(length = 90) {
   return Array.from({ length }, (_, i) => ({ t: i * 60_000, o: 100, h: 100.4, l: 99.6, c: 100, v: 1 }));
 }
 
+function setClose(candles, value) {
+  const last = candles.at(-1);
+  last.c = value;
+  last.h = Math.max(last.h, value);
+  last.l = Math.min(last.l, value);
+}
+
 test("trendline is rejected when a closed wick crosses it", () => {
   const candles = baseCandles();
   for (const [idx, high] of [[10, 110], [30, 108], [50, 106]]) {
@@ -26,7 +33,7 @@ test("valid descending resistance trendline is detected near price", () => {
     candles[idx - 1].h = 100.4;
     candles[idx + 1].h = 100.4;
   }
-  candles[candles.length - 1].c = 100.8;
+  setClose(candles, 100.8);
   const tls = engine.detectTrendlines(candles, 2);
   assert.ok(tls.length > 0);
   assert.equal(tls[0].direction, "up");
@@ -39,7 +46,7 @@ test("horizontal resistance uses outer wick boundary", () => {
     candles[idx - 1].h = 103;
     candles[idx + 1].h = 103;
   }
-  candles[candles.length - 1].c = 102;
+  setClose(candles, 102);
   const levels = engine.detectHorizontals(candles, 2);
   const resistance = levels.find(item => item.direction === "up");
   assert.ok(resistance);
@@ -55,7 +62,7 @@ test("horizontal resistance is rejected when an intermediate candle pierces thro
   }
   // Intermediate bar piercing straight through 105
   candles[32] = { ...candles[32], o: 104, h: 108, c: 107 };
-  candles[candles.length - 1].c = 102;
+  setClose(candles, 102);
   const levels = engine.detectHorizontals(candles, 2);
   const resistance = levels.find(item => item.direction === "up" && Math.abs(item.price - 105) < 1);
   assert.equal(resistance, undefined, "Pierced level must be rejected");
@@ -88,7 +95,7 @@ test("cascades respect timeframe distance limit and filter distant macro levels 
   candles[25] = { ...candles[25], h: 103, c: 101, o: 101 };
   candles[24].h = 101;
   candles[26].h = 101;
-  candles[candles.length - 1].c = 100;
+  setClose(candles, 100);
 
   const cascades = engine.detectCascades(candles, 1);
   const upCascades = cascades.filter(c => c.direction === "up");
@@ -103,7 +110,7 @@ test("valid ascending support trendline is detected on lows", () => {
     candles[idx - 1].l = 97.5;
     candles[idx + 1].l = 97.5;
   }
-  candles[candles.length - 1].c = 97.5;
+  setClose(candles, 97.5);
   const tls = engine.detectTrendlines(candles, 2);
   const support = tls.find(t => t.direction === "down" || !t.isHigh);
   assert.ok(support, "Should detect ascending support trendline");
@@ -114,10 +121,10 @@ test("trendlines never intersect on the same side", () => {
   const candles = baseCandles(100);
   for (const [idx, high] of [[10, 106], [30, 104], [50, 102]]) {
     candles[idx] = { ...candles[idx], h: high, c: 100, o: 100 };
-    candles[idx - 1].h = 99;
-    candles[idx + 1].h = 99;
+    candles[idx - 1] = { ...candles[idx - 1], o: 98.8, c: 98.8, h: 99, l: 98.3 };
+    candles[idx + 1] = { ...candles[idx + 1], o: 98.8, c: 98.8, h: 99, l: 98.3 };
   }
-  candles[candles.length - 1].c = 100;
+  setClose(candles, 100);
   const tls = engine.detectTrendlines(candles, 2);
   const upLines = tls.filter(t => t.direction === "up");
   for (let i = 0; i < upLines.length; i++) {
@@ -137,9 +144,9 @@ test("triangle pattern detects both descending resistance and ascending support"
   const candles = baseCandles(85);
   // Descending highs: (10, 106), (35, 104), (60, 102) -> slope = -0.08
   for (const [idx, high] of [[10, 106], [35, 104], [60, 102]]) {
-    candles[idx] = { ...candles[idx], h: high, c: 99, o: 99 };
-    candles[idx - 1].h = 99;
-    candles[idx + 1].h = 99;
+    candles[idx] = { ...candles[idx], h: high, l: 98.5, c: 99, o: 99 };
+    candles[idx - 1] = { ...candles[idx - 1], o: 98.8, c: 98.8, h: 99, l: 98.3 };
+    candles[idx + 1] = { ...candles[idx + 1], o: 98.8, c: 98.8, h: 99, l: 98.3 };
   }
   // Ascending lows: (15, 94), (40, 95.5), (65, 97) -> slope = +0.06
   for (const [idx, low] of [[15, 94], [40, 95.5], [65, 97]]) {
@@ -150,7 +157,7 @@ test("triangle pattern detects both descending resistance and ascending support"
   for (let i = 66; i < candles.length; i++) {
     candles[i] = { ...candles[i], o: 99, h: 99.5, l: 98.5, c: 99 };
   }
-  candles[candles.length - 1].c = 99;
+  setClose(candles, 99);
   const tls = engine.detectTrendlines(candles, 2);
   const res = tls.find(t => t.direction === "up" || t.isHigh);
   const sup = tls.find(t => t.direction === "down" || !t.isHigh);
@@ -158,14 +165,14 @@ test("triangle pattern detects both descending resistance and ascending support"
   assert.ok(sup, "Triangle must have support line");
 });
 
-test("trendline with two anchors and no intermediate departure has exactly 2 touches", () => {
+test("trendline with two anchors and no additional pivot touches has exactly 2 touches", () => {
   const candles = baseCandles(90);
   for (const [idx, high] of [[10, 104], [60, 102]]) {
     candles[idx] = { ...candles[idx], h: high, c: 100.5, o: 100.5 };
     candles[idx - 1].h = 100.4;
     candles[idx + 1].h = 100.4;
   }
-  candles[candles.length - 1].c = 100.8;
+  setClose(candles, 100.8);
   const tls = engine.detectTrendlines(candles, 2);
   assert.ok(tls.length > 0);
   assert.equal(tls[0].touches, 2, "Should have exactly 2 touches");
@@ -183,7 +190,7 @@ test("trendline pierced by earlier peak before p1 is rejected", () => {
     candles[idx - 1].h = 100.4;
     candles[idx + 1].h = 100.4;
   }
-  candles[candles.length - 1].c = 100.8;
+  setClose(candles, 100.8);
   const tls = engine.detectTrendlines(candles, 2);
   const found = tls.find(t => t.p1?.idx === 30 || t.p2?.idx === 60);
   assert.equal(found, undefined, "Trendline pierced by earlier peak must be rejected");
@@ -198,7 +205,7 @@ test("horizontal touches must each reach the level, not merely share a cluster",
   // Rising highs inside one cluster: level price becomes maxP = 100.2, but the
   // earliest member only reached 100.0 (20 bps away vs ~6 bps tolerance).
   for (const [idx, high] of [[12, 100.0], [32, 100.1], [52, 100.2]]) {
-    candles[idx] = { ...candles[idx], h: high, c: 99, o: 99, l: 98.9 };
+    candles[idx] = { ...candles[idx], h: high, l: 98.5, c: 99, o: 99, l: 98.9 };
   }
   candles[candles.length - 1] = { ...candles[candles.length - 1], o: 99, h: 99.6, l: 98.9, c: 99.5 };
 
@@ -241,9 +248,9 @@ test("horizontal support is still detected when swing highs are present", () => 
 test("converging trendlines clamp extension at apex and do not cross each other", () => {
   const candles = baseCandles(85);
   for (const [idx, high] of [[10, 106], [35, 104], [60, 102]]) {
-    candles[idx] = { ...candles[idx], h: high, c: 99, o: 99 };
-    candles[idx - 1].h = 99;
-    candles[idx + 1].h = 99;
+    candles[idx] = { ...candles[idx], h: high, l: 98.5, c: 99, o: 99 };
+    candles[idx - 1] = { ...candles[idx - 1], o: 98.8, c: 98.8, h: 99, l: 98.3 };
+    candles[idx + 1] = { ...candles[idx + 1], o: 98.8, c: 98.8, h: 99, l: 98.3 };
   }
   for (const [idx, low] of [[15, 94], [40, 95.5], [65, 97]]) {
     candles[idx] = { ...candles[idx], l: low, c: 99, o: 99 };
@@ -253,7 +260,7 @@ test("converging trendlines clamp extension at apex and do not cross each other"
   for (let i = 66; i < candles.length; i++) {
     candles[i] = { ...candles[i], o: 99, h: 99.5, l: 98.5, c: 99 };
   }
-  candles[candles.length - 1].c = 99;
+  setClose(candles, 99);
   const tls = engine.detectTrendlines(candles, 2);
   const res = tls.find(t => t.direction === "up" || t.isHigh);
   const sup = tls.find(t => t.direction === "down" || !t.isHigh);
@@ -265,18 +272,14 @@ test("converging trendlines clamp extension at apex and do not cross each other"
 });
 
 test("trendlines that crossed each other in past visible candles are rejected", () => {
-  const candles = baseCandles(90);
-  // Highs start at 100 and drop sharply to 94 at idx 50
-  candles[10] = { ...candles[10], h: 100, c: 96, o: 96 };
-  candles[30] = { ...candles[30], h: 97, c: 95, o: 95 };
-  candles[50] = { ...candles[50], h: 94, c: 92, o: 92 };
+  const candles = baseCandles(90).map(c=>({...c,o:95,c:95,h:95.4,l:94.6}));
+  // These opposing lines converge before the current candle; neither can be
+  // returned as an active bounding channel once their projected sides cross.
+  candles[10] = { ...candles[10], h: 100, l:90, c:96, o:96 };
+  candles[30] = { ...candles[30], h: 97, l:93, c:95, o:95 };
+  candles[50] = { ...candles[50], h: 96, l:96, c:96, o:96 };
 
-  // Lows start at 90 and rise sharply to 96 at idx 50 -> they cross in the middle!
-  candles[10] = { ...candles[10], l: 90 };
-  candles[30] = { ...candles[30], l: 93 };
-  candles[50] = { ...candles[50], l: 96 };
-
-  candles[candles.length - 1].c = 95;
+  setClose(candles, 95);
   const tls = engine.detectTrendlines(candles, 2);
   // They crossed in the middle, so they cannot both be valid active bounding trendlines
   const res = tls.filter(t => t.direction === "up" || t.isHigh);
@@ -290,7 +293,7 @@ test("horizontal touches clustered within 3-4 bars without deep pullback count a
   candles[15] = { ...candles[15], h: 105, c: 103, o: 103 };
   candles[16] = { ...candles[16], h: 104.2, c: 103, o: 103 };
   candles[17] = { ...candles[17], h: 105, c: 103, o: 103 };
-  candles[candles.length - 1].c = 101;
+  setClose(candles, 101);
 
   // With minTouches = 2, candles 15 & 17 alone must NOT form a 2-touch level!
   const levelsClustered = engine.detectHorizontals(candles, 2);
@@ -368,7 +371,7 @@ test("trendline does not register touches when intermediate swing wick does not 
   candles[40] = { ...candles[40], l: 93.8, c: 96, o: 96 };
   candles[39].l = 95; candles[41].l = 95;
 
-  candles[candles.length - 1].c = 98;
+  setClose(candles, 98);
   const tls = engine.detectTrendlines(candles, 2);
   const tl = tls.find(t => t.direction === "down" || !t.isHigh);
   assert.ok(tl, "Support trendline should be detected between anchors");
@@ -395,13 +398,11 @@ test("descending resistance trendline rejects touches that stop short and accept
   candles[80] = { ...candles[80], h: 102.20, c: 100.5, o: 100.5 };
   candles[79].h = 100.4; candles[81].h = 100.4;
 
-  candles[candles.length - 1].c = 100.5;
+  setClose(candles, 100.5);
   const tls = engine.detectTrendlines(candles, 2);
   const tl = tls.find(t => t.direction === "up" || t.isHigh);
   assert.ok(tl, "Descending resistance trendline should be detected");
   assert.ok(!tl.swingIndices.includes(60), "Candle 60 with gap must NOT be registered as a touch");
   assert.ok(tl.swingIndices.includes(80), "Candle 80 with exact kiss must be registered as a touch");
 });
-
-
 
