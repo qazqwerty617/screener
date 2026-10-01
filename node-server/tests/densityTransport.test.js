@@ -20,11 +20,40 @@ test("slow HTTP snapshots cannot overwrite a newer WebSocket snapshot",async()=>
   resolve({ok:true,json:async()=>({walls:[{ex:"BN",base:"OLD"}],updatedAt:100})});
   await pending; assert.equal(c.densityData[0].base,"NEW"); assert.equal(c.densityFetchPending,false);
 });
+
+test("a late HTTP response without a usable timestamp cannot replace newer WebSocket walls",async()=>{
+  for (const response of [[{ex:'BN',base:'OLD'}], {walls:[{ex:'BN',base:'OLD'}],updatedAt:'invalid'}]) {
+    let resolve;
+    const {context:c}=setup(()=>new Promise(r=>resolve=r));
+    const pending=c.fetchWalls();
+    c.deliver({type:'walls',data:{walls:[{ex:'BN',base:'NEW'}],updatedAt:200}});
+    resolve({ok:true,json:async()=>response}); await pending;
+    assert.equal(c.densityData[0].base,'NEW');
+    assert.equal(c.densityLastUpdate,200);
+  }
+});
+
+test("a newer timestamped HTTP snapshot still updates the map after a WebSocket snapshot",async()=>{
+  let resolve;
+  const {context:c}=setup(()=>new Promise(r=>resolve=r));
+  const pending=c.fetchWalls();
+  c.deliver({type:'walls',data:{walls:[],updatedAt:200}});
+  resolve({ok:true,json:async()=>({walls:[{ex:'BN',base:'LATEST'}],updatedAt:300})});
+  await pending; assert.equal(c.densityData[0].base,'LATEST');
+});
 test("an empty authoritative partial snapshot removes disappeared walls instead of retaining ghosts",()=>{
   const {context:c}=setup(()=>{});
   c.deliver({type:"walls",data:{walls:[{ex:"BN",base:"OLD"}],updatedAt:100}});
   c.deliver({type:"walls",data:{walls:[],updatedAt:200,partial:true}});
   assert.equal(c.densityData.length,0);
+});
+
+test("malformed WebSocket timestamps cannot corrupt the accepted density snapshot",()=>{
+  const {context:c}=setup(()=>{});
+  c.deliver({type:'walls',data:{walls:[{ex:'BN',base:'CURRENT'}],updatedAt:200}});
+  c.deliver({type:'walls',data:{walls:[],updatedAt:'invalid'}});
+  assert.equal(c.densityData[0]?.base,'CURRENT');
+  assert.equal(c.densityLastUpdate,200);
 });
 test("a late HTTP error cannot mark a healthy WebSocket stream offline",async()=>{
   let reject;

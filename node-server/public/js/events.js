@@ -31,12 +31,14 @@
   let unlockPage = 0, unlockWindowPage = 0;
   let unlockType = "all", unlockSource = "all";
   let newsKind = "all", newsLimit = 40;
+  let socialPlatform = "all", socialTopic = "all", socialPage = 0, socialSourcePage = 0;
+  let socialData = null, socialRequestKey = "", socialSequence = 0, socialAbort = null, socialSearchTimer = null;
   const seenKey = "obsidian-urgent-news-seen-v1";
   const visibleAlerts = new Map();
   let seenAlerts = [];
   try { seenAlerts = JSON.parse(window.sessionStorage.getItem(seenKey)) || []; } catch (_) {}
   if (!Array.isArray(seenAlerts)) seenAlerts = [];
-  const dateTime = value => value != null && Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString("ru-RU", {
+  const dateTime = value => value != null && Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), {
     day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit"
   }) : "Время неизвестно";
   const dayKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -53,6 +55,10 @@
 
   function clearWithEmpty(target, message) {
     target.replaceChildren(node("div", "events-empty", message));
+  }
+
+  function publicationTitle(item) {
+    return window.ObsidianI18n?.language === 'en' ? (item.title || item.titleRu) : (item.titleRu || item.title);
   }
 
   function urgentText(item) {
@@ -223,7 +229,8 @@
       cardTop(link, confirmedUrgent ? "⚡ Срочно" : item.priority !== "regular" ? "● Важно" : "Новость",
         item.publishedAt, confirmedUrgent ? "red" : "");
       const heading = node("h3", "");
-      const primary = node("a", "events-source-link", item.titleRu || item.title);
+      const primary = node("a", "events-source-link", publicationTitle(item));
+      primary.setAttribute('translate', 'no');
       primary.href = url.href; primary.target = "_blank"; primary.rel = "noopener noreferrer";
       heading.append(primary); link.append(heading);
       const sources = node("div", "events-news-sources");
@@ -253,7 +260,8 @@
         const card = node("article", "events-card");
         cardTop(card, "Один источник · требует подтверждения", item.publishedAt);
         const heading = node("h3", "");
-        const link = node("a", "events-source-link", item.titleRu || item.title);
+        const link = node("a", "events-source-link", publicationTitle(item));
+        link.setAttribute('translate', 'no');
         link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer";
         heading.append(link);
         card.append(heading);
@@ -268,6 +276,95 @@
         developingBox.append(card);
       }
       if (!developingBox.children.length) clearWithEmpty(developingBox, "Неподтверждённых сообщений от подключённых изданий нет.");
+    }
+  }
+
+  function socialLink(label, value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password) return node("span", "", label);
+      const link = node("a", "events-source-link", label);
+      link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer";
+      return link;
+    } catch (_) { return node("span", "", label); }
+  }
+
+  function socialPagination(id, total, page, size, change) {
+    const box = byId(id); box.replaceChildren();
+    if (total <= size) return;
+    const prev = node("button", "", "Назад"), next = node("button", "", "Далее");
+    prev.type = next.type = "button"; prev.disabled = page === 0; next.disabled = (page + 1) * size >= total;
+    prev.addEventListener("click", () => { change(page - 1); void loadSocial(); });
+    next.addEventListener("click", () => { change(page + 1); void loadSocial(); });
+    box.append(prev, node("span", "", `${page * size + 1}–${Math.min(total, (page + 1) * size)} из ${total}`), next);
+  }
+
+  function renderSocial() {
+    const box = byId("events-social-list"), coverage = byId("events-social-coverage");
+    if (!box || !coverage) return;
+    if (!socialData) { coverage.textContent = "Проверяем доступность официальных источников…"; void loadSocial(); return; }
+    const c = socialData.coverage || {}, platforms = socialData.platforms || {};
+    coverage.replaceChildren(node("p", "", `Кандидатов: ${c.candidates || 0} · сайтов проверено: ${c.checked || 0} · проектов со ссылками на аккаунты: ${c.verifiedProjects || 0} · источников успешно прочитано за 10 минут: ${c.reading || 0}.`),
+      node("p", "", `${platforms.x === "configured" ? "X: API настроен" : "X: нужен доступ к API"}. ${platforms.discord === "configured" ? "Discord: доступ настроен" : "Discord: нужен бот с доступом к каналу объявлений"}. Telegram: публичные веб-каналы. Сайты: официальные RSS. Обновлено: ${dateTime(socialData.updatedAt)}.`));
+    if (socialData.catalog?.status === "error") coverage.append(node("p", "", "Каталог проектов временно недоступен; продолжаем проверять сохранённый реестр."));
+    if (c.unavailableWebsites) coverage.append(node("p", "", `Не удалось проверить сайтов: ${c.unavailableWebsites}. Аккаунты без действующего подтверждения не читаются.`));
+    if (socialData.catalog?.partial) coverage.append(node("p", "", "Каталог превышает текущий предел реестра; охват неполный."));
+    if (socialData.persistenceError) coverage.append(node("p", "", "Ошибка сохранения истории на сервере."));
+    if (socialData.retention?.limitedAt) coverage.append(node("p", "", "Лента ограничена последними 7 днями, 2000 объявлениями и 100 записями на источник."));
+    box.replaceChildren();
+    for (const item of socialData.posts || []) {
+      const card = node("article", "events-card");
+      cardTop(card, `${item.project} · ${item.platform}`, item.publishedAt);
+      const title = node("h3", ""); title.setAttribute('translate', 'no'); title.append(socialLink(item.title, item.url)); card.append(title);
+      const details = node("details", "events-social-text"), summary = node("summary", "", "Текст публикации");
+      const publication = node("p", "", item.text); publication.setAttribute('translate', 'no');
+      details.append(summary, publication); card.append(details);
+      const evidence = node("div", "events-news-sources");
+      evidence.append(node("small", "", "Аккаунт указан на сайте проекта"), socialLink("Проверить источник ↗", item.evidenceUrl));
+      card.append(evidence);
+      if (item.topic === "unlock") card.append(node("small", "", "Объявление о разлоке: дату, объём и изменения расписания нужно сверить. Автоматически в календарь не добавляется."));
+      box.append(card);
+    }
+    if (!box.children.length) clearWithEmpty(box, "Подходящих объявлений пока нет. Доступность подключений показана в реестре ниже.");
+    socialPagination("events-social-pages", socialData.postTotal, socialData.page, 40, p => { socialPage = p; });
+    const sources = byId("events-social-sources"); sources.replaceChildren();
+    const statuses = { pending: "Ожидает чтения", ok: "Прочитан", no_relevant_posts: "Прочитан, подходящих объявлений нет", catching_up: "Восстанавливаем пропущенные страницы",
+      requires_api_token: "Нет ключа X API", requires_bot_access: "Не подключён бот / канал Discord", verification_expired: "Проверка официальности устарела",
+      rate_limited: "Лимит провайдера, повтор позже", access_denied: "Провайдер отказал в доступе", error: "Не удалось прочитать источник",
+      stale: "Данные старше 10 минут, ждём повторного чтения", empty_or_restricted: "История пуста или Discord ограничил доступ" };
+    for (const source of socialData.sources || []) {
+      const row = node("div", "events-social-source");
+      row.append(socialLink(`${source.project} · ${source.platform} ↗`, source.url), node("span", "", statuses[source.status] || "Ожидает проверки"), socialLink("Ссылка с сайта ↗", source.evidenceUrl));
+      row.append(node("small", "", `Проверка ссылки: ${dateTime(source.verifiedAt)} · последнее чтение: ${dateTime(source.lastSuccessAt)}${source.historyLimited ? " · история ограничена провайдером или глубиной первого опроса" : ""}`));
+      if (source.error) row.title = source.error;
+      sources.append(row);
+    }
+    if (!sources.children.length) clearWithEmpty(sources, "Проверенных аккаунтов по этому фильтру пока нет. Проверка сайтов продолжается в фоне.");
+    socialPagination("events-social-source-pages", socialData.sourceTotal, socialData.sourcePage, 50, p => { socialSourcePage = p; });
+    void loadSocial();
+  }
+
+  async function loadSocial() {
+    if (selectedTab !== "social") return;
+    const params = new URLSearchParams({ search: byId("events-social-search")?.value.trim() || "", platform: socialPlatform,
+      topic: socialTopic, page: String(socialPage), sourcePage: String(socialSourcePage) });
+    const key = `${params}:${data?.social?.updatedAt || 0}`;
+    if (key === socialRequestKey) return;
+    socialRequestKey = key;
+    const sequence = ++socialSequence;
+    socialAbort?.abort(); socialAbort = new AbortController();
+    try {
+      const response = await fetch(`/api/events/social?${params}`, { signal: AbortSignal.any([socialAbort.signal, AbortSignal.timeout(10000)]) });
+      if (!response.ok) throw new Error("Social request failed");
+      const payload = await response.json();
+      if (!payload || !Array.isArray(payload.posts) || !Array.isArray(payload.sources)) throw new Error("Invalid social response");
+      if (sequence !== socialSequence) return;
+      socialData = payload;
+      if (selectedTab === "social") renderSocial();
+    } catch (_) {
+      if (sequence !== socialSequence) return;
+      socialRequestKey = "";
+      byId("events-social-coverage").textContent = "Не удалось обновить официальные каналы. Последние загруженные данные сохранены; повторим при следующем обновлении.";
     }
   }
 
@@ -300,7 +397,7 @@
     for (const label of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", label));
     const year = month.getFullYear(), monthIndex = month.getMonth();
     const label = byId("events-month-label");
-    if (label) label.textContent = month.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+    if (label) label.textContent = month.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { month: "long", year: "numeric" });
     const offset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
     for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
     const days = new Date(year, monthIndex + 1, 0).getDate();
@@ -310,7 +407,7 @@
       const items = byDay.get(key) || [];
       const cell = node("button", "events-calendar-day");
       cell.type = "button"; cell.dataset.date = key;
-      cell.setAttribute("aria-label", `${date.toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}, событий: ${items.length}`);
+      cell.setAttribute("aria-label", `${date.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { day: "numeric", month: "long" })}, событий: ${items.length}`);
       if (key === selectedDay) cell.classList.add("selected");
       if (key === dayKey(new Date())) cell.classList.add("today");
       const head = node("span", "events-calendar-day-head");
@@ -328,7 +425,7 @@
       calendar.append(cell);
     }
     const selectedDate = new Date(`${selectedDay}T12:00:00`);
-    byId("events-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+    byId("events-day-label").textContent = selectedDate.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { day: "numeric", month: "long", year: "numeric" });
     const selectedItems = (byDay.get(selectedDay) || []).sort((a, b) =>
       Number(eventTime(a)) - Number(eventTime(b)));
     byId("events-day-count").textContent = selectedItems.length ? `${selectedItems.length} событий` : "";
@@ -341,7 +438,7 @@
       const venue = VENUES.find(([code]) => code === item.exchange)?.[1] || item.exchange;
       text.append(node("strong", "", item.symbol), node("small", "", `${venue} · ${item.type === "spot" ? "Спот" : "Фьючерсы"} · ${removed ? item.delistAt ? "делистинг · дата биржи" : "исчезла из каталога" : item.launchAt ? "дата из каталога" : "обнаружено"}`));
       const time = eventTime(item);
-      card.append(icon, text, node("time", "", new Date(Number(time)).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })));
+      card.append(icon, text, node("time", "", new Date(Number(time)).toLocaleTimeString((window.ObsidianI18n?.locale || "ru-RU"), { hour: "2-digit", minute: "2-digit" })));
       dayList.append(card);
     }
     if (!selectedItems.length) clearWithEmpty(dayList, "На эту дату событий нет");
@@ -401,7 +498,7 @@
     calendar.replaceChildren();
     for (const weekday of ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]) calendar.append(node("span", "events-weekday", weekday));
     const year = unlockMonth.getUTCFullYear(), monthIndex = unlockMonth.getUTCMonth();
-    byId("events-unlocks-month-label").textContent = unlockMonth.toLocaleDateString("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" });
+    byId("events-unlocks-month-label").textContent = unlockMonth.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", month: "long", year: "numeric" });
     const offset = (unlockMonth.getUTCDay() + 6) % 7;
     for (let i = 0; i < offset; i++) calendar.append(node("div", "events-day-spacer"));
     const days = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
@@ -411,7 +508,7 @@
       monthEvents += items.length;
       const cell = node("button", "events-calendar-day unlock-calendar-day");
       cell.type = "button"; cell.dataset.unlockDate = key;
-      cell.setAttribute("aria-label", `${date.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long" })} UTC, записей: ${items.length}`);
+      cell.setAttribute("aria-label", `${date.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", day: "numeric", month: "long" })} UTC, записей: ${items.length}`);
       if (key === unlockSelectedDay) cell.classList.add("selected");
       if (key === utcDayKey(new Date())) cell.classList.add("today");
       const head = node("span", "events-calendar-day-head");
@@ -439,7 +536,7 @@
       Number(item.windowStart) < monthEnd && Number(item.windowEnd) >= monthStart);
     if (count) count.textContent = `Календарь UTC · в месяце: ${monthEvents} записей с датой + ${windows.length} приблизительных окон · всего по фильтрам: ${rows.length}. % = доля общего предложения.`;
     const selectedDate = new Date(`${unlockSelectedDay}T12:00:00Z`);
-    byId("events-unlocks-day-label").textContent = selectedDate.toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }) + " · UTC";
+    byId("events-unlocks-day-label").textContent = selectedDate.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }) + " · UTC";
     const selectedItems = byDay.get(unlockSelectedDay) || [];
     byId("events-unlocks-day-count").textContent = selectedItems.length ? `${selectedItems.length} записей` : "";
 
@@ -451,7 +548,8 @@
     const signals = byId("events-unlocks-signals");
     if (signals) {
       const cards = (payload?.signals || []).filter(item => !query || `${item.title} ${item.titleRu || ""}`.toLowerCase().includes(query)).map(item => {
-        const card = node("article", "events-card"), link = node("a", "events-source-link", item.titleRu || item.title);
+        const card = node("article", "events-card"), link = node("a", "events-source-link", publicationTitle(item));
+        link.setAttribute('translate', 'no');
         try { const url = new URL(item.url); if (url.protocol !== "https:") return null; link.href = url.href; } catch (_) { return null; }
         link.target = "_blank"; link.rel = "noopener noreferrer";
         card.append(link, node("small", "", `${item.source} · опубликовано ${dateTime(item.publishedAt)} · расписание требует проверки`)); return card;
@@ -467,21 +565,21 @@
     for (const item of items.slice(page * 100, (page + 1) * 100)) {
       const card = node("article", "events-card");
       const at = new Date(item.at);
-      const formatDay = date => new Date(date).toLocaleDateString("ru-RU", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
-      const dateLabel = item.precision === "month" ? at.toLocaleDateString("ru-RU", { timeZone: "UTC", month: "long", year: "numeric" })
+      const formatDay = date => new Date(date).toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" });
+      const dateLabel = item.precision === "month" ? at.toLocaleDateString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC", month: "long", year: "numeric" })
         : item.precision === "week" ? `${formatDay(item.windowStart)} — ${formatDay(item.windowEnd)}` : formatDay(item.at);
       card.append(node("h3", "", `${item.symbol || item.name} · ${dateLabel}`));
       const types = { cliff: "Разовый разлок (cliff)", linear: "Линейный вестинг · ближайшая порция по источнику", scheduled: "Расчёт по официальному расписанию", tge: "Первичный выпуск (TGE)", inflationary: "Возрастающая эмиссия", deflationary: "Убывающая эмиссия", "non-linear": "Нелинейный выпуск", unknown: "Тип выпуска не уточнён" };
       card.append(node("p", "", `${item.name} · ${types[item.unlockType] || types.unknown}`));
-      const amount = Number(item.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+      const amount = Number(item.amount).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), { maximumFractionDigits: 2 });
       const share = Number.isFinite(item.percentSupply) ? ` · ${item.percentSupply > 0 && item.percentSupply < 0.01 ? "<0.01" : item.percentSupply.toFixed(2)}% от указанного общего предложения` : "";
       card.append(node("p", "", `${amount} токенов${share}`));
-      const utcTime = value => new Date(Number(value)).toLocaleString("ru-RU", { timeZone: "UTC" }) + " UTC";
+      const utcTime = value => new Date(Number(value)).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), { timeZone: "UTC" }) + " UTC";
       const precisionLabel = { month: "любой день месяца, дата приблизительная", week: "приблизительное окно ±3 дня", day: "точное время неизвестно · дата UTC", hour: `${utcTime(item.windowStart ?? item.at)} · в пределах этого часа`, block: `${utcTime(item.at)} · оценка времени блока` }[item.precision];
       card.append(node("small", "", `${item.provider} · ${precisionLabel || utcTime(item.at)}${item.stale ? " · УСТАРЕВШИЕ ДАННЫЕ" : ""}`));
       if (item.marketStatus === "inactive") card.append(node("small", "", "Источник пометил проект неактивным; доступность торгов не подтверждена."));
       if (item.allocationMismatch) card.append(node("small", "", "Сумма распределений источника расходится с итогом. Показан итог без разбивки."));
-      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`));
+      for (const allocation of item.allocations || []) card.append(node("div", "", `${allocation.label}: ${Number(allocation.amount).toLocaleString((window.ObsidianI18n?.locale || "ru-RU"), { maximumFractionDigits: 2 })}`));
       const sources = node("div", "events-news-sources");
       for (const url of item.sources || []) {
         let parsed; try { parsed = new URL(url); if (parsed.protocol !== "https:") continue; } catch (_) { continue; }
@@ -509,6 +607,7 @@
     if (updated) updated.title = Object.entries(data?.sources || {}).map(([name, source]) =>
       `${name}: ${source.status === "ok" || source.status === "connected" ? "доступен" : source.status === "no_recent_items" ? "нет публикаций за 7 дней" : "нет связи"}`).join("\n");
     if (selectedTab === "news") renderNews();
+    else if (selectedTab === "social") renderSocial();
     else if (selectedTab === "listings") renderListings();
     else renderUnlocks();
   }
@@ -518,7 +617,8 @@
     byId("events-news-panel").hidden = tab !== "news";
     byId("events-listings-panel").hidden = tab !== "listings";
     byId("events-unlocks-panel").hidden = tab !== "unlocks";
-    for (const key of ["news", "listings", "unlocks"]) {
+    byId("events-social-panel").hidden = tab !== "social";
+    for (const key of ["news", "listings", "unlocks", "social"]) {
       const button = byId(`events-tab-${key}`);
       button.classList.toggle("on", key === tab);
       button.setAttribute("aria-selected", String(key === tab));
@@ -569,6 +669,18 @@
       }));
       byId("events-tab-listings").addEventListener("click", () => setTab("listings"));
       byId("events-tab-unlocks").addEventListener("click", () => setTab("unlocks"));
+      byId("events-tab-social").addEventListener("click", () => setTab("social"));
+      byId("events-social-search").addEventListener("input", () => {
+        clearTimeout(socialSearchTimer);
+        socialSearchTimer = setTimeout(() => { socialPage = socialSourcePage = 0; void loadSocial(); }, 250);
+      });
+      for (const kind of ["platform", "topic"]) for (const button of document.querySelectorAll(`[data-social-${kind}]`)) {
+        button.addEventListener("click", () => {
+          if (kind === "platform") socialPlatform = button.dataset.socialPlatform; else socialTopic = button.dataset.socialTopic;
+          button.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === button));
+          socialPage = socialSourcePage = 0; void loadSocial();
+        });
+      }
       byId("events-unlocks-search").addEventListener("input", () => { unlockPage = unlockWindowPage = 0; renderUnlocks(); });
       byId("events-unlocks-hide-inactive").addEventListener("change", () => { unlockPage = unlockWindowPage = 0; renderUnlocks(); });
       for (const [id, offset] of [["events-unlocks-prev-month", -1], ["events-unlocks-next-month", 1]]) {
@@ -621,11 +733,14 @@
 
   function deactivate() { closePickers(); }
   function stopAlerts() {
+    socialAbort?.abort(); socialSequence++; socialRequestKey = "";
+    if (socialSearchTimer) window.clearTimeout(socialSearchTimer);
     stream?.close(); stream = null;
     if (refreshTimer) window.clearInterval(refreshTimer);
     if (updateTimer) window.clearTimeout(updateTimer);
     refreshTimer = null; updateTimer = null;
   }
   window.ObsidianEvents = { activate, deactivate, stopAlerts };
+  window.addEventListener('obsidian:languagechange', () => { if (data) render(); });
   initAlerts();
 })();

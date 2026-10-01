@@ -767,7 +767,8 @@ const { renderServerChartSnapshot } = require("./serverChartRenderer");
 const telegramQueue = require("./telegramQueue");
 const priceHistoryStore = require("./priceHistoryStore");
 const { createEventsHub } = require("./eventsHub");
-const eventsHub = createEventsHub();
+const { createOfficialSocialService } = require("./officialSocialService");
+const eventsHub = createEventsHub({ socialService: createOfficialSocialService() });
 telegramBot.setNewsChannelHandler(message => eventsHub.ingestTelegram(message));
 const securityShield = require("./securityShield");
 const { PAGES, renderSeoPage, renderNotFoundPage, renderSitemap } = require("./seoPages");
@@ -4337,6 +4338,12 @@ app.get("/api/events", (_req, res) => {
   res.json(eventsHub.snapshot());
 });
 
+app.get("/api/events/social", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json(eventsHub.socialSnapshot({ search: req.query.search, platform: req.query.platform,
+    topic: req.query.topic, page: req.query.page, sourcePage: req.query.sourcePage }));
+});
+
 let eventStreamClients = 0;
 app.get("/api/events/stream", (req, res) => {
   if (eventStreamClients >= 2000) return res.status(503).end();
@@ -5501,7 +5508,7 @@ server.listen(PORT, BIND_HOST, () => {
     const seenChatIds = new Set();
 
     for (const u of allUsers) {
-      if (!u || u.blocked) continue;
+      if (!u) continue;
       const userChatId = String(u.telegramChatId || u.telegramId || u.tgChatId || u.chatId || "").trim();
       const globalOverride = userChatId ? getFormationChatPrefs(userChatId) : null;
       const prefs = {
@@ -5511,7 +5518,11 @@ server.listen(PORT, BIND_HOST, () => {
         ...(globalOverride || {})
       };
       const chatId = String(userChatId || prefs.telegramChatId || "").trim();
-      if (!chatId) continue;
+      if (!chatId || seenChatIds.has(chatId)) continue;
+      // A known subscription owns the destination even when disabled. Otherwise
+      // the admin fallback silently re-enables every venue and formation type.
+      seenChatIds.add(chatId);
+      if (u.blocked) continue;
 
       const isMasterAdmin = chatId === String(process.env.ADMIN_CHAT_ID || "").trim() || chatId === String(process.env.TELEGRAM_ADMIN_ID || "").trim();
       const tgEnabled = prefs.tgEnabled !== undefined ? !!prefs.tgEnabled : (isMasterAdmin ? true : false);
@@ -5558,7 +5569,9 @@ server.listen(PORT, BIND_HOST, () => {
     // only get here via an authenticated write (see setFormationChatPrefs).
     for (const [cId, entry] of formationAlertsByChatId) {
       const s = entry.settings;
-      if (!seenChatIds.has(cId) && s && s.enabled !== false && s.tgEnabled !== false) {
+      if (seenChatIds.has(cId)) continue;
+      seenChatIds.add(cId);
+      if (s && s.enabled !== false && s.tgEnabled === true) {
         subscribers.push({
           userId: `chat_${cId}`,
           chatId: cId,

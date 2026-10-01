@@ -13,8 +13,10 @@
     "@napi-rs/canvas": "^1.0.7",
     "ccxt": "^4.5.46",
     "compression": "^1.7.4",
+    "domutils": "^3.2.2",
     "dotenv": "^17.4.2",
     "express": "^4.22.3",
+    "htmlparser2": "^10.1.0",
     "nodemailer": "^10.0.10",
     "undici": "^8.10.1",
     "ws": "^8.21.3"

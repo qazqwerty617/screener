@@ -6,7 +6,7 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(path.join(__dirname, '../public/js/app.js'), 'utf8');
 
-function build(t) {
+function build(t, extra = '') {
   const dom = new JSDOM('<div id="auth-modal" style="display:none"></div><p id="formation-alert-sync-status"></p>', { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());
   const w = dom.window, sent = [];
@@ -20,7 +20,7 @@ function build(t) {
   w.eval(source.slice(source.indexOf('const DEFAULT_FORMATION_ALERT_SETTINGS ='), source.indexOf('function initNotificationsUI()')) +
     '\nconst formationAlertCooldownMap = new Map();\n' + source.slice(begin,end) +
     `currentFormationAlertSettings = {...DEFAULT_FORMATION_ALERT_SETTINGS, enabled: true, toastEnabled: true};
-    window.settings = currentFormationAlertSettings;`);
+    window.settings = currentFormationAlertSettings;` + extra);
   return { w, sent };
 }
 const signal = { ex: 'BN', sym: 'BTCUSDT', tf: '15m', type: 'level', direction: 'short', targetPrice: 100.3, curPrice: 100, touches: 3, distPct: 0.3 };
@@ -70,4 +70,29 @@ test('concurrent settings saves reach server in order', async t => {
   assert.deepEqual(received, [100]); release();
   await Promise.all([first, second]);
   assert.deepEqual(received, [100, 200]);
+});
+
+test('account refresh does not detach the notification controls from saved settings', async t => {
+  const helpers = source.slice(source.indexOf('  function setupButtonGroup('), source.indexOf('  // Open & Close Formations Modal'));
+  const sync = /  function syncFormationUI\(\) \{[^]*?\n  \}/.exec(source)[0];
+  const { w, sent } = build(t, helpers + '\n' + sync + '\nwindow.syncFormationUI = syncFormationUI;');
+  const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+  const ui = new JSDOM(html);
+  w.document.body.append(w.document.importNode(ui.window.document.getElementById('modal-formation-alerts-overlay'), true));
+  ui.window.close();
+  w.syncFormationUI();
+  // A profile refresh can arrive while the settings modal is open.
+  w.restoreFormationAlertsFromAccount(JSON.parse(JSON.stringify(w.settings)));
+  w.document.querySelector('#fmt-exchanges-group [data-ex="BN"]').click();
+  for (const type of ['level', 'retest']) {
+    const input = w.$(`set-fmt-${type}-enabled`); input.checked = false; input.onchange();
+  }
+  await new Promise(resolve => setImmediate(resolve));
+  const saved = JSON.parse(w.localStorage.getItem('obsidian_formation_alert_settings'));
+  assert.deepEqual(saved.exchanges, ['BN']);
+  assert.equal(saved.level.enabled, false);
+  w.handleServerFormationAlert({ ...signal, ex: 'BB', sym: 'SOLUSDT', type: 'trendline' });
+  w.handleServerFormationAlert(signal);
+  w.handleServerFormationAlert({ ...signal, type: 'trendline' });
+  assert.deepEqual(sent.map(s => `${s.ex}:${s.type}`), ['BN:trendline']);
 });

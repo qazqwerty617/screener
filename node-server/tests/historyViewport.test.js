@@ -18,6 +18,8 @@ function mainFixture(fetcher){
     KLINES_CACHE:cache,storeKlinesCache:(key,data)=>cache.set(key,{ts:Date.now(),data}),KLINE_REQUESTS:new Map(),decodeKlinePayload:x=>x,mergeCandles:(a,b)=>[...b,...a]});
   const helper=/(?:async )?function fetchOlderKlines\([^]*?\n\}/.exec(src);if(helper)vm.runInContext(helper[0],ctx);
   const start=src.indexOf('async function loadOlderHistory(');
+  ctx.chartNeedsDraw=false;
+  vm.runInContext(/function requestDraw\([^]*?\n\}/.exec(src)[0],ctx);
   vm.runInContext(src.slice(start,src.indexOf('function appendCandle(',start)),ctx);
   return ctx;
 }
@@ -28,9 +30,9 @@ test('temporary history HTTP failure is not treated as the beginning of the mark
 });
 test('history completion schedules a new draw after releasing the loading lock',async()=>{
   const ctx=mainFixture(async()=>({ok:true,json:async()=>[bar(1700000540000)]}));
-  const states=[];ctx.requestAnimationFrame=()=>states.push(ctx.isLoadingOlderCandles);ctx.window.requestMainChartDraw=()=>states.push(ctx.isLoadingOlderCandles);ctx.drawChart=()=>states.push(ctx.isLoadingOlderCandles);
   await ctx.loadOlderHistory('BN','BTCUSDT','1m');
-  assert.equal(states.at(-1),false);
+  assert.equal(ctx.chartNeedsDraw,true);
+  assert.equal(ctx.isLoadingOlderCandles,false);
 });
 test('prepending a grid history page preserves distance from the newest candle',async()=>{
   const ctx=mainFixture(async()=>({ok:true,json:async()=>[bar(1700000480000),bar(1700000540000)]}));
@@ -62,7 +64,7 @@ test('a wide single-chart viewport fills across multiple pages without dragging 
   const render='(function(){'+src.slice(start,src.indexOf('  let autoMn',start))+'})()';
   ctx.drawChart=()=>vm.runInContext(render,ctx);
   ctx.drawChart();
-  for(let i=0;i<12;i++) {await new Promise(r=>setImmediate(r));for(const callback of frames.splice(0))callback();}
+  for(let i=0;i<12;i++) {await new Promise(r=>setImmediate(r));for(const callback of frames.splice(0))callback();if(ctx.chartNeedsDraw){ctx.chartNeedsDraw=false;ctx.drawChart();}}
   assert.equal(calls,3);assert.equal(ctx.candles.length,602);assert.equal(ctx.offsetX,0);
   assert.equal(ctx.loadOlderHistory.retry,null);
 });

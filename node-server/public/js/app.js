@@ -120,6 +120,16 @@ function showToast(options, typeArg, titleArg, durationArg) {
     body.textContent = message;
     card.appendChild(body);
   }
+  if (isClickable && options.actionLabel) {
+    const action = document.createElement("div");
+    action.className = "toast-action";
+    action.textContent = options.actionLabel + " ↗";
+    card.appendChild(action);
+    card.setAttribute("role", "button"); card.tabIndex = 0;
+    card.addEventListener("keydown", event => {
+      if (event.target === card && ["Enter", " "].includes(event.key)) { event.preventDefault(); card.click(); }
+    });
+  }
   const progressBar = document.createElement("div");
   progressBar.className = "toast-progress";
   card.appendChild(progressBar);
@@ -181,7 +191,7 @@ let activeEx = "BN",
   activeSym = "BTCUSDT",
   activeTf = "4h";
 window.getActiveMarket = () => ({ ex: activeEx, sym: activeSym, tf: activeTf });
-window.requestMainChartDraw = () => requestAnimationFrame(drawChart);
+window.requestMainChartDraw = () => requestDraw();
 let listEx = "BN",
   searchQ = ""; // listEx tracks dropdown, default = BN
 
@@ -937,7 +947,7 @@ function applyAccountPreferences(prefs) {
 
   if (needChartRedraw) {
     if (typeof requestDraw === "function") requestDraw();
-    if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+    if (typeof drawChart === "function") requestDraw();
   }
 }
 
@@ -1167,7 +1177,10 @@ function processTickData(dt) {
   }
 
   // 2. DOM updates for dirty rows
-  if (dirty.size > 0 || needRebuild) {
+  if (activeView !== "screener" || typeof document !== "undefined" && document.hidden) {
+    if (dirty.size) needRebuild = true;
+    dirty.clear();
+  } else if (dirty.size > 0 || needRebuild) {
     const now2 = performance.now();
     if ((needRebuild || now2 - lastSort > 1000) && (lastSort === 0 || now2 - lastSort > 1000)) {
       rebuildList();
@@ -1244,7 +1257,8 @@ function processTickData(dt) {
     }
   }
 
-  if (screenerView === "multichart" || activeView === "formations") {
+  if ((activeView === "screener" && screenerView === "multichart" || activeView === "formations") &&
+      (typeof document === "undefined" || !document.hidden)) {
     if (chartTickerDirty.size > 0 && typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
       for (let i = 0; i < chartInstances.length; i++) {
         const inst = chartInstances[i];
@@ -1266,6 +1280,15 @@ function startMcLoop() {
 function scheduleInterp(key) {
   const c = coins.get(key);
   if (!c) return;
+  // The table uses real prices. Only visible grid charts consume interpolated
+  // prices; off-screen markets must not create a per-frame CPU backlog.
+  if ((activeView !== "formations" && !(activeView === "screener" && screenerView === "multichart")) ||
+      document.hidden ||
+      !chartInstances.some(inst => inst?.key === key)) {
+    c.displayP = c.p;
+    interpActive.delete(key);
+    return;
+  }
   if (!chartAnimationsEnabled) {
     c.displayP = c.p;
     interpActive.delete(key);
@@ -3418,6 +3441,7 @@ function renderFormationsOnChart(ctx, candles, s, candleW, futureGap, toY, PW, P
 
 
 function drawChart() {
+  if (document.hidden) return;
   if (!chartW || !chartH) return;
   // Performance guard: do not draw main chart if main screener view is hidden and chart not borrowed
   if (activeView !== "screener" && !window.isFormationFullChartOpen?.()) return;
@@ -5375,7 +5399,7 @@ function pickToolColor(tool) {
       toolColors[tool] = clr;
       saveToolColors();
       applyToolButtonColors();
-      requestAnimationFrame(drawChart);
+      requestDraw();
     },
   });
 }
@@ -5398,7 +5422,7 @@ function renderFibLevelEditor() {
     toggle.onchange = () => {
       row.enabled = toggle.checked;
       wrap.classList.toggle("disabled", !toggle.checked);
-      requestAnimationFrame(drawChart);
+      requestDraw();
     };
 
     const input = document.createElement("input");
@@ -5409,7 +5433,7 @@ function renderFibLevelEditor() {
       const value = +String(input.value).replace(",", ".");
       if (!Number.isFinite(value)) return;
       row.value = value;
-      requestAnimationFrame(drawChart);
+      requestDraw();
     };
 
     const colorBtn = document.createElement("button");
@@ -5429,7 +5453,7 @@ function renderFibLevelEditor() {
         onSelect: (clr) => {
           row.color = clr;
           colorBtn.style.background = clr;
-          requestAnimationFrame(drawChart);
+          requestDraw();
         },
       });
     };
@@ -5476,7 +5500,7 @@ function applyToolButtonColors() {
 function cancelDrawing() {
   tempDrawing = null;
   drawingPhase = 0;
-  requestAnimationFrame(drawChart);
+  requestDraw();
 }
 
 // тФАтФА Mouse events тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -5607,7 +5631,7 @@ canvas.addEventListener("mousedown", (e) => {
       tempDrawing = null;
       drawingPhase = 0;
       setTool("none");
-      requestAnimationFrame(drawChart);
+      requestDraw();
       return;
     }
 
@@ -5645,7 +5669,7 @@ canvas.addEventListener("mousedown", (e) => {
       drawingPhase = 0;
       setTool("none");
     }
-    requestAnimationFrame(drawChart);
+    requestDraw();
     return;
   }
 
@@ -5659,7 +5683,7 @@ canvas.addEventListener("mousedown", (e) => {
       if (hitHandle(chartDrawings[i], px, py) || hitBody(chartDrawings[i], px, py)) {
         chartDrawings.splice(i, 1);
         saveDrawings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
         return;
       }
     }
@@ -6017,7 +6041,7 @@ document.addEventListener("keydown", (e) => {
       }
     }
     saveDrawings();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   }
 });
 
@@ -7368,10 +7392,13 @@ function connectWS() {
       }
 
       if (incomingWalls) {
-        if (meta?.updatedAt && meta.updatedAt < densityLastUpdate) return;
+        const incomingAt = Number(meta?.updatedAt);
+        const hasTimestamp = Number.isFinite(incomingAt) && incomingAt > 0;
+        if (meta?.updatedAt != null && !hasTimestamp) return;
+        if (hasTimestamp && incomingAt < densityLastUpdate) return;
         densityData = incomingWalls;
         if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
-        densityLastUpdate = (meta && meta.updatedAt) || Date.now();
+        densityLastUpdate = hasTimestamp ? incomingAt : Date.now();
         if (typeof updateDensityStatusUI === "function") updateDensityStatusUI(meta);
         if (typeof updateDensityExchangeCounts === "function") updateDensityExchangeCounts();
         if (activeView === "map") {
@@ -7766,7 +7793,7 @@ async function refetchMissingHistory(ex, sym, tf) {
       const key = `${ex}|${sym}|${tf}`;
       storeKlinesCache(key, candles);
       chartNeedsDraw = true;
-      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+      if (typeof drawChart === "function") requestDraw();
     }
   } catch (_) {}
   finally {
@@ -8258,13 +8285,13 @@ async function loadOlderHistory(ex, sym, tf) {
       const failures = retry?.key === requestKey ? retry.failures + 1 : 1;
       const delay = Math.min(30000, 1000 * 2 ** Math.min(failures, 5));
       loadOlderHistory.retry = { key: requestKey, failures, at: Date.now() + delay };
-      setTimeout(() => { if (curToken === klFetchToken) requestAnimationFrame(drawChart); }, delay).unref?.();
+      setTimeout(() => { if (curToken === klFetchToken) requestDraw(); }, delay).unref?.();
     }
   } finally {
     if (curToken === klFetchToken) {
       isLoadingOlderCandles = false;
       // Allow a second page to fill a wide viewport, even without a new tick.
-      requestAnimationFrame(drawChart);
+      requestDraw();
     }
   }
 }
@@ -8750,14 +8777,14 @@ function startRender() {
   requestAnimationFrame(rafLoop);
 }
 
-// rAF loop: ONLY repaints the canvas тАФ runs at monitor refresh rate (60/120/144hz)
-// All logic (interpolation, DOM updates) happens in the faster MessageChannel loop
+// Coalesce canvas and visible table work to at most 30 frames per second.
+// Market ingestion and alerts run independently in the stream handlers.
 function rafLoop() {
   const now = performance.now();
+  requestAnimationFrame(rafLoop);
+  if (document.hidden || now - lastRafTs < 1000 / 30) return;
   const dt = Math.min((now - lastRafTs) / 1000, 0.05); // max 50ms step for stability
   lastRafTs = now;
-
-  requestAnimationFrame(rafLoop);
 
   // 1. TOP PRIORITY: Paint chart immediately on the very first microsecond of the frame (Vataga model)
   if (chartNeedsDraw) {
@@ -8765,7 +8792,7 @@ function rafLoop() {
     drawChart();
   }
 
-  if (screenerView === "multichart" || activeView === "formations") {
+  if (activeView === "screener" && screenerView === "multichart" || activeView === "formations") {
     chartInstances.forEach(inst => {
       if (inst.dirty) inst.draw(true);
     });
@@ -8853,6 +8880,11 @@ function rebuildList() {
 
   sortedList = list.slice(0, 300);
   const cl = $("coin-list");
+  const retainedRows = new Set(sortedList.map(c => c.key));
+  for (const [key, row] of rowEls) if (!retainedRows.has(key) && !isHoveringScreener) {
+    if (row.el._flashTimer) clearTimeout(row.el._flashTimer);
+    row.el.remove(); rowEls.delete(key);
+  }
 
   // Ensure all row elements exist and are filled
   for (const c of sortedList) {
@@ -9098,7 +9130,7 @@ $("clear-draw").onclick = () => {
   if (confirm("Очистить все рисунки?")) {
     chartDrawings = [];
     saveDrawings();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   }
 };
 const _magnetBtn = $("magnet-btn");
@@ -9160,7 +9192,7 @@ if (densitySwitch) {
     densitySwitch.classList.toggle("on");
     chartDensityEnabled = densitySwitch.classList.contains("on");
     saveChartDensitySettings();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   };
 }
 
@@ -9230,7 +9262,7 @@ document.querySelectorAll(".chart-density-panel .chart-density-filter-btn").forE
       }
     }
     saveChartDensitySettings();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   };
 });
 
@@ -9298,7 +9330,7 @@ function setFormationTouchMinimum(type, value) {
     default: return;
   }
   try { saveFovSettings(); } catch (_) {}
-  requestAnimationFrame(drawChart);
+  requestDraw();
 }
 let formationTouchMenu = null;
 function closeFormationTouchMenu() { formationTouchMenu?.remove(); formationTouchMenu = null; }
@@ -9360,9 +9392,9 @@ document.querySelectorAll(".chart-density-panel .chart-indicator-grid-btn").forE
       chartFormationsOnChart = chartActiveFormations.size > 0;
       saveActiveFormations();
       try { saveFovSettings(); } catch (_) {}
-      requestAnimationFrame(drawChart);
+      requestDraw();
     }
-    requestAnimationFrame(drawChart);
+    requestDraw();
   };
 
   // Hover descriptions
@@ -9396,7 +9428,7 @@ document.querySelectorAll("#chart-density-panel [data-fmt-cascade]").forEach(btn
     const val = parseInt(btn.dataset.fmtCascade, 10);
     if (val) formationsMinCascade = val;
     if (typeof window.loadFormations === "function") window.loadFormations();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   };
 });
 
@@ -9408,7 +9440,7 @@ document.querySelectorAll("#chart-density-panel [data-fmt-tol]").forEach(btn => 
     const val = parseFloat(btn.dataset.fmtTol);
     if (val) formationsTolerance = val;
     if (typeof window.loadFormations === "function") window.loadFormations();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   };
 });
 
@@ -9452,7 +9484,7 @@ if (cDexCbAll) {
     else chartDensityExes.clear();
     updateChartDexDropdownUI();
     saveChartDensitySettings();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   });
 }
 
@@ -9462,7 +9494,7 @@ cDexCbs.forEach(cb => {
     else chartDensityExes.delete(cb.value);
     updateChartDexDropdownUI();
     saveChartDensitySettings();
-    requestAnimationFrame(drawChart);
+    requestDraw();
   });
 });
 
@@ -9481,13 +9513,7 @@ const settingsClose = $("settings-close");
 
 if (settingsBtn && settingsOverlay) {
   const openSettings = () => {
-    const isPro = window.currentUser && window.currentUser.plan === "pro";
-    if (!isPro) {
-      if (typeof openProModal === "function") {
-        openProModal("Настройки оформления и интерфейса");
-      }
-      return;
-    }
+    document.querySelector('.settings-tab[data-tab="general"]')?.click();
     settingsOverlay.style.display = "flex";
     settingsOverlay.classList.add("open");
     if (typeof window.pdDiscardDraft === "function") window.pdDiscardDraft();
@@ -9511,6 +9537,10 @@ if (settingsBtn && settingsOverlay) {
   // Tabs switching
   document.querySelectorAll(".settings-tab").forEach(tab => {
     tab.onclick = () => {
+      if (tab.dataset.tab !== 'general' && window.currentUser?.plan !== 'pro') {
+        if (typeof openProModal === 'function') openProModal('Настройки оформления и интерфейса');
+        return;
+      }
       document.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
       tab.classList.add("active");
       const targetId = "tab-" + tab.dataset.tab;
@@ -9607,7 +9637,7 @@ if (settingsBtn && settingsOverlay) {
         chartFormationsOnChart = elEnabled.checked;
         syncUI();
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     }
 
@@ -9623,7 +9653,7 @@ if (settingsBtn && settingsOverlay) {
         }
         syncUI();
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       });
     });
 
@@ -9633,7 +9663,7 @@ if (settingsBtn && settingsOverlay) {
         chartFovCascadesMin = parseInt(btn.dataset.val) || 1;
         syncUI();
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     });
 
@@ -9643,7 +9673,7 @@ if (settingsBtn && settingsOverlay) {
         chartFovBreakoutMin = parseInt(btn.dataset.val) || 1;
         syncUI();
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     });
 
@@ -9653,7 +9683,7 @@ if (settingsBtn && settingsOverlay) {
         chartFovTrendlineMin = parseInt(btn.dataset.val) || 1;
         syncUI();
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     });
 
@@ -9663,7 +9693,7 @@ if (settingsBtn && settingsOverlay) {
       elApp.onchange = () => {
         chartFovRetestApproaching = elApp.checked;
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     }
 
@@ -9673,7 +9703,7 @@ if (settingsBtn && settingsOverlay) {
       elNear.onchange = () => {
         chartFovNearest = elNear.checked;
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     }
 
@@ -9683,7 +9713,7 @@ if (settingsBtn && settingsOverlay) {
       elLabels.onchange = () => {
         chartFovShowLabels = elLabels.checked;
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     }
 
@@ -9693,7 +9723,7 @@ if (settingsBtn && settingsOverlay) {
       elTouchCircles.onchange = () => {
         chartFovShowTouches = elTouchCircles.checked;
         saveSettings();
-        requestAnimationFrame(drawChart);
+        requestDraw();
       };
     }
   })();
@@ -10079,7 +10109,7 @@ if (settingsBtn && settingsOverlay) {
 
     function refreshCharts() {
       window.dispatchEvent(new Event("appearancechange"));
-      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+      if (typeof drawChart === "function") requestDraw();
       if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
         chartInstances.forEach(inst => {
           if (inst && typeof inst.draw === "function") inst.draw();
@@ -10130,6 +10160,8 @@ if (settingsBtn && settingsOverlay) {
     // Apply button (Master Save Across All Tabs)
     if (applyBtn) {
       applyBtn.onclick = () => {
+        if (document.querySelector('.settings-tab.active')?.dataset.tab === 'general') { closeSettingsModal(); return; }
+        if (window.currentUser?.plan !== 'pro') return;
         updateBgColor(pendingBg, pendingOpacity, true);
         updateAxisColor(pendingAxisColor, pendingAxisOpacity, true);
 
@@ -10170,6 +10202,8 @@ if (settingsBtn && settingsOverlay) {
     const resetBtn = $("settings-reset-btn");
     if (resetBtn) {
       resetBtn.onclick = () => {
+        if (document.querySelector('.settings-tab.active')?.dataset.tab === 'general') { window.ObsidianI18n?.setLanguage('ru'); return; }
+        if (window.currentUser?.plan !== 'pro') return;
         selectAppearanceTheme("obsidian");
 
         // Reset every setting represented by this modal, including unsaved UI state.
@@ -10242,7 +10276,7 @@ function updateAxisColor(color, opacity = 100, save = true) {
     localStorage.setItem("screener-axis-color", color);
     localStorage.setItem("screener-axis-opacity", opacity);
   }
-  if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+  if (typeof drawChart === "function") requestDraw();
 }
 
 function getAxisTextColor(background = getCanvasBgColor()) {
@@ -10341,7 +10375,7 @@ function updateBgColor(color, opacity = 100, save = true) {
 
   // Force redraw main chart
   if (typeof drawChart === "function") {
-    requestAnimationFrame(drawChart);
+    requestDraw();
   }
 
   if (typeof screenerView !== "undefined" && (screenerView === "multichart" || activeView === "formations")) {
@@ -10710,7 +10744,7 @@ $("fib-settings-reset").onclick = () => {
   editingFibDrawing.useSingleColor = true;
   renderFibLevelEditor();
   if (externalFibOnChange) externalFibOnChange(editingFibDrawing);
-  requestAnimationFrame(drawChart);
+  requestDraw();
 };
 $("fib-settings-apply").onclick = () => {
   if (!editingFibDrawing) return;
@@ -10723,7 +10757,7 @@ $("fib-settings-apply").onclick = () => {
   normalizeDrawing(editingFibDrawing);
   if (externalFibOnChange) externalFibOnChange(editingFibDrawing);
   else saveDrawings();
-  requestAnimationFrame(drawChart);
+  requestDraw();
   closeMenus();
 };
 $("fib-add-level-btn").onclick = () => {
@@ -10740,7 +10774,7 @@ $("fib-use-single-color").onchange = (e) => {
   if (!editingFibDrawing) return;
   editingFibDrawing.useSingleColor = e.target.checked;
   renderFibLevelEditor();
-  requestAnimationFrame(drawChart);
+  requestDraw();
 };
 $("fib-master-color").onclick = (e) => {
   if (!editingFibDrawing) return;
@@ -10759,7 +10793,7 @@ $("fib-master-color").onclick = (e) => {
         });
       }
       renderFibLevelEditor();
-      requestAnimationFrame(drawChart);
+      requestDraw();
     },
   });
 };
@@ -10957,9 +10991,9 @@ let densityMeta = null;
 let densityFetchPending = false;
 let densityConnectionError = false;
 let densitySnapshotVersion = 0;
-const densityBubbleSpriteCache = new Map();
-const DENSITY_SPRITE_W = 84;
-const DENSITY_SPRITE_H = 92;
+let densityLayoutVersion = 0;
+let densityBubbleLayer = null;
+let densityBubbleLayerVersion = '';
 
 const EX_COLORS = {
   BN: "#f59e0b", BB: "#6366f1", OX: "#94a3b8", BG: "#22d3ee",
@@ -12437,7 +12471,7 @@ function toggleScreenerView(view, rebuildGrid = true) {
     volCanvas.style.visibility = "visible";
     drawTools.style.display = "flex";
     if (backBtn) backBtn.style.display = "flex";
-    if (rebuildGrid) requestAnimationFrame(drawChart);
+    if (rebuildGrid) requestDraw();
   }
 }
 
@@ -12690,15 +12724,7 @@ window.switchView = function switchView(view) {
 
   // Highlight active navbar tab
   document.querySelectorAll("#nav .ntab").forEach(t => {
-    const text = t.textContent.trim().toLowerCase();
-    const isMatch =
-      (view === "screener" && (text.includes("скринер") || t.id === "tab-screener")) ||
-      (view === "map" && text.includes("карта")) ||
-      (view === "arbitrage" && (text.includes("арбитраж") || t.id === "tab-arbitrage")) ||
-      (view === "formations" && text.includes("формации")) ||
-      (view === "backtest" && text.includes("бэктест")) ||
-      (view === "journal" && (text.includes("дневник") || t.id === "tab-journal")) ||
-      (view === "events" && t.id === "tab-events");
+    const isMatch = t.dataset.view === view;
     t.classList.toggle("on", isMatch);
     t.setAttribute("aria-selected", isMatch ? "true" : "false");
   });
@@ -12785,26 +12811,9 @@ window.switchView = function switchView(view) {
   }
 };
 
-document.querySelectorAll("#nav .ntab").forEach((tab, idx) => {
-  tab.addEventListener("click", (e) => {
-    const text = tab.textContent.trim().toLowerCase();
-    if (text.includes("скринер") || idx === 0) {
-      window.switchView("screener");
-    } else if (text.includes("карта") || idx === 1) {
-      window.switchView("map");
-    } else if (text.includes("арбитраж") || tab.id === "tab-arbitrage" || idx === 2) {
-      window.switchView("arbitrage");
-    } else if (text.includes("формации") || idx === 3) {
-      window.switchView("formations");
-    } else if (text.includes("бэктест") || idx === 4) {
-      window.switchView("backtest");
-    } else if (text.includes("дневник") || tab.id === "tab-journal" || idx === 5) {
-      window.switchView("journal");
-    } else if (tab.id === "tab-events") {
-      window.switchView("events");
-    }
-  });
-});
+// Navbar clicks use the existing HTML handlers; attaching another listener
+// would open each view twice and repeat snapshot requests.
+
 
 // тХРтХРтХР Density Map тАФ Radar Visualization тХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХР
 
@@ -12893,19 +12902,23 @@ async function fetchWalls() {
       }
       if (!incomingWalls) throw new Error("Invalid density response");
       if (incomingWalls) {
-        if (meta?.updatedAt && meta.updatedAt < densityLastUpdate) return;
+        const incomingAt = Number(meta?.updatedAt);
+        const hasTimestamp = Number.isFinite(incomingAt) && incomingAt > 0;
+        if (densitySnapshotVersion !== startedVersion && (!hasTimestamp || incomingAt <= densityLastUpdate)) return;
+        if (hasTimestamp && incomingAt < densityLastUpdate) return;
+        if (meta?.updatedAt != null && !hasTimestamp) throw new Error("Invalid density timestamp");
         densityData = incomingWalls;
         if (meta && Array.isArray(meta.history)) densityHistoryData = meta.history;
-        densityLastUpdate = (meta && meta.updatedAt) || Date.now();
+        densityLastUpdate = hasTimestamp ? incomingAt : Date.now();
         updateDensityStatusUI(meta);
         updateDensityExchangeCounts();
         if (activeView === "map") {
           layoutDensityBadges();
         } else {
-          requestAnimationFrame(drawChart);
+          requestDraw();
           if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
             chartInstances.forEach(inst => {
-              if (inst && typeof inst.draw === "function") inst.draw();
+              if (inst) inst.dirty = true;
             });
           }
         }
@@ -12988,6 +13001,7 @@ function getFilteredDensity() {
 
 // ── Layout: distribute badges radially by pct ───────────────────────────────
 function layoutDensityBadges() {
+  densityLayoutVersion++;
   const filtered = getFilteredDensity();
   const sorters = {
     score: (a, b) => getDensityScore(b) - getDensityScore(a) || (b.S || 0) - (a.S || 0),
@@ -13269,6 +13283,8 @@ function drawDensityMap() {
   // тФАтФА Draw badges
   const filtered = densityVisibleData;
   densityHover = findDensityAt(densityMouseX, densityMouseY);
+  const bubbleLayer = getDensityBubblesLayer();
+  if (bubbleLayer) ctx.drawImage(bubbleLayer, 0, 0, densityW, densityH);
   for (let i = 0; i < filtered.length; i++) {
     const d = filtered[i];
     if (d.rx === undefined) continue;
@@ -13276,9 +13292,6 @@ function drawDensityMap() {
     const isSelected = densitySelectedKey && getDensityStableKey(d) === densitySelectedKey;
     if (isHover || isSelected) {
       drawDensityBubble(ctx, d, d.rx, d.ry, true);
-    } else {
-      const sprite = getDensityBubbleSprite(d);
-      ctx.drawImage(sprite, d.rx - DENSITY_SPRITE_W / 2, d.ry - 40, DENSITY_SPRITE_W, DENSITY_SPRITE_H);
     }
   }
 
@@ -13424,7 +13437,7 @@ function drawDensityMap() {
     ctx.fillText(headerTitle, tipX + 16, tipY + 16);
     const titleW = ctx.measureText(headerTitle).width;
     ctx.fillStyle = headerTypeColor;
-    ctx.fillText(headerType, tipX + 16 + titleW, tipY + 16);
+    ctx.fillText(window.ObsidianI18n?.t(headerType) || headerType, tipX + 16 + titleW, tipY + 16);
 
     // Separator line
     ctx.beginPath();
@@ -13443,12 +13456,12 @@ function drawDensityMap() {
       ctx.font = isAgeRow ? "600 12px Inter" : "11px Inter";
       ctx.fillStyle = mapMuted;
       ctx.textAlign = "left";
-      ctx.fillText(label, tipX + 16, currY);
+      ctx.fillText(window.ObsidianI18n?.t(label) || label, tipX + 16, currY);
 
       ctx.font = isAgeRow ? "bold 14px Inter" : "bold 12px Inter";
       ctx.fillStyle = color;
       ctx.textAlign = "right";
-      ctx.fillText(String(value), tipX + tipW - 16, currY);
+      ctx.fillText(window.ObsidianI18n?.t(String(value)) || String(value), tipX + tipW - 16, currY);
       currY += 20;
     }
 
@@ -13458,7 +13471,8 @@ function drawDensityMap() {
   if (filtered.length === 0) {
     ctx.fillStyle = "rgba(255,255,255,0.18)";
     ctx.font = "15px Inter"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(densityEmptyMessage(), cx, cy + 55);
+    const emptyMessage = densityEmptyMessage();
+    ctx.fillText(window.ObsidianI18n?.t(emptyMessage) || emptyMessage, cx, cy + 55);
   }
 }
 
@@ -13548,30 +13562,31 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
   ctx.restore();
 }
 
-function getDensityBubbleSprite(d) {
-  const stableId = getDensityStableKey(d);
-  const scale = Math.min(2, window.devicePixelRatio || 1);
-  const key = `${stableId}|${getDensitySizeType(d)}|${d.wallK}|${getDensityScore(d).toFixed(1)}|${Number(d.pct || 0).toFixed(2)}|${scale}`;
-  const cached = densityBubbleSpriteCache.get(key);
-  if (cached) return cached;
-
-  const sprite = document.createElement("canvas");
-  sprite.width = DENSITY_SPRITE_W * scale;
-  sprite.height = DENSITY_SPRITE_H * scale;
-  const spriteCtx = sprite.getContext("2d", { alpha: true });
-  spriteCtx.scale(scale, scale);
-  drawDensityBubble(spriteCtx, d, DENSITY_SPRITE_W / 2, 40, false);
-  densityBubbleSpriteCache.set(key, sprite);
-
-  // Keep the cache bounded while retaining most stable walls between updates.
-  if (densityBubbleSpriteCache.size > 6000) {
-    let removeCount = 1500;
-    for (const oldKey of densityBubbleSpriteCache.keys()) {
-      densityBubbleSpriteCache.delete(oldKey);
-      if (--removeCount <= 0) break;
-    }
+function getDensityBubblesLayer() {
+  if (!densityVisibleData.length || !(densityW > 0) || !(densityH > 0)) {
+    if (densityBubbleLayer) densityBubbleLayer.width = 0;
+    densityBubbleLayer = null; densityBubbleLayerVersion = '';
+    return null;
   }
-  return sprite;
+  // One composite avoids cache eviction thrashing when thousands of walls are
+  // visible. Bound pixel memory even on a 4K display with a high device DPR.
+  const scale = Math.min(2, window.devicePixelRatio || 1,
+    Math.sqrt(32 * 1024 * 1024 / (densityW * densityH * 4)));
+  const width = Math.max(1, Math.floor(densityW * scale));
+  const height = Math.max(1, Math.floor(densityH * scale));
+  const version = `${densityLayoutVersion}|${width}|${height}`;
+  if (densityBubbleLayer && densityBubbleLayerVersion === version) return densityBubbleLayer;
+  if (!densityBubbleLayer) densityBubbleLayer = document.createElement('canvas');
+  if (densityBubbleLayer.width !== width) densityBubbleLayer.width = width;
+  if (densityBubbleLayer.height !== height) densityBubbleLayer.height = height;
+  const layerCtx = densityBubbleLayer.getContext('2d', { alpha: true });
+  layerCtx.setTransform(width / densityW, 0, 0, height / densityH, 0, 0);
+  layerCtx.clearRect(0, 0, densityW, densityH);
+  for (const wall of densityVisibleData) {
+    if (Number.isFinite(wall.rx) && Number.isFinite(wall.ry)) drawDensityBubble(layerCtx, wall, wall.rx, wall.ry, false);
+  }
+  densityBubbleLayerVersion = version;
+  return densityBubbleLayer;
 }
 
 
@@ -13850,6 +13865,7 @@ function saveDensityFilters() {
 }
 
 function loadDensityFilters() {
+  let migratedDistance = false;
   try {
     const raw = localStorage.getItem("density_filters_v2");
     if (!raw) return;
@@ -13871,7 +13887,7 @@ function loadDensityFilters() {
       // computed. Lift that one legacy value to the full range exactly once.
       const distanceMigrationKey = "density_max_distance_full_band_v1";
       if (!localStorage.getItem(distanceMigrationKey)) {
-        if (densityMaxDistance === 3) densityMaxDistance = 5;
+        if (densityMaxDistance === 3) { densityMaxDistance = 5; migratedDistance = true; }
         localStorage.setItem(distanceMigrationKey, "1");
       }
 
@@ -13892,9 +13908,9 @@ function loadDensityFilters() {
         }
       }
 
-      syncDensityFilterUI();
+      if (migratedDistance) saveDensityFilters();
     }
-  } catch (_) {}
+  } catch (_) {} finally { syncDensityFilterUI(); }
 }
 
 function syncDensityFilterUI() {
@@ -13972,8 +13988,8 @@ function initDensityBlacklistUI() {
     } catch(_) {}
     updateBlacklistUI();
     layoutDensityBadges();
-    if (activeView === "screener") {
-      requestAnimationFrame(drawChart);
+    if (!document.hidden && activeView === "screener") {
+      requestDraw();
       if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
         chartInstances.forEach(inst => { if (inst && typeof inst.draw === "function") inst.draw(); });
       }
@@ -14379,11 +14395,11 @@ window.addEventListener("resize", () => {
 
   // Periodic update for screener heatmap
   setInterval(() => {
-    if (activeView === "screener") {
+    if (activeView === "screener" && !document.hidden) {
       if (screenerView === "heatmap") {
         renderScreenerHeatmap();
       } else if (screenerView === "multichart") {
-        chartInstances.forEach(inst => inst.draw());
+        chartInstances.forEach(inst => { if (inst.dirty) inst.draw(); });
       }
     }
   }, 3000);
@@ -14475,14 +14491,14 @@ window.addEventListener("resize", () => {
   setTimeout(() => fetchKlines(activeEx, activeSym, activeTf), 200);
   // Periodic safety redraw (catches edge cases)
   setInterval(() => {
-    if (candles.length) {
+    if (!document.hidden && activeView === "screener" && candles.length) {
       chartNeedsDraw = true;
     }
   }, 500);
 
-  // Force list refresh every 2s regardless of dirty state
+  // Refresh only when visible and new data arrived.
   setInterval(() => {
-    needRebuild = true;
+    if (!document.hidden && activeView === "screener" && dirty.size) needRebuild = true;
   }, 2000);
 
   // тФАтФА Debug overlay (tap logo 5x to toggle) тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
@@ -15394,7 +15410,7 @@ window.addEventListener("resize", () => {
 
     requestAnimationFrame(() => {
       resizeChart();
-      requestAnimationFrame(drawChart);
+      requestDraw();
     });
   };
 
@@ -16010,7 +16026,7 @@ window.addEventListener("resize", () => {
 
     let infoText = `${formationsPage + 1} / ${totalPages}`;
     if (scanProgressText) {
-      infoText += ` [${scanProgressText}]`;
+      infoText += ` [${window.ObsidianI18n?.t(scanProgressText) || scanProgressText}]`;
     }
     pgEl.textContent = infoText;
     if (prevBtn) prevBtn.disabled = formationsPage === 0;
@@ -17288,12 +17304,26 @@ async function sendTelegramAlert(message, photoDataUrl = null) {
 
 
 async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
-  if (!price || price <= 0) return;
+  price = Number(price);
+  if (!Number.isFinite(price) || price <= 0) return;
   const targetSym = normSymCode(sym);
   const targetEx = normExCode(ex);
   
-  const hVal = high > 0 ? high : price;
-  const lVal = low > 0 ? low : price;
+  const hVal = Number.isFinite(Number(high)) && Number(high) > 0 ? Number(high) : price;
+  const lVal = Number.isFinite(Number(low)) && Number(low) > 0 ? Number(low) : price;
+  const owner = window.currentUser?.id || localStorage.getItem('obsidian_auth_token') || '';
+  function deliverTelegram(message, alertSym, alertPrice, tf, alertEx) {
+    // Browser feedback and state cleanup must finish before a remote snapshot.
+    Promise.resolve().then(async () => {
+      const sameOwner = () => owner === (window.currentUser?.id || localStorage.getItem('obsidian_auth_token') || '');
+      if (!sameOwner()) return;
+      let photo = null;
+      if (window.currentUser?.telegramChatId) {
+        try { photo = await captureChartSnapshot(alertSym, price, alertPrice, tf, alertEx); } catch (_) {}
+      }
+      if (sameOwner()) await sendTelegramAlert(message, photo);
+    }).catch(error => console.warn('[PRICE ALERT DELIVERY]', error));
+  }
 
   if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) && chartDrawings.length > 0) {
     const isCurrentChart = (!sym || normSymCode(sym) === normSymCode(activeSym)) && (!ex || normExCode(ex) === normExCode(activeEx));
@@ -17301,6 +17331,8 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
       for (let i = chartDrawings.length - 1; i >= 0; i--) {
         const d = chartDrawings[i];
         if (!d || d.type !== "alert" || d.triggered) continue;
+        if (priceAlerts?.some(a => !a.triggered && normExCode(a.ex) === targetEx && normSymCode(a.sym) === targetSym &&
+          (a.drawingId != null && a.drawingId === d.t1 || a.price === d.p1))) continue;
 
         const alertPrice = d.p1;
         if (!alertPrice || alertPrice <= 0) continue;
@@ -17313,25 +17345,25 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
 
         if (isHit) {
           d.triggered = true;
-
-          let photoDataUrl = null;
-          try {
-            photoDataUrl = await captureChartSnapshot(sym || activeSym, price, alertPrice, d.tf || activeTf || "5m", ex || activeEx || "BN");
-          } catch (_) {}
-
+          const alertExVal = ex || activeEx || "BN";
+          const alertSymVal = sym || activeSym || "BTCUSDT";
+          const alertTfVal = d.tf || activeTf || "5m";
+          // Remove before awaiting a snapshot: the user can change charts while
+          // capture is in flight, and the old index then belongs to another coin.
           chartDrawings.splice(i, 1);
           if (typeof saveDrawings === "function") saveDrawings();
-          if (typeof drawChart === "function") requestAnimationFrame(drawChart);
 
-          const displayExFull = getFullExchangeName(ex || activeEx || "BN");
-          const displaySym = (sym || activeSym || "BTCUSDT").toUpperCase();
+          if (typeof drawChart === "function") requestDraw();
+
+          const displayExFull = getFullExchangeName(alertExVal);
+          const displaySym = alertSymVal.toUpperCase();
           const formattedTarget = typeof fP === "function" ? fP(alertPrice) : alertPrice.toLocaleString();
           const now = new Date();
           const timeStr = now.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
           const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
           const title = `🔔 Достигнут уровень цены!`;
-          const body = `<b>${displayExFull} · ${displaySym}</b> достиг уровня <b>$${formattedTarget}</b>`;
+          const body = `${displayExFull} · ${displaySym} достиг уровня $${formattedTarget}`;
 
           const telegramMsg =
             `─────── <b>${displaySym}</b> ───────\n` +
@@ -17341,13 +17373,12 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
             `─────────────────────────\n` +
             `🎯 <b>Obsidian Price Alert</b>`;
 
-          const alertExVal = alert.ex;
-          const alertSymVal = alert.sym;
           try { playAlertSound("chime"); } catch (_) {}
           try {
             showToast({
               title,
-              message: body + `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к графику</span> ↗</div>`,
+              message: body,
+              actionLabel: "Перейти к графику",
               type: "price_alert",
               hint: "Нажмите, чтобы открыть график монеты",
               onClick: () => {
@@ -17358,7 +17389,7 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
               }
             });
           } catch (_) {}
-          try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
+          deliverTelegram(telegramMsg, alertSymVal, alertPrice, alertTfVal, alertExVal);
         }
       }
     }
@@ -17369,11 +17400,12 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
   for (let i = 0; i < priceAlerts.length; i++) {
     const alert = priceAlerts[i];
     if (!alert || alert.triggered) continue;
+    if (!Number.isFinite(Number(alert.price)) || Number(alert.price) <= 0) continue;
     
     const alertSym = normSymCode(alert.sym);
     const alertEx = normExCode(alert.ex);
     
-    if (alertSym !== targetSym && !targetSym.includes(alertSym) && !alertSym.includes(targetSym)) continue;
+    if (alertSym !== targetSym) continue;
     if (alertEx && targetEx && alertEx !== targetEx) continue;
     
     let isHit = false;
@@ -17393,13 +17425,11 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
     
     if (isHit) {
       alert.triggered = true;
+      savePriceAlerts();
 
-      let photoDataUrl = null;
-      try {
-        photoDataUrl = await captureChartSnapshot(alert.sym || sym || activeSym, price, alert.price, alert.tf || activeTf || "5m", alert.ex || targetEx || "BN");
-      } catch (_) {}
       
-      if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings)) {
+      if (typeof chartDrawings !== "undefined" && Array.isArray(chartDrawings) &&
+        normSymCode(activeSym) === alertSym && normExCode(activeEx) === alertEx) {
         const initialLen = chartDrawings.length;
         chartDrawings = chartDrawings.filter(d => {
           if (d.type === "alert") {
@@ -17429,7 +17459,7 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
         }
       } catch (_) {}
 
-      if (typeof drawChart === "function") requestAnimationFrame(drawChart);
+      if (typeof drawChart === "function") requestDraw();
       if (typeof chartInstances !== "undefined" && Array.isArray(chartInstances)) {
         chartInstances.forEach(inst => { if (inst && inst.draw) inst.draw(true); });
       }
@@ -17442,7 +17472,7 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
       const dateStr = `${String(now.getDate()).padStart(2,"0")}.${String(now.getMonth()+1).padStart(2,"0")}`;
 
       const title = `🔔 Достигнут уровень цены!`;
-      const body = `<b>${alertExNameFull} · ${alertSymName}</b> достиг уровня <b>$${formattedTarget}</b>`;
+      const body = `${alertExNameFull} · ${alertSymName} достиг уровня $${formattedTarget}`;
       
       const telegramMsg =
         `─────── <b>${alertSymName}</b> ───────\n` +
@@ -17458,7 +17488,8 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
       try {
         showToast({
           title,
-          message: body + `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к графику</span> ↗</div>`,
+          message: body,
+          actionLabel: "Перейти к графику",
           type: "price_alert",
           hint: "Нажмите, чтобы открыть график монеты",
           onClick: () => {
@@ -17469,7 +17500,7 @@ async function checkPriceAlerts(ex, sym, price, high = price, low = price) {
           }
         });
       } catch (_) {}
-      try { sendTelegramAlert(telegramMsg, photoDataUrl); } catch (_) {}
+      deliverTelegram(telegramMsg, alertSymVal || sym || activeSym, alert.price, alert.tf || activeTf || '5m', alertExVal || targetEx || 'BN');
       
       savePriceAlerts();
     }
@@ -18155,15 +18186,18 @@ const DEFAULT_FORMATION_ALERT_SETTINGS = {
   }
 };
 
-let currentFormationAlertSettings = { ...DEFAULT_FORMATION_ALERT_SETTINGS };
+// Controls keep a reference to this object. Preserve its identity across
+// account refreshes so a visible selection is the setting we actually save.
+let currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
 
 function loadFormationAlertSettings() {
+  let loadedSettings;
   try {
     const raw = localStorage.getItem("obsidian_formation_alert_settings");
     const isConfigured = localStorage.getItem("obsidian_formation_alerts_user_configured") === "true";
     if (raw && isConfigured) {
       const parsed = JSON.parse(raw);
-      currentFormationAlertSettings = {
+      loadedSettings = {
         ...DEFAULT_FORMATION_ALERT_SETTINGS,
         ...parsed,
         exchanges: Array.isArray(parsed.exchanges) && parsed.exchanges.length > 0 ? parsed.exchanges : [...DEFAULT_FORMATION_ALERT_SETTINGS.exchanges],
@@ -18175,18 +18209,19 @@ function loadFormationAlertSettings() {
         retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(parsed.retest || {}) }
       };
     } else {
-      currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+      loadedSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
     }
   } catch (_) {
-    currentFormationAlertSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
+    loadedSettings = JSON.parse(JSON.stringify(DEFAULT_FORMATION_ALERT_SETTINGS));
   }
+  Object.assign(currentFormationAlertSettings, loadedSettings);
   window.formationAlertSettings = currentFormationAlertSettings;
   return currentFormationAlertSettings;
 }
 
 function saveFormationAlertSettings(settings) {
   localStorage.setItem("obsidian_formation_alerts_user_configured", "true");
-  currentFormationAlertSettings = settings || currentFormationAlertSettings;
+  if (settings && settings !== currentFormationAlertSettings) Object.assign(currentFormationAlertSettings, settings);
   // Telegram destinations are bound only through the bot-link flow.  Do not
   // persist a manually entered chat ID into the server-synchronised payload.
   delete currentFormationAlertSettings.telegramChatId;
@@ -18204,6 +18239,7 @@ window.restoreFormationAlertsFromAccount = settings => {
     localStorage.setItem('obsidian_formation_alert_settings', JSON.stringify(settings || DEFAULT_FORMATION_ALERT_SETTINGS));
     localStorage.setItem('obsidian_formation_alerts_user_configured', 'true');
     loadFormationAlertSettings();
+    window.syncFormationAlertUI?.();
   } catch (_) {}
 };
 
@@ -18437,13 +18473,13 @@ function initNotificationsUI() {
           if (data && data.success && data.settings &&
               !localStorage.getItem('formation_alert_sync_pending') &&
               localAtOpen === localStorage.getItem('obsidian_formation_alert_settings')) {
-            currentFormationAlertSettings = {
+            Object.assign(currentFormationAlertSettings, {
               ...DEFAULT_FORMATION_ALERT_SETTINGS,
               ...data.settings,
               trendline: { ...DEFAULT_FORMATION_ALERT_SETTINGS.trendline, ...(data.settings.trendline || {}) },
               level: { ...DEFAULT_FORMATION_ALERT_SETTINGS.level, ...(data.settings.level || {}) },
               retest: { ...DEFAULT_FORMATION_ALERT_SETTINGS.retest, ...(data.settings.retest || {}) }
-            };
+            });
             localStorage.setItem("obsidian_formation_alert_settings", JSON.stringify(currentFormationAlertSettings));
             localStorage.setItem("obsidian_formation_alerts_user_configured", "true");
             window.formationAlertSettings = currentFormationAlertSettings;
@@ -18585,6 +18621,7 @@ function initNotificationsUI() {
     setupButtonGroup("fmt-retest-age-group", s.retest.maxAgeCandles, val => { s.retest.maxAgeCandles = parseInt(val, 10); autoSaveSettings(); });
   }
 
+  window.syncFormationAlertUI = syncFormationUI;
   syncFormationUI();
 
   // Test Sound & Alert Button
@@ -19009,8 +19046,8 @@ function initNotificationsUI() {
       try {
         showToast({
           title: data.typeName,
-          message: `<b>${symDisp} (${exFull}) [${data.tf}]</b>: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})` +
-                   `<div style="margin-top:5px; font-size:11px; color:#a78bfa; font-weight:600; display:flex; align-items:center; gap:4px;"><span>Перейти к формации</span> ↗</div>`,
+          message: `${symDisp} (${exFull}) [${data.tf}]: ${data.touches} касания · ${data.distPct}% до формации ($${formattedPrice})`,
+          actionLabel: "Перейти к формации",
           type: "price_alert",
           hint: "Нажмите, чтобы открыть формацию на графике",
           onClick: () => {

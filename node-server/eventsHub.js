@@ -254,7 +254,7 @@ function createMarketFetcher(createClient = require("./listingMarketClient").cre
 
 function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   fetchMarkets = null, fetchFeed = createSourceReader(), fetchGateAnnouncements = readGateAnnouncements,
-  now = () => Date.now(), translate = translateTitle, unlockService = createUnlockService(),
+  now = () => Date.now(), translate = translateTitle, unlockService = createUnlockService(), socialService = null,
   streamFactory = url => new WebSocket(url, { perMessageDeflate: false }),
   streamKey = process.env.TREE_NEWS_API_KEY || "",
   telegramChannelIds = (process.env.NEWS_TELEGRAM_CHANNEL_IDS || "").split(",").map(value => value.trim()).filter(Boolean) } = {}) {
@@ -301,6 +301,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   let translationTimer = null;
 
   function emit(event) { publicCache = null; for (const listener of listeners) { try { listener(event); } catch (_) {} } }
+  socialService?.subscribe(() => { if (!stopped) emit(); });
   const isDeveloping = item => Boolean(item && item.alertKind && item.originVerified &&
     item.verification?.status === "pending" && item.verification?.sources?.length);
   const isTranslatable = item => Boolean(item && (isPublished(item) || isDeveloping(item)));
@@ -642,7 +643,10 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
       item.verification?.status === "pending" && item.verification.sources.length && item.publishedAt > now() - 7 * 86400000)
       .slice(0, 30).map(({ context, originVerified, ...item }) => item);
     publicCacheAt = now();
-    return publicCache = { listings: state.listings, announcements: listingAnnouncements(state.news), unlocks: { ...unlockService.snapshot(), signals: unlockSignals(state.news, now()) }, news, developing, venues: state.venues, sources: sourceHealth,
+    const socialSnapshot = socialService?.snapshot();
+    const social = socialSnapshot ? { coverage: socialSnapshot.coverage, platforms: socialSnapshot.platforms, updatedAt: socialSnapshot.updatedAt } : null;
+    const signals = [...unlockSignals(state.news, now()), ...(socialSnapshot?.signals || [])].sort((a, b) => b.publishedAt - a.publishedAt).slice(0, 100);
+    return publicCache = { listings: state.listings, announcements: listingAnnouncements(state.news), unlocks: { ...unlockService.snapshot(), signals }, social, news, developing, venues: state.venues, sources: sourceHealth,
       translation: { provider: process.env.DEEPL_API_KEY ? "DeepL" : "MyMemory", pending: translationQueue.length + translating,
         untranslated: [...news, ...developing].filter(item => !item.titleRu && /[a-z]{3}/i.test(item.title) && !/[а-яё]/i.test(item.title)).length,
         pausedUntil: translationPauseUntil || null, lastError: translationLastError },
@@ -653,6 +657,7 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   function start() {
     if (marketTimer) return;
     stopped = false;
+    socialService?.start();
     for (const item of state.news) if (isTranslatable(item)) queueTranslation(item);
     drainTranslations();
     void Promise.allSettled([refreshMarkets(), refreshNews()]);
@@ -667,6 +672,8 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
   }
   function stop() {
     stopped = true;
+    socialService?.stop();
+    void socialService?.flush().catch(() => {});
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (translationTimer) clearTimeout(translationTimer);
     if (persistTimer) clearTimeout(persistTimer);
@@ -679,7 +686,8 @@ function createEventsHub({ filePath = path.join(__dirname, "events_hub.json"),
     marketTimer = null; newsTimer = null;
   }
   return { snapshot, refreshMarkets, refreshNews, start, stop, flush, ingestNews: mergeNews,
-    ingestTelegram(message) { ingestLead(telegramLead(message, telegramChannelIds, now())); },
+    socialSnapshot(options) { return socialService?.query(options) || { posts: [], sources: [], postTotal: 0, sourceTotal: 0 }; },
+    ingestTelegram(message) { socialService?.ingestTelegram(message); ingestLead(telegramLead(message, telegramChannelIds, now())); },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
 }
 

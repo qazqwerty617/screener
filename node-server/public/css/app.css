@@ -3573,6 +3573,11 @@ body.hide-col-corr #sh-corr, body.hide-col-corr .ccorr { display: none !importan
     gap: 16px;
 }
 
+.settings-language { display: block; margin-top: 12px; min-width: 180px; padding: 10px 12px; color: var(--t1, #eee); background: var(--bg, #12141d); border: 1px solid var(--border, #303342); border-radius: 6px; }
+.settings-language-hint { color: var(--t2, #9299ac); font-size: 12px; line-height: 1.6; margin-top: 14px; max-width: 420px; }
+.toast-action { margin-top: 5px; font-size: 11px; color: #a78bfa; font-weight: 600; }
+.formation-alert-sync-status { margin: 0; padding: 0 24px; color: var(--t2, #9299ac); font-size: 11px; line-height: 1.5; min-height: 18px; }
+
 .formations-title {
     display: flex;
     align-items: center;

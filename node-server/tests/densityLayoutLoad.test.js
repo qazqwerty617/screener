@@ -8,7 +8,7 @@ test("crowded density layouts bound collision work without dropping walls", () =
   const math = Object.create(Math); math.hypot = (...args) => { distances++; return Math.hypot(...args); };
   const context = { Math: math };
   vm.runInNewContext(`
-    let densityW = 1000, densityH = 700, densitySort = "score", densityVisibleData = [];
+    let densityW = 1000, densityH = 700, densitySort = "score", densityVisibleData = [], densityLayoutVersion = 0;
     function getFilteredDensity() { return Array.from({length: 1000}, (_, i) => ({wallId: "wall-"+i, pct: 1+(i%40)/10, score: i, S: 100, sizeType: "small"})); }
     function getDensityLiveAgeSec() { return 60; }
     function $(id) { return null; }
