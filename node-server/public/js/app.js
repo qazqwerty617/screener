@@ -8,6 +8,7 @@ var authToken = localStorage.getItem("obsidian_auth_token") || "";
 const coins = new Map();
 window.coins = coins;
 const dirty = new Set();
+let tickerListChanged = false;
 // Ticker-table dirtiness and chart dirtiness have different lifecycles. The
 // table drains a bounded number of rows per frame, while visible charts need
 // only the newest value for their own market. A separate set prevents every
@@ -16,8 +17,13 @@ const chartTickerDirty = new Set();
 
 function markTickerDirty(key) {
   if (!key) return;
-  dirty.add(key);
-  chartTickerDirty.add(key);
+  // Ingestion/alerts retain every market; the DOM queue needs only mounted rows.
+  tickerListChanged = true;
+  if (!document.hidden && activeView === 'screener' && rowEls.has(key)) dirty.add(key);
+  if (!document.hidden && (activeView === 'formations' || activeView === 'screener' && screenerView === 'multichart') &&
+      typeof chartInstances !== 'undefined' && chartInstances.some(inst => inst && !inst._disposed && inst.key === key)) {
+    chartTickerDirty.add(key);
+  }
 }
 const rowEls = new Map();
 // Correlations are sampled once on the server for all clients.
@@ -1184,14 +1190,16 @@ function processTickData(dt) {
 
   // 2. DOM updates for dirty rows
   if (activeView !== "screener" || typeof document !== "undefined" && document.hidden) {
-    if (dirty.size) needRebuild = true;
+    if (dirty.size || tickerListChanged) needRebuild = true;
     dirty.clear();
-  } else if (dirty.size > 0 || needRebuild) {
+    tickerListChanged = false;
+  } else if (dirty.size > 0 || needRebuild || tickerListChanged) {
     const now2 = performance.now();
     if ((needRebuild || now2 - lastSort > 1000) && (lastSort === 0 || now2 - lastSort > 1000)) {
       rebuildList();
       lastSort = now2;
       needRebuild = false;
+      tickerListChanged = false;
     } else {
       let processed = 0;
       for (const key of dirty) {
@@ -1577,6 +1585,12 @@ function requestDraw() {
   chartNeedsDraw = true;
 }
 
+function refreshMainChartClock() {
+  if (document.hidden || !candles.length ||
+      ((activeView !== 'screener' || screenerView === 'multichart') && !window.isFormationFullChartOpen?.())) return;
+  if (drawChart.lastClockSecond !== Math.floor(Date.now() / 1000)) requestDraw();
+}
+
 // ═══ Trading Sessions Overlay ═══════════════════════════════════════════════
 // Session times in UTC hours. The user's chartUtcOffset is applied to convert.
 const TRADING_SESSIONS = [
@@ -1682,6 +1696,23 @@ function clearCandleCaches(data, tailOnly = false) {
     else delete data._cache;
   }
   if (data && !tailOnly) formationDetectionCache.delete(data);
+}
+
+function getAverageCandleVolume(data) {
+  if (!data?.length) return 0;
+  const last = data[data.length - 1];
+  if (!data._cache) data._cache = {};
+  let cached = data._cache.averageVolume;
+  if (!cached || cached.length !== data.length || cached.firstT !== data[0].t || cached.lastT !== last.t) {
+    let closedSum = 0;
+    for (let i = 0; i < data.length - 1; i++) {
+      const v = Number(data[i].v);
+      if (Number.isFinite(v) && v > 0) closedSum += v;
+    }
+    cached = data._cache.averageVolume = { length: data.length, firstT: data[0].t, lastT: last.t, closedSum };
+  }
+  const liveV = Number(last.v);
+  return (cached.closedSum + (Number.isFinite(liveV) && liveV > 0 ? liveV : 0)) / data.length;
 }
 
 function calcEMA(data, period) {
@@ -3566,7 +3597,7 @@ function drawChart() {
   if (document.hidden) return;
   if (!chartW || !chartH) return;
   // Performance guard: do not draw main chart if main screener view is hidden and chart not borrowed
-  if (activeView !== "screener" && !window.isFormationFullChartOpen?.()) return;
+  if ((activeView !== "screener" || screenerView === 'multichart') && !window.isFormationFullChartOpen?.()) return;
   if (typeof isLoadingKlines !== "undefined" && isLoadingKlines || !candles || !candles.length) {
     if ((typeof isLoadingKlines !== "undefined" && isLoadingKlines) || !candles || !candles.length) {
       const dpr = window.devicePixelRatio || 1;
@@ -3619,6 +3650,7 @@ function drawChart() {
   const PH = chartH - volH - 1;
   const TOP = 0;
   if (PH <= 20) return;
+  drawChart.lastClockSecond = Math.floor(Date.now() / 1000);
 
   // тФАтФА Background тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   ctx.clearRect(0, 0, chartW, chartH);
@@ -5088,13 +5120,8 @@ function drawChart() {
     const ci = clamp(visIdx, 0, vis.length - 1);
     if (vis[ci]) {
       const c = vis[ci];
-      if (!candles._avgV) {
-        let tv = 0;
-        for (let k = 0; k < candles.length; k++) tv += candles[k].v;
-        candles._avgV = candles.length > 0 ? tv / candles.length : 1;
-      }
-      const avgV = candles._avgV;
-      const mult = (c.v / avgV).toFixed(1);
+      const avgV = getAverageCandleVolume(candles);
+      const mult = (avgV > 0 ? c.v / avgV : 0).toFixed(1);
 
       // Draw fixed volume box at top-left
       ctx.font = "11px Inter";
@@ -8972,7 +8999,7 @@ function rafLoop() {
     drawChart();
   }
 
-  if (activeView === "screener" && screenerView === "multichart" || activeView === "formations") {
+  if ((activeView === "screener" && screenerView === "multichart" || activeView === "formations") && !window.isFormationFullChartOpen?.()) {
     chartInstances.forEach(inst => {
       if (inst.dirty) inst.draw();
     });
@@ -9088,7 +9115,15 @@ function rebuildList() {
     if (cl._lastOrder !== newKeyOrder) {
       cl._lastOrder = newKeyOrder;
       const nodes = sortedList.map(c => rowEls.get(c.key).el);
-      cl.replaceChildren(...nodes);
+      if (!cl.firstElementChild) cl.replaceChildren(...nodes);
+      else {
+        let cursor = cl.firstElementChild;
+        for (const node of nodes) {
+          if (node === cursor) cursor = cursor.nextElementSibling;
+          else cl.insertBefore(node, cursor);
+        }
+        while (cursor) { const next = cursor.nextElementSibling; cursor.remove(); cursor = next; }
+      }
     }
   }
 
@@ -9139,6 +9174,13 @@ function createRow(c) {
 }
 
 function fillRow(c, rr) {
+  const selected = c.key === `${activeEx}:${activeSym}`;
+  const tag = coinTags[c.key], tagColor = TAG_PALETTE[tag];
+  const prev = rr._rowInputs;
+  if (prev && prev.chg === c.chg && prev.v === c.v && prev.p === c.p &&
+      prev.h === c.h && prev.l === c.l && prev.funding === c.funding &&
+      prev.corr === c.corr && prev.selected === selected && prev.tag === tag &&
+      prev.tagColor === tagColor && prev.ex === c.ex) return;
   // тФАтФА 24h change % with subtle flash тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
   const isPos = c.chg >= 0;
   const chgStr = fC(c.chg);
@@ -9191,13 +9233,13 @@ function fillRow(c, rr) {
     }
   }
 
-  const ak = `${activeEx}:${activeSym}`;
-  rr.el.classList.toggle("sel", c.key === ak);
+  rr.el.classList.toggle("sel", selected);
 
   const tagIdx = coinTags[c.key];
   if (tagIdx !== undefined && TAG_PALETTE[tagIdx]) {
-    if (rr._lastTag !== tagIdx) {
+    if (rr._lastTag !== tagIdx || rr._lastTagColor !== tagColor) {
       rr._lastTag = tagIdx;
+      rr._lastTagColor = tagColor;
       rr._lastExIcon = null;
       rr.cells.dot.style.background = TAG_PALETTE[tagIdx];
       rr.cells.dot.classList.add("tagged");
@@ -9216,6 +9258,10 @@ function fillRow(c, rr) {
       rr.cells.dot.classList.remove("tagged");
     }
   }
+  const values = prev || (rr._rowInputs = {});
+  values.chg = c.chg; values.v = c.v; values.p = c.p; values.h = c.h; values.l = c.l;
+  values.funding = c.funding; values.corr = c.corr; values.selected = selected;
+  values.tag = tag; values.tagColor = tagColor; values.ex = c.ex;
 }
 
 function updateRow(key) {
@@ -9224,7 +9270,7 @@ function updateRow(key) {
   if (!c || !rr) return;
   fillRow(c, rr);
   // Row background flash on real price change (not interpolated)
-  if (c.p !== c.prev) {
+  if (c.p !== c.prev && c.p !== rr._lastFlashedPrice) {
     const fc = c.p > c.prev ? "fu" : "fd";
     if (fc === "fu") rr.el.classList.remove("fd");
     else rr.el.classList.remove("fu");
@@ -9232,6 +9278,7 @@ function updateRow(key) {
     rr.el._flashTimer && clearTimeout(rr.el._flashTimer);
     rr.el._flashTimer = setTimeout(() => rr.el.classList.remove(fc), 350);
   }
+  rr._lastFlashedPrice = c.p;
   if (key === `${activeEx}:${activeSym}`) updateSymInfoInterp(c);
 }
 
@@ -9247,16 +9294,20 @@ function updateSymInfoInterp(c) {
     scorr = $("scorr"),
     sfun = $("sfun"),
     soi = $("soi");
-  if (sn) sn.textContent = c.base + ".F";
+  if (sn && sn.textContent !== c.base + ".F") sn.textContent = c.base + ".F";
   if (sc) {
-    sc.textContent = fC(displayChg);
-    sc.className = "sym-chg " + (displayChg >= 0 ? "pos" : "neg");
+    const text = fC(displayChg);
+    if (sc.textContent !== text) sc.textContent = text;
+    const className = "sym-chg " + (displayChg >= 0 ? "pos" : "neg");
+    if (sc.className !== className) sc.className = className;
   }
   if (schg) {
-    schg.textContent = fC(displayChg);
-    schg.className = "sv " + (displayChg >= 0 ? "pos" : "neg");
+    const text = fC(displayChg);
+    if (schg.textContent !== text) schg.textContent = text;
+    const className = "sv " + (displayChg >= 0 ? "pos" : "neg");
+    if (schg.className !== className) schg.className = className;
   }
-  if (sv) sv.textContent = fV(c.v);
+  if (sv) { const text = fV(c.v); if (sv.textContent !== text) sv.textContent = text; }
 
   // NATR (Normalized ATR)
   let natr = 0;
@@ -9265,15 +9316,18 @@ function updateSymInfoInterp(c) {
   }
   natr = Math.max(0, Math.min(100, natr));
   if (snatr) {
-    snatr.textContent = natr.toFixed(1);
-    snatr.className = "sv " + (natr >= 5 ? "pos" : "");
+    const text = natr.toFixed(1);
+    if (snatr.textContent !== text) snatr.textContent = text;
+    const className = "sv " + (natr >= 5 ? "pos" : "");
+    if (snatr.className !== className) snatr.className = className;
   }
 
   // О.Корр (Overall Correlation)
   if (scorr) {
     const corrVal = c.corr !== undefined ? c.corr : "—";
-    scorr.textContent = corrVal;
-    scorr.className = "sv " + (typeof corrVal === "number" && corrVal > 50 ? "pos" : typeof corrVal === "number" && corrVal < 0 ? "neg" : "");
+    if (scorr.textContent !== String(corrVal)) scorr.textContent = corrVal;
+    const className = "sv " + (typeof corrVal === "number" && corrVal > 50 ? "pos" : typeof corrVal === "number" && corrVal < 0 ? "neg" : "");
+    if (scorr.className !== className) scorr.className = className;
   }
 
   // Funding in % and countdown
@@ -9297,8 +9351,9 @@ function updateSymInfoInterp(c) {
   }
 
   if (sfun) {
-    sfun.textContent = fundStr;
-    sfun.className = "sv " + (funding > 0 ? "pos" : funding < 0 ? "neg" : "");
+    if (sfun.textContent !== fundStr) sfun.textContent = fundStr;
+    const className = "sv " + (funding > 0 ? "pos" : funding < 0 ? "neg" : "");
+    if (sfun.className !== className) sfun.className = className;
   }
 }
 
@@ -11225,6 +11280,7 @@ class ChartInstance {
     this.candleW = 8;
     this.lastDrawTs = 0;
     this.dirty = true;
+    this._interactionDirty = false;
     this.levels = [];
     this._lastFormationDetectAt = 0;
 
@@ -11339,7 +11395,7 @@ class ChartInstance {
 
         this.rulerStart = { x: px, y: py, price, idx };
         this.rulerEnd = { x: px, y: py, price, idx };
-        this.draw(true);
+        this.requestInteractionDraw();
         e.stopPropagation();
         return;
       }
@@ -11399,7 +11455,7 @@ class ChartInstance {
         const price = this.viewMx - (py / this.canvas.clientHeight) * (this.viewMx - this.viewMn);
 
         this.rulerEnd = { x: px, y: py, price, idx };
-        this.draw(true);
+        this.requestInteractionDraw();
         return;
       }
 
@@ -11412,7 +11468,7 @@ class ChartInstance {
         const minOffsetX = -Math.max(0, n - 2);
         const maxOffsetX = Math.max(0, this.candles.length - 2);
         this.offsetX = Math.max(minOffsetX, Math.min(maxOffsetX, this.dragOff + dx / this.candleW));
-        this.draw(true);
+        this.requestInteractionDraw();
       }
 
       if (this.isDragYScale) {
@@ -11422,7 +11478,7 @@ class ChartInstance {
         half = clamp(half, Math.max(Math.abs(center) * 0.0001, 1e-8), Math.max(Math.abs(center) * 50, 1));
         this.viewMn = center - half;
         this.viewMx = center + half;
-        this.draw(true);
+        this.requestInteractionDraw();
       }
 
       if (this.isDragY) {
@@ -11432,7 +11488,7 @@ class ChartInstance {
           const shift = (e.clientY - this.dragStartY) * (pr / h);
           this.viewMn = this.dragMnOff + shift;
           this.viewMx = this.dragMxOff + shift;
-          this.draw(true);
+          this.requestInteractionDraw();
         }
       }
     };
@@ -11443,7 +11499,7 @@ class ChartInstance {
         this.isRuler = false;
         this.rulerStart = { x: null, y: null, price: null, idx: null };
         this.rulerEnd = { x: null, y: null, price: null, idx: null };
-        this.draw(true);
+        this.requestInteractionDraw();
       }
       if (this.isDrag || this.isDragYScale || this.isDragY) {
         this.isDrag = false;
@@ -11462,7 +11518,7 @@ class ChartInstance {
       this.isManualYScale = false;
       this.viewMn = null;
       this.viewMx = null;
-      this.draw(true);
+      this.requestInteractionDraw();
     };
 
     this.canvas.oncontextmenu = (e) => e.preventDefault();
@@ -11493,14 +11549,14 @@ class ChartInstance {
       const maxOffsetX = Math.max(0, this.candles.length - 2);
       this.offsetX = clamp(this.candles.length - nAfter - vStartAfter, minOffsetX, maxOffsetX);
 
-      this.draw(true);
+      this.requestInteractionDraw();
       e.stopPropagation();
     };
 
     if (window.ResizeObserver && this.el) {
       this._ro = new ResizeObserver(() => {
         if (activeView === "formations" || (activeView === "screener" && screenerView === "multichart")) {
-          this.draw(true);
+          this.requestInteractionDraw();
         }
       });
       this._ro.observe(this.el);
@@ -11508,7 +11564,7 @@ class ChartInstance {
   }
 
   refreshFormationLevels(force = false) {
-    if (document.hidden || activeView !== 'formations' || this.loadingKlines || this.candles.length < 30) return;
+    if (document.hidden || window.isFormationFullChartOpen?.() || activeView !== 'formations' || this.loadingKlines || this.candles.length < 30) return;
     const now = performance.now();
     if (!force && now - this._lastFormationDetectAt < 900) return;
     this._lastFormationDetectAt = now;
@@ -11869,23 +11925,31 @@ class ChartInstance {
     }
   }
 
+  requestInteractionDraw() {
+    this._interactionDirty = true;
+    this.draw(true);
+  }
+
   draw(force = false) {
     if (this._disposed) return;
     // Input and stream handlers invalidate; the shared render loop paints.
-    if (force || document.hidden || (activeView !== 'formations' && !(activeView === 'screener' && screenerView === 'multichart'))) {
+    if (force || document.hidden || window.isFormationFullChartOpen?.() || (activeView !== 'formations' && !(activeView === 'screener' && screenerView === 'multichart'))) {
       this.dirty = true;
       return;
     }
     if (activeView === "screener" && screenerView !== "multichart") return;
     if (!this.candles.length) {
+      this.dirty = false;
+      this._interactionDirty = false;
       if (this.loadingKlines && this.canvas) {
         const cw = this.canvas.clientWidth;
         const ch = this.canvas.clientHeight;
         if (cw && ch && cw >= 30 && ch >= 30) {
           const dpr = window.devicePixelRatio || 1;
-          if (this.canvas.width !== cw * dpr || this.canvas.height !== ch * dpr) {
-            this.canvas.width = cw * dpr;
-            this.canvas.height = ch * dpr;
+          const width = Math.round(cw * dpr), height = Math.round(ch * dpr);
+          if (this.canvas.width !== width || this.canvas.height !== height) {
+            this.canvas.width = width;
+            this.canvas.height = height;
           }
           this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           this.ctx.fillStyle = getCanvasBgColorFor(this.canvas);
@@ -11932,9 +11996,11 @@ class ChartInstance {
     }
 
     const now = Date.now();
-    if (!force && now - this.lastDrawTs < 16) return; // Increased to ~60fps
+    // Pointer/zoom frames follow the display; background data keeps its budget.
+    if (!this._interactionDirty && now - this.lastDrawTs < 16) return;
     this.lastDrawTs = now;
     this.dirty = false;
+    this._interactionDirty = false;
 
     const last = this.candles[this.candles.length - 1];
     const cData = coins.get(this.key || `${this.ex}:${this.sym}`);
@@ -13332,6 +13398,9 @@ function layoutDensityBadges() {
 }
 
 function findDensityAt(x, y) {
+  const version = densityLayoutVersion;
+  const cached = findDensityAt._cache;
+  if (cached && cached.version === version && cached.x === x && cached.y === y) return cached.index;
   let bestIndex = -1;
   let bestDistanceSq = Infinity;
   for (let i = 0; i < densityVisibleData.length; i++) {
@@ -13346,30 +13415,27 @@ function findDensityAt(x, y) {
       bestDistanceSq = distanceSq;
     }
   }
+  const next = cached || (findDensityAt._cache = {});
+  next.version = version; next.x = x; next.y = y; next.index = bestIndex;
   return bestIndex;
 }
 
+function findSelectedDensityIndex() {
+  if (!densitySelectedKey) return -1;
+  const cached = findSelectedDensityIndex._cache;
+  if (cached && cached.version === densityLayoutVersion && cached.key === densitySelectedKey) return cached.index;
+  const index = densityVisibleData.findIndex(d => getDensityStableKey(d) === densitySelectedKey);
+  const next = cached || (findSelectedDensityIndex._cache = {});
+  next.version = densityLayoutVersion; next.key = densitySelectedKey; next.index = index;
+  return index;
+}
+
 // тФАтФА Draw density radar map тФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФАтФА
-function drawDensityMap() {
-  if (!densityCtx || !densityW || !densityH) return;
-  const ctx = densityCtx;
-  const rootStyle = getComputedStyle(document.documentElement);
-  const activePalette = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
-  const mapBg = rootStyle.getPropertyValue("--map-bg").trim() || activePalette?.mapBg || "#04050d";
-  const mapPanel = rootStyle.getPropertyValue("--map-panel").trim() || activePalette?.mapPanel || "#0d0f14";
-  const mapAccent = rootStyle.getPropertyValue("--ac").trim() || activePalette?.accent || "#7c3aed";
-  const mapText = rootStyle.getPropertyValue("--map-text").trim() || activePalette?.text || "#ffffff";
-  const mapMuted = rootStyle.getPropertyValue("--map-muted").trim() || activePalette?.muted || "#94a3b8";
-  const mapBorder = rootStyle.getPropertyValue("--bd").trim() || activePalette?.border || "#2b2e39";
+function drawDensityBackdrop(ctx, palette) {
+  const {mapBg, mapPanel, mapAccent, mapMuted} = palette;
   const accentAlpha = alpha => hexToRgba(mapAccent, alpha * 100);
-  const cx = densityW / 2;
-  const cy = densityH / 2;
-  const maxR = Math.min(cx, cy) - 60;
-  const minR = 50;
-  const t = Date.now();
-
-  ctx.clearRect(0, 0, densityW, densityH);
-
+  const cx = densityW / 2, cy = densityH / 2;
+  const maxR = Math.min(cx, cy) - 60, minR = 50;
   // тФАтФА Background gradient
   const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.8);
   bg.addColorStop(0, mapPanel);
@@ -13444,6 +13510,45 @@ function drawDensityMap() {
   ctx.strokeStyle = accentAlpha(0.08); ctx.lineWidth = 1; ctx.stroke();
   ctx.restore();
 
+  ctx.save();
+  ctx.fillStyle = mapMuted;
+  ctx.font = "bold 10px Inter"; ctx.textAlign = "center";
+  ctx.fillText("PRICE", cx, cy + 22);
+  ctx.restore();
+
+}
+
+function drawDensityMap() {
+  if (!densityCtx || !densityW || !densityH) return;
+  const ctx = densityCtx;
+  const rootStyle = getComputedStyle(document.documentElement);
+  const activePalette = window.AppearanceThemes?.get(document.documentElement.dataset.appearanceTheme);
+  const mapBg = rootStyle.getPropertyValue("--map-bg").trim() || activePalette?.mapBg || "#04050d";
+  const mapPanel = rootStyle.getPropertyValue("--map-panel").trim() || activePalette?.mapPanel || "#0d0f14";
+  const mapAccent = rootStyle.getPropertyValue("--ac").trim() || activePalette?.accent || "#7c3aed";
+  const mapText = rootStyle.getPropertyValue("--map-text").trim() || activePalette?.text || "#ffffff";
+  const mapMuted = rootStyle.getPropertyValue("--map-muted").trim() || activePalette?.muted || "#94a3b8";
+  const mapBorder = rootStyle.getPropertyValue("--bd").trim() || activePalette?.border || "#2b2e39";
+  const accentAlpha = alpha => hexToRgba(mapAccent, alpha * 100);
+  const cx = densityW / 2;
+  const cy = densityH / 2;
+  const maxR = Math.min(cx, cy) - 60;
+  const minR = 50;
+  const t = Date.now();
+
+  ctx.clearRect(0, 0, densityW, densityH);
+
+  const palette = drawDensityMap._palette || (drawDensityMap._palette = {});
+  palette.mapBg = mapBg; palette.mapPanel = mapPanel; palette.mapAccent = mapAccent; palette.mapMuted = mapMuted;
+  const dpr = window.devicePixelRatio || 1;
+  const layerScale = Math.min(2, dpr, Math.sqrt(32 * 1024 * 1024 / (densityW * densityH * 4)));
+  // A downscaled wall cache must never soften the radar's text and rings.
+  const cacheBackdrop = layerScale >= dpr;
+  const bubbleLayer = getDensityBubblesLayer(cacheBackdrop ? palette : null);
+  const backdropCached = cacheBackdrop && bubbleLayer;
+  if (backdropCached) ctx.drawImage(bubbleLayer, 0, 0, densityW, densityH);
+  else drawDensityBackdrop(ctx, palette);
+
   // тФАтФА Animated scan sweep
   const sweepAngle = ((t % 6000) / 6000) * Math.PI * 2 - Math.PI / 2;
   ctx.save();
@@ -13482,31 +13587,25 @@ function drawDensityMap() {
   ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2);
   ctx.fillStyle = mapAccent; ctx.fill();
   ctx.strokeStyle = accentAlpha(0.6); ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = mapMuted;
-  ctx.font = "bold 10px Inter"; ctx.textAlign = "center";
-  ctx.fillText("PRICE", cx, cy + 22);
   ctx.restore();
 
   // тФАтФА Draw badges
   const filtered = densityVisibleData;
   densityHover = findDensityAt(densityMouseX, densityMouseY);
-  const bubbleLayer = getDensityBubblesLayer();
-  if (bubbleLayer) ctx.drawImage(bubbleLayer, 0, 0, densityW, densityH);
-  for (let i = 0; i < filtered.length; i++) {
-    const d = filtered[i];
-    if (d.rx === undefined) continue;
-    const isHover = i === densityHover;
-    const isSelected = densitySelectedKey && getDensityStableKey(d) === densitySelectedKey;
-    if (isHover || isSelected) {
-      drawDensityBubble(ctx, d, d.rx, d.ry, true);
-    }
+  if (bubbleLayer && !backdropCached) ctx.drawImage(bubbleLayer, 0, 0, densityW, densityH);
+  const selectedIndex = findSelectedDensityIndex();
+  if (densityHover >= 0 && filtered[densityHover]) {
+    const d = filtered[densityHover];
+    drawDensityBubble(ctx, d, d.rx, d.ry, true);
+  }
+  if (selectedIndex >= 0 && selectedIndex !== densityHover) {
+    const d = filtered[selectedIndex];
+    if (Number.isFinite(d.rx) && Number.isFinite(d.ry)) drawDensityBubble(ctx, d, d.rx, d.ry, true);
   }
 
   // Active item for tooltip / line (hovered or explicitly selected on tap)
   let activeItemIndex = densityHover;
-  if (activeItemIndex < 0 && densitySelectedKey) {
-    activeItemIndex = filtered.findIndex(d => getDensityStableKey(d) === densitySelectedKey);
-  }
+  if (activeItemIndex < 0) activeItemIndex = selectedIndex;
 
   // тФАтФА Hover/Select connector line & Tooltip
   if (activeItemIndex >= 0 && activeItemIndex < filtered.length) {
@@ -13769,7 +13868,7 @@ function drawDensityBubble(ctx, d, x, y, isHover) {
   ctx.restore();
 }
 
-function getDensityBubblesLayer() {
+function getDensityBubblesLayer(backdrop = null) {
   if (!densityVisibleData.length || !(densityW > 0) || !(densityH > 0)) {
     if (densityBubbleLayer) densityBubbleLayer.width = 0;
     densityBubbleLayer = null; densityBubbleLayerVersion = '';
@@ -13781,7 +13880,8 @@ function getDensityBubblesLayer() {
     Math.sqrt(32 * 1024 * 1024 / (densityW * densityH * 4)));
   const width = Math.max(1, Math.floor(densityW * scale));
   const height = Math.max(1, Math.floor(densityH * scale));
-  const version = `${densityLayoutVersion}|${width}|${height}`;
+  const backdropKey = backdrop ? `${backdrop.mapBg}|${backdrop.mapPanel}|${backdrop.mapAccent}|${backdrop.mapMuted}` : '';
+  const version = `${densityLayoutVersion}|${width}|${height}|${backdropKey}`;
   if (densityBubbleLayer && densityBubbleLayerVersion === version) return densityBubbleLayer;
   if (!densityBubbleLayer) densityBubbleLayer = document.createElement('canvas');
   if (densityBubbleLayer.width !== width) densityBubbleLayer.width = width;
@@ -13789,6 +13889,7 @@ function getDensityBubblesLayer() {
   const layerCtx = densityBubbleLayer.getContext('2d', { alpha: true });
   layerCtx.setTransform(width / densityW, 0, 0, height / densityH, 0, 0);
   layerCtx.clearRect(0, 0, densityW, densityH);
+  if (backdrop) drawDensityBackdrop(layerCtx, backdrop);
   for (const wall of densityVisibleData) {
     if (Number.isFinite(wall.rx) && Number.isFinite(wall.ry)) drawDensityBubble(layerCtx, wall, wall.rx, wall.ry, false);
   }
@@ -13801,10 +13902,13 @@ function getDensityBubblesLayer() {
 function startDensityLoop() {
   if (densityAnimFrame) return;
   let lastFrame = 0;
+  let lastMouseX = NaN, lastMouseY = NaN;
   function loop(ts) {
     if (activeView !== "map") { densityAnimFrame = null; return; }
-    if (!document.hidden && ts - lastFrame >= 33) {
+    const pointerMoved = densityVisibleData.length > 0 && (densityMouseX !== lastMouseX || densityMouseY !== lastMouseY);
+    if (!document.hidden && (pointerMoved || ts - lastFrame >= 33)) {
       lastFrame = ts;
+      lastMouseX = densityMouseX; lastMouseY = densityMouseY;
       drawDensityMap();
     }
     densityAnimFrame = requestAnimationFrame(loop);
@@ -14697,11 +14801,7 @@ window.addEventListener("resize", () => {
   connectWS();
   setTimeout(() => fetchKlines(activeEx, activeSym, activeTf), 200);
   // Periodic safety redraw (catches edge cases)
-  setInterval(() => {
-    if (!document.hidden && activeView === "screener" && candles.length) {
-      chartNeedsDraw = true;
-    }
-  }, 500);
+  setInterval(refreshMainChartClock, 500);
 
   // Refresh only when visible and new data arrived.
   setInterval(() => {

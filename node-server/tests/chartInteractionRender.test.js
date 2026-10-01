@@ -7,10 +7,10 @@ const begin = source.indexOf('function rafLoop() {');
 const end = source.indexOf('\nfunction isUsdtFutures', begin);
 assert.ok(begin > 0 && end > begin);
 
-function runFrames({ hidden = false, dirty = true, grid = false, hz = 60 } = {}) {
+function runFrames({ hidden = false, dirty = true, grid = false, expanded = false, hz = 60 } = {}) {
   let now = 0, painted = 0, tables = 0, cells = 0;
   const ctx = { performance: { now: () => now }, requestAnimationFrame() {},
-    document: { hidden }, lastRafTs: 0, chartNeedsDraw: dirty,
+    document: { hidden }, window: { isFormationFullChartOpen: () => expanded }, lastRafTs: 0, chartNeedsDraw: dirty,
     drawChart: () => painted++, processTickData: () => tables++,
     activeView: grid ? 'formations' : 'screener', screenerView: 'chart',
     chartInstances: [{ dirty, draw() { cells++; this.dirty = false; } }] };
@@ -45,4 +45,9 @@ for (const hz of [60, 120, 144]) test(`ticker table retains its independent 30 H
 
 test('formation grid input frames are not dropped by the ticker-table throttle', () => {
   assert.equal(runFrames({ grid: true }).cells, 60);
+});
+
+test('expanding a formation paints its main canvas without painting the covered grid cells', () => {
+  const { painted, cells } = runFrames({ grid: true, expanded: true, hz: 120 });
+  assert.equal(painted, 120); assert.equal(cells, 0);
 });

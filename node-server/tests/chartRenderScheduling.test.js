@@ -21,7 +21,7 @@ function runTickerFrame(pendingKeys = []) {
     const chartTickerDirty = new Set(${JSON.stringify(pendingKeys)});
     const chartInstances = [{ key: "BN:BTCUSDT", update() { calls++; } }];
     let calls = 0;
-    let needRebuild = false, screenerView = "multichart", activeView = "screener";
+    let needRebuild = false, tickerListChanged = false, screenerView = "multichart", activeView = "screener";
     let activeEx = "BN", activeSym = "BTCUSDT", candles = [], klWs = null;
     const hasMainMarketStream = () => true;
     ${block("processTickData")}

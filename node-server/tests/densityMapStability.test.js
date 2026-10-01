@@ -123,6 +123,7 @@ test("density hit testing chooses the nearest overlapping wall", () => {
   const layout = sourceBetween("function layoutDensityBadges()", "function drawDensityMap()");
   const context = { Math };
   vm.runInNewContext(`
+    let densityLayoutVersion = 0;
     let densityVisibleData = [
       { wallId: "far", rx: 120, ry: 100, sizeType: "large" },
       { wallId: "near", rx: 104, ry: 100, sizeType: "small" },

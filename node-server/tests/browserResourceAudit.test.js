@@ -52,7 +52,7 @@ test("an ETH alert does not fire for WETH or for another exchange", async () => 
 });
 test("a hidden screener does not update ticker table DOM during a 50000-market burst", () => {
   const c = { dirty: new Set(Array.from({ length: 50000 }, (_, i) => String(i))), needRebuild: false,
-    interpActive: new Map(), coins: new Map(), chartTickerDirty: new Set(), chartInstances: [],
+    interpActive: new Map(), coins: new Map(), chartTickerDirty: new Set(), chartInstances: [], tickerListChanged: false,
     activeView: "events", screenerView: "list", activeEx: "BN", activeSym: "BTCUSDT", candles: [],
     lastSort: 1000, lastRender: 1000, performance: { now: () => 1100 }, hasMainMarketStream: () => true,
     document: { hidden: false }, window: {}, calls: 0, updateRow() { c.calls++; }, rebuildList() { c.calls++; } };
@@ -98,10 +98,10 @@ test("1000 unchanged density bubbles are rendered once across repeated radar fra
     drawDensityBubble() { c.renders++; },
     document: { createElement: () => ({width:0,height:0,getContext:()=>canvasContext}) } };
   vm.createContext(c);
-  const helper = block('getDensityBubblesLayer');
+  const helper = block('getDensityBubblesLayer') + '\n' + block('findSelectedDensityIndex');
   const begin = source.indexOf('  // тФАтФА Draw badges');
   const end = source.indexOf('  // Active item for tooltip', begin);
-  vm.runInContext(helper + '\nfunction frame(){const ctx=densityCtx;\n' + source.slice(begin,end) + '\n}', c);
+  vm.runInContext(helper + '\nfunction frame(){const ctx=densityCtx;const bubbleLayer=getDensityBubblesLayer(),backdropCached=false;\n' + source.slice(begin,end) + '\n}', c);
   for (let i = 0; i < 30; i++) c.frame();
   assert.equal(c.renders, 1000, 'unchanged walls must not recreate sprites or gradients each frame');
   c.densityLayoutVersion++; c.densityVisibleData[0].wallK = 20; c.frame();
