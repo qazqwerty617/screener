@@ -1,6 +1,8 @@
 "use strict";
 
-// Dedicated USDT spot quotes. Futures symbols and ticker last prices never
+const {createHyperliquidSpot}=require('./hyperliquidSpot');
+
+// Dedicated spot quotes valued in USDT. Futures symbols and ticker last prices never
 // substitute for a missing ask/bid. Shared by arbitrage and the wall universe.
 const SPOT_VENUES = Object.freeze({
   BN:{name:"Binance",feePct:.1,url:"https://api.binance.com/api/v3/ticker/bookTicker"},
@@ -10,19 +12,23 @@ const SPOT_VENUES = Object.freeze({
   GT:{name:"Gate.io",feePct:.2,url:"https://api.gateio.ws/api/v4/spot/tickers"},
   MX:{name:"MEXC",feePct:.1,url:"https://api.mexc.com/api/v3/ticker/bookTicker"},
   KC:{name:"KuCoin",feePct:.1,url:"https://api.kucoin.com/api/v1/market/allTickers"},
+  BX:{name:"BingX",feePct:.1,url:"https://open-api.bingx.com/openApi/spot/v1/ticker/bookTicker"},
+  AD:{name:"Aster",feePct:.1,url:"https://sapi.asterdex.com/api/v3/ticker/bookTicker"},
+  HL:{name:"Hyperliquid",feePct:.07,url:"https://api.hyperliquid.xyz/info",quote:"USDC",indicative:true},
   HT:{name:"HTX",feePct:.2,url:"https://api.huobi.pro/market/tickers"},
   PL:{name:"Poloniex",feePct:.2,url:"https://api.poloniex.com/markets/ticker24h"},
   CD:{name:"Crypto.com",feePct:.5,url:"https://api.crypto.com/exchange/v1/public/get-tickers"},
   KR:{name:"Kraken",feePct:.4,url:"https://api.kraken.com/0/public/Ticker?assetVersion=1"},
   BS:{name:"Bitstamp",feePct:.4,url:"https://www.bitstamp.net/api/v2/ticker/"},
 });
-const VOLUME_URLS={BN:"https://api.binance.com/api/v3/ticker/24hr",MX:"https://api.mexc.com/api/v3/ticker/24hr"};
+const VOLUME_URLS={BN:"https://api.binance.com/api/v3/ticker/24hr",MX:"https://api.mexc.com/api/v3/ticker/24hr",BX:"https://open-api.bingx.com/openApi/spot/v1/ticker/24hr",AD:"https://sapi.asterdex.com/api/v3/ticker/24hr"};
 const MAX_QUOTE_AGE_MS=15000;
 const number=v=>v!==null&&v!==undefined&&v!==""&&Number.isFinite(Number(v))?Number(v):null;
 
-function normalizeSpotQuotes(ex,payload,observedAt,volumes=new Map()) {
+function normalizeSpotQuotes(ex,payload,observedAt,volumes=new Map(),{includeUsdc=false}={}) {
   let rows;
-  if(["BN","MX","GT","PL","BS"].includes(ex))rows=payload;
+  if(["BN","MX","AD","GT","PL","BS"].includes(ex))rows=payload;
+  else if(ex==="BX"){if(Number(payload?.code)!==0)throw new Error("Invalid BingX response");rows=payload.data;}
   else if(ex==="BB"){if(Number(payload?.retCode)!==0)throw new Error("Invalid Bybit response");rows=payload.result?.list;}
   else if(ex==="OX"){if(String(payload?.code)!=="0")throw new Error("Invalid OKX response");rows=payload.data;}
   else if(ex==="BG"){if(String(payload?.code)!=="00000")throw new Error("Invalid Bitget response");rows=payload.data;}
@@ -37,7 +43,8 @@ function normalizeSpotQuotes(ex,payload,observedAt,volumes=new Map()) {
   const quotes=new Map();
   for(const r of rows){
     let symbol,bid,ask,bidSize,askSize,volume,sourceAt=null;
-    if(["BN","MX"].includes(ex)){symbol=r.symbol;bid=r.bidPrice;ask=r.askPrice;bidSize=r.bidQty;askSize=r.askQty;volume=volumes.get(symbol);}
+    if(["BN","MX","AD"].includes(ex)){symbol=r.symbol;bid=r.bidPrice;ask=r.askPrice;bidSize=r.bidQty;askSize=r.askQty;volume=volumes.get(symbol);if(ex==="AD")sourceAt=number(r.time);}
+    else if(ex==="BX"){symbol=r.symbol;bid=r.bidPrice;ask=r.askPrice;bidSize=r.bidVolume;askSize=r.askVolume;volume=volumes.get(symbol);sourceAt=number(r.time);}
     else if(ex==="BB"){symbol=r.symbol;bid=r.bid1Price;ask=r.ask1Price;bidSize=r.bid1Size;askSize=r.ask1Size;volume=r.turnover24h;}
     else if(ex==="OX"){symbol=r.instId;bid=r.bidPx;ask=r.askPx;bidSize=r.bidSz;askSize=r.askSz;volume=r.volCcy24h;sourceAt=number(r.ts);}
     else if(ex==="BG"){symbol=r.symbol;bid=r.bidPr;ask=r.askPr;bidSize=r.bidSz;askSize=r.askSz;volume=r.usdtVolume;}
@@ -52,12 +59,12 @@ function normalizeSpotQuotes(ex,payload,observedAt,volumes=new Map()) {
     const match=/^([A-Z0-9][A-Z0-9.]{0,30})(?:[-_/]?USDT)$/.exec(symbol);
     if(!match)continue;
     const base=ex==="KR"&&match[1]==="XBT"?"BTC":match[1];
-    if(/(?:[235][LS]|BULL|BEAR)$/.test(base)||/^(?:BTC|ETH|BNB|XRP|TRX|EOS|ADA|LTC|DOT|LINK|BCH)(?:UP|DOWN)$/.test(base)||["USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDE","USD1"].includes(base))continue;
+    if(/(?:[235][LS]|BULL|BEAR)$/.test(base)||/^(?:BTC|ETH|BNB|XRP|TRX|EOS|ADA|LTC|DOT|LINK|BCH)(?:UP|DOWN)$/.test(base)||(["USDT","USDC","BUSD","DAI","TUSD","FDUSD","USDE","USD1"].includes(base)&&!(base==="USDC"&&includeUsdc)))continue;
     bid=number(bid);ask=number(ask);volume=number(volume);
     if(!(bid>0&&ask>=bid))continue;
     const at=sourceAt>0?Math.min(observedAt,sourceAt):observedAt;
     if(sourceAt>observedAt+1000)continue;
-    const q={ex,symbol,base,bid,ask,bidSize:number(bidSize),askSize:number(askSize),volume:volume>0?volume:0,
+    const q={ex,symbol,base,quote:"USDT",bid,ask,bidSize:number(bidSize),askSize:number(askSize),volume:volume>0?volume:0,
       observedAt,at,sourceAt:sourceAt>0?sourceAt:null,feePct:SPOT_VENUES[ex].feePct};
     const existing=quotes.get(base);
     if(!existing||q.at>existing.at||q.at===existing.at&&q.volume>existing.volume)quotes.set(base,q);
@@ -72,19 +79,23 @@ function spotTradeUrl(ex,symbol){
     OX:`https://www.okx.com/trade-spot/${s.toLowerCase()}`,BG:`https://www.bitget.com/spot/${plain}`,
     GT:`https://www.gate.com/trade/${s}`,MX:`https://www.mexc.com/exchange/${s.replace(/USDT$/,"_USDT")}`,
     KC:`https://www.kucoin.com/trade/${s}`,HT:`https://www.htx.com/trade/${s.toLowerCase()}`,
+    BX:`https://bingx.com/en/spot/${encodeURIComponent(symbol.replace(/[-_]/g,''))}`,AD:`https://www.asterdex.com/en/spot/${plain}`,
+    HL:`https://app.hyperliquid.xyz/trade/${s}`,
     PL:`https://poloniex.com/trade/${s}`,CD:`https://crypto.com/exchange/trade/${s}`,
     KR:`https://pro.kraken.com/app/trade/${encodeURIComponent(symbol.replace('/','-').toLowerCase())}`,
     BS:`https://www.bitstamp.net/markets/${encodeURIComponent(symbol.replace('/','').toLowerCase())}/`})[ex]||null;
 }
 
-function createSpotMarketData({request=fetch,now=Date.now,pollMs=5000,venues=SPOT_VENUES}={}){
+function createSpotMarketData({request=fetch,now=Date.now,pollMs=5000,venues=SPOT_VENUES,socketFactory}={}){
   const quotes=new Map(),health=new Map(),volumes=new Map(),volumeAt=new Map(),due=new Map(),pending=new Map();
   let timer=null,stopped=false,revision=0,snapshotCache=null,snapshotAt=-Infinity,snapshotRevision=-1;
-  const controllers=new Set();
-  async function json(url){
+  const controllers=new Set(),fxQuotes=new Map();
+  const hyperliquid=venues.HL?createHyperliquidSpot({json,now,socketFactory}):null;
+  function referenceFx(){return [...fxQuotes.values()].filter(q=>now()-q.at<=MAX_QUOTE_AGE_MS&&q.at<=now()+1000).sort((a,b)=>a.feePct-b.feePct||b.volume-a.volume)[0]||null;}
+  async function json(url,{method="GET",body}={}){
     const controller=new AbortController();controllers.add(controller);const timeout=setTimeout(()=>controller.abort(),8000);
     try{
-      const r=await request(url,{signal:controller.signal,redirect:"error",headers:{Accept:"application/json"}});
+      const r=await request(url,{signal:controller.signal,redirect:"error",method,headers:{Accept:"application/json",...(body?{"Content-Type":"application/json"}:{})},...(body?{body:JSON.stringify(body)}:{})});
       if(!r.ok){
         const retry=r.headers?.get("retry-after"),seconds=Number(retry);
         const delay=retry&&Number.isFinite(seconds)?seconds*1000:retry?Date.parse(retry)-now():null;
@@ -98,19 +109,23 @@ function createSpotMarketData({request=fetch,now=Date.now,pollMs=5000,venues=SPO
     }finally{clearTimeout(timeout);controllers.delete(controller);}
   }
   async function poll(ex){
+    if(ex==="HL")return stopped?Promise.resolve():hyperliquid.refresh();
     if(stopped||pending.has(ex)||now()<(due.get(ex)||0))return pending.get(ex);
     const op=(async()=>{
       const started=now();
       try{
         if(VOLUME_URLS[ex]&&(!volumeAt.has(ex)||started-volumeAt.get(ex)>=60000)){
-          const data=await json(VOLUME_URLS[ex]);
+          const payload=await json(VOLUME_URLS[ex]);
+          if(ex==="BX"&&Number(payload?.code)!==0)throw Error("Invalid BingX volume response");
+          const data=ex==="BX"?payload.data:payload;
           if(stopped)return;
           if(!Array.isArray(data)||data.length>25000)throw new Error("Invalid spot volume list");
           volumes.set(ex,new Map(data.filter(r=>typeof r.symbol==="string"&&number(r.quoteVolume)>=0).map(r=>[r.symbol,Number(r.quoteVolume)])));
           volumeAt.set(ex,now());
         }
         const requestedAt=now(),data=await json(venues[ex].url);
-        const next=normalizeSpotQuotes(ex,data,requestedAt,volumes.get(ex));
+        const next=normalizeSpotQuotes(ex,data,requestedAt,volumes.get(ex),{includeUsdc:true});
+        const fx=next.get('USDC');if(fx)fxQuotes.set(ex,fx);else fxQuotes.delete(ex);next.delete('USDC');
         if(stopped)return;
         const freshCount=[...next.values()].filter(q=>now()-q.at<=MAX_QUOTE_AGE_MS).length;
         quotes.set(ex,next);health.set(ex,{name:venues[ex].name,status:freshCount?'ok':next.size?'stale':'empty',updatedAt:requestedAt,markets:freshCount});
@@ -133,20 +148,22 @@ function createSpotMarketData({request=fetch,now=Date.now,pollMs=5000,venues=SPO
   function getTickers(maxAgeMs=MAX_QUOTE_AGE_MS){
     const time=now(),rows=[];
     for(const map of quotes.values())for(const q of map.values())if(time-q.at<=maxAgeMs&&q.at<=time+1000)rows.push(q);
+    if(hyperliquid)rows.push(...hyperliquid.snapshot(referenceFx()).quotes.filter(q=>time-q.at<=maxAgeMs));
     return rows;
   }
   function snapshot(){
     const time=now();
-    if(snapshotCache&&snapshotRevision===revision&&time-snapshotAt<250)return snapshotCache;
+    const hl=hyperliquid?.snapshot(referenceFx()),version=`${revision}:${hl?.revision??0}`;
+    if(snapshotCache&&snapshotRevision===version&&time-snapshotAt<250)return snapshotCache;
     const fresh=getTickers(),counts=new Map();for(const q of fresh)counts.set(q.ex,(counts.get(q.ex)||0)+1);
-    snapshotCache={revision,generatedAt:time,quotes:fresh,sources:Object.fromEntries(Object.keys(venues).map(ex=>{
-      const source=health.get(ex)||{name:venues[ex].name,status:'pending',markets:0,updatedAt:0};
+    snapshotCache={revision:version,generatedAt:time,quotes:fresh,sources:Object.fromEntries(Object.keys(venues).map(ex=>{
+      const source=(ex==='HL'?hl?.source:health.get(ex))||{name:venues[ex].name,status:'pending',markets:0,updatedAt:0};
       return [ex,{...source,markets:counts.get(ex)||0,status:source.status==='ok'&&!counts.get(ex)?'stale':source.status}];
     }))};
-    snapshotAt=time;snapshotRevision=revision;return snapshotCache;
+    snapshotAt=time;snapshotRevision=version;return snapshotCache;
   }
-  function start(){if(timer)return;stopped=false;void refresh();timer=setInterval(()=>void refresh(),1000);timer.unref?.();}
-  function stop(){stopped=true;clearInterval(timer);timer=null;for(const controller of controllers)controller.abort();}
+  function start(){if(timer)return;stopped=false;hyperliquid?.start();void refresh();timer=setInterval(()=>void refresh(),1000);timer.unref?.();}
+  function stop(){stopped=true;clearInterval(timer);timer=null;hyperliquid?.stop();for(const controller of controllers)controller.abort();}
   return {start,stop,refresh,snapshot,getTickers};
 }
 module.exports={SPOT_VENUES,MAX_QUOTE_AGE_MS,normalizeSpotQuotes,spotTradeUrl,createSpotMarketData};

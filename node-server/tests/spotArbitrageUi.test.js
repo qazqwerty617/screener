@@ -21,7 +21,7 @@ function setup(t,{unknown=false,pendingQuote=false}={}){
       const response={ok:true,json:async()=>({...r,estimate:'depth',generatedAt:Date.now()})};
       if(pendingQuote)return new Promise(resolve=>release=()=>resolve(response));return response;
     }
-    if(url.includes('/spot?'))return {ok:true,json:async()=>({rows:[r],total:1,notional:500,exchangeCount:2,marketCount:1,sources:{BN:{name:'Binance',status:'ok'},BG:{name:'Bitget',status:'ok'}}})};
+    if(url.includes('/spot?'))return {ok:true,json:async()=>({generatedAt:Date.now(),rows:[r],total:1,notional:500,exchangeCount:2,marketCount:1,sources:{BN:{name:'Binance',status:'ok'},BG:{name:'Bitget',status:'ok'}}})};
     return {ok:true,json:async()=>({generatedAt:Date.now(),spreads:[],funding:[],totals:{spreads:0,funding:0}})};
   };
   scripts.forEach(script=>w.eval(script));
@@ -30,14 +30,36 @@ function setup(t,{unknown=false,pendingQuote=false}={}){
   return {w,requests,r,release:()=>release?.()};
 }
 async function activateSpot(w){w.document.querySelector('[data-arb-mode="spot"]').click();await tick();await tick();}
-test('spot mode has its own table, twelve eligible venues, model labels, amount and zero fee parameters',async t=>{
+test('spot mode offers all eleven original plus four new venues and sends those selections',async t=>{
   const {w,requests}=setup(t);await activateSpot(w);const d=w.document;
   assert.equal(d.getElementById('arb-spot-table').hidden,false);assert.equal(d.getElementById('arb-spreads-table').hidden,true);
-  assert.equal([...d.querySelectorAll('.arb-exchange')].filter(b=>!b.hidden).length,12);
+  assert.equal([...d.querySelectorAll('.arb-exchange')].filter(b=>!b.hidden).length,15);
+  const sent=new URL(requests.find(r=>r.url.includes('/spot?')).url,'https://obsidianscreener.com').searchParams.get('exchanges').split(',');
+  for(const ex of ['BX','HL','AD','PL','CD','KR','BS'])assert.ok(sent.includes(ex));
   assert.match(d.getElementById('arb-net-label').textContent,/Оценка после перевода/);
   assert.ok(requests.some(r=>r.url.includes('/spot?')&&r.url.includes('notional=500')));
   d.getElementById('arb-spot-buy-fee').value='0';assert.equal(w.ArbitrageSpot.parameters().buyFeePct,'0');
   assert.equal(d.querySelector('#arb-spot-body tr').children.length,11);
+});
+test('coverage denominator follows the registry and source failures explain their actual status',async t=>{
+  const {w,r}=setup(t);await activateSpot(w);
+  const venues=Object.fromEntries(['BN','BB','OX','BG','GT','MX','KC','BX','HT','HL','AD','PL','CD','KR','BS'].map(ex=>[ex,{}]));
+  w.ArbitrageSpot.render({rows:[r],venues,sources:{BX:{name:'BingX',status:'rate_limited'},HL:{name:'Hyperliquid',status:'fx_unavailable'}},notional:500,total:1,exchangeCount:13,marketCount:2500});
+  assert.match(w.document.getElementById('arb-shown').textContent,/13\/15/);
+  const text=w.document.getElementById('arb-spot-source-health').textContent;assert.match(text,/BingX \(лимит API\)/);assert.match(text,/нет свежего курса USDC\/USDT/);
+});
+for(const language of ['ru','en'])test(`USDC comparison shows native price, FX source and unverified bridge in ${language}`,async t=>{
+  const {w,r}=setup(t,{unknown:true});w.ObsidianI18n={language};await activateSpot(w);
+  Object.assign(r,{key:'spot:HYPE:BN:HL',base:'HYPE',buyQuote:'USDT',sellQuote:'USDC',sellName:'Hyperliquid',sellEx:'HL',sellNativeBid:91,
+    conversions:{buy:null,sell:{ex:'BN',bid:1.0001,ask:1.0002,feePct:.1}}});
+  r.flow.reasons.push('quote_conversion_unverified','bridge_unverified');
+  w.ArbitrageSpot.render({rows:[r],sources:{},notional:500,marketCount:1});
+  const d=w.document;assert.match(d.querySelector('#arb-spot-body').textContent,/HYPEUSDC/);
+  assert.doesNotMatch(d.querySelector('#arb-spot-body').textContent,/HYPE\/USDT/);
+  d.querySelector('#arb-spot-body tr').click();await tick();const body=d.querySelector('.spot-dialog-body');
+  assert.match(body.textContent,/HYPE · USDT → USDC/);assert.match(body.textContent,/SELL bid 91 USDC/);assert.match(body.textContent,/BN USDC\/USDT/);
+  assert.match(body.textContent,language==='en'?/bridge.*unconfirmed/:/Мост.*не подтверждены/);
+  assert.equal(body.querySelector('.spot-result.confirmed'),null);
 });
 test('hover fetches only the inspected route, renders all three ledger steps and lives for observed duration',async t=>{
   const {w,requests}=setup(t);await activateSpot(w);const d=w.document,r=d.querySelector('#arb-spot-body tr');
@@ -87,6 +109,7 @@ test('source disconnection does not preserve old opportunities after quote expir
 });
 test('English detail uses English ledger labels and conditional assumptions',async t=>{
   const {w}=setup(t);w.ObsidianI18n={language:'en'};await activateSpot(w);
+  assert.equal(w.document.getElementById('arb-update-age').textContent,'updated just now');
   w.document.querySelector('#arb-spot-body tr').click();await tick();const content=w.document.querySelector('.spot-dialog-body').textContent;
   assert.match(content,/Buy · Binance/);assert.match(content,/Withdrawal fee/);assert.match(content,/Spot|Trading fees are modelled/);
   assert.doesNotMatch(content,/Покупка|Комиссия|Спред живёт/);

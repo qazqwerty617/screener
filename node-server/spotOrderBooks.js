@@ -3,9 +3,12 @@ const { normalizeLevels } = require('./depthAnalyzer');
 const { SPOT_VENUES } = require('./spotMarketData');
 
 function bookRequest(ex,symbol){
+  if(ex==='HL'){if(!/^(@\d{1,6}|PURR\/USDC)$/.test(symbol))throw Error('Invalid Hyperliquid spot market');return {url:'https://api.hyperliquid.xyz/info',method:'POST',body:{type:'l2Book',coin:symbol}};}
   if(!SPOT_VENUES[ex]||!/^([A-Z0-9][A-Z0-9.]{0,30})(?:[-_/]?USDT)$/.test(symbol))throw new Error('Invalid spot market');
   const s=encodeURIComponent(symbol);
   return ({BN:`https://api.binance.com/api/v3/depth?symbol=${s}&limit=500`,
+    BX:`https://open-api.bingx.com/openApi/spot/v1/market/depth?symbol=${s}&limit=500`,
+    AD:`https://sapi.asterdex.com/api/v3/depth?symbol=${s}&limit=500`,
     MX:`https://api.mexc.com/api/v3/depth?symbol=${s}&limit=500`,
     BB:`https://api.bybit.com/v5/market/orderbook?category=spot&symbol=${s}&limit=200`,
     OX:`https://www.okx.com/api/v5/market/books?instId=${s}&sz=400`,
@@ -20,7 +23,14 @@ function bookRequest(ex,symbol){
 }
 function normalizeSpotBook(ex,payload,symbol,requestedAt,finishedAt){
   let data=payload,asks,bids,sourceAt=null;
-  if(ex==='BB'){
+  if(ex==='HL'){
+    if(payload?.coin!==symbol||!Array.isArray(payload.levels)||payload.levels.length!==2)throw Error('Invalid Hyperliquid spot book');
+    bids=payload.levels[0].map(l=>[l.px,l.sz]);asks=payload.levels[1].map(l=>[l.px,l.sz]);sourceAt=Number(payload.time);
+  }else if(ex==='BX'){
+    if(Number(payload?.code)!==0)throw Error('Invalid BingX spot book');data=payload.data;sourceAt=Number(data?.ts||payload.timestamp);
+  }else if(ex==='AD'){
+    if(payload?.symbol!==symbol)throw Error('Wrong Aster spot book');sourceAt=Number(payload.T||payload.E);
+  }else if(ex==='BB'){
     if(Number(payload?.retCode)!==0||payload.result?.s!==symbol)throw new Error('Invalid Bybit spot book');
     data=payload.result;asks=data.a;bids=data.b;sourceAt=Number(data.ts);
   }else if(ex==='OX'){
@@ -59,7 +69,7 @@ function createSpotOrderBooks(apiFetch,{now=Date.now}={}){
     if(pending.has(key))return pending.get(key);
     const operation=(async()=>{
       await slot();
-      try{const started=now(),payload=await apiFetch(url,5000,1),book=normalizeSpotBook(ex,payload,symbol,started,now());
+      try{const started=now(),payload=await apiFetch(typeof url==='string'?url:url.url,5000,1,typeof url==='string'?'GET':url.method,typeof url==='string'?null:url.body),book=normalizeSpotBook(ex,payload,symbol,started,now());
         cache.delete(key);cache.set(key,book);while(cache.size>200)cache.delete(cache.keys().next().value);return book;
       }finally{release();}
     })().finally(()=>pending.delete(key));pending.set(key,operation);return operation;

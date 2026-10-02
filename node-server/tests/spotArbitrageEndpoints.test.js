@@ -18,15 +18,20 @@ test('spot snapshot validates budget and fees before expensive work; explicit ze
   assert.equal(calls.length,0);const res=response();handler({query:{notional:1000,buyFeePct:'0',sellFeePct:'0'}},res);
   assert.equal(calls[0].options.buyFeePct,0);assert.equal(res.headers['Cache-Control'],'no-store');
 });
-test('exchange filters accept new spot venues, remove unsupported futures venues, and preserve explicit NONE',()=>{
+test('exchange filters accept every original exchange and the new spot venues; unknown codes are removed',()=>{
   const {routes,calls}=endpoints(),handler=routes.get('/api/arbitrage/spot');
-  handler({query:{exchanges:'PL,KR,BS,CD,HL,BN,BN'}},response());assert.equal(calls[0].options.exchanges.join(','),'BN,BS,CD,KR,PL');
+  handler({query:{exchanges:'PL,KR,BS,CD,HL,BX,AD,BN,BN,XX'}},response());assert.equal(calls[0].options.exchanges.join(','),'AD,BN,BS,BX,CD,HL,KR,PL');
   handler({query:{exchanges:'NONE'}},response());assert.equal(calls[1].options.exchanges.join(','),'NONE');
 });
 test('invalid routes and ineligible spot exchanges do not access linked private accounts',async()=>{
   const {routes,calls}=endpoints(),handler=routes.get('/api/arbitrage/spot/quote');
-  for(const key of ['spread:BTC:BN:BG','spot:BTC:HL:BN','spot:BTC:BN:BN','spot:BTC:<script>:BG']){const res=response();await handler({query:{key}},res);assert.equal(res.code,400);}
+  for(const key of ['spread:BTC:BN:BG','spot:BTC:XX:BN','spot:BTC:BN:BN','spot:BTC:<script>:BG']){const res=response();await handler({query:{key}},res);assert.equal(res.code,400);}
   assert.equal(calls.length,0);
+});
+test('newly added original exchanges reach the actual quote service',async()=>{
+  const {routes,calls}=endpoints(),handler=routes.get('/api/arbitrage/spot/quote');
+  for(const key of ['spot:BTC:BX:BN','spot:ASTER:BN:AD','spot:HYPE:HL:BN']){const res=response();await handler({query:{key}},res);assert.equal(res.code,200);}
+  assert.equal(calls.filter(c=>c.method==='quote').length,3);
 });
 test('spot depth results are private and include selected network and account overlays',async()=>{
   const {routes,calls}=endpoints(),res=response();

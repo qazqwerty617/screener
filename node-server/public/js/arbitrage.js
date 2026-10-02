@@ -254,7 +254,7 @@
     window.ArbitrageSpot?.setActive(mode === "spot");
     document.querySelectorAll('.arb-exchange').forEach(button => {
       const code = button.dataset.ex;
-      button.hidden = mode === 'spot' ? ['BX', 'HL', 'AD'].includes(code) : ['PL', 'CD', 'KR', 'BS'].includes(code);
+      button.hidden = mode !== 'spot' && ['PL', 'CD', 'KR', 'BS'].includes(code);
     });
     if (minInput) minInput.value = state.minByMode[mode] || "0";
     document.querySelectorAll("[data-arb-mode]").forEach(x => x.classList.toggle("on", x.dataset.arbMode === mode));
@@ -291,7 +291,7 @@
         search: $("arb-search")?.value || "",
         minNet: $("arb-min-net")?.value || "0",
         minVolume: $("arb-min-volume")?.value || "0",
-        exchanges: [...state.selectedExchanges].filter(ex => state.mode === 'spot' ? !['BX', 'HL', 'AD'].includes(ex) : !['PL', 'CD', 'KR', 'BS'].includes(ex)).join(',') || 'NONE',
+        exchanges: [...state.selectedExchanges].filter(ex => state.mode === 'spot' || !['PL', 'CD', 'KR', 'BS'].includes(ex)).join(',') || 'NONE',
         limit: "600"
       });
       if (force) q.set("_", Date.now());
@@ -333,7 +333,7 @@
       if (!state.active || state.mode !== requestedMode) return;
       state.requestErrors[requestedMode === "dex" ? "dex" : "cex"] = true;
       console.warn("[Arbitrage]", err.message);
-      if ($("arb-update-age")) $("arb-update-age").textContent = "Нет связи · данные могут устареть";
+      updateFreshness(0);
       if (requestedMode === 'spot') render();
     } finally {
       state.loading = false;
@@ -624,11 +624,17 @@
   function updateFreshness(generatedAt, poolGeneratedAt = 0) {
     const target = $("arb-update-age");
     if (!target) return;
+    const english=window.ObsidianI18n?.language==='en';
     if (state.requestErrors[state.mode === "dex" ? "dex" : "cex"]) {
-      target.textContent = "Нет связи · данные могут устареть";
+      target.textContent = english?'Disconnected · data may become stale':"Нет связи · данные могут устареть";
       return;
     }
     const age = Math.max(0, Date.now() - Number(generatedAt || 0));
+    if(english){
+      target.textContent=poolGeneratedAt?`CEX ${age<2500?'just now':`${Math.round(age/1000)}s ago`} · pool ${Math.round(Math.max(0,Date.now()-Number(poolGeneratedAt))/1000)}s ago`
+        :age<2500?'updated just now':`updated ${Math.round(age/1000)}s ago`;
+      return;
+    }
     target.textContent = poolGeneratedAt
       ? `CEX ${age < 2500 ? "сейчас" : `${Math.round(age / 1000)}с назад`} · пул ${Math.round(Math.max(0, Date.now() - Number(poolGeneratedAt)) / 1000)}с назад`
       : age < 2500 ? "обновлено сейчас" : `обновлено ${Math.round(age / 1000)}с назад`;

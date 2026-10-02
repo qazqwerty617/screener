@@ -10,6 +10,8 @@ const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-8,`${a} != ${b}`);
 const fixtures=at=>({
   BN:[{symbol:'BTCUSDT',bidPrice:'100',askPrice:'101',bidQty:'2',askQty:'3'}],
   MX:[{symbol:'BTCUSDT',bidPrice:'100',askPrice:'101'}],
+  BX:{code:0,data:[{symbol:'BTC-USDT',bidPrice:'100',askPrice:'101',bidVolume:'2',askVolume:'3',time:at}]},
+  AD:[{symbol:'BTCUSDT',bidPrice:'100',askPrice:'101',time:at}],
   BB:{retCode:0,result:{list:[{symbol:'BTCUSDT',bid1Price:'100',ask1Price:'101',turnover24h:'50000'}]}},
   OX:{code:'0',data:[{instId:'BTC-USDT',bidPx:'100',askPx:'101',volCcy24h:'50000',ts:at}]},
   BG:{code:'00000',data:[{symbol:'BTCUSDT',bidPr:'100',askPr:'101',usdtVolume:'50000'}]},
@@ -21,8 +23,8 @@ const fixtures=at=>({
   KR:{error:[],result:{'BTC/USDT':{a:['101','1','2'],b:['100','1','2'],v:['0','500'],p:['0','100']},'BTC/USD':{a:['1'],b:['1']}}},
   BS:[{market:'BTC/USDT',market_type:'SPOT',bid:'100',ask:'101',volume:'500',vwap:'100',timestamp:at/1000}],
 });
-for(const ex of Object.keys(SPOT_VENUES))test(`USDT spot BBO and volume normalize correctly: ${ex}`,()=>{
-  const result=normalizeSpotQuotes(ex,fixtures(100000)[ex],100000,new Map([['BTCUSDT',50000]]));
+for(const ex of Object.keys(SPOT_VENUES).filter(ex=>ex!=='HL'))test(`USDT spot BBO and volume normalize correctly: ${ex}`,()=>{
+  const result=normalizeSpotQuotes(ex,fixtures(100000)[ex],100000,new Map([['BTCUSDT',50000],['BTC-USDT',50000]]));
   assert.equal(result.size,1);const q=result.get('BTC');assert.equal(q.bid,100);assert.equal(q.ask,101);assert.equal(q.volume,50000);assert.equal(q.at,100000);
 });
 test('spot normalization rejects futures, leverage, USD conversions, invalid/future BBO; JUP is a genuine token',()=>{

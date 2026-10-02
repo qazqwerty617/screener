@@ -111,8 +111,26 @@ function bestPath(paths,args,network){
 function routeRow(row){
   const {buy,sell,base,key,gross,spreadSince,spreadSamples}=row;
   return {key,base,symbol:`${base}/USDT`,buyEx:buy.ex,sellEx:sell.ex,buyName:SPOT_VENUES[buy.ex].name,sellName:SPOT_VENUES[sell.ex].name,
-    buySymbol:buy.symbol,sellSymbol:sell.symbol,buyAsk:buy.ask,sellBid:sell.bid,gross,liquidity:Math.min(buy.volume,sell.volume),
+    buySymbol:buy.symbol,sellSymbol:sell.symbol,buyQuote:buy.quote||'USDT',sellQuote:sell.quote||'USDT',
+    buyNativeAsk:buy.nativeAsk||buy.ask,sellNativeBid:sell.nativeBid||sell.bid,
+    conversions:{buy:buy.quoteConversion||null,sell:sell.quoteConversion||null},
+    buyAsk:buy.ask,sellBid:sell.bid,gross,liquidity:Math.min(buy.volume,sell.volume),
     buyAt:buy.at,sellAt:sell.at,buyUrl:spotTradeUrl(buy.ex,buy.symbol),sellUrl:spotTradeUrl(sell.ex,sell.symbol),spreadSince,spreadSamples};
+}
+function indicativeFlow(row,flow){
+  if(!row.buy.quoteConversion&&!row.sell.quoteConversion)return flow;
+  // A reference FX price is not a proven capital/bridge path. Even linked
+  // wallet metadata cannot make that extra leg executable without verification.
+  return {...flow,complete:false,profitUsdt:null,netPct:null,proceeds:null,
+    reasons:[...new Set([...flow.reasons,'quote_conversion_unverified','bridge_unverified'])],
+    assumptions:[...new Set([...flow.assumptions,'directional_fx_valuation'])]};
+}
+function valuedBook(book,quote,time){
+  if(!quote.quoteConversion)return book;
+  if(time-quote.quoteConversion.at>5000)throw Error('Stale spot conversion');
+  const bidFactor=quote.bid/quote.nativeBid,askFactor=quote.ask/quote.nativeAsk;
+  return {...book,at:Math.min(book.at,quote.quoteConversion.at),
+    bids:book.bids.map(([p,size])=>[p*bidFactor,size]),asks:book.asks.map(([p,size])=>[p*askFactor,size])};
 }
 // Bounded top-N heap: inspecting every pair does not retain thousands of full
 // execution ledgers per user/filter. Unknown routes rank after verified ones.
@@ -169,6 +187,7 @@ function createSpotArbitrage(market,transfers,books,{now=Date.now,assetAllowed=(
       // Build a detailed ledger only for candidates that survive pagination.
       const args={asks:[[row.buy.ask,Infinity]],bids:[[row.sell.bid,Infinity]],notional,buyFeePct,sellFeePct};
       const evaluated=transfer.paths.length?bestPath(transfer.paths,args):null;
+      if(evaluated)evaluated.flow=indicativeFlow(row,evaluated.flow);
       const net=evaluated?.flow.netPct??evaluated?.flow.preTransferNetPct??upperNet;
       if(net<(options.minNet??0))continue;total++;
       const rank=[evaluated?.flow.complete?1:0,net];
@@ -178,7 +197,7 @@ function createSpotArbitrage(market,transfers,books,{now=Date.now,assetAllowed=(
     const rows=heap.sort((a,b)=>rankCompare(b,a)).map(item=>{
       const {row,transfer,args}=item,{path,flow}=item.evaluated||bestPath([],args);
       return {...routeRow(row),ageMs:Math.max(time-row.buy.at,time-row.sell.at),
-        transferStatus:transfer.status,path,flow,networkCount:transfer.paths.length,estimate:'bbo',
+        transferStatus:transfer.status,path,flow:indicativeFlow(row,flow),networkCount:transfer.paths.length,estimate:'bbo',
         spreadAgeMs:row.spreadSince===null?null:Math.max(0,time-row.spreadSince)};
     });
     const value={generatedAt:full.generatedAt,notional,total,rows,
@@ -190,9 +209,11 @@ function createSpotArbitrage(market,transfers,books,{now=Date.now,assetAllowed=(
   async function quote(key,options={},overlays=new Map()){
     validNotional(options.notional??500);
     let raw=getMarkets().rows.find(r=>r.key===key);if(!raw)throw new Error('Route no longer available');
-    let row=routeRow(raw);
-    const [buy,sell]=await Promise.all([books.get(row.buyEx,row.buySymbol),books.get(row.sellEx,row.sellSymbol)]);
+    let row=routeRow(raw);const requested=row,tokens={buy:raw.buy.tokenId,sell:raw.sell.tokenId};
+    const [buyNative,sellNative]=await Promise.all([books.get(row.buyEx,row.buySymbol),books.get(row.sellEx,row.sellSymbol)]);
     const time=now();raw=getMarkets().rows.find(r=>r.key===key);row=raw?routeRow(raw):null;
+    if(row&&(row.buySymbol!==requested.buySymbol||row.sellSymbol!==requested.sellSymbol||raw.buy.tokenId!==tokens.buy||raw.sell.tokenId!==tokens.sell))throw Error('Spot market changed during book fetch');
+    const buy=raw?valuedBook(buyNative,raw.buy,time):buyNative,sell=raw?valuedBook(sellNative,raw.sell,time):sellNative;
     if(!row||time-Math.min(row.buyAt,row.sellAt)>MAX_QUOTE_AGE_MS||time-buy.at>5000||time-sell.at>5000||Math.abs(buy.at-sell.at)>5000)throw new Error('Stale spot quotes');
     const metadata=transfers.getCatalogSnapshot(),catalogs=new Map([...metadata.catalogs,...overlays]);
     const transfer=transferPaths(catalogs,row.base,row.buyEx,row.sellEx);
@@ -200,8 +221,9 @@ function createSpotArbitrage(market,transfers,books,{now=Date.now,assetAllowed=(
       buyFeePct:feeFor(row.buyEx,options.buyFeePct),sellFeePct:feeFor(row.sellEx,options.sellFeePct)};
     const {path,flow}=bestPath(transfer.paths,args,options.network);
     return {...row,generatedAt:time,buyAsk:buy.asks[0][0],sellBid:sell.bids[0][0],
+      buyNativeAsk:buyNative.asks[0][0],sellNativeBid:sellNative.bids[0][0],
       gross:(sell.bids[0][0]/buy.asks[0][0]-1)*100,spreadAgeMs:row.spreadSince===null?null:Math.max(0,time-row.spreadSince),
-      ageMs:Math.max(time-buy.at,time-sell.at),transferStatus:transfer.status,paths:transfer.paths,path,flow,estimate:'depth',
+      ageMs:Math.max(time-buy.at,time-sell.at),transferStatus:transfer.status,paths:transfer.paths,path,flow:indicativeFlow(raw,flow),estimate:'depth',
       booksAt:{buy:buy.at,sell:sell.at},transferSources:metadata.sources};
   }
   function start(){if(timer)return;getMarkets();timer=setInterval(getMarkets,1000);timer.unref?.();}

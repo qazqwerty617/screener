@@ -24,6 +24,8 @@
     withdraw_fee_unknown:['Биржа не раскрывает комиссию вывода','Withdrawal fee unavailable'],variable_fee:['Есть дополнительная комиссия; её формула не подтверждена','Additional fee formula unconfirmed'],
     withdraw_min:['Сумма ниже минимума вывода','Below minimum withdrawal'],deposit_min:['Сумма ниже минимума депозита','Below minimum deposit'],
     withdraw_fee_exceeds:['Комиссия вывода превышает сумму','Withdrawal fee exceeds amount'],
+    quote_conversion_unverified:['USDC пересчитан по живому bid/ask; глубина и перевод валюты расчёта не подтверждены','USDC valued at live bid/ask; FX depth and quote-currency transfer unconfirmed'],
+    bridge_unverified:['Мост и перенос актива Hyperliquid не подтверждены','Hyperliquid bridge and asset transfer unconfirmed'],
   };
   let initialized=false,active=false,rows=new Map(),key=null,quote=null,quoteAt=0,sequence=0,controller=null;
   let patch,refresh,hoverTimer,closeTimer,refreshTimer,anchor=null,lastPayload=null,lastFavorites=null;
@@ -143,8 +145,11 @@
     const list=(flow.reasons||[]).map(reason=>t(...(reasons[reason]||[reason,reason])));
     const line=(label,value)=>`<div><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
     const network=path?`${path.network}${path.needTag?' · MEMO/TAG':''}`:t('Не подтверждена','Unconfirmed');
+    const converted=Boolean(row.conversions?.buy||row.conversions?.sell);
+    const pair=converted?`${row.base} · ${row.buyQuote} → ${row.sellQuote}`:`${row.base}/USDT`;
+    const conversionNote=converted?`<p class="spot-caution">${t('Цены ниже — эквивалент USDT. Спот Hyperliquid торгуется за USDC.','Prices below are USDT equivalents. Hyperliquid spot trades in USDC.')} ${row.buyQuote==='USDC'?`BUY ask ${n(row.buyNativeAsk)} USDC · `:''}${row.sellQuote==='USDC'?`SELL bid ${n(row.sellNativeBid)} USDC · `:''}${Object.values(row.conversions).filter(Boolean).map(fx=>`${esc(fx.ex)} USDC/USDT · bid ${n(fx.bid)} / ask ${n(fx.ask)} · ${t('комиссия модели','model fee')} ${n(fx.feePct,3)}%`).join(' · ')}</p>`:'';
     const links=`<a href="${esc(row.buyUrl)}" target="_blank" rel="noopener noreferrer">${t('Купить на','Buy on')} ${esc(row.buyName)} ↗</a><a href="${esc(row.sellUrl)}" target="_blank" rel="noopener noreferrer">${t('Продать на','Sell on')} ${esc(row.sellName)} ↗</a>`;
-    return `<div class="spot-route-head"><div><span>SPOT → SPOT · ${depth?'DEPTH':'BBO'}</span><h3>${esc(row.base)}/USDT</h3><p>${esc(row.buyName)} <i>→</i> ${esc(row.sellName)}</p></div><strong class="${confirmed&&flow.profitUsdt>0?'positive':''}">${confirmed?usd(flow.profitUsdt):t('Оценка','Estimate')}<small>${confirmed?pct(flow.netPct):pct(flow.netPct??flow.preTransferNetPct)}</small></strong></div>
+    return `<div class="spot-route-head"><div><span>SPOT → SPOT · ${depth?'DEPTH':'BBO'}</span><h3>${esc(pair)}</h3><p>${esc(row.buyName)} <i>→</i> ${esc(row.sellName)}</p></div><strong class="${confirmed&&flow.profitUsdt>0?'positive':''}">${confirmed?usd(flow.profitUsdt):t('Оценка','Estimate')}<small>${confirmed?pct(flow.netPct):pct(flow.netPct??flow.preTransferNetPct)}</small></strong></div>${conversionNote}
       <div class="spot-route-meta"><span>${t('Спред живёт','Spread observed')} <b>${duration(row.spreadSince==null?null:Date.now()-row.spreadSince)}</b></span><span>BBO ${duration(row.ageMs)} · ${esc(row.spreadSamples)} ${t('набл.','samples')}</span></div>
       <ol class="spot-flow"><li><span class="spot-step">1</span><div><h4>${t('Покупка','Buy')} · ${esc(row.buyName)}</h4>${line(t('Бюджет','Budget'),usd(flow.notional))}${line(t('Средняя цена','Average price'),`${n(flow.buyAverage)} USDT`)}${line(t('Куплено','Bought'),`${n(flow.bought)} ${row.base}`)}${line(t('Комиссия покупки','Buy fee'),`${usd(flow.buyFeeUsdt)} · ${n(flow.buyFeePct,3)}%`)}${line(t('После комиссии','After fee'),`${n(flow.acquired)} ${row.base}`)}</div></li>
       <li><span class="spot-step">2</span><div><h4>${t('Перевод','Transfer')} · ${esc(network)}</h4>${line(t('Комиссия вывода','Withdrawal fee'),`${n(flow.withdrawFee)} ${row.base}${flow.withdrawFeeUsdt===null?'':` ≈ ${usd(flow.withdrawFeeUsdt)}`}`)}${line(t('Придёт на биржу','Arrives at venue'),`${n(flow.received)} ${row.base}`)}${path?.confirmations!=null?line(t('Подтверждения депозита','Deposit confirmations'),String(path.confirmations)):''}${detail&&path?line(t('Минимум вывода / депозита','Min withdrawal / deposit'),`${n(path.minWithdraw)} / ${n(path.minDeposit)} ${row.base}`):''}${flow.dust>0?line(t('Остаток из-за округления','Rounding dust'),`${n(flow.dust,12)} ${row.base}`):''}</div></li>
@@ -173,7 +178,7 @@
     if(sort==='gross')view.sort((a,b)=>b.gross-a.gross);
     const html=view.slice(0,400).map(row=>[row.key,`<tr data-spot-key="${esc(row.key)}" tabindex="0" aria-label="${esc(row.base)} ${esc(row.buyName)} → ${esc(row.sellName)}">
       <td><button class="arb-star ${favorites.has(row.base)?'on':''}" data-fav="${esc(row.base)}" aria-label="${t('Избранное','Favorite')}">★</button></td>
-      <td><div class="arb-pair"><span class="arb-coin">${esc(row.base.slice(0,4))}</span><div><strong>${esc(row.base)}/USDT</strong><small>SPOT</small></div></div></td>
+      <td><div class="arb-pair"><span class="arb-coin">${esc(row.base.slice(0,4))}</span><div><strong>${esc(row.base)}${row.conversions?.buy||row.conversions?.sell?'':'/USDT'}</strong><small>${row.conversions?.buy||row.conversions?.sell?t('USDC · оценка в USDT','USDC · valued in USDT'):'SPOT'}</small></div></div></td>
       <td><div class="spot-table-route"><span>${esc(row.buyName)} <b>${n(row.buyAsk)}</b></span><i>→</i><span>${esc(row.sellName)} <b>${n(row.sellBid)}</b></span></div></td>
       <td class="arb-num">${pct(row.gross)}</td><td class="arb-num">${pct(row.flow.preTransferNetPct)}</td>
       <td><span class="spot-network ${row.flow.complete?'verified':''}">${esc(row.path?.network||t('Нет данных','No data'))}</span><small>${row.path?n(row.path.fee)+' '+esc(row.base):row.transferStatus==='closed'?t('Перевод закрыт','Transfer closed'):t('Требует проверки','Needs verification')}</small></td>
@@ -184,9 +189,11 @@
     patch($('arb-spot-body'),html);
     $('arb-empty').hidden=view.length>0;
     $('arb-spot-badge').textContent=payload.total??view.length;
-    $('arb-shown').textContent=t(`Показано ${view.length} · биржи ${payload.exchangeCount}/12 · рынки ${payload.marketCount} · расчёт на ${n(payload.notional)} USDT`,`Showing ${view.length} · venues ${payload.exchangeCount}/12 · markets ${payload.marketCount} · budget ${n(payload.notional)} USDT`);
+    const venueCount=Object.keys(payload.venues||payload.sources||{}).length;
+    $('arb-shown').textContent=t(`Показано ${view.length} · биржи ${payload.exchangeCount||0}/${venueCount} · рынки ${payload.marketCount} · расчёт на ${n(payload.notional)} USDT`,`Showing ${view.length} · venues ${payload.exchangeCount||0}/${venueCount} · markets ${payload.marketCount} · budget ${n(payload.notional)} USDT`);
     const failed=Object.entries(payload.sources||{}).filter(([,s])=>s.status!=='ok');
-    $('arb-spot-source-health').textContent=failed.length?t('Нет свежего потока: ','No fresh feed: ')+failed.map(([,s])=>s.name).join(', '):t('Все спот-потоки доступны','All spot feeds available');
+    const statusNames={pending:['загрузка','loading'],connecting:['подключение','connecting'],disconnected:['соединение потеряно','disconnected'],stale:['устарело','stale'],empty:['нет котировок','no quotes'],error:['API недоступен','API unavailable'],rate_limited:['лимит API','API rate limit'],capacity_limited:['лимит подписок провайдера','provider subscription limit'],fx_unavailable:['нет свежего курса USDC/USDT','no fresh USDC/USDT rate']};
+    $('arb-spot-source-health').textContent=(failed.length?t('Нет свежего потока: ','No fresh feed: ')+failed.map(([,s])=>`${s.name} (${t(...(statusNames[s.status]||['нет данных','no data']))})`).join(', '):t('Все спот-потоки доступны','All spot feeds available'))+(payload.sources?.HL?t(' · Hyperliquid: USDC → USDT, мост и конвертация требуют проверки',' · Hyperliquid: USDC → USDT, bridge and conversion need verification'):'');
     $('arb-kpi-count').textContent=String(view.filter(r=>r.flow.netPct>0).length);
     const best=view.reduce((best,row)=>row.flow.netPct>0&&(!best||row.flow.netPct>best.flow.netPct)?row:best,null);
     $('arb-kpi-net').textContent=best?pct(best.flow.netPct):'—';
