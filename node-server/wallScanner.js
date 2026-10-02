@@ -2612,8 +2612,19 @@ function startPublishLoop() {
 
 // ═══ Spot ticker loading ═════════════════════════════════════════════════════
 
-async function updateSpotTickers(tickers) {
+async function updateSpotTickers(tickers, spotMarketData = null) {
   const exchanges = EXCHANGES.filter(ex => profileFor(ex).hasSpot);
+  if (spotMarketData) {
+    await spotMarketData.refresh();
+    // Shared bulk quotes supply the universe; wall books have their own prices.
+    for (const quote of spotMarketData.getTickers(SPOT_REFRESH_MS * 2)) {
+      if (!exchanges.includes(quote.ex) || !isTradableBase(quote.base, quote.symbol, quote)) continue;
+      const sym = quote.base + 'USDT_SPOT', key = quote.ex + ':' + sym, p = (quote.bid + quote.ask) / 2;
+      tickers.set(key, { key, ex: quote.ex, sym, base: quote.base, p, chg: 0, v: quote.volume,
+        h: p, l: p, o: p, funding: 0, nextFunding: 0, cs: 1 });
+    }
+    return;
+  }
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
   };
@@ -2699,7 +2710,7 @@ async function updateSpotTickers(tickers) {
 
 // ═══ Public API ══════════════════════════════════════════════════════════════
 
-function startScanning(tickers, apiFetch, onUpdate) {
+function startScanning(tickers, apiFetch, onUpdate, options = {}) {
   if (engineStarted) return;
   engineStarted = true;
   onUpdateCb = onUpdate || null;
@@ -2711,9 +2722,9 @@ function startScanning(tickers, apiFetch, onUpdate) {
   refreshVenueAssetExclusions()
     .then(() => refreshUniverse(tickers))
     .catch(e => console.warn("[WALL] RWA metadata refresh failed; curated fallback active:", e.message));
-  updateSpotTickers(tickers).catch(e => console.error("[SPOT] Initial load error:", e.message));
+  updateSpotTickers(tickers, options.spotMarketData).catch(e => console.error("[SPOT] Initial load error:", e.message));
   setInterval(() => {
-    updateSpotTickers(tickers).catch(e => console.error("[SPOT] Poll update error:", e.message));
+    updateSpotTickers(tickers, options.spotMarketData).catch(e => console.error("[SPOT] Poll update error:", e.message));
     refreshVenueAssetExclusions().catch(() => {});
   }, SPOT_REFRESH_MS);
 

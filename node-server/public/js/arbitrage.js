@@ -6,6 +6,7 @@
     BG: ["Bitget", "BG.svg"], GT: ["Gate.io", "GT.svg"], MX: ["MEXC", "MX.svg"],
     KC: ["KuCoin", "KC.svg"], BX: ["BingX", "BX.svg"], HT: ["HTX", "HX.svg"],
     HL: ["Hyperliquid", "HL.svg"], AD: ["Asterdex", "AS.svg"],
+    PL: ["Poloniex", null], CD: ["Crypto.com", null], KR: ["Kraken", null], BS: ["Bitstamp", null],
   };
   const $ = id => document.getElementById(id);
   function readFavorites() {
@@ -15,11 +16,11 @@
     } catch (_) { return new Set(); }
   }
   const state = {
-    active: false, initialized: false, loading: false, mode: "spreads", data: null, dexData: null,
+    active: false, initialized: false, loading: false, mode: "spreads", data: null, dexData: null, spotData: null,
     selectedExchanges: new Set(Object.keys(EX)), favorites: readFavorites(),
     trail: new Map(), timer: null, detailKey: null, detailRow: null,
     transferByKey: new Map(), transferRequested: new Set(), transferUpdatedAt: new Map(), transferLoading: false,
-    minByMode: { spreads: "0", funding: "0", dex: "0" },
+    minByMode: { spreads: "0", funding: "0", dex: "0", spot: "0" },
     requestErrors: { cex: false, dex: false },
   };
   let sparkObserver = null, sparkDrawQueued = false;
@@ -172,9 +173,10 @@
   function init() {
     if (state.initialized) return;
     state.initialized = true;
+    window.ArbitrageSpot?.configure({ patch: patchTableRows, refresh: () => fetchData(true) });
     const exWrap = $("arb-exchanges");
     if (exWrap) {
-      exWrap.innerHTML = Object.entries(EX).map(([code, [name]]) => `<button class="arb-exchange" data-ex="${code}"><img src="${icon(code)}" alt=""><span>${esc(name)}</span><i></i></button>`).join("");
+      exWrap.innerHTML = Object.entries(EX).map(([code, [name, image]]) => `<button class="arb-exchange" data-ex="${code}">${image ? `<img src="${icon(code)}" alt="">` : `<span class="spot-exchange-icon">${code}</span>`}<span>${esc(name)}</span><i></i></button>`).join("");
       exWrap.addEventListener("click", e => {
         const btn = e.target.closest(".arb-exchange"); if (!btn) return;
         const code = btn.dataset.ex;
@@ -201,6 +203,8 @@
     const resetBtn = $("arb-reset"); if (resetBtn) resetBtn.addEventListener("click", reset);
     const spreadsBody = $("arb-spreads-body"); if (spreadsBody) spreadsBody.addEventListener("click", tableClick);
     const fundingBody = $("arb-funding-body"); if (fundingBody) fundingBody.addEventListener("click", tableClick);
+    const spotBody = $("arb-spot-body");
+    if (spotBody) spotBody.addEventListener('click', e => { if (e.target.closest('[data-fav]')) tableClick(e); });
     const dexBody = $("arb-dex-body");
     if (dexBody) {
       dexBody.addEventListener("click", dexTableClick);
@@ -219,9 +223,13 @@
   function debounce(fn, wait) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); }; }
 
   function reset() {
+    window.ArbitrageSpot?.close();
+    if ($('arb-spot-notional')) $('arb-spot-notional').value = '500';
+    if ($('arb-spot-buy-fee')) $('arb-spot-buy-fee').value = '';
+    if ($('arb-spot-sell-fee')) $('arb-spot-sell-fee').value = '';
     if ($("arb-search")) $("arb-search").value = "";
     if ($("arb-min-net")) $("arb-min-net").value = "0";
-    state.minByMode = { spreads: "0", funding: "0", dex: "0" };
+    state.minByMode = { spreads: "0", funding: "0", dex: "0", spot: "0" };
     if ($("arb-min-volume")) $("arb-min-volume").value = "0";
     if ($("arb-bbo-only")) $("arb-bbo-only").checked = true;
     if ($("arb-transfer-only")) $("arb-transfer-only").checked = false;
@@ -234,27 +242,39 @@
   }
 
   function setMode(mode) {
-    if (!["spreads", "funding", "dex"].includes(mode)) return;
+    if (!["spreads", "funding", "dex", "spot"].includes(mode)) return;
     const previousMode = state.mode;
+    if (mode !== previousMode) closeDetail();
     const minInput = $("arb-min-net");
     if (minInput) state.minByMode[previousMode] = minInput.value || "0";
     state.mode = mode;
+    if ($('arb-count-label')) $('arb-count-label').textContent = mode === 'spot' ? 'Положительных оценок' : 'Исполнимых возможностей';
+    if ($('arb-count-sub')) $('arb-count-sub').textContent = mode === 'spot' ? 'BBO · выбранный бюджет' : 'свежий BBO · полный round-trip';
+    if ($('arb-net-label')) $('arb-net-label').textContent = mode === 'spot' ? 'Оценка после перевода' : 'Лучший net при схождении';
+    window.ArbitrageSpot?.setActive(mode === "spot");
+    document.querySelectorAll('.arb-exchange').forEach(button => {
+      const code = button.dataset.ex;
+      button.hidden = mode === 'spot' ? ['BX', 'HL', 'AD'].includes(code) : ['PL', 'CD', 'KR', 'BS'].includes(code);
+    });
     if (minInput) minInput.value = state.minByMode[mode] || "0";
     document.querySelectorAll("[data-arb-mode]").forEach(x => x.classList.toggle("on", x.dataset.arbMode === mode));
     if ($("arb-spreads-table")) $("arb-spreads-table").hidden = mode !== "spreads";
     if ($("arb-funding-table")) $("arb-funding-table").hidden = mode !== "funding";
     if ($("arb-dex-table")) $("arb-dex-table").hidden = mode !== "dex";
+    if ($("arb-spot-table")) $("arb-spot-table").hidden = mode !== "spot";
     if ($("arb-min-label")) $("arb-min-label").textContent = mode === "funding" ? "Мин. выплата" : "Мин. net";
     const netOption = $("arb-sort")?.querySelector('option[value="net"]');
     const grossOption = $("arb-sort")?.querySelector('option[value="gross"]');
     const scoreOption = $("arb-sort")?.querySelector('option[value="score"]');
     const freshnessOption = $("arb-sort")?.querySelector('option[value="freshness"]');
-    if (netOption) netOption.textContent = mode === "spreads" ? "Net при схождении" : mode === "funding" ? "Ближ. выплата" : "Edge после costs";
+    if (netOption) netOption.textContent = mode === "spot" ? "После перевода" : mode === "spreads" ? "Net при схождении" : mode === "funding" ? "Ближ. выплата" : "Edge после costs";
     if (grossOption) grossOption.textContent = mode === "funding" ? "Edge / час" : "Валовый спред";
     if (scoreOption) scoreOption.textContent = mode === "dex" ? "Оценка edge" : "Edge Score";
     if (freshnessOption) freshnessOption.textContent = mode === "dex" ? "Свежесть CEX" : "Свежесть";
     if ($("arb-sort")) syncCompactSelect($("arb-sort"));
-    if ($("arb-method-note")) $("arb-method-note").innerHTML = mode === "dex"
+    if ($("arb-method-note")) $("arb-method-note").innerHTML = mode === "spot"
+      ? 'BBO — оценка без проскальзывания · наведите на связку для расчёта по стаканам · неизвестные расходы не равны нулю'
+      : mode === "dex"
       ? '<i class="indicative"></i> *Индикативно: цена пула и оценка влияния объёма · газ, вывод и закрытие хеджа не включены · проверьте wallet quote'
       : '<i class="bbo"></i> D — депозит · W — вывод · зелёный маршрут имеет общую открытую сеть';
     render();
@@ -271,10 +291,21 @@
         search: $("arb-search")?.value || "",
         minNet: $("arb-min-net")?.value || "0",
         minVolume: $("arb-min-volume")?.value || "0",
-        exchanges: [...state.selectedExchanges].join(","),
+        exchanges: [...state.selectedExchanges].filter(ex => state.mode === 'spot' ? !['BX', 'HL', 'AD'].includes(ex) : !['PL', 'CD', 'KR', 'BS'].includes(ex)).join(',') || 'NONE',
         limit: "600"
       });
       if (force) q.set("_", Date.now());
+      if (state.mode === 'spot') {
+        const parameters = window.ArbitrageSpot?.parameters();
+        if (!parameters) { window.ArbitrageSpot?.invalidParameters(); return; }
+        for (const [field, value] of Object.entries(parameters)) q.set(field, value);
+        const response = await fetch('/api/arbitrage/spot?' + q, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const payload = await response.json();
+        if (!state.active || state.mode !== requestedMode) return;
+        state.requestErrors.cex = false; state.spotData = payload;
+        updateFreshness(payload.generatedAt); render(); return;
+      }
       if (state.mode === "dex") {
         if (force) q.set("force", "1");
         const dexResponse = await fetch(`/api/arbitrage/dex?${q}`, { cache: "no-store", signal: AbortSignal.timeout(15000) });
@@ -303,6 +334,7 @@
       state.requestErrors[requestedMode === "dex" ? "dex" : "cex"] = true;
       console.warn("[Arbitrage]", err.message);
       if ($("arb-update-age")) $("arb-update-age").textContent = "Нет связи · данные могут устареть";
+      if (requestedMode === 'spot') render();
     } finally {
       state.loading = false;
       if (state.refreshPending || state.mode !== requestedMode) {
@@ -334,6 +366,10 @@
 
   function render() {
     if (!state.active || document.hidden) return;
+    if (state.mode === 'spot') {
+      if (state.spotData) window.ArbitrageSpot?.render(state.spotData, state.favorites);
+      return;
+    }
     if (state.mode === "dex") {
       if (!state.dexData) return;
       const rows = filteredRows();
@@ -435,6 +471,7 @@
 
   async function fetchTransferStatuses() {
     if (!state.data || state.transferLoading) return;
+    if (!['spreads', 'funding'].includes(state.mode)) return;
     const source = state.mode === "spreads" ? state.data.spreads : state.data.funding;
     const now = Date.now();
     const keys = source.slice(0, 400).map(row => row.key)
@@ -449,6 +486,7 @@
       const payloads = await Promise.all(batches.map(async batch => {
         const response = await fetch(`/api/arbitrage/transfers?routes=${encodeURIComponent(batch.join(","))}`, {
           cache: "no-store",
+          signal: AbortSignal.timeout(15000),
           headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -534,7 +572,7 @@
         <td class="arb-num ${r.closeNowNet >= 0 ? "arb-positive" : "arb-exit"}">${pct(r.closeNowNet)}</td>
         <td>${transferCell(r)}</td>
         <td class="arb-num">${money(r.liquidity)}</td>
-        <td>${sparkCell(r, "net")}</td>
+        <td>${sparkCell(r, "net")}<small class="spot-lifetime" title="Наблюдаемая жизнь положительного gross-спреда">${r.spreadAgeMs == null ? '—' : `${Math.floor(r.spreadAgeMs / 1000)}с`}</small></td>
         <td>${scoreCell(r)}</td>
       </tr>`]));
     scheduleSparks();
@@ -783,6 +821,7 @@
     state.detailKey = null;
     state.detailRow = null;
     if (window.ArbitragePro) window.ArbitragePro.close();
+    window.ArbitrageSpot?.close();
     if ($("arb-drawer")) {
       $("arb-drawer").classList.remove("open");
       $("arb-drawer").setAttribute("aria-hidden", "true");
@@ -793,6 +832,7 @@
   function activate() {
     init();
     state.active = true;
+    setMode(state.mode);
     fetchData(true);
     clearInterval(state.timer);
     state.timer = setInterval(() => {
@@ -805,6 +845,7 @@
   function deactivate() {
     state.active = false; state.refreshPending = false;
     clearInterval(state.timer); state.timer = null;
+    window.ArbitrageSpot?.setActive(false);
     closeDetail();
   }
   window.CryptoArbitrage = { activate, deactivate, refresh: () => fetchData(true) };

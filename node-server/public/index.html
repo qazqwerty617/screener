@@ -39,7 +39,7 @@
     <!-- Arbitrage styles are only needed once the Arbitrage tab is opened. The
          `media="print"` + onload swap is the standard non-blocking stylesheet
          pattern: the browser fetches it at low priority without blocking paint. -->
-    <link rel="stylesheet" href="/css/arbitrage.css?v=5" media="print" onload="this.media='all';this.onload=null" />
+    <link rel="stylesheet" href="/css/arbitrage.css?v=6" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/arbitrage-pro.css?v=7" media="print" onload="this.media='all';this.onload=null" />
     <link rel="stylesheet" href="/css/events.css?v=10" media="print" onload="this.media='all';this.onload=null" />
     <style>.arb-chart-empty[hidden]{display:none!important}</style>
@@ -1188,8 +1188,8 @@
                 <span class="arb-freshness" id="arb-update-age">обновление…</span>
             </header>
             <section class="arb-kpis">
-                <article><span>Исполнимых возможностей</span><strong id="arb-kpi-count">—</strong><small>свежий BBO · полный round-trip</small></article>
-                <article><span>Лучший net при схождении</span><strong class="positive" id="arb-kpi-net">—</strong><small id="arb-kpi-route">ожидание данных</small></article>
+                <article><span id="arb-count-label">Исполнимых возможностей</span><strong id="arb-kpi-count">—</strong><small id="arb-count-sub">свежий BBO · полный round-trip</small></article>
+                <article><span id="arb-net-label">Лучший net при схождении</span><strong class="positive" id="arb-kpi-net">—</strong><small id="arb-kpi-route">ожидание данных</small></article>
                 <article><span>Ближайшая выплата</span><strong class="cyan" id="arb-kpi-funding">—</strong><small id="arb-kpi-funding-sub">текущая оценка бирж</small></article>
                 <article><span>Рынков в сравнении</span><strong id="arb-kpi-streams">—</strong><small>единая нормализация</small></article>
             </section>
@@ -1197,6 +1197,7 @@
                 <div class="arb-modes" role="tablist">
                     <button class="on" data-arb-mode="spreads" role="tab">Спреды <b id="arb-spread-badge">0</b></button>
                     <button data-arb-mode="funding" role="tab">Фандинг <b id="arb-funding-badge">0</b></button>
+                    <button data-arb-mode="spot" role="tab">Спот → Спот <b id="arb-spot-badge">0</b></button>
                     <button data-arb-mode="dex" role="tab">CEX ↔ DEX <b id="arb-dex-badge">0</b></button>
                 </div>
             </div>
@@ -1213,9 +1214,16 @@
                         <button class="arb-reset-btn" id="arb-reset">Сбросить</button><button class="arb-refresh-btn" id="arb-refresh" title="Обновить сейчас">↻</button>
                     </div>
                     <div class="arb-exchange-bar"><span>Биржи</span><div class="arb-exchanges" id="arb-exchanges"></div><button id="arb-all-exchanges">Выбрать все</button></div>
+                    <div id="arb-spot-controls" class="spot-controls" hidden>
+                        <label><span>Бюджет · USDT</span><input id="arb-spot-notional" type="number" min="10" max="1000000" step="any" value="500" aria-label="Бюджет спот-сделки"></label>
+                        <label><span>BUY fee · %</span><input id="arb-spot-buy-fee" type="number" min="0" max="5" step="any" placeholder="Модель биржи" aria-label="Комиссия покупки в процентах"></label>
+                        <label><span>SELL fee · %</span><input id="arb-spot-sell-fee" type="number" min="0" max="5" step="any" placeholder="Модель биржи" aria-label="Комиссия продажи в процентах"></label>
+                        <span id="arb-spot-source-health" class="spot-source-health" data-i18n-skip></span>
+                    </div>
                     <div class="arb-table-scroll">
                         <table class="arb-table" id="arb-spreads-table"><thead><tr><th></th><th>Монета</th><th>Связка · свежий BBO</th><th>Funding edge / ч</th><th>Вход после fees</th><th>Net при схождении</th><th>Закрыть сейчас</th><th>Депозит / вывод</th><th>Объём 24ч</th><th>График</th><th>Edge</th></tr></thead><tbody id="arb-spreads-body"></tbody></table>
                         <table class="arb-table" id="arb-funding-table" hidden><thead><tr><th></th><th>Монета</th><th>Связка · текущие ставки</th><th>Ближайшая выплата</th><th>Edge / ч</th><th>Окупаемость fees</th><th>Базис</th><th>Депозит / вывод</th><th>Объём 24ч</th><th>До события</th><th>Edge</th></tr></thead><tbody id="arb-funding-body"></tbody></table>
+                        <table class="arb-table spot-table" id="arb-spot-table" hidden><thead><tr><th></th><th>Монета</th><th>Купить ask → продать bid</th><th>Gross</th><th>После trading fees</th><th>Сеть · вывод</th><th>После перевода*</th><th>Спред живёт</th><th>Свежесть</th><th>Объём 24ч</th><th></th></tr></thead><tbody id="arb-spot-body" data-i18n-skip></tbody></table>
                         <table class="arb-table arb-dex-table" id="arb-dex-table" hidden><thead><tr><th>Монета</th><th>Маршрут</th><th>Сеть</th><th>Точный контракт</th><th>CEX цена</th><th>DEX цена</th><th>Gross</th><th>Оценка costs</th><th>Оценка edge*</th><th>Ликвидность пула</th><th>Объём 24ч</th></tr></thead><tbody id="arb-dex-body"></tbody></table>
                         <div class="arb-empty" id="arb-empty" hidden><span>⌁</span><strong>Возможности не найдены</strong><p>Ослабьте фильтры или дождитесь следующего движения рынка.</p></div>
                     </div>
@@ -1223,6 +1231,8 @@
                 </main>
             </section>
         </div>
+        <div id="arb-spot-popover" class="spot-popover" role="region" aria-label="Расчёт спот-арбитража" hidden></div>
+        <dialog id="arb-spot-dialog" class="spot-dialog" aria-labelledby="arb-spot-dialog-title"><header><strong id="arb-spot-dialog-title">SPOT → SPOT</strong><button data-spot-close aria-label="Закрыть">×</button></header><div class="spot-dialog-body" data-i18n-skip></div></dialog>
         <div class="arb-drawer-backdrop" id="arb-drawer-backdrop" hidden></div>
         <aside class="arb-drawer" id="arb-drawer" aria-hidden="true">
             <header><div><span id="arb-detail-kind">СПРЕД</span><h2 id="arb-detail-title">—</h2></div><button id="arb-detail-close">×</button></header>
@@ -3779,13 +3789,14 @@
          inside app.js / journal.js / tradeOverlay.js fire exactly as before.
          The `?v=` on app.js must match the preload above or the file downloads
          twice. -->
-    <script defer src="/js/i18n-en.js?v=5"></script>
+    <script defer src="/js/i18n-en.js?v=6"></script>
     <script defer src="/js/i18n.js?v=5"></script>
     <script defer src="/js/formationEngine.js?v=2016"></script>
     <script defer src="/js/tradeOverlay.js?v=2015"></script>
     <script defer src="/js/pumpLogic.js?v=3"></script>
     <script defer src="/js/app.js?v=2114"></script>
-    <script defer src="/js/arbitrage.js?v=2018"></script>
+    <script defer src="/js/spot-arbitrage.js?v=1"></script>
+    <script defer src="/js/arbitrage.js?v=2019"></script>
     <script defer src="/js/arbitrage-pro.js?v=2018"></script>
     <script defer src="/js/journal.js?v=2019"></script>
     <script defer src="/js/events.js?v=17"></script>

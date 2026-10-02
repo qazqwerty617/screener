@@ -149,7 +149,7 @@ test("every formation map consumer skips spot keys", () => {
 test("the density map still covers spot, with market carried per wall", () => {
   const scanner = fs.readFileSync(path.join(ROOT, "wallScanner.js"), "utf8");
   // wallScanner injects the spot tickers, so it must keep doing so.
-  assert.match(scanner, /async function updateSpotTickers\(tickers\)/);
+  assert.match(scanner, /async function updateSpotTickers\(tickers, spotMarketData = null\)/);
   assert.match(scanner, /const market = sym\.endsWith\("_SPOT"\) \? "spot" : "futures";/);
   // And the client filters on that field rather than guessing.
   assert.match(APP_CODE, /if \(densityMarket !== "all" && d\.market !== densityMarket\) return false;/);

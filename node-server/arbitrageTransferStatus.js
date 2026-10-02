@@ -6,19 +6,20 @@ const PUBLIC_SOURCES = Object.freeze({
   GT: "https://api.gateio.ws/api/v4/spot/currencies",
   KC: "https://api.kucoin.com/api/v3/currencies",
   HT: "https://api.huobi.pro/v2/reference/currencies",
+  PL: "https://api.poloniex.com/currencies?includeMultiChainCurrencies=true",
 });
 
 const NETWORK_ALIASES = Object.freeze({
-  BITCOIN: "BTC", BTC: "BTC",
+  BITCOIN: "BTC", BTC: "BTC", SEGWITBTC:"BTC", BECH32:"BTC",
   LIGHTNINGNETWORK: "LIGHTNING", LIGHTNING: "LIGHTNING", BTCLN: "LIGHTNING",
   ETHEREUM: "ETH", ETH: "ETH", ERC20: "ETH",
   TRON: "TRX", TRX: "TRX", TRC20: "TRX",
   BSC: "BSC", BEP20: "BSC", BNBSMARTCHAIN: "BSC",
   BNB: "BNB", BEP2: "BNB",
   SOLANA: "SOL", SOL: "SOL",
-  ARBITRUM: "ARB", ARBITRUMONE: "ARB", ARBONE: "ARB", ARB: "ARB",
+  ARBITRUM: "ARB", ARBITRUMONE: "ARB", ARBONE: "ARB", ARB: "ARB", ETHARB:"ARB",
   OPTIMISM: "OP", OPTIMISTICETHEREUM: "OP", OP: "OP",
-  POLYGON: "POLYGON", MATIC: "POLYGON", POL: "POLYGON",
+  POLYGON: "POLYGON", MATIC: "POLYGON", POL: "POLYGON", POLPOLY:"POLYGON",
   AVALANCHECCHAIN: "AVAXC", AVAXC: "AVAXC", CCHAIN: "AVAXC",
   BASE: "BASE", TON: "TON", SUI: "SUI", APTOS: "APT", APT: "APT",
   NEAR: "NEAR", CELO: "CELO", FANTOM: "FTM", FTM: "FTM",
@@ -40,8 +41,10 @@ const NETWORK_ALIASES = Object.freeze({
 });
 
 function enabled(value) {
+  if(value===null||value===undefined||value==='')return null;
   return value === true || String(value).toLowerCase() === "true" || String(value).toLowerCase() === "allowed" || String(value) === "1";
 }
+function amountOrNull(value){return value!==null&&value!==undefined&&String(value).trim()!==''&&Number.isFinite(Number(value))&&Number(value)>=0?Number(value):null;}
 
 function canonicalNetwork(value) {
   const raw = String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -55,10 +58,19 @@ function addCoin(map, coin, chains) {
     .map(chain => ({
       network: canonicalNetwork(chain.network),
       label: String(chain.label || chain.network || "").trim(),
-      deposit: chain.deposit === null ? null : Boolean(chain.deposit),
-      withdraw: chain.withdraw === null ? null : Boolean(chain.withdraw),
-      fee: Number.isFinite(Number(chain.fee)) ? Number(chain.fee) : null,
-      minWithdraw: Number.isFinite(Number(chain.minWithdraw)) ? Number(chain.minWithdraw) : null,
+      deposit: enabled(chain.deposit),
+      withdraw: enabled(chain.withdraw),
+      minWithdraw: amountOrNull(chain.minWithdraw),
+      minDeposit: amountOrNull(chain.minDeposit),
+      fee: amountOrNull(chain.fee),
+      // Nonzero percentage/surcharges require a verified adapter formula;
+      // keep them visible but do not silently treat them as a fixed-only fee.
+      variableFee: amountOrNull(chain.variableFee),
+      depositFee: amountOrNull(chain.depositFee),
+      confirmations: amountOrNull(chain.confirmations),
+      withdrawStep: amountOrNull(chain.withdrawStep),
+      withdrawPrecision: amountOrNull(chain.withdrawPrecision),
+      needTag: enabled(chain.needTag),
       contractAddress: String(chain.contractAddress || chain.contract || "").trim() || null,
     }))
     .filter(chain => chain.network);
@@ -77,6 +89,8 @@ function normalizeBinance(payload) {
       fee: chain.withdrawFee,
       minWithdraw: chain.withdrawMin,
       contractAddress: chain.contractAddress,
+      depositFee: chain.depositFee, minDeposit: chain.depositDust, confirmations: chain.minConfirm,
+      withdrawStep: chain.withdrawIntegerMultiple,needTag:chain.withdrawIsTag,
     })));
   }
   return map;
@@ -93,6 +107,7 @@ function normalizeBybit(payload) {
       fee: chain.withdrawFee ?? chain.withdrawalFee,
       minWithdraw: chain.withdrawMin,
       contractAddress: chain.contractAddress,
+      variableFee:chain.withdrawPercentageFee, minDeposit:chain.minDeposit, confirmations:chain.confirmation,
     })));
   }
   return map;
@@ -113,6 +128,7 @@ function normalizeOkx(payload) {
       fee: row.fee,
       minWithdraw: row.minWd,
       contractAddress: row.ctAddr,
+      confirmations:row.minDepArrivalConfirm,minDeposit:row.minDep,
     });
   }
   for (const [coin, chains] of grouped) addCoin(map, coin, chains);
@@ -147,6 +163,8 @@ function normalizeBitget(payload) {
       fee: chain.withdrawFee,
       minWithdraw: chain.minWithdrawAmount,
       contractAddress: chain.contractAddress,
+      variableFee:chain.extraWithdrawFee,minDeposit:chain.minDepositAmount,confirmations:chain.depositConfirm,
+      needTag:chain.needTag,withdrawStep:chain.withdrawStep,withdrawPrecision:chain.withdrawMinScale,
     })));
   }
   return map;
@@ -159,9 +177,10 @@ function normalizeGate(payload) {
     addCoin(map, coin.currency, chains.map(chain => ({
       network: chain.name || chain.chain || coin.chain,
       label: chain.name || chain.chain || coin.chain,
-      deposit: !(chain.deposit_disabled ?? coin.deposit_disabled),
-      withdraw: !(chain.withdraw_disabled ?? coin.withdraw_disabled),
+      deposit: enabled(chain.deposit_disabled ?? coin.deposit_disabled)===null?null:!enabled(chain.deposit_disabled ?? coin.deposit_disabled),
+      withdraw: enabled(chain.withdraw_disabled ?? coin.withdraw_disabled)===null?null:!enabled(chain.withdraw_disabled ?? coin.withdraw_disabled),
       contractAddress: chain.contract_address || chain.contractAddress,
+      fee:chain.withdraw_fee??coin.withdraw_fee,minWithdraw:chain.withdraw_min??coin.withdraw_min,
     })));
   }
   return map;
@@ -172,13 +191,15 @@ function normalizeKucoin(payload) {
   const rows = Array.isArray(payload?.data) ? payload.data : payload?.data ? [payload.data] : [];
   for (const coin of rows) {
     addCoin(map, coin.currency, (coin.chains || []).map(chain => ({
-      network: chain.chainName || chain.chainId,
+      network: chain.chainId || chain.chainName,
       label: chain.chainName || chain.chainId,
       deposit: enabled(chain.isDepositEnabled),
       withdraw: enabled(chain.isWithdrawEnabled),
       fee: chain.withdrawMinFee ?? chain.withdrawalMinFee,
       minWithdraw: chain.withdrawMinSize ?? chain.withdrawalMinSize,
       contractAddress: chain.contractAddress || chain.contract,
+      variableFee:chain.withdrawFeeRate,minDeposit:chain.depositMinSize,confirmations:chain.confirms,
+      needTag:chain.needTag,withdrawPrecision:chain.withdrawPrecision,
     })));
   }
   return map;
@@ -195,16 +216,34 @@ function normalizeHtx(payload) {
       fee: chain.transactFeeWithdraw,
       minWithdraw: chain.minWithdrawAmt,
       contractAddress: chain.contractAddress,
+      minDeposit:chain.minDepositAmt,confirmations:chain.numOfConfirmations,
+      variableFee:chain.transactFeeRateWithdraw,
     })));
   }
+  return map;
+}
+
+function normalizePoloniex(payload){
+  const map=new Map(),grouped=new Map();
+  const rows=Array.isArray(payload)?payload:[];
+  for(const entry of rows)for(const [symbol,coin] of Object.entries(entry||{})){
+    if(!coin||coin.delisted)continue;
+    const base=coin.parentChain||symbol;
+    if(!grouped.has(base))grouped.set(base,[]);
+    grouped.get(base).push({network:coin.blockchain,label:coin.blockchain,
+      deposit:coin.walletDepositState==='ENABLED'?true:coin.walletDepositState==='DISABLED'?false:null,
+      withdraw:coin.walletWithdrawalState==='ENABLED'?true:coin.walletWithdrawalState==='DISABLED'?false:null,
+      fee:coin.withdrawalFee,confirmations:coin.minConf,contractAddress:coin.contractAddress});
+  }
+  for(const [coin,chains] of grouped)addCoin(map,coin,chains);
   return map;
 }
 
 function summarize(chains) {
   if (!Array.isArray(chains) || !chains.length) return { deposit: null, withdraw: null, chains: [] };
   return {
-    deposit: chains.some(chain => chain.deposit === true),
-    withdraw: chains.some(chain => chain.withdraw === true),
+    deposit: chains.some(chain => chain.deposit === true)?true:chains.some(chain=>chain.deposit==null)?null:false,
+    withdraw: chains.some(chain => chain.withdraw === true)?true:chains.some(chain=>chain.withdraw==null)?null:false,
     chains,
   };
 }
@@ -228,15 +267,18 @@ function resolveTransferRoute(catalogs, base, buyEx, sellEx) {
     .filter(chain => chain.withdraw && sellDeposits.some(target =>
       canonicalNetwork(target.network) === canonicalNetwork(chain.network) && sameContract(chain.contractAddress, target.contractAddress)))
     .map(chain => canonicalNetwork(chain.network)))].sort();
-  return { status: networks.length ? "open" : "closed", networks, buy, sell };
+  const unknown=buy.chains.some(chain=>chain.withdraw===null)||sell.chains.some(chain=>chain.deposit===null);
+  return { status: networks.length ? "open" : unknown?"unknown":"closed", networks, buy, sell };
 }
 
 function createTransferStatusService(apiFetch, options = {}) {
-  const ttlMs = Math.max(60_000, Number(options.ttlMs) || 15 * 60_000);
+  const ttlMs = Math.max(60_000, Number(options.ttlMs) || 2 * 60_000);
   const retryMs = Math.max(5_000, Number(options.retryMs) || 60_000);
   const clock = typeof options.now === "function" ? options.now : Date.now;
   const catalogs = new Map();
   const refreshedAt = new Map();
+  const successfulAt = new Map();
+  const failures = new Set();
   let pending = null;
 
   const sources = [
@@ -245,15 +287,16 @@ function createTransferStatusService(apiFetch, options = {}) {
     ["GT", PUBLIC_SOURCES.GT, normalizeGate],
     ["KC", PUBLIC_SOURCES.KC, normalizeKucoin],
     ["HT", PUBLIC_SOURCES.HT, normalizeHtx],
+    ["PL", PUBLIC_SOURCES.PL, normalizePoloniex],
   ];
 
   async function refresh(force = false) {
     if (pending) return pending;
     const now = clock();
-    const due = sources.filter(([code]) => force || now - (refreshedAt.get(code) || 0) >= (catalogs.has(code) ? ttlMs : retryMs));
+    const due = sources.filter(([code]) => force || !refreshedAt.has(code) || now - refreshedAt.get(code) >= (catalogs.has(code)&&!failures.has(code) ? ttlMs : retryMs));
     if (!due.length) return;
     pending = Promise.allSettled(due.map(([code, url, normalize]) =>
-      apiFetch(url, 12_000, 1).then(data => [code, normalize(data)])
+      apiFetch(url, 12_000, 1).then(data => [code, normalize(data), clock()])
     )).then(results => {
       const finishedAt = clock();
       for (let index = 0; index < results.length; index++) {
@@ -262,6 +305,9 @@ function createTransferStatusService(apiFetch, options = {}) {
         refreshedAt.set(code, finishedAt);
         if (result.status === "fulfilled" && result.value[1].size) {
           catalogs.set(code, result.value[1]);
+          successfulAt.set(code,result.value[2]);failures.delete(code);
+        }else{
+          failures.add(code);
         }
       }
     }).finally(() => { pending = null; });
@@ -270,15 +316,22 @@ function createTransferStatusService(apiFetch, options = {}) {
 
   async function getRoutes(routes, overlayCatalogs = null) {
     await refresh(false);
-    const activeCatalogs = overlayCatalogs?.size ? new Map([...catalogs, ...overlayCatalogs]) : catalogs;
+    const current=getCatalogSnapshot();
+    const activeCatalogs = overlayCatalogs?.size ? new Map([...current.catalogs, ...overlayCatalogs]) : current.catalogs;
     return (Array.isArray(routes) ? routes : []).map(route => ({
       key: String(route.key || ""),
       base: String(route.base || "").toUpperCase(),
       ...resolveTransferRoute(activeCatalogs, route.base, route.buyEx, route.sellEx),
+      checkedAt:Math.min(...[route.buyEx,route.sellEx].map(ex=>overlayCatalogs?.has(ex)?clock():successfulAt.get(ex)||0))||null,
     }));
   }
 
-  return { refresh, getRoutes, resolve: (base, buyEx, sellEx) => resolveTransferRoute(catalogs, base, buyEx, sellEx), catalogs, refreshedAt };
+  function getCatalogSnapshot(){
+    const time=clock(),fresh=new Map([...catalogs].filter(([ex])=>time-(successfulAt.get(ex)||0)<=ttlMs));
+    return {catalogs:fresh,sources:Object.fromEntries(sources.map(([ex,url])=>[ex,{url,checkedAt:successfulAt.get(ex)||null,
+      status:failures.has(ex)?'error':fresh.has(ex)?'ok':'pending',stale:catalogs.has(ex)&&!fresh.has(ex)}]))};
+  }
+  return { refresh, getRoutes, getCatalogSnapshot, resolve: (base, buyEx, sellEx) => resolveTransferRoute(getCatalogSnapshot().catalogs, base, buyEx, sellEx), catalogs, refreshedAt };
 }
 
 module.exports = {
@@ -292,6 +345,7 @@ module.exports = {
   normalizeGate,
   normalizeKucoin,
   normalizeHtx,
+  normalizePoloniex,
   resolveTransferRoute,
   createTransferStatusService,
 };

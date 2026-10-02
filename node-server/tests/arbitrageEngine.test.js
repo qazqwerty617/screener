@@ -201,3 +201,14 @@ test("tokenized stocks and exchange RWA instruments never become arbitrage route
   ]);
   assert.equal(buildRows(map, now).spreads.length, 0);
 });
+
+test('futures gross spread lifetime uses the injected clock and resets when the opportunity disappears', () => {
+  let now = 100000;
+  const a = {ex:'BN',sym:'BTCUSDT',base:'BTC',p:100,bid:99.9,ask:100,v:1e7,quoteTs:now};
+  const b = {ex:'BB',sym:'BTCUSDT',base:'BTC',p:101,bid:101,ask:101.1,v:1e7,quoteTs:now};
+  const engine = createArbitrageEngine(new Map([['BN:BTCUSDT',a],['BB:BTCUSDT',b]]),new Map(),{now:()=>now});
+  engine.refresh();assert.equal(engine.getSnapshot().spreads[0].spreadAgeMs,0);
+  now += 5000;a.quoteTs=b.quoteTs=now;engine.refresh();assert.equal(engine.getSnapshot().spreads[0].spreadAgeMs,5000);
+  b.bid=99.9;b.ask=100;now+=5000;a.quoteTs=b.quoteTs=now;engine.refresh();assert.equal(engine.getSnapshot().spreads[0].spreadAgeMs,undefined);
+  b.bid=101;b.ask=101.1;now+=5000;a.quoteTs=b.quoteTs=now;engine.refresh();assert.equal(engine.getSnapshot().spreads[0].spreadAgeMs,0);
+});

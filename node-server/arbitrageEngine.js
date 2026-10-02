@@ -412,6 +412,7 @@ function createArbitrageEngine(tickers, exStatus, options = {}) {
   let snapshot = { generatedAt: 0, spreads: [], funding: [], groups: 0 };
   const history = new Map();
   const watchedRoutes = new Map();
+  const spreadLifetimes = new Map();
   const clock = typeof options.now === "function" ? options.now : Date.now;
   const rankedHistoryLimit = Math.max(0, Number.isFinite(options.rankedHistoryLimit) ? options.rankedHistoryLimit : 200);
   const historyLimit = Math.max(90, Number.isFinite(options.historyLimit) ? options.historyLimit : 2160);
@@ -433,6 +434,19 @@ function createArbitrageEngine(tickers, exStatus, options = {}) {
       if (watchedRoutes.has(sample.key)) watchedSamples.set(sample.key, sample);
     }, options.assetAllowed);
     snapshot = { generatedAt, ...rows };
+    const observed = new Set();
+    for (const row of snapshot.spreads) {
+      if (row.gross <= 0) continue;
+      observed.add(row.key);
+      let life = spreadLifetimes.get(row.key);
+      if (!life && spreadLifetimes.size >= 50000) continue;
+      if (!life || generatedAt - life.lastObservedAt > 10000) life = { since: generatedAt, samples: 0 };
+      life.lastObservedAt = generatedAt; life.samples++;
+      spreadLifetimes.set(row.key, life);
+      row.spreadSince = life.since; row.spreadAgeMs = generatedAt - life.since; row.spreadSamples = life.samples;
+    }
+    for (const key of spreadLifetimes.keys()) if (!observed.has(key)) spreadLifetimes.delete(key);
+    while (spreadLifetimes.size > 50000) spreadLifetimes.delete(spreadLifetimes.keys().next().value);
     for (const row of snapshot.spreads.slice(0, rankedHistoryLimit)) {
       record(row.key, generatedAt, row.net, row.buyAsk, row.sellBid, row.gross, row.exitNet, row.buyBid, row.sellAsk);
     }
@@ -461,7 +475,7 @@ function createArbitrageEngine(tickers, exStatus, options = {}) {
   }
 
   function getSnapshot() {
-    if (!snapshot.generatedAt || Date.now() - snapshot.generatedAt > 6000) refresh();
+    if (!snapshot.generatedAt || clock() - snapshot.generatedAt > 6000) refresh();
     const statuses = {};
     for (const code of Object.keys(EXCHANGES)) {
       const state = exStatus.get(code);

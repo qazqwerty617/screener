@@ -1,5 +1,23 @@
 /* UI copy only. Market symbols, source publications and user text stay intact. */
 window.ObsidianEnglish = Object.freeze(Object.fromEntries(`
+Положительных оценок|Positive estimates
+BBO · выбранный бюджет|BBO · selected budget
+Оценка после перевода|Estimated result after transfer
+Наблюдаемая жизнь положительного gross-спреда|Observed positive gross spread lifetime
+Спот → Спот|Spot → Spot
+Бюджет · USDT|Budget · USDT
+Бюджет спот-сделки|Spot trade budget
+Модель биржи|Venue model
+Комиссия покупки в процентах|Buy fee percent
+Комиссия продажи в процентах|Sell fee percent
+Купить ask → продать bid|Buy ask → sell bid
+После trading fees|After trading fees
+Сеть · вывод|Network · withdrawal
+После перевода*|After transfer*
+После перевода|After transfer
+Спред живёт|Spread observed
+Расчёт спот-арбитража|Spot arbitrage calculation
+BBO — оценка без проскальзывания · наведите на связку для расчёта по стаканам · неизвестные расходы не равны нулю|BBO estimate before slippage · hover for order book calculation · unknown costs are not zero
 Range / Боковик|Range / Sideways
 Разметка не подтверждена на текущих свечах|Formation is not confirmed on the current candles
 Разметка вне видимой области|Formation is outside the visible area

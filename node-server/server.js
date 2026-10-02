@@ -73,6 +73,9 @@ const patternDetector = require("./patternDetector");
 const serverLevels = require("./serverLevels");
 const wallScanner = require("./wallScanner");
 const { createArbitrageEngine } = require("./arbitrageEngine");
+const { createSpotMarketData, SPOT_VENUES } = require("./spotMarketData");
+const { createSpotOrderBooks } = require("./spotOrderBooks");
+const { createSpotArbitrage, validNotional, feeFor } = require("./spotArbitrage");
 const { createTransferStatusService } = require("./arbitrageTransferStatus");
 const { createDexArbitrageService } = require("./dexArbitrageEngine");
 const { fetchAuthenticatedCatalogue } = require("./authenticatedTransferCatalogs");
@@ -360,13 +363,17 @@ const arbitrageEngine = createArbitrageEngine(tickers, exStatus, {
   assetAllowed: (base, ticker) => wallScanner.isTradableBase(base, ticker?.sym, ticker),
 });
 const arbitrageTransfers = createTransferStatusService(apiFetch);
+const spotMarketData = createSpotMarketData();
+const spotArbitrage = createSpotArbitrage(spotMarketData, arbitrageTransfers, createSpotOrderBooks(apiFetch), {
+  assetAllowed: (base, quote) => wallScanner.isTradableBase(base, quote.symbol, quote),
+});
 const dexArbitrage = createDexArbitrageService(
   apiFetch,
   arbitrageTransfers,
   () => tickers,
 );
 const authenticatedTransferCache = new Map();
-const AUTH_TRANSFER_TTL_MS = 15 * 60_000;
+const AUTH_TRANSFER_TTL_MS = 2 * 60_000;
 const AUTH_TRANSFER_RETRY_MS = 60_000;
 const AUTH_TRANSFER_CACHE_MAX = 1_000;
 
@@ -393,15 +400,15 @@ async function loadAuthenticatedTransferCatalogs(req) {
   const now = Date.now();
   await Promise.allSettled(candidates.map(async item => {
     const current = authenticatedTransferCache.get(item.cacheKey);
-    const ageLimit = current?.catalog?.size ? AUTH_TRANSFER_TTL_MS : AUTH_TRANSFER_RETRY_MS;
+    const ageLimit = current?.catalog?.size && !current.error ? AUTH_TRANSFER_TTL_MS : AUTH_TRANSFER_RETRY_MS;
     if (current?.pending) return current.pending;
     if (current?.at && now - current.at < ageLimit) return;
     const pending = getFetchImpl().then(fetchImpl => fetchAuthenticatedCatalogue(item.exchange, item.credentials, fetchImpl))
       .then(catalog => {
-        authenticatedTransferCache.set(item.cacheKey, { at: Date.now(), catalog });
+        authenticatedTransferCache.set(item.cacheKey, { at: Date.now(), updatedAt: Date.now(), catalog });
       })
       .catch(error => {
-        authenticatedTransferCache.set(item.cacheKey, { at: Date.now(), catalog: current?.catalog || null, error: String(error.message || error) });
+        authenticatedTransferCache.set(item.cacheKey, { at: Date.now(), updatedAt: current?.updatedAt || 0, catalog: current?.catalog || null, error: String(error.message || error) });
       });
     authenticatedTransferCache.set(item.cacheKey, { ...current, at: current?.at || 0, pending });
     return pending;
@@ -409,8 +416,8 @@ async function loadAuthenticatedTransferCatalogs(req) {
   pruneAuthenticatedTransferCache();
   const overlays = new Map();
   for (const item of candidates) {
-    const catalog = authenticatedTransferCache.get(item.cacheKey)?.catalog;
-    if (catalog?.size) overlays.set(item.exchange, catalog);
+    const cached = authenticatedTransferCache.get(item.cacheKey);
+    if (cached?.catalog?.size && Date.now() - cached.updatedAt <= AUTH_TRANSFER_TTL_MS) overlays.set(item.exchange, cached.catalog);
   }
   return overlays;
 }
@@ -3000,6 +3007,40 @@ app.get("/api/arbitrage/snapshot", (req, res) => {
   });
 });
 
+function spotOptions(query) {
+  const options = {
+    notional: validNotional(query.notional ?? 500),
+    search: String(query.search || '').trim().toUpperCase().slice(0, 32),
+    exchanges: query.exchanges === 'NONE' ? ['NONE'] : [...new Set(String(query.exchanges || '').split(',').filter(ex => SPOT_VENUES[ex]))].sort(),
+    minNet: Math.max(-100, Math.min(100, Number(query.minNet) || 0)),
+    minVolume: Math.max(0, Math.min(1e12, Number(query.minVolume) || 0)),
+    limit: Math.max(1, Math.min(1000, Number(query.limit) || 400)),
+    network: String(query.network || '').toUpperCase().slice(0, 32),
+  };
+  for (const field of ['buyFeePct', 'sellFeePct']) if (query[field] !== undefined && query[field] !== '') options[field] = feeFor('BN', query[field]);
+  return options;
+}
+app.get('/api/arbitrage/spot', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(spotArbitrage.snapshot(spotOptions(req.query)));
+  } catch (_) { res.status(400).json({ error: 'Invalid spot parameters' }); }
+});
+app.get('/api/arbitrage/spot/quote', async (req, res) => {
+  const key = String(req.query.key || '');
+  if (!/^spot:[A-Z0-9.]{1,31}:[A-Z]{2}:[A-Z]{2}$/.test(key)) return res.status(400).json({ error: 'Invalid spot route' });
+  const [, , buyEx, sellEx] = key.split(':');
+  if (!SPOT_VENUES[buyEx] || !SPOT_VENUES[sellEx] || buyEx === sellEx) return res.status(400).json({ error: 'Invalid spot venues' });
+  let options;
+  try { options = spotOptions(req.query); } catch (_) { return res.status(400).json({ error: 'Invalid spot parameters' }); }
+  try {
+    const overlays = await loadAuthenticatedTransferCatalogs(req);
+    const result = await spotArbitrage.quote(key, options, overlays);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
+  } catch (_) { res.status(502).json({ error: 'Spot route unavailable. Refresh quotes and order books.' }); }
+});
+
 app.get("/api/arbitrage/history", (req, res) => {
   const key = String(req.query.key || "").slice(0, 160);
   if (!/^(spread|funding):[A-Z0-9_.-]{1,40}:[A-Z0-9]{2}:[A-Z0-9]{2}$/i.test(key)) {
@@ -3022,8 +3063,8 @@ app.get("/api/arbitrage/transfers", async (req, res) => {
   try {
     const authenticatedCatalogs = await loadAuthenticatedTransferCatalogs(req);
     const statuses = await arbitrageTransfers.getRoutes(routes, authenticatedCatalogs);
-    res.setHeader("Cache-Control", authenticatedCatalogs.size ? "private, no-store" : "public, max-age=60, stale-while-revalidate=300");
-    res.json({ generatedAt: Date.now(), publicExchanges: ["BN", "BG", "GT", "KC", "HT"], routes: statuses });
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ generatedAt: Date.now(), publicExchanges: ["BN", "BG", "GT", "KC", "HT", "PL"], routes: statuses });
   } catch (error) {
     res.status(502).json({ error: "Transfer status unavailable", detail: String(error?.message || error).slice(0, 160) });
   }
@@ -4748,6 +4789,10 @@ server.listen(PORT, BIND_HOST, () => {
   console.log(`тХЪтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХРтХЭ\n`);
   
   arbitrageEngine.start();
+  spotMarketData.start();
+  spotArbitrage.start();
+  void arbitrageTransfers.refresh();
+  setInterval(() => void arbitrageTransfers.refresh(), 30_000).unref();
 
   // Parallel init тАФ all exchanges start simultaneously
   for (const name in exchanges) {
@@ -4785,7 +4830,7 @@ server.listen(PORT, BIND_HOST, () => {
         try { ws.send(msg); } catch (e) {}
       }
     }
-  });
+  }, { spotMarketData });
 
   // ═══ Pattern Scanner Engine (24/7 Continuous Parallel Pool with Smart Caching) ═══
   let isScanningPatterns = false;
