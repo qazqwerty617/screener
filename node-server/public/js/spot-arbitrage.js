@@ -27,8 +27,8 @@
     quote_conversion_unverified:['USDC пересчитан по живому bid/ask; глубина и перевод валюты расчёта не подтверждены','USDC valued at live bid/ask; FX depth and quote-currency transfer unconfirmed'],
     bridge_unverified:['Мост и перенос актива Hyperliquid не подтверждены','Hyperliquid bridge and asset transfer unconfirmed'],
   };
-  let initialized=false,active=false,rows=new Map(),key=null,quote=null,quoteAt=0,sequence=0,controller=null;
-  let patch,refresh,hoverTimer,closeTimer,refreshTimer,anchor=null,lastPayload=null,lastFavorites=null;
+  let initialized=false,active=false,rows=new Map(),key=null,quote=null,quoteAt=0,sequence=0,controller=null,selectedNetwork=null;
+  let patch,refresh,refreshTimer,lastPayload=null,lastFavorites=null;
   const pop = () => $('arb-spot-popover'), dialog = () => $('arb-spot-dialog');
   const isDialog = () => dialog()?.hasAttribute('open');
   function parameters() {
@@ -50,17 +50,6 @@
   function init() {
     if(initialized)return;initialized=true;
     const body=$('arb-spot-body');
-    body.addEventListener('pointerover',event=>{
-      if(event.pointerType==='touch')return;
-      const row=event.target.closest('tr[data-spot-key]');
-      if(row&&!row.contains(event.relatedTarget))schedule(row);
-    });
-    body.addEventListener('pointerout',event=>{
-      const row=event.target.closest('tr[data-spot-key]');
-      if(row&&!row.contains(event.relatedTarget)&&!pop().contains(event.relatedTarget))closeSoon();
-    });
-    body.addEventListener('focusin',event=>{const row=event.target.closest('tr[data-spot-key]');if(row)schedule(row,0);});
-    body.addEventListener('focusout',event=>{if(!body.contains(event.relatedTarget)&&!pop().contains(event.relatedTarget))closeSoon();});
     body.addEventListener('click',event=>{
       if(event.target.closest('[data-fav]'))return;
       const row=event.target.closest('tr[data-spot-key]');if(row)open(row.dataset.spotKey,row);
@@ -68,12 +57,13 @@
     body.addEventListener('keydown',event=>{
       if((event.key==='Enter'||event.key===' ')&&event.target.matches('tr[data-spot-key]')){event.preventDefault();open(event.target.dataset.spotKey,event.target);}
     });
-    pop().addEventListener('pointerenter',()=>clearTimeout(closeTimer));
-    pop().addEventListener('pointerleave',closeSoon);
-    pop().addEventListener('click',event=>{if(event.target.closest('[data-spot-open]'))open(key,anchor);});
-    dialog().addEventListener('click',event=>{if(event.target===dialog()||event.target.closest('[data-spot-close]'))close();});
+    dialog().addEventListener('click',event=>{
+      if(event.target===dialog()||event.target.closest('[data-spot-close]'))close();
+      const choice=event.target.closest('[data-spot-select-network]');
+      if(choice)chooseNetwork(choice.dataset.spotSelectNetwork);
+    });
     dialog().addEventListener('cancel',()=>close());
-    dialog().addEventListener('change',event=>{if(event.target.matches('[data-spot-network]')){quote=null;void load(true);}});
+    dialog().addEventListener('change',event=>{if(event.target.matches('[data-spot-network]'))chooseNetwork(event.target.value);});
     let inputTimer;
     for(const id of ['arb-spot-notional','arb-spot-buy-fee','arb-spot-sell-fee'])$(id).addEventListener('input',()=>{
       clearTimeout(inputTimer);invalidate();inputTimer=setTimeout(()=>{if(active){refresh?.();if(key)void load(true);}},250);
@@ -94,31 +84,19 @@
   }
   function invalidate(){sequence++;controller?.abort();controller=null;quote=null;quoteAt=0;}
   function close(){
-    clearTimeout(hoverTimer);clearTimeout(closeTimer);clearInterval(refreshTimer);refreshTimer=null;
-    invalidate();key=null;anchor=null;pop()?.setAttribute('hidden','');
+    clearInterval(refreshTimer);refreshTimer=null;
+    invalidate();key=null;selectedNetwork=null;pop()?.setAttribute('hidden','');
     if(isDialog()){if(dialog().close)dialog().close();else dialog().removeAttribute('open');}
   }
-  function closeSoon(){clearTimeout(hoverTimer);clearTimeout(closeTimer);closeTimer=setTimeout(()=>{if(!isDialog())close();},160);}
-  function schedule(row,wait=160){
-    clearTimeout(closeTimer);clearTimeout(hoverTimer);if(isDialog())return;
-    hoverTimer=setTimeout(()=>show(row.dataset.spotKey,row),wait);
-  }
-  function show(nextKey,row){
+  function open(nextKey){
     if(!active||!rows.has(nextKey))return;
-    if(key!==nextKey){invalidate();key=nextKey;}
-    anchor=row;pop().hidden=false;paint();position();watch();void load(false);
-  }
-  function open(nextKey,row){
-    if(!rows.has(nextKey))return;
-    show(nextKey,row);pop().hidden=true;
+    if(key!==nextKey){invalidate();key=nextKey;selectedNetwork=null;}
     if(!isDialog()){if(dialog().showModal)dialog().showModal();else dialog().setAttribute('open','');}
-    paint();void load(false);
+    paint();watch();void load(false);
   }
-  function position(){
-    if(!anchor||pop().hidden)return;
-    const rect=anchor.getBoundingClientRect(),height=pop().offsetHeight,width=pop().offsetWidth;
-    pop().style.left=`${Math.max(8,Math.min(rect.left+90,window.innerWidth-width-8))}px`;
-    pop().style.top=`${Math.max(8,Math.min(rect.bottom+7,window.innerHeight-height-8))}px`;
+  function chooseNetwork(network){
+    if(!key||!network||selectedNetwork===network&&quote?.path?.network===network)return;
+    selectedNetwork=network;invalidate();paint();void load(true);
   }
   async function load(force){
     if(!active||!key||controller||!force&&quote&&Date.now()-quoteAt<4000)return;
@@ -126,15 +104,14 @@
     const currentKey=key,version=++sequence,abort=new AbortController();controller=abort;
     const timeout=setTimeout(()=>abort.abort(),12000);
     const params=new URLSearchParams({...values,key:currentKey});
-    const network=isDialog()?dialog().querySelector('[data-spot-network]')?.value:null;
-    if(network)params.set('network',network);
+    if(selectedNetwork)params.set('network',selectedNetwork);
     let token='';try{token=window.getStoredAuthToken?.()||localStorage.getItem('obsidian_auth_token')||'';}catch(_){}
     try{
       const response=await fetch(`/api/arbitrage/spot/quote?${params}`,{cache:'no-store',signal:abort.signal,headers:token?{Authorization:`Bearer ${token}`}:{}});
       if(!response.ok)throw new Error('quote unavailable');
       const payload=await response.json();
       if(version!==sequence||key!==currentKey||!active)return;
-      quote=payload;quoteAt=Date.now();paint();position();
+      quote=payload;quoteAt=Date.now();paint();
     }catch(error){
       if(version===sequence&&active&&key===currentKey){quote=null;quoteAt=Date.now();paint(t('Стаканы недоступны — итог по объёму не подтверждён.','Books unavailable — size estimate unconfirmed.'));}
     }finally{clearTimeout(timeout);if(controller===abort)controller=null;}
@@ -149,19 +126,33 @@
     const pair=converted?`${row.base} · ${row.buyQuote} → ${row.sellQuote}`:`${row.base}/USDT`;
     const conversionNote=converted?`<p class="spot-caution">${t('Цены ниже — эквивалент USDT. Спот Hyperliquid торгуется за USDC.','Prices below are USDT equivalents. Hyperliquid spot trades in USDC.')} ${row.buyQuote==='USDC'?`BUY ask ${n(row.buyNativeAsk)} USDC · `:''}${row.sellQuote==='USDC'?`SELL bid ${n(row.sellNativeBid)} USDC · `:''}${Object.values(row.conversions).filter(Boolean).map(fx=>`${esc(fx.ex)} USDC/USDT · bid ${n(fx.bid)} / ask ${n(fx.ask)} · ${t('комиссия модели','model fee')} ${n(fx.feePct,3)}%`).join(' · ')}</p>`:'';
     const links=`<a href="${esc(row.buyUrl)}" target="_blank" rel="noopener noreferrer">${t('Купить на','Buy on')} ${esc(row.buyName)} ↗</a><a href="${esc(row.sellUrl)}" target="_blank" rel="noopener noreferrer">${t('Продать на','Sell on')} ${esc(row.sellName)} ↗</a>`;
+    const rec=row.recommendations,hasRecommendations=Boolean(rec?.cheapest||rec?.fastest);
+    const recommendation=(value,fast)=>`<button type="button" class="spot-network-card ${value?.network===path?.network?'selected':''}" ${value?`data-spot-select-network="${esc(value.network)}"`:'disabled'}>
+      <span>${fast?t('Быстрее по подтверждениям','Faster confirmations'):t('Дешевле перевод','Cheaper transfer')}</span>
+      <strong>${value?esc(value.network):t('Нет оценки','No estimate')}</strong>
+      <small>${value?fast?'≈ '+duration(value.confirmationEstimateMs):n(value.totalFee)+' '+esc(row.base)+' ≈ '+usd(value.feeUsdt):t('API не даёт достаточно данных','Insufficient API data')}</small></button>`;
+    const recommendations=detail?`<div class="spot-network-recommendations">${recommendation(rec?.cheapest,false)}${recommendation(rec?.fastest,true)}</div>
+      <p class="spot-network-note">${hasRecommendations?t(`Сравнено ${rec.eligibleCount} проверенных сетей из ${rec.pathCount}; оценка скорости есть для ${rec.timedCount}.`,`Compared ${rec.eligibleCount} verified networks out of ${rec.pathCount}; ${rec.timedCount} have timing estimates.`):t('Для выбора сети нужны открытые вывод и депозит, совпадение актива, комиссии и достаточная сумма.','Network choice requires open withdrawal/deposit, matching asset, fees and sufficient size.')}
+      ${t('Скорость ≈ число подтверждений × время блока. Проверка вывода и обработка биржей не учтены.','Speed ≈ confirmations × block interval. Withdrawal review and exchange processing are excluded.')}
+      ${path?.confirmationTiming?.source?`<a href="${esc(path.confirmationTiming.source)}" target="_blank" rel="noopener noreferrer">${t('Источник модели','Model source')} ↗</a>`:''}</p>`:'';
     return `<div class="spot-route-head"><div><span>SPOT → SPOT · ${depth?'DEPTH':'BBO'}</span><h3>${esc(pair)}</h3><p>${esc(row.buyName)} <i>→</i> ${esc(row.sellName)}</p></div><strong class="${confirmed&&flow.profitUsdt>0?'positive':''}">${confirmed?usd(flow.profitUsdt):t('Оценка','Estimate')}<small>${confirmed?pct(flow.netPct):pct(flow.netPct??flow.preTransferNetPct)}</small></strong></div>${conversionNote}
       <div class="spot-route-meta"><span>${t('Спред живёт','Spread observed')} <b>${duration(row.spreadSince==null?null:Date.now()-row.spreadSince)}</b></span><span>BBO ${duration(row.ageMs)} · ${esc(row.spreadSamples)} ${t('набл.','samples')}</span></div>
-      <ol class="spot-flow"><li><span class="spot-step">1</span><div><h4>${t('Покупка','Buy')} · ${esc(row.buyName)}</h4>${line(t('Бюджет','Budget'),usd(flow.notional))}${line(t('Средняя цена','Average price'),`${n(flow.buyAverage)} USDT`)}${line(t('Куплено','Bought'),`${n(flow.bought)} ${row.base}`)}${line(t('Комиссия покупки','Buy fee'),`${usd(flow.buyFeeUsdt)} · ${n(flow.buyFeePct,3)}%`)}${line(t('После комиссии','After fee'),`${n(flow.acquired)} ${row.base}`)}</div></li>
-      <li><span class="spot-step">2</span><div><h4>${t('Перевод','Transfer')} · ${esc(network)}</h4>${line(t('Комиссия вывода','Withdrawal fee'),`${n(flow.withdrawFee)} ${row.base}${flow.withdrawFeeUsdt===null?'':` ≈ ${usd(flow.withdrawFeeUsdt)}`}`)}${line(t('Придёт на биржу','Arrives at venue'),`${n(flow.received)} ${row.base}`)}${path?.confirmations!=null?line(t('Подтверждения депозита','Deposit confirmations'),String(path.confirmations)):''}${detail&&path?line(t('Минимум вывода / депозита','Min withdrawal / deposit'),`${n(path.minWithdraw)} / ${n(path.minDeposit)} ${row.base}`):''}${flow.dust>0?line(t('Остаток из-за округления','Rounding dust'),`${n(flow.dust,12)} ${row.base}`):''}</div></li>
+      ${recommendations}<ol class="spot-flow"><li><span class="spot-step">1</span><div><h4>${t('Покупка','Buy')} · ${esc(row.buyName)}</h4>${line(t('Бюджет','Budget'),usd(flow.notional))}${line(t('Средняя цена','Average price'),`${n(flow.buyAverage)} USDT`)}${line(t('Куплено','Bought'),`${n(flow.bought)} ${row.base}`)}${line(t('Комиссия покупки','Buy fee'),`${usd(flow.buyFeeUsdt)} · ${n(flow.buyFeePct,3)}%`)}${line(t('После комиссии','After fee'),`${n(flow.acquired)} ${row.base}`)}</div></li>
+      <li><span class="spot-step">2</span><div><h4>${t('Перевод','Transfer')} · ${esc(network)}</h4>${line(t('Комиссия вывода','Withdrawal fee'),`${n(flow.withdrawFee)} ${row.base}${flow.withdrawFeeUsdt===null?'':` ≈ ${usd(flow.withdrawFeeUsdt)}`}`)}${line(t('Придёт на биржу','Arrives at venue'),`${n(flow.received)} ${row.base}`)}${path?.confirmations!=null?line(t('Подтверждения депозита','Deposit confirmations'),String(path.confirmations)):''}${path?.confirmationEstimateMs!=null?line(t('Подтверждение в сети ≈','Network confirmation ≈'),duration(path.confirmationEstimateMs)):''}${detail&&path?line(t('Минимум вывода / депозита','Min withdrawal / deposit'),`${n(path.minWithdraw)} / ${n(path.minDeposit)} ${row.base}`):''}${flow.dust>0?line(t('Остаток из-за округления','Rounding dust'),`${n(flow.dust,12)} ${row.base}`):''}</div></li>
       <li><span class="spot-step">3</span><div><h4>${t('Продажа','Sell')} · ${esc(row.sellName)}</h4>${line(t('Количество','Quantity'),`${n(flow.sold)} ${row.base}`)}${line(t('Средняя цена','Average price'),`${n(flow.sellAverage)} USDT`)}${line(t('Комиссия продажи','Sell fee'),`${usd(flow.sellFeeUsdt)} · ${n(flow.sellFeePct,3)}%`)}${line(t('Получено после продажи','Net sale proceeds'),expired?'—':usd(flow.proceeds))}</div></li></ol>
-      ${detail&&row.paths?.length>1?`<label class="spot-network-choice">${t('Сеть перевода','Transfer network')}<select data-spot-network>${row.paths.map(p=>`<option value="${esc(p.network)}" ${p.network===path?.network?'selected':''}>${esc(p.network)} · ${n(p.fee)} ${esc(row.base)}${p.identity==='unverified'?' · ?':''}</option>`).join('')}</select></label>`:''}
+      ${detail&&row.paths?.length>1?`<label class="spot-network-choice">${t('Все общие сети','All shared networks')}<select data-spot-network>${row.paths.map(p=>`<option value="${esc(p.network)}" ${p.network===(selectedNetwork||path?.network)?'selected':''}>${esc(p.network)} · ${n(p.fee)} ${esc(row.base)}${p.identity==='unverified'?' · ?':''}</option>`).join('')}</select></label>`:''}
       <div class="spot-result ${confirmed?'confirmed':''}">${line(t('Итог к исходному бюджету','Result versus initial budget'),expired?'—':usd(flow.profitUsdt))}<small>${confirmed?t('Расчёт по свежим стаканам','Calculated from fresh order books'):t('Индикативно. Глубина, сеть или данные ещё не подтверждены.','Indicative. Depth, transfer or data not yet confirmed.')}</small></div>
       ${error||expired||list.length?`<p class="spot-caution">${esc(error|| (expired?t('Данные устарели. Обновляем…','Data expired. Refreshing…'):list.join(' · ')))}</p>`:''}
       <p class="spot-model-note">${t('Комиссии торговли — модель, их можно задать сверху. Расчёт предполагает удержание BUY fee в монете и сохранение цен после перевода. Депозит без комиссии, если API её не сообщает. Время перевода не гарантировано; таймер показывает наблюдаемую жизнь gross-спреда > 0. Лимиты ордеров и тариф аккаунта проверьте на бирже.','Trading fees are modelled; override them above. BUY fee is charged in base. Calculation assumes prices persist after transfer and no deposit fee when not reported. Transfer time is not guaranteed; timer measures observed gross spread > 0. Check order limits and account fees on the venue.')}</p>
       <div class="spot-route-actions">${detail?links:`<button data-spot-open>${t('Открыть расчёт','Open calculation')} ↗</button>`}</div>`;
   }
   function paint(error=''){
-    const row=quote||rows.get(key);if(!row)return;
+    let row=quote||rows.get(key);if(!row)return;
+    if(selectedNetwork && row.path?.network!==selectedNetwork){
+      row={...row,path:null,flow:{...row.flow,complete:false,profitUsdt:null,proceeds:null,netPct:null,
+        withdrawFee:null,withdrawFeeUsdt:null,received:null,sold:null,sellAverage:null,sellGross:null,sellFeeUsdt:null,dust:0}};
+      error=t(`Пересчитываем перевод через ${selectedNetwork}…`,`Recalculating transfer via ${selectedNetwork}…`);
+    }
     if(isDialog()){
       const body=dialog().querySelector('.spot-dialog-body'),scroll=body.scrollTop;
       body.innerHTML=content(row,true,error);body.scrollTop=scroll;
@@ -181,7 +172,8 @@
       <td><div class="arb-pair"><span class="arb-coin">${esc(row.base.slice(0,4))}</span><div><strong>${esc(row.base)}${row.conversions?.buy||row.conversions?.sell?'':'/USDT'}</strong><small>${row.conversions?.buy||row.conversions?.sell?t('USDC · оценка в USDT','USDC · valued in USDT'):'SPOT'}</small></div></div></td>
       <td><div class="spot-table-route"><span>${esc(row.buyName)} <b>${n(row.buyAsk)}</b></span><i>→</i><span>${esc(row.sellName)} <b>${n(row.sellBid)}</b></span></div></td>
       <td class="arb-num">${pct(row.gross)}</td><td class="arb-num">${pct(row.flow.preTransferNetPct)}</td>
-      <td><span class="spot-network ${row.flow.complete?'verified':''}">${esc(row.path?.network||t('Нет данных','No data'))}</span><small>${row.path?n(row.path.fee)+' '+esc(row.base):row.transferStatus==='closed'?t('Перевод закрыт','Transfer closed'):t('Требует проверки','Needs verification')}</small></td>
+      <td>${row.recommendations?.cheapest?`<span class="spot-network verified">${esc(row.recommendations.cheapest.network)} · ${t('дешевле','cheaper')}</span><small>${n(row.recommendations.cheapest.totalFee)} ${esc(row.base)}</small>`:`<span class="spot-network">${esc(row.path?.network||t('Нет данных','No data'))}</span><small>${row.path?n(row.path.fee)+' '+esc(row.base):row.transferStatus==='closed'?t('Перевод закрыт','Transfer closed'):t('Требует проверки','Needs verification')}</small>`}
+      ${row.recommendations?.fastest?`<small class="spot-fast-network">${esc(row.recommendations.fastest.network)} · ≈ ${duration(row.recommendations.fastest.confirmationEstimateMs)} ${t('в сети','on-chain')}</small>`:''}</td>
       <td class="arb-num ${row.flow.netPct>0?'positive':''}">${pct(row.flow.netPct)}<small>${usd(row.flow.profitUsdt)}</small></td>
       <td class="arb-num" title="${t('Наблюдаемый gross-спред > 0; сброс при разрыве данных','Observed gross spread > 0; resets on data gap')}">${duration(row.spreadAgeMs)}<small>${row.spreadSamples} ${t('набл.','samples')}</small></td>
       <td class="arb-num">${duration(row.ageMs)}</td><td class="arb-num">${usd(row.liquidity)}</td>

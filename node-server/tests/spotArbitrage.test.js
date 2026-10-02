@@ -63,6 +63,25 @@ test('network choice considers fixed fees and minimums, rather than choosing an 
   assert.equal(bestPath([cheap,valid],args).path.network,'BTC');
   assert.equal(bestPath([cheap,valid],args,'FAST').flow.complete,false);
 });
+
+test('native ETH on Arbitrum, Base and Optimism does not incorrectly require an ERC20 contract',()=>{
+  const {assetIdentity}=require('../spotArbitrage');
+  for(const network of ['ARB','BASE','OP','SCROLL','LINEA'])assert.equal(assetIdentity('ETH',{network},{network}),'native');
+  assert.equal(assetIdentity('ETH',{network:'BSC'},{network:'BSC'}),'unverified');
+  assert.equal(assetIdentity('WETH',{network:'ARB'},{network:'ARB'}),'unverified');
+  assert.equal(assetIdentity('AVAX',{network:'AVAXC'},{network:'AVAXC'}),'native');
+});
+
+test('network recommendation gives separate usable cheapest and fastest confirmation estimate',()=>{
+  const slow={...path,network:'ETH',fee:.01,confirmationEstimateMs:384000},fast={...path,network:'OP',fee:.03,confirmationEstimateMs:20000};
+  const impossible={...path,network:'BASE',fee:0,minWithdraw:1000,confirmationEstimateMs:1000};
+  const result=bestPath([slow,fast,impossible],args);
+  assert.equal(result.recommendations.cheapest.network,'ETH');assert.equal(result.recommendations.fastest.network,'OP');
+  assert.equal(result.recommendations.timedCount,2);
+  assert.equal(bestPath([{...slow,confirmationEstimateMs:null}],args).recommendations.fastest,null);
+  assert.equal(bestPath([{...slow,variableFee:1}],args).recommendations.cheapest,null);
+  assert.equal(bestPath([slow,fast],args,'OP').recommendations.cheapest.network,'ETH','manual selection does not hide alternatives');
+});
 test('chain match alone is insufficient: native coin or exact matching contract is required',()=>{
   const catalogs=new Map([['BN',new Map([['BTC',[{network:'BTC',withdraw:true,fee:.1}]],['ABC',[{network:'ETH',withdraw:true,fee:1,contractAddress:'0x'+'a'.repeat(40)}]]])],
     ['BG',new Map([['BTC',[{network:'BTC',deposit:true}]],['ABC',[{network:'ERC20',deposit:true,contractAddress:'0x'+'A'.repeat(40)}]]])]]);

@@ -6704,6 +6704,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (typeof pdLoadFromServer === "function") {
+        window.pdRetrySettingsSync?.();
         pdLoadFromServer();
       } else if (typeof pdLoad === "function") {
         pdLoad();
@@ -19788,39 +19789,58 @@ if (document.readyState === "loading") {
     pdRestartScanner();
   }
 
+  let pdSettingsSyncQueue = Promise.resolve();
   async function pdSyncToServer(settings) {
-    try {
-      const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
-      if (!token) return;
-      const tgChatId = localStorage.getItem("obsidian_tg_chat_id") || (window.currentUser && (window.currentUser.telegramChatId || window.currentUser.telegramId)) || "";
-      const payload = {
-        tgEnabled: !!settings.tgEnabled,
-        telegramChatId: tgChatId,
-        pumpDump: settings,
-        pumpAlerts: settings
-      };
-      await fetch("/api/user/notification-settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-        body: JSON.stringify(payload)
-      });
-      await fetch("/api/user/pump-alerts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
-        body: JSON.stringify(settings)
-      });
-    } catch (_) {}
+    const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
+    if (!token) return false;
+    const body = JSON.stringify(settings);
+    localStorage.setItem('pump_alert_sync_pending', JSON.stringify({ token, body }));
+    const send = async () => {
+      if (localStorage.getItem('obsidian_auth_token') !== token) return false;
+      try {
+        // This endpoint persists both representations atomically. Two separate
+        // POSTs allowed a delayed older request to re-enable disabled alerts.
+        const res = await fetch('/api/user/pump-alerts', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+          body, signal: AbortSignal.timeout(12000)
+        });
+        if (!res.ok || !(await res.json()).success) throw new Error('Settings not saved');
+        const pending = JSON.parse(localStorage.getItem('pump_alert_sync_pending') || 'null');
+        if (pending?.token === token && pending?.body === body) localStorage.removeItem('pump_alert_sync_pending');
+        return true;
+      } catch (_) {
+        if (typeof showToast === 'function') showToast({type:'warning',
+          title:window.ObsidianI18n?.language==='en'?'Pump settings not saved':'Настройки пампов не сохранены',
+          message:window.ObsidianI18n?.language==='en'?'We will retry when connectivity returns or the page reloads.':'Повторим при восстановлении связи или перезагрузке страницы.'});
+        return false;
+      }
+    };
+    pdSettingsSyncQueue = pdSettingsSyncQueue.then(send, send);
+    return pdSettingsSyncQueue;
   }
+
+  function pdRetrySettingsSync() {
+    try {
+      const pending = JSON.parse(localStorage.getItem('pump_alert_sync_pending') || 'null');
+      if (pending?.token === localStorage.getItem('obsidian_auth_token')) return pdSyncToServer(JSON.parse(pending.body));
+    } catch (_) {}
+    return Promise.resolve(false);
+  }
+  window.addEventListener('online', pdRetrySettingsSync);
 
   async function pdLoadFromServer() {
     try {
       const token = localStorage.getItem("obsidian_auth_token") || (typeof authToken === "string" ? authToken : "");
       if (!token) return;
+      const localAtStart = localStorage.getItem(pdGetStorageKey());
       const res = await fetch("/api/user/notification-settings", {
         headers: { "Authorization": `Bearer ${token}` }
       });
       if (!res.ok) return;
       const d = await res.json();
+      if (localStorage.getItem('obsidian_auth_token') !== token ||
+          localAtStart !== localStorage.getItem(pdGetStorageKey()) ||
+          JSON.parse(localStorage.getItem('pump_alert_sync_pending') || 'null')?.token === token) return;
       if (d.success && d.settings) {
         if (d.settings.telegramChatId && !localStorage.getItem("obsidian_tg_chat_id")) {
           localStorage.setItem("obsidian_tg_chat_id", d.settings.telegramChatId);
@@ -19844,6 +19864,7 @@ if (document.readyState === "loading") {
 
   window.pdLoad = pdLoad;
   window.pdLoadFromServer = pdLoadFromServer;
+  window.pdRetrySettingsSync = pdRetrySettingsSync;
   window.pdGetStorageKey = pdGetStorageKey;
 
 
@@ -20743,6 +20764,7 @@ if (document.readyState === "loading") {
   // ── Init ─────────────────────────────────────────────────────────────────
   function pdInit() {
     pdLoad();
+    pdRetrySettingsSync();
     pdLoadFromServer();
 
     if (document.readyState === "loading") {

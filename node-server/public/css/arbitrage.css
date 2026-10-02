@@ -64,4 +64,11 @@
 .spot-caution{padding:9px 11px;border:1px solid #53412d;border-radius:8px;background:#30261a;color:#e2c399;font-size:10px;line-height:1.6}
 .spot-model-note{margin:11px 0;color:#929bad;font-size:9px;line-height:1.65}.spot-route-actions{display:flex;flex-wrap:wrap;gap:8px}.spot-route-actions button,.spot-route-actions a{flex:1;padding:10px;border:1px solid #614491;border-radius:8px;background:#322149;color:#dfc8ff;text-align:center;font:600 11px Inter,sans-serif;text-decoration:none;cursor:pointer}.spot-route-actions button:hover,.spot-route-actions a:hover{background:#422963}
 .spot-network-choice{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;color:#aab2c3;font-size:11px}.spot-network-choice select{max-width:65%;border:1px solid #514075;border-radius:7px;background:#231d32;color:#ddcaf5;padding:8px;font:500 11px Inter,sans-serif}
+.spot-network-recommendations{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0 8px}
+.spot-network-card{display:grid;gap:7px;padding:12px;text-align:left;color:#e0e4ee;background:#191b29;border:1px solid #353148;border-radius:10px;cursor:pointer;font:inherit;min-width:0}
+.spot-network-card span,.spot-network-card small{font-size:10px;color:#929bb1;overflow-wrap:anywhere}
+.spot-network-card strong{font-size:15px;color:#ccb5fc}.spot-network-card.selected{border-color:#8752dc;background:#211b32}
+.spot-network-card:hover:not(:disabled),.spot-network-card:focus-visible{border-color:#a879f6;outline:2px solid #63329a;outline-offset:2px}
+.spot-network-card:disabled{cursor:default;opacity:.6}.spot-network-note{color:#8993a9;font-size:10px;line-height:1.65;margin:0 0 16px}
+.spot-network-note a{color:#b694eb;white-space:nowrap}.spot-fast-network{color:#8ab9d9!important}
 @media(max-width:650px){.arb-modes{flex-wrap:wrap}.spot-controls{gap:9px}.spot-controls label{flex:1;min-width:80px}.spot-controls input{width:100%;box-sizing:border-box}.spot-source-health{flex-basis:100%}.spot-dialog-body{padding:15px}.spot-route-head h3{font-size:18px}}

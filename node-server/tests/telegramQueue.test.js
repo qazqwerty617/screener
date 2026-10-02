@@ -26,6 +26,29 @@ test.afterEach(() => {
   global.fetch = realFetch;
 });
 
+test('an alert disabled while waiting behind another send is cancelled before delivery', async () => {
+  let release, enabled = true;
+  const calls = stubFetch(async (method, n) => {
+    if (n === 1) await new Promise(resolve => { release = resolve; });
+    return { ok: true, result: { message_id: n } };
+  });
+  const first = telegramQueue.enqueue({ chatId: 'blocker', text: 'first' });
+  const second = telegramQueue.enqueue({ chatId: 'cancelled', text: 'pump', shouldSend: () => enabled });
+  enabled = false;
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  release(); await first;
+  const result = await second;
+  assert.equal(result.ok, false); assert.equal(result.reason, 'CANCELLED');
+  assert.equal(calls.length, 1);
+});
+
+test('preference is checked again before retry and before photo fallback', async () => {
+  let enabled = true;
+  const calls = stubFetch(() => { enabled = false; return { ok: false, error_code: 500 }; });
+  const result = await telegramQueue.enqueue({ chatId: 'cancel-retry', text: 'pump', photoBuffer: Buffer.from('chart'), shouldSend: () => enabled });
+  assert.equal(result.reason, 'CANCELLED'); assert.equal(calls.length, 1);
+});
+
 test("a 429 is retried after retry_after instead of dropping the alert", async () => {
   const calls = stubFetch((method, n) => {
     if (n === 1) return { ok: false, error_code: 429, parameters: { retry_after: 0 } };

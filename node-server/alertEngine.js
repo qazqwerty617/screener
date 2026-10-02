@@ -148,9 +148,10 @@ async function sendTelegramMessage(chatId, text) {
 // successful text-only send, and `false` when delivery ultimately failed.
 // Callers must treat a falsy result as "not delivered" and refrain from arming
 // an alert cooldown, otherwise the alert is silently lost.
-async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null, group = null, requirePhoto = false) {
+async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null, group = null, requirePhoto = false, shouldSend = null, expiresAt = null) {
   if (!chatId || !text) return false;
   if (requirePhoto && !Buffer.isBuffer(photoBuffer) && !fileId) return false;
+  if (shouldSend && !shouldSend()) return false;
   if (!process.env.TELEGRAM_BOT_TOKEN && !process.env.ADMIN_BOT_TOKEN && (!telegramBotModule || typeof telegramBotModule.sendAlert !== "function")) return false;
 
   if (userStoreModule && typeof userStoreModule.isTelegramAlertsEnabled === "function") {
@@ -161,14 +162,14 @@ async function sendTelegramAlert(chatId, text, photoBuffer = null, fileId = null
 
   if (telegramBotModule && typeof telegramBotModule.sendAlert === "function") {
     try {
-      const res = await telegramBotModule.sendAlert(chatId, text, photoBuffer, null, group);
-      return res || true;
+      const res = await telegramBotModule.sendAlert(chatId, text, photoBuffer, fileId, group, { shouldSend, expiresAt, requirePhoto });
+      return res || false;
     } catch (_) {
       return false;
     }
   }
 
-  const res = await telegramQueue.enqueue({ chatId, text, photoBuffer, fileId, group, requirePhoto });
+  const res = await telegramQueue.enqueue({ chatId, text, photoBuffer, fileId, group, requirePhoto, shouldSend, expiresAt });
   if (!res || !res.ok) return false;
   return res.fileId || true;
 }
@@ -341,10 +342,12 @@ function sampleTickers() {
 // ── 2. Get All Active Alert Subscribers (Cached for 2.5s for zero CPU overhead) ──
 let cachedSubscribers = null;
 let lastSubscribersFetch = 0;
+let cachedSubscribersRevision;
 
-function getAllAlertSubscribers() {
+function getAllAlertSubscribers(force = false) {
   const now = Date.now();
-  if (cachedSubscribers && (now - lastSubscribersFetch < 2500)) {
+  const revision = userStoreModule?.getPreferencesRevision?.();
+  if (!force && cachedSubscribers && cachedSubscribersRevision === revision && (now - lastSubscribersFetch < 2500)) {
     return cachedSubscribers;
   }
 
@@ -357,25 +360,28 @@ function getAllAlertSubscribers() {
   if (getUsersFn) {
     const allUsers = getUsersFn.call(userStoreModule) || {};
     for (const u of Object.values(allUsers)) {
-      if (!u || u.blocked) continue;
+      if (!u) continue;
       const chatId = String(u.telegramChatId || u.telegramId || "").trim();
       if (!chatId) continue;
+      // A known account owns this destination, even when it opts out. Do not
+      // silently bring it back via the legacy admin fallback.
+      if (seenChatIds.has(chatId)) continue;
+      seenChatIds.add(chatId);
+      if (u.blocked || u.tgAlertsEnabled === false) continue;
 
-      const isAdminUser = adminChatId && (chatId === adminChatId || String(u.id) === "admin" || u.role === "admin");
+      const isAdminUser = Boolean(adminChatId && chatId === adminChatId);
       const prefs = u.preferences || {};
       const notifPrefs = prefs.notifications || u.notificationSettings || {};
       const pdUserPrefs = notifPrefs.pumpDump || notifPrefs.pumpAlerts || prefs.pumpAlerts || prefs.pumpDump || u.pumpAlerts || {};
 
-      // If user is admin, alerts in telegram are always active
-      const tgEnabled = isAdminUser
-        ? true
-        : (pdUserPrefs.tgEnabled !== undefined
+      const tgEnabled = (pdUserPrefs.tgEnabled !== undefined
             ? !!pdUserPrefs.tgEnabled
             : (notifPrefs.tgEnabled !== undefined
                 ? !!notifPrefs.tgEnabled
-                : (u.tgAlertsEnabled === true)));
+                : (u.tgAlertsEnabled === true || isAdminUser)));
 
-      if (!tgEnabled) continue;
+      const priceAlerts = Array.isArray(u.priceAlerts) ? u.priceAlerts : (Array.isArray(prefs.priceAlerts) ? prefs.priceAlerts : []);
+      if (!tgEnabled && !priceAlerts.length) continue;
 
       const userMinPct = Number(pdUserPrefs.minPct) || (isAdminUser ? 5.0 : 3.0);
       const userPeriod = Number(pdUserPrefs.periodMinutes) || (isAdminUser ? 1 : 5);
@@ -383,15 +389,13 @@ function getAllAlertSubscribers() {
       const pumpDump = {
         ...DEFAULT_USER_ALERT_SETTINGS.pumpDump,
         ...pdUserPrefs,
-        enabled: pdUserPrefs.enabled !== undefined ? !!pdUserPrefs.enabled : true,
+        enabled: tgEnabled && (pdUserPrefs.enabled !== undefined ? !!pdUserPrefs.enabled : true),
         minPct: userMinPct,
         periodMinutes: userPeriod,
         exchanges: pdUserPrefs.exchanges === undefined
           ? (isAdminUser ? ["BN"] : ["all"])
           : normalizeExchanges(pdUserPrefs.exchanges)
       };
-
-      const priceAlerts = Array.isArray(u.priceAlerts) ? u.priceAlerts : (Array.isArray(prefs.priceAlerts) ? prefs.priceAlerts : []);
 
       seenChatIds.add(chatId);
       subscribers.push({
@@ -462,8 +466,25 @@ function getAllAlertSubscribers() {
 
 
   cachedSubscribers = subscribers;
+  cachedSubscribersRevision = revision;
   lastSubscribersFetch = now;
   return subscribers;
+}
+
+function canDeliverPumpAlert(entry, ticker, ex, isSpot) {
+  const liveUser=userStoreModule?.findUser?.(entry.sub.userId);
+  if(liveUser && (liveUser.blocked || liveUser.tgAlertsEnabled===false ||
+    String(liveUser.telegramChatId || liveUser.telegramId || '').trim()!==entry.sub.chatId)) return false;
+  const sub = getAllAlertSubscribers(!userStoreModule?.getPreferencesRevision)
+    .find(s => s.userId === entry.sub.userId && s.chatId === entry.sub.chatId);
+  if (!sub?.pumpDump.enabled || userStoreModule?.isTelegramAlertsEnabled?.(sub.chatId) === false) return false;
+  const pd = sub.pumpDump;
+  return isExchangeAllowed(ex, pd.exchanges)
+    && (Number(pd.periodMinutes) || 5) === entry.periodMins
+    && Math.abs(entry.pctChange) >= (Number(pd.minPct) || 3)
+    && (Number(ticker.v) || 0) >= (Number(pd.minVolume) || 0)
+    && (pd.direction === 'both' || !pd.direction || pd.direction === (entry.isPump ? 'pump' : 'dump'))
+    && (pd.marketType === 'both' || !pd.marketType || pd.marketType === (isSpot ? 'spot' : 'futures'));
 }
 
 // Build authentic candles from in-memory recorded price history if exchange APIs fail
@@ -912,7 +933,8 @@ function processTicker(t, now, activeSubscribers) {
       const groupToken = `pd:${t.key}:${entryIsPump ? "pump" : "dump"}:${entryPeriodMins}:${now}`;
       let delivered = false;
       try {
-        const res = await sendTelegramAlert(entry.sub.chatId, msg, photoBuffer, null, groupToken, true);
+        const res = await sendTelegramAlert(entry.sub.chatId, msg, photoBuffer, null, groupToken, true,
+          () => canDeliverPumpAlert(entry, t, exCode, isSpot), now + 60_000);
         delivered = !!res;
       } catch (err) {
         console.warn(`[ALERT ENGINE] Send failed for ${entry.sub.chatId}: ${err.message}`);

@@ -502,8 +502,9 @@ function scanCandles(meta, candles, cfgOverride = {}, precomputedFormations) {
       if (!(box.lower > 0 && box.upper > box.lower) || priceNow < box.lower || priceNow > box.upper) continue;
       const target = priceNow - box.lower <= box.upper - priceNow ? box.lower : box.upper;
       signals.push({ type: 'range', ex, sym, base, tf, price: target,
-        direction: 'neutral', confidence: Math.min(5, box.touches), ts: now,
-        meta: { ...box, dist: Math.abs(priceNow - target) / priceNow * 100 } });
+        direction: 'neutral', confidence: Math.min(5, Number(box.lowerTouches) || 0, Number(box.upperTouches) || 0), ts: now,
+        meta: { ...box, touches: Math.min(Number(box.lowerTouches) || 0, Number(box.upperTouches) || 0),
+          dist: Math.abs(priceNow - target) / priceNow * 100 } });
     }
 
     // 1. Dominant Unbroken Trendlines

@@ -1,7 +1,25 @@
 "use strict";
-
 const test = require("node:test");
 const assert = require("node:assert/strict");
+
+const {normalizeBitstamp}=require('../arbitrageTransferStatus');
+test('Gate parses token addresses and groups chain-specific currencies under the actual traded currency',()=>{
+  const {normalizeGate}=require('../arbitrageTransferStatus');
+  const address='0x'+'a'.repeat(40);
+  const map=normalizeGate([{currency:'ABC',chains:[{name:'ETH',addr:address,deposit_disabled:false,withdraw_disabled:false}]},
+    {currency:'ABC_ARB',chain:'ARB',contract_address:address,deposit_disabled:false,withdraw_disabled:false}]);
+  assert.equal(map.get('ABC').length,2);assert.equal(map.get('ABC')[0].contractAddress,address);
+  assert.equal(map.has('ABC_ARB'),false);
+});
+test('Bitstamp public currencies preserve per-network status and minimums without inventing fees',()=>{
+  const m=normalizeBitstamp([{currency:'ETH',type:'crypto',deposit:'Enabled',withdrawal:'Enabled',
+    networks:[{network:'op-mainnet',deposit:'Enabled',withdrawal:'Enabled',withdrawal_minimum_amount:'0.001',withdrawal_decimals:8},
+      {network:'ethereum',deposit:'Disabled',withdrawal:'Enabled'}]}]);
+  assert.equal(m.get('ETH')[0].network,'OP');assert.equal(m.get('ETH')[0].deposit,true);
+  assert.equal(m.get('ETH')[0].fee,null);assert.equal(m.get('ETH')[0].minWithdraw,.001);
+  assert.equal(m.get('ETH')[1].deposit,false);
+});
+
 const {
   normalizeBinance,
   normalizeBybit,
@@ -15,6 +33,24 @@ const {
   createTransferStatusService,
   PUBLIC_SOURCES,
 } = require("../arbitrageTransferStatus");
+
+test("a healthy network catalogue becomes usable while an unrelated exchange is still loading", async () => {
+  let release;
+  const service = createTransferStatusService(async url => {
+    if (url === PUBLIC_SOURCES.GT) return new Promise(resolve => { release = resolve; });
+    if (url === PUBLIC_SOURCES.BN) return [{ coin: "ETH", networkList: [{ network: "BASE", depositEnable: true, withdrawEnable: true }] }];
+    return null;
+  });
+  const loading = service.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  try {
+    assert.equal(service.getCatalogSnapshot().catalogs.has("BN"), true,
+      "an exchange timeout must not withhold other exchanges' successful responses");
+  } finally {
+    release(null);
+    await loading;
+  }
+});
 
 test("normalizes major venue catalogues that otherwise leave transfer routes unknown", () => {
   const binance = normalizeBinance({ data: [{

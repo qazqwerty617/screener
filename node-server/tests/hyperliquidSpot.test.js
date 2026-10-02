@@ -143,7 +143,9 @@ test('USDC routes stay indicative even with fabricated complete wallet metadata;
     {get:async ex=>({asks:[[ex==='HL'?111:100,100]],bids:[[ex==='HL'?110:99,100]],at:time})},{now:()=>time});
   const row=engine.snapshot().rows[0];assert.equal(row.sellQuote,'USDC');assert.equal(row.flow.complete,false);assert.equal(row.flow.profitUsdt,null);
   assert.ok(row.flow.reasons.includes('quote_conversion_unverified'));assert.equal(row.flow.reasons.filter(x=>x==='bridge_unverified').length,1);
+  assert.equal(row.recommendations.cheapest,null,'unverified bridge cannot be recommended as a usable cheap transfer');
   const detail=await engine.quote(row.key);assert.ok(Math.abs(detail.sellBid-110*.98*.999)<1e-8);assert.equal(detail.flow.profitUsdt,null);
+  assert.equal(detail.recommendations.cheapest,null);
 });
 
 test('an asset identity or spot coin change during async depth fetching rejects the old order book',async()=>{

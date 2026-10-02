@@ -17,7 +17,7 @@ BBO · выбранный бюджет|BBO · selected budget
 После перевода|After transfer
 Спред живёт|Spread observed
 Расчёт спот-арбитража|Spot arbitrage calculation
-BBO — оценка без проскальзывания · наведите на связку для расчёта по стаканам · неизвестные расходы не равны нулю|BBO estimate before slippage · hover for order book calculation · unknown costs are not zero
+BBO — оценка без проскальзывания · нажмите на связку для расчёта по стаканам · неизвестные расходы не равны нулю|BBO estimate before slippage · click for order book calculation · unknown costs are not zero
 Range / Боковик|Range / Sideways
 Разметка не подтверждена на текущих свечах|Formation is not confirmed on the current candles
 Разметка вне видимой области|Formation is outside the visible area

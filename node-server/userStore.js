@@ -1661,6 +1661,7 @@ function getUserPreferences(userIdOrQuery) {
   return target.preferences || {};
 }
 
+let preferencesRevision = 0;
 function updateUserPreferences(userIdOrQuery, prefs) {
   let target = findUser(userIdOrQuery);
   if (!target) return null;
@@ -1673,6 +1674,7 @@ function updateUserPreferences(userIdOrQuery, prefs) {
       ...prefs,
       updatedAt: new Date().toISOString()
     };
+    preferencesRevision++;
     // Request path (POST /api/user/preferences) — debounced.
     saveJSONDebounced(USERS_FILE, users);
   }
@@ -1700,6 +1702,7 @@ function expireProSubscriptions() {
 }
 
 module.exports = {
+  getPreferencesRevision: () => preferencesRevision,
   validateEmail,
   getReferralCode,
   recordReferralVisit,

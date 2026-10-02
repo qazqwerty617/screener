@@ -30,6 +30,7 @@ const chatNextAllowedAt = new Map(); // chatId -> timestamp
 const groupFileIds = new Map();      // group token -> { fileId, at }
 
 const stats = {
+  cancelled: 0,
   enqueued: 0,
   sent: 0,
   failed: 0,
@@ -37,6 +38,13 @@ const stats = {
   rateLimited: 0,
   retried: 0
 };
+
+function cancellationReason(item) {
+  if (item.expiresAt && Date.now() >= item.expiresAt) return 'EXPIRED';
+  if (typeof item.shouldSend !== 'function') return null;
+  try { return item.shouldSend() === true ? null : 'CANCELLED'; }
+  catch (_) { return 'CANCELLED'; }
+}
 
 function getBotToken() {
   return process.env.TELEGRAM_BOT_TOKEN || process.env.ADMIN_BOT_TOKEN || "";
@@ -134,6 +142,8 @@ function extractFileId(parsed) {
 //   { ok: false, retryAfterMs } transient; caller should requeue
 //   { ok: false, permanent }    give up
 async function attemptDelivery(item) {
+  const cancelled = cancellationReason(item);
+  if (cancelled) return { ok: false, permanent: true, reason: cancelled };
   const token = getBotToken();
   if (!token) return { ok: false, permanent: true, reason: "NO_BOT_TOKEN" };
 
@@ -161,6 +171,8 @@ async function attemptDelivery(item) {
   }
 
   if (item.photoBuffer && Buffer.isBuffer(item.photoBuffer)) {
+    const cancelled = cancellationReason(item);
+    if (cancelled) return { ok: false, permanent: true, reason: cancelled };
     try {
       const parsed = await sendPhotoRequest(token, item.chatId, caption, item.photoBuffer);
       if (parsed && parsed.ok) {
@@ -186,6 +198,8 @@ async function attemptDelivery(item) {
     }
   }
 
+  const cancelledBeforeText = cancellationReason(item);
+  if (cancelledBeforeText) return { ok: false, permanent: true, reason: cancelledBeforeText };
   if (item.requirePhoto) {
     return { ok: false, permanent: true, reason: "PHOTO_REQUIRED" };
   }
@@ -268,6 +282,11 @@ async function runWorker() {
       }
 
       if (result.permanent || item.attempts >= MAX_ATTEMPTS) {
+        if (result.reason === 'CANCELLED' || result.reason === 'EXPIRED') {
+          stats.cancelled++;
+          item.resolve({ ok: false, fileId: null, reason: result.reason });
+          continue;
+        }
         stats.failed++;
         if (result.reason) {
           console.warn(`[TG QUEUE] giving up on ${item.chatId} after ${item.attempts} attempt(s): ${result.reason}`);
@@ -302,6 +321,8 @@ async function runWorker() {
  * @param {string} [opts.fileId]        known Telegram file_id to reuse
  * @param {string} [opts.group]         shared token so one upload serves many chats
  * @param {boolean} [opts.requirePhoto] never fall back to a text-only message
+ * @param {function():boolean} [opts.shouldSend] live preference check before each delivery/retry
+ * @param {number} [opts.expiresAt] latest useful delivery time (epoch ms)
  * @returns {Promise<{ok: boolean, fileId: string|null, reason?: string}>}
  */
 function enqueue(opts) {
@@ -309,6 +330,8 @@ function enqueue(opts) {
   const text = opts && typeof opts.text === "string" ? opts.text : "";
   if (!chatId || !text) return Promise.resolve({ ok: false, fileId: null, reason: "MISSING_TARGET" });
   if (!getBotToken()) return Promise.resolve({ ok: false, fileId: null, reason: "NO_BOT_TOKEN" });
+  const cancelled = cancellationReason(opts);
+  if (cancelled) return Promise.resolve({ ok: false, fileId: null, reason: cancelled });
 
   // Shed load rather than grow without bound: the oldest pending alert is the
   // least useful one, and dropping it keeps chart buffers from piling up.
@@ -327,6 +350,8 @@ function enqueue(opts) {
       fileId: typeof opts.fileId === "string" && opts.fileId ? opts.fileId : null,
       group: opts.group ? String(opts.group) : null,
       requirePhoto: opts.requirePhoto === true,
+      shouldSend: typeof opts.shouldSend === 'function' ? opts.shouldSend : null,
+      expiresAt: Number.isFinite(opts.expiresAt) ? opts.expiresAt : null,
       attempts: 0,
       notBefore: 0,
       resolve

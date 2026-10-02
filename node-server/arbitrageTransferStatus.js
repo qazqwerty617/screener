@@ -7,6 +7,7 @@ const PUBLIC_SOURCES = Object.freeze({
   KC: "https://api.kucoin.com/api/v3/currencies",
   HT: "https://api.huobi.pro/v2/reference/currencies",
   PL: "https://api.poloniex.com/currencies?includeMultiChainCurrencies=true",
+  BS: "https://www.bitstamp.net/api/v2/currencies/",
 });
 
 const NETWORK_ALIASES = Object.freeze({
@@ -19,8 +20,11 @@ const NETWORK_ALIASES = Object.freeze({
   SOLANA: "SOL", SOL: "SOL",
   ARBITRUM: "ARB", ARBITRUMONE: "ARB", ARBONE: "ARB", ARB: "ARB", ETHARB:"ARB",
   OPTIMISM: "OP", OPTIMISTICETHEREUM: "OP", OP: "OP",
+  OPMAINNET:'OP', ETHBASE:'BASE', ETHOP:'OP', ETHOPTIMISM:'OP',
   POLYGON: "POLYGON", MATIC: "POLYGON", POL: "POLYGON", POLPOLY:"POLYGON",
   AVALANCHECCHAIN: "AVAXC", AVAXC: "AVAXC", CCHAIN: "AVAXC",
+  AVAXCCHAIN:'AVAXC', POLYGONPOS:'POLYGON', TON2:'TON', KCC:'KCC',
+  PLASMA:'PLASMA', XPL:'PLASMA',
   BASE: "BASE", TON: "TON", SUI: "SUI", APTOS: "APT", APT: "APT",
   NEAR: "NEAR", CELO: "CELO", FANTOM: "FTM", FTM: "FTM",
   ZKSYNCERA: "ZKSYNC", ZKSYNC: "ZKSYNC", LINEA: "LINEA", SCROLL: "SCROLL",
@@ -42,7 +46,7 @@ const NETWORK_ALIASES = Object.freeze({
 
 function enabled(value) {
   if(value===null||value===undefined||value==='')return null;
-  return value === true || String(value).toLowerCase() === "true" || String(value).toLowerCase() === "allowed" || String(value) === "1";
+  return value === true || ['true','allowed','enabled','1'].includes(String(value).toLowerCase());
 }
 function amountOrNull(value){return value!==null&&value!==undefined&&String(value).trim()!==''&&Number.isFinite(Number(value))&&Number(value)>=0?Number(value):null;}
 
@@ -66,6 +70,7 @@ function addCoin(map, coin, chains) {
       // Nonzero percentage/surcharges require a verified adapter formula;
       // keep them visible but do not silently treat them as a fixed-only fee.
       variableFee: amountOrNull(chain.variableFee),
+      feeFormulaUnknown: chain.feeFormulaUnknown === true,
       depositFee: amountOrNull(chain.depositFee),
       confirmations: amountOrNull(chain.confirmations),
       withdrawStep: amountOrNull(chain.withdrawStep),
@@ -74,7 +79,7 @@ function addCoin(map, coin, chains) {
       contractAddress: String(chain.contractAddress || chain.contract || "").trim() || null,
     }))
     .filter(chain => chain.network);
-  if (normalized.length) map.set(base, normalized);
+  if (normalized.length) map.set(base, [...(map.get(base) || []), ...normalized]);
 }
 
 function normalizeBinance(payload) {
@@ -174,12 +179,18 @@ function normalizeGate(payload) {
   const map = new Map();
   for (const coin of Array.isArray(payload) ? payload : []) {
     const chains = Array.isArray(coin.chains) && coin.chains.length ? coin.chains : [coin];
-    addCoin(map, coin.currency, chains.map(chain => ({
+    // Gate documents both ABC and ABC_CHAIN records for one traded asset.
+    // Only remove an exact suffix matching the published chain identifier.
+    const currency=String(coin.currency || '').toUpperCase();
+    const suffix=String(coin.chain || '').toUpperCase();
+    const base=suffix && currency.endsWith('_'+suffix) ? currency.slice(0,-suffix.length-1) : currency;
+    if(coin.delisted === true) continue;
+    addCoin(map, base, chains.map(chain => ({
       network: chain.name || chain.chain || coin.chain,
       label: chain.name || chain.chain || coin.chain,
       deposit: enabled(chain.deposit_disabled ?? coin.deposit_disabled)===null?null:!enabled(chain.deposit_disabled ?? coin.deposit_disabled),
       withdraw: enabled(chain.withdraw_disabled ?? coin.withdraw_disabled)===null?null:!enabled(chain.withdraw_disabled ?? coin.withdraw_disabled),
-      contractAddress: chain.contract_address || chain.contractAddress,
+      contractAddress: chain.addr || chain.contract_address || chain.contractAddress,
       fee:chain.withdraw_fee??coin.withdraw_fee,minWithdraw:chain.withdraw_min??coin.withdraw_min,
     })));
   }
@@ -218,6 +229,22 @@ function normalizeHtx(payload) {
       contractAddress: chain.contractAddress,
       minDeposit:chain.minDepositAmt,confirmations:chain.numOfConfirmations,
       variableFee:chain.transactFeeRateWithdraw,
+      feeFormulaUnknown: Boolean(chain.withdrawFeeType && chain.withdrawFeeType !== 'fixed'),
+      withdrawPrecision:chain.withdrawPrecision,needTag:chain.addrWithTag,
+    })));
+  }
+  return map;
+}
+
+function normalizeBitstamp(payload) {
+  const map=new Map();
+  for(const coin of Array.isArray(payload) ? payload : []) {
+    if(coin.type !== 'crypto') continue;
+    addCoin(map,coin.currency,(coin.networks || []).map(chain=>({
+      network:chain.network,label:chain.network,
+      deposit:enabled(chain.deposit),withdraw:enabled(chain.withdrawal),
+      minWithdraw:chain.withdrawal_minimum_amount,withdrawPrecision:chain.withdrawal_decimals,
+      // The public catalogue does not supply withdrawal fees/contracts.
     })));
   }
   return map;
@@ -288,6 +315,7 @@ function createTransferStatusService(apiFetch, options = {}) {
     ["KC", PUBLIC_SOURCES.KC, normalizeKucoin],
     ["HT", PUBLIC_SOURCES.HT, normalizeHtx],
     ["PL", PUBLIC_SOURCES.PL, normalizePoloniex],
+    ["BS", PUBLIC_SOURCES.BS, normalizeBitstamp],
   ];
 
   async function refresh(force = false) {
@@ -295,22 +323,21 @@ function createTransferStatusService(apiFetch, options = {}) {
     const now = clock();
     const due = sources.filter(([code]) => force || !refreshedAt.has(code) || now - refreshedAt.get(code) >= (catalogs.has(code)&&!failures.has(code) ? ttlMs : retryMs));
     if (!due.length) return;
-    pending = Promise.allSettled(due.map(([code, url, normalize]) =>
-      apiFetch(url, 12_000, 1).then(data => [code, normalize(data), clock()])
-    )).then(results => {
-      const finishedAt = clock();
-      for (let index = 0; index < results.length; index++) {
-        const code = due[index][0];
-        const result = results[index];
-        refreshedAt.set(code, finishedAt);
-        if (result.status === "fulfilled" && result.value[1].size) {
-          catalogs.set(code, result.value[1]);
-          successfulAt.set(code,result.value[2]);failures.delete(code);
-        }else{
-          failures.add(code);
-        }
+    pending = Promise.allSettled(due.map(async ([code, url, normalize]) => {
+      try {
+        const catalog = normalize(await apiFetch(url, 12_000, 1));
+        if (!catalog.size) { failures.add(code); return; }
+        // Publish each successful response immediately. A timeout at another
+        // venue must not delay healthy catalogues or renew stale data's age.
+        catalogs.set(code, catalog);
+        successfulAt.set(code, clock());
+        failures.delete(code);
+      } catch (_) {
+        failures.add(code);
+      } finally {
+        refreshedAt.set(code, clock());
       }
-    }).finally(() => { pending = null; });
+    })).finally(() => { pending = null; });
     return pending;
   }
 
@@ -346,6 +373,7 @@ module.exports = {
   normalizeKucoin,
   normalizeHtx,
   normalizePoloniex,
+  normalizeBitstamp,
   resolveTransferRoute,
   createTransferStatusService,
 };

@@ -61,12 +61,17 @@ for(const language of ['ru','en'])test(`USDC comparison shows native price, FX s
   assert.match(body.textContent,language==='en'?/bridge.*unconfirmed/:/Мост.*не подтверждены/);
   assert.equal(body.querySelector('.spot-result.confirmed'),null);
 });
-test('hover fetches only the inspected route, renders all three ledger steps and lives for observed duration',async t=>{
+test('pointer hover and keyboard focus never open a route or fetch books; click opens the ledger',async t=>{
   const {w,requests}=setup(t);await activateSpot(w);const d=w.document,r=d.querySelector('#arb-spot-body tr');
   assert.equal(requests.filter(r=>r.url.includes('/spot/quote')).length,0);
   r.dispatchEvent(new w.MouseEvent('pointerover',{bubbles:true}));await sleep(180);await tick();
+  r.dispatchEvent(new w.FocusEvent('focusin',{bubbles:true}));await sleep(10);
+  assert.equal(requests.filter(r=>r.url.includes('/spot/quote')).length,0);
+  assert.equal(d.getElementById('arb-spot-popover').hidden,true);
+  assert.equal(d.getElementById('arb-spot-dialog').hasAttribute('open'),false);
+  r.click();await tick();
   assert.equal(requests.filter(r=>r.url.includes('/spot/quote')).length,1);
-  const pop=d.getElementById('arb-spot-popover');assert.equal(pop.hidden,false);
+  const pop=d.querySelector('.spot-dialog-body');assert.equal(d.getElementById('arb-spot-popover').hidden,true);
   assert.match(pop.textContent,/Покупка · Binance/);assert.match(pop.textContent,/Перевод · BTC/);assert.match(pop.textContent,/Продажа · Bitget/);
   assert.match(pop.textContent,/2м/);assert.match(pop.textContent,/Комиссия вывода/);
 });
@@ -113,4 +118,35 @@ test('English detail uses English ledger labels and conditional assumptions',asy
   w.document.querySelector('#arb-spot-body tr').click();await tick();const content=w.document.querySelector('.spot-dialog-body').textContent;
   assert.match(content,/Buy · Binance/);assert.match(content,/Withdrawal fee/);assert.match(content,/Spot|Trading fees are modelled/);
   assert.doesNotMatch(content,/Покупка|Комиссия|Спред живёт/);
+});
+
+test('cheaper and faster network cards select a route and a late previous response cannot undo that choice',async t=>{
+  const {w,r}=setup(t);await activateSpot(w);const pending=[],d=w.document;
+  r.paths=[{...r.path,network:'BTC'},{...r.path,network:'OP',fee:.00003}];
+  r.flow.withdrawFeeUsdt=1.2;
+  r.recommendations={cheapest:{network:'BTC',totalFee:.00002,feeUsdt:1.2},fastest:{network:'OP',confirmationEstimateMs:40000},
+    pathCount:2,eligibleCount:2,timedCount:2};
+  w.ArbitrageSpot.render({rows:[r],sources:{},notional:500,marketCount:1});
+  w.fetch=async(url,options)=>new Promise(resolve=>pending.push({url,options,resolve}));
+  d.querySelector('#arb-spot-body tr').click();await tick();
+  assert.equal(pending.length,1);
+  d.querySelector('[data-spot-select-network="OP"]').click();await tick();
+  assert.equal(pending.length,2);assert.equal(pending[0].options.signal.aborted,true);assert.match(pending[1].url,/network=OP/);
+  assert.match(d.querySelector('.spot-dialog-body').textContent,/Комиссия вывода— BTC(?! ≈)/,
+    'a pending network change must not reuse the previous network fee in USDT');
+  const result={...r,path:r.paths[1],estimate:'depth',generatedAt:Date.now()};
+  pending[1].resolve({ok:true,json:async()=>result});await tick();
+  pending[0].resolve({ok:true,json:async()=>({...r,estimate:'depth',generatedAt:Date.now()})});await tick();
+  assert.equal(d.querySelector('[data-spot-network]').value,'OP');
+  assert.match(d.querySelector('.spot-dialog-body').textContent,/Быстрее по подтверждениям/);
+  assert.match(d.querySelector('.spot-dialog-body').textContent,/обработка биржей не учтены/);
+});
+
+test('favorite button never opens the calculation; keyboard Enter opens it',async t=>{
+  const {w,requests}=setup(t);await activateSpot(w);const d=w.document,r=d.querySelector('#arb-spot-body tr');
+  r.querySelector('[data-fav]').click();await tick();
+  assert.equal(d.getElementById('arb-spot-dialog').hasAttribute('open'),false);
+  assert.equal(requests.filter(r=>r.url.includes('/spot/quote')).length,0);
+  r.dispatchEvent(new w.KeyboardEvent('keydown',{bubbles:true,key:'Enter'}));await tick();
+  assert.equal(d.getElementById('arb-spot-dialog').hasAttribute('open'),true);
 });

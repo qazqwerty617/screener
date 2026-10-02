@@ -3,12 +3,17 @@
 const { SPOT_VENUES, MAX_QUOTE_AGE_MS, spotTradeUrl } = require('./spotMarketData');
 const { canonicalNetwork } = require('./arbitrageTransferStatus');
 const { fillQuantity } = require('./depthAnalyzer');
+const { confirmationTiming } = require('./transferNetworkTiming');
 
 // Native asset identity is only established on its own chain. A BTC token on
 // Ethereum/BSC still requires matching contracts on both exchange catalogues.
 const NATIVE = Object.freeze({BTC:'BTC',ETH:'ETH',SOL:'SOL',TRX:'TRX',LTC:'LTC',BCH:'BCH',DOGE:'DOGE',
   XRP:'XRP',XLM:'XLM',ADA:'ADA',DOT:'DOT',ATOM:'ATOM',NEAR:'NEAR',SUI:'SUI',APT:'APT',TON:'TON',
   ETC:'ETC',ALGO:'ALGO',KSM:'KSM',ICP:'ICP',HBAR:'HBAR',XTZ:'XTZ'});
+// ETH remains native on these specific L2 chains; WETH and ETH on other chains
+// still require matching token contracts. Never infer identity just from "EVM".
+const NATIVE_NETWORKS = Object.freeze({ETH:['ETH','ARB','OP','BASE','SCROLL','LINEA','ZKSYNC','BLAST'],
+  BNB:['BSC','BNB'],AVAX:['AVAX','AVAXC']});
 const amount=v=>v!==null&&v!==undefined&&String(v).trim()!==''&&Number.isFinite(Number(v))&&Number(v)>=0?Number(v):null;
 function assetIdentity(base,a,b){
   const clean=value=>{const s=String(value||'').trim();return /^(?:-|null|none|n\/a|0x0{40})$/i.test(s)?'':s;};
@@ -17,7 +22,8 @@ function assetIdentity(base,a,b){
     const evm=/^0x[0-9a-f]{40}$/i;
     const network=canonicalNetwork(a.network);
     const valid=value=>{
-      if(['ETH','BSC','ARB','OP','BASE','POLYGON','AVAXC','FTM','LINEA','SCROLL','ZKSYNC','OPBNB','MANTLE','BLAST','CELO'].includes(network))return evm.test(value)&&!/^0x0{40}$/i.test(value);
+      if(['ETH','BSC','ARB','OP','BASE','POLYGON','AVAXC','FTM','LINEA','SCROLL','ZKSYNC','OPBNB','MANTLE','BLAST','CELO','KCC','PLASMA'].includes(network))return evm.test(value)&&!/^0x0{40}$/i.test(value);
+      if(network==='STRK')return /^0x[0-9a-f]{1,64}$/i.test(value)&&BigInt(value)>0n;
       if(network==='SOL')return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value);
       if(network==='TRX')return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(value);
       if(['APT','SUI'].includes(network))return /^0x[0-9a-f]{1,64}(?:::[a-z0-9_:]+)?$/i.test(value);
@@ -29,7 +35,7 @@ function assetIdentity(base,a,b){
     if(!valid(left)||!valid(right))return 'unverified';
     return (evm.test(left)&&evm.test(right)?left.toLowerCase()===right.toLowerCase():left===right)?'contract':'mismatch';
   }
-  if(!left&&!right&&NATIVE[base]===canonicalNetwork(a.network))return 'native';
+  if(!left&&!right&&(NATIVE[base]===canonicalNetwork(a.network)||NATIVE_NETWORKS[base]?.includes(canonicalNetwork(a.network))))return 'native';
   return 'unverified';
 }
 function transferPaths(catalogs,base,buyEx,sellEx){
@@ -42,10 +48,12 @@ function transferPaths(catalogs,base,buyEx,sellEx){
     if(identity==='mismatch'){mismatch=true;continue;}
     if(a.withdraw==null||b.deposit==null)unknown=true;
     if(a.withdraw!==true||b.deposit!==true)continue;
-    paths.push({network:canonicalNetwork(a.network),identity,fee:amount(a.fee),variableFee:amount(a.variableFee),
+    const timing=confirmationTiming(canonicalNetwork(a.network),amount(b.confirmations));
+    paths.push({network:canonicalNetwork(a.network),identity,fee:amount(a.fee),variableFee:amount(a.variableFee),feeFormulaUnknown:a.feeFormulaUnknown===true,
       depositFee:amount(b.depositFee),minWithdraw:amount(a.minWithdraw),minDeposit:amount(b.minDeposit),
       step:amount(a.withdrawStep),precision:amount(a.withdrawPrecision),confirmations:amount(b.confirmations),
-      needTag:b.needTag===true,contractAddress:a.contractAddress||b.contractAddress||null});
+      needTag:b.needTag===true,contractAddress:a.contractAddress||b.contractAddress||null,
+      confirmationEstimateMs:timing?.ms??null,confirmationTiming:timing});
   }
   return {status:paths.length?'open':unknown?'unknown':mismatch?'mismatch':'closed',paths};
 }
@@ -74,7 +82,7 @@ function calculateSpotFlow({asks,bids,notional=500,buyFeePct,sellFeePct,path=nul
   else{
     if(!['native','contract'].includes(path.identity))reasons.push('identity_unverified');
     if(path.fee===null||path.fee===undefined)reasons.push('withdraw_fee_unknown');
-    if(path.variableFee>0)reasons.push('variable_fee');
+    if(path.variableFee>0||path.feeFormulaUnknown)reasons.push('variable_fee');
     if(path.minWithdraw>acquired)reasons.push('withdraw_min');
   }
   let withdrawal=acquired,dust=0;
@@ -101,12 +109,20 @@ function calculateSpotFlow({asks,bids,notional=500,buyFeePct,sellFeePct,path=nul
     buyComplete:buy.complete,sellComplete:sell.complete,buyLevels:buy.levelsUsed,sellLevels:sell.levelsUsed};
 }
 function bestPath(paths,args,network){
-  const selected=network?paths.filter(p=>p.network===network):paths;
-  const evaluated=selected.map(path=>({path,flow:calculateSpotFlow({...args,path})}));
+  const all=paths.map(path=>({path,flow:calculateSpotFlow({...args,path})}));
+  const eligible=all.filter(e=>e.flow.complete),timed=eligible.filter(e=>e.path.confirmationEstimateMs>0);
+  const summary=e=>e?{network:e.path.network,fee:e.path.fee,depositFee:e.path.depositFee,
+    totalFee:e.path.fee+(e.path.depositFee||0),feeUsdt:(e.path.fee+(e.path.depositFee||0))*(e.flow.buyAverage||0),
+    confirmationEstimateMs:e.path.confirmationEstimateMs??null,confirmationTiming:e.path.confirmationTiming||null}:null;
+  const cheapest=eligible.reduce((best,e)=>!best||e.path.fee+(e.path.depositFee||0)<best.path.fee+(best.path.depositFee||0)?e:best,null);
+  const fastest=timed.reduce((best,e)=>!best||e.path.confirmationEstimateMs<best.path.confirmationEstimateMs||
+    e.path.confirmationEstimateMs===best.path.confirmationEstimateMs&&e.flow.profitUsdt>best.flow.profitUsdt?e:best,null);
+  const recommendations={cheapest:summary(cheapest),fastest:summary(fastest),eligibleCount:eligible.length,timedCount:timed.length,pathCount:paths.length};
+  const evaluated=network?all.filter(e=>e.path.network===network):all;
   evaluated.sort((a,b)=>Number(b.flow.complete)-Number(a.flow.complete)||(b.flow.profitUsdt??-Infinity)-(a.flow.profitUsdt??-Infinity)||
     Number(['native','contract'].includes(b.path.identity))-Number(['native','contract'].includes(a.path.identity))||
     Number(a.path.fee===null)-Number(b.path.fee===null)||(a.path.fee??Infinity)-(b.path.fee??Infinity));
-  return evaluated[0]||{path:null,flow:calculateSpotFlow({...args,path:null})};
+  return {...(evaluated[0]||{path:null,flow:calculateSpotFlow({...args,path:null})}),recommendations};
 }
 function routeRow(row){
   const {buy,sell,base,key,gross,spreadSince,spreadSamples}=row;
@@ -124,6 +140,10 @@ function indicativeFlow(row,flow){
   return {...flow,complete:false,profitUsdt:null,netPct:null,proceeds:null,
     reasons:[...new Set([...flow.reasons,'quote_conversion_unverified','bridge_unverified'])],
     assumptions:[...new Set([...flow.assumptions,'directional_fx_valuation'])]};
+}
+function indicativeRecommendations(row,recommendations){
+  if(!row.buy.quoteConversion&&!row.sell.quoteConversion)return recommendations;
+  return {...recommendations,cheapest:null,fastest:null,eligibleCount:0,timedCount:0};
 }
 function valuedBook(book,quote,time){
   if(!quote.quoteConversion)return book;
@@ -195,9 +215,9 @@ function createSpotArbitrage(market,transfers,books,{now=Date.now,assetAllowed=(
       heapPush(heap,{row,args,transfer,evaluated,rank},limit);
     }
     const rows=heap.sort((a,b)=>rankCompare(b,a)).map(item=>{
-      const {row,transfer,args}=item,{path,flow}=item.evaluated||bestPath([],args);
+      const {row,transfer,args}=item,{path,flow,recommendations}=item.evaluated||bestPath([],args);
       return {...routeRow(row),ageMs:Math.max(time-row.buy.at,time-row.sell.at),
-        transferStatus:transfer.status,path,flow:indicativeFlow(row,flow),networkCount:transfer.paths.length,estimate:'bbo',
+        transferStatus:transfer.status,path,flow:indicativeFlow(row,flow),recommendations:indicativeRecommendations(row,recommendations),networkCount:transfer.paths.length,estimate:'bbo',
         spreadAgeMs:row.spreadSince===null?null:Math.max(0,time-row.spreadSince)};
     });
     const value={generatedAt:full.generatedAt,notional,total,rows,
@@ -219,11 +239,11 @@ function createSpotArbitrage(market,transfers,books,{now=Date.now,assetAllowed=(
     const transfer=transferPaths(catalogs,row.base,row.buyEx,row.sellEx);
     const args={asks:buy.asks,bids:sell.bids,notional:options.notional??500,
       buyFeePct:feeFor(row.buyEx,options.buyFeePct),sellFeePct:feeFor(row.sellEx,options.sellFeePct)};
-    const {path,flow}=bestPath(transfer.paths,args,options.network);
+    const {path,flow,recommendations}=bestPath(transfer.paths,args,options.network);
     return {...row,generatedAt:time,buyAsk:buy.asks[0][0],sellBid:sell.bids[0][0],
       buyNativeAsk:buyNative.asks[0][0],sellNativeBid:sellNative.bids[0][0],
       gross:(sell.bids[0][0]/buy.asks[0][0]-1)*100,spreadAgeMs:row.spreadSince===null?null:Math.max(0,time-row.spreadSince),
-      ageMs:Math.max(time-buy.at,time-sell.at),transferStatus:transfer.status,paths:transfer.paths,path,flow:indicativeFlow(raw,flow),estimate:'depth',
+      ageMs:Math.max(time-buy.at,time-sell.at),transferStatus:transfer.status,paths:transfer.paths,path,recommendations:indicativeRecommendations(raw,recommendations),flow:indicativeFlow(raw,flow),estimate:'depth',
       booksAt:{buy:buy.at,sell:sell.at},transferSources:metadata.sources};
   }
   function start(){if(timer)return;getMarkets();timer=setInterval(getMarkets,1000);timer.unref?.();}

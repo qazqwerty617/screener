@@ -3064,7 +3064,7 @@ app.get("/api/arbitrage/transfers", async (req, res) => {
     const authenticatedCatalogs = await loadAuthenticatedTransferCatalogs(req);
     const statuses = await arbitrageTransfers.getRoutes(routes, authenticatedCatalogs);
     res.setHeader("Cache-Control", "private, no-store");
-    res.json({ generatedAt: Date.now(), publicExchanges: ["BN", "BG", "GT", "KC", "HT", "PL"], routes: statuses });
+    res.json({ generatedAt: Date.now(), publicExchanges: ["BN", "BG", "GT", "KC", "HT", "PL", "BS"], routes: statuses });
   } catch (error) {
     res.status(502).json({ error: "Transfer status unavailable", detail: String(error?.message || error).slice(0, 160) });
   }
@@ -3858,7 +3858,7 @@ app.post("/api/user/pump-alerts", express.json({ limit: "5mb" }), (req, res) => 
     currentPrefs.notifications.tgEnabled = !!settings.tgEnabled;
   }
   const updated = userStore.updateUserPreferences(user.id, currentPrefs);
-  console.log(`[USER PREFS] Updated pumpAlerts for user ${user.id}:`, JSON.stringify(settings));
+  console.log(`[USER PREFS] Updated pumpAlerts for user ${user.id}`);
 
   const adminChatId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || "").trim();
   // Do not authorize from a mutable chat ID, a display role, or a hard-coded
@@ -5445,10 +5445,14 @@ server.listen(PORT, BIND_HOST, () => {
   // sent is the most meaningful: more touches first, then closest to price.
   function scoreFormationSignal(signal) {
     const meta = signal.meta || {};
-    const touches = Number(meta.touches) || (meta.p1Idx !== undefined ? 2 : 1);
+    // A Range has two boundaries. Count balanced visits to both, rather than
+    // making a 2+2 Range lose to a single line with three visits on every scan.
+    const touches = signal.type === "range"
+      ? 2 * Math.min(Number(meta.lowerTouches) || 0, Number(meta.upperTouches) || 0)
+      : Number(meta.touches) || (meta.p1Idx !== undefined ? 2 : 1);
     const dist = meta.dist !== undefined ? Number(meta.dist) : 1.0;
     // Structural formations outrank a bare retest at equal touch count.
-    const typeWeight = signal.type === "trendline" ? 2 : signal.type === "level" ? 2 : 0;
+    const typeWeight = ["trendline", "level", "range"].includes(signal.type) ? 2 : 0;
     return touches * 100 + typeWeight * 10 - Math.min(dist, 5) * 8;
   }
 
@@ -5485,14 +5489,43 @@ server.listen(PORT, BIND_HOST, () => {
   // same global/per-chat Telegram rate limits as pump/dump alerts and honour
   // retry_after instead of being dropped on 429. Returns true only on confirmed
   // delivery — callers rely on that to decide whether to arm a cooldown.
-  async function sendServerTelegramAlert(chatId, caption, photoBuffer, group) {
+  function isFormationTelegramDeliveryAllowed(chatId, userId, signal) {
+    const records = userStore.getAllUsersRaw?.() || {};
+    const user = records[userId] || Object.values(records).find(u =>
+      u && String(u.telegramChatId || u.telegramId || u.tgChatId || u.chatId ||
+        u.preferences?.formationAlerts?.telegramChatId || u.preferences?.notifications?.formationAlerts?.telegramChatId ||
+        u.formationAlerts?.telegramChatId || '').trim() === chatId);
+    if (user?.blocked || user?.tgAlertsEnabled === false) return false;
+    const stored = user?.preferences?.formationAlerts || user?.preferences?.notifications?.formationAlerts || user?.formationAlerts || {};
+    if (user && String(user.telegramChatId || user.telegramId || user.tgChatId || user.chatId || stored.telegramChatId || '').trim() !== chatId) return false;
+    const prefs = { ...stored, ...(getFormationChatPrefs(chatId) || {}) };
+    const adminId = String(process.env.ADMIN_CHAT_ID || process.env.TELEGRAM_ADMIN_ID || '').trim();
+    if (prefs.enabled === false || (prefs.tgEnabled !== undefined ? !prefs.tgEnabled : chatId !== adminId)) return false;
+    const typeSettings = prefs[signal.type];
+    if (signal.type === 'range' ? typeSettings?.enabled !== true : typeSettings?.enabled === false) return false;
+    const exs = Array.isArray(prefs.exchanges) && prefs.exchanges.length ? prefs.exchanges : ['all'];
+    if (!exs.includes('all') && !exs.includes(signal.ex)) return false;
+    if (typeSettings?.timeframes?.length && !typeSettings.timeframes.includes(signal.tf)) return false;
+    if (signal.type === 'range') {
+      const {lower,upper,lowerTouches,upperTouches} = signal.meta || {};
+      const current = tickers.get(`${signal.ex}:${signal.sym}`)?.p || signal.curPrice || signal.price;
+      const minimum = Math.max(2, Number(typeSettings.minTouches) || 2);
+      if (!(lower > 0 && upper > lower && current >= lower && current <= upper &&
+            lowerTouches >= minimum && upperTouches >= minimum)) return false;
+      if (Math.min(current-lower,upper-current)/current*100 > (Number(typeSettings.distancePct) || 1)) return false;
+    }
+    return userStore.isTelegramAlertsEnabled?.(chatId) !== false;
+  }
+
+  async function sendServerTelegramAlert(chatId, caption, photoBuffer, group, shouldSend, expiresAt) {
     if (userStore && typeof userStore.isTelegramAlertsEnabled === "function") {
       if (!userStore.isTelegramAlertsEnabled(chatId)) {
         return false;
       }
     }
 
-    const res = await telegramQueue.enqueue({ chatId, text: caption, photoBuffer, group });
+    const res = await telegramQueue.enqueue({ chatId, text: caption, photoBuffer, group, expiresAt,
+      shouldSend: () => userStore.isTelegramAlertsEnabled?.(chatId) !== false && (!shouldSend || shouldSend()) });
     return !!(res && res.ok);
   }
 
@@ -5514,7 +5547,9 @@ server.listen(PORT, BIND_HOST, () => {
     for (const signal of signals) {
       if (!signal || !signal.type || !signal.sym) continue;
       const actualPrice = signal.curPrice || fallbackCurPrice || signal.price;
-      const touches = signal.meta?.touches || (signal.meta?.p1Idx !== undefined ? 2 : 1);
+      const touches = signal.type === 'range'
+        ? Math.min(Number(signal.meta?.lowerTouches) || 0, Number(signal.meta?.upperTouches) || 0)
+        : signal.meta?.touches || (signal.meta?.p1Idx !== undefined ? 2 : 1);
       const dist = signal.meta?.dist !== undefined ? Number(signal.meta.dist) : 0.5;
 
       // Filter out signals that are too far away or not enough touches
@@ -5719,7 +5754,9 @@ server.listen(PORT, BIND_HOST, () => {
 
     for (const signal of rankedSignals) {
       const { ex, sym, base, tf, type, price, meta } = signal;
-      const touches = meta?.touches || (meta?.p1Idx !== undefined ? 2 : 1);
+      const touches = type === 'range'
+        ? Math.min(Number(meta?.lowerTouches) || 0, Number(meta?.upperTouches) || 0)
+        : meta?.touches || (meta?.p1Idx !== undefined ? 2 : 1);
       const dist = meta?.dist !== undefined ? Number(meta.dist) : 0.5;
 
       // Filter out distant signals before checking subscriber settings
@@ -5977,7 +6014,8 @@ server.listen(PORT, BIND_HOST, () => {
           // file_id for every other recipient of this same signal.
           const groupToken = `fm:${ex}:${sym}:${type}:${tf}:${now}`;
           const results = await Promise.allSettled(
-            matchingSubsForSignal.map(({ chatId }) => sendServerTelegramAlert(chatId, msg, photoBuffer, groupToken))
+            matchingSubsForSignal.map(({ chatId, userId }) => sendServerTelegramAlert(chatId, msg, photoBuffer, groupToken,
+              () => isFormationTelegramDeliveryAllowed(chatId, userId, signal), now + 120_000))
           );
           results.forEach((r, i) => {
             const delivered = r.status === "fulfilled" && r.value === true;

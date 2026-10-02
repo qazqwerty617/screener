@@ -22,6 +22,15 @@ function extractFn(name) {
 
 const scoreFormationSignal = extractFn("scoreFormationSignal");
 
+test("Range ranking counts balanced evidence on both boundaries", () => {
+  const range = { type: "range", meta: { lowerTouches: 2, upperTouches: 2, touches: 2, dist: 0.3 } };
+  assert.ok(scoreFormationSignal(range) > scoreFormationSignal({ type: "trendline", meta: { touches: 3, dist: 0.3 } }));
+  assert.ok(scoreFormationSignal(range) < scoreFormationSignal({ type: "level", meta: { touches: 5, dist: 0.3 } }));
+  range.meta.upperTouches = 20;
+  assert.ok(scoreFormationSignal(range) < scoreFormationSignal({ type: "level", meta: { touches: 5, dist: 0.3 } }),
+    "one busy boundary cannot inflate the evidence of a balanced Range");
+});
+
 const cooldownSource = /function getFormationCoinCooldownMs\(settings\) \{[\s\S]*?\n  \}/.exec(SERVER_SRC);
 assert.ok(cooldownSource);
 const getFormationCoinCooldownMs = new Function(`${cooldownSource[0]}; return getFormationCoinCooldownMs;`)();
